@@ -67,6 +67,31 @@ class KVBranch:
         self.decode_actual_seq_len = decode_actual_seq_len
 
 
+def _partial(qg, k, v, sc: float, allowed):
+    """(acc, m, l) of query rows qg [H_kv, n, D] over keys k / v [H_kv, P, D] (fp32): the unnormalised attention, each
+    row's maximum score (-inf: no key) and the sum of its exponentials. ONE score matrix alive: scaled, masked
+    (`allowed` [n, P] bool, None: every key) and exponentiated in place."""
+    s = torch.matmul(qg, k.transpose(1, 2))
+    s.mul_(sc)
+    if allowed is not None:
+        s.masked_fill_(~allowed, float("-inf"))
+    m = s.amax(dim=2)
+    s.sub_(m.masked_fill(torch.isneginf(m), 0.0)[..., None]).exp_()
+    return torch.matmul(s, v), m, s.sum(dim=2)
+
+
+def _merge_partials(a, b):
+    """Two partials of the same rows over disjoint keys as one (log-sum-exp); `a` None: `b`. A row with no key in
+    a part (l = 0) weighs nothing."""
+    if a is None:
+        return b
+    (acc, m, l), (acc2, m2, l2) = a, b
+    mn = torch.maximum(m, m2)
+    c1 = torch.where(l > 0, torch.exp(m - mn), torch.zeros_like(l))
+    c2 = torch.where(l2 > 0, torch.exp(m2 - mn), torch.zeros_like(l2))
+    return acc * c1[..., None] + acc2 * c2[..., None], mn, l * c1 + l2 * c2
+
+
 class KVCacheAttentionWrapper:
     """
     Intercepts scaled_dot_product_attention for KV cache injection.
@@ -388,81 +413,84 @@ class KVCacheAttentionWrapper:
             return self._prefill_over_spill(q, layer_idx, start, rows, scale)
         tpp = self.cache.page_tokens
         k_full, v_full = self.cache.whole_pages(layer_idx, -(-(start + rows) // tpp) * tpp)
-        return self._attend_in_row_blocks(q.to(k_full.dtype), k_full, v_full, start, dropout_p, scale)
+        return self._attend_per_query_group(q.to(k_full.dtype), k_full, v_full, start, dropout_p, scale)
 
-    def _attend_in_row_blocks(self, q, k_full, v_full, start: int, dropout_p, scale) -> torch.Tensor:
-        """q [1, H, rows, D] at cached position `start` over k_full / v_full [1, H_kv, keys, D] (the KV heads, never
-        expanded), causal: one page of query rows at a time, each query group of a KV head in its own call, over the
-        keys up to the block's last row. What it never builds: the rows x keys mask (4 096 x 61 440 in fp16 was the
-        480 MiB that ended the 79 931-token turn on a full V100, 2026-11-10) — one [page, keys] buffer of zeros takes
-        each block's triangle in its last columns and gives it back — and the K / V repeated for every query head."""
-        tpp, rows, heads, kv_heads = self.cache.page_tokens, int(q.shape[2]), int(q.shape[1]), int(k_full.shape[1])
+    def _attend_per_query_group(self, q, k_full, v_full, start: int, dropout_p, scale) -> torch.Tensor:
+        """q [1, H, rows, D] at cached position `start` over k_full / v_full [1, H_kv, keys, D], causal: ONE attention
+        per query group of a KV head over the chunk's whole rows, K / V as the KV heads — never repeated for every
+        query head (groups x the cached keys, about 1 GB at a V100's reach, was copied at every layer of every pass).
+        Its dense [rows, keys] mask is the session chunk's priced reserve (`price.session_chunk_attention_bytes`).
+        Measured against cutting the rows too (one page at a time, 256 calls a layer): 141.9 s against 44.2 s for a
+        19 931-token turn of Qwen3-Coder-30B-A3B on two V100-32GB (2026-11-10) — the calls cost, the rows stay whole."""
+        rows, heads, kv_heads = int(q.shape[2]), int(q.shape[1]), int(k_full.shape[1])
         groups = heads // kv_heads
-        key = (str(q.device), q.dtype)
-        if key not in self._chunk_masks:        # (zeros [page, keys], the triangle a block lends them): one a chunk
-            self._chunk_masks[key] = (
-                torch.zeros((tpp, start + rows), dtype=q.dtype, device=q.device),
-                torch.full((tpp, tpp), float("-inf"), dtype=q.dtype, device=q.device).triu(1))
-        zeros, triangle = self._chunk_masks[key]
+        mask = self._chunk_mask(q.device, q.dtype, start, rows, int(k_full.shape[2]))
         qg = q.reshape(1, kv_heads, groups, rows, int(q.shape[3]))          # query head h = kv head * groups + g
-        out = None
-        for a in range(0, rows, tpp):
-            r, n = min(tpp, rows - a), start + min(a + tpp, rows)           # the block's rows; the keys it may read
-            zeros[:r, n - r:n] = triangle[:r, :r]                           # row i reads the keys up to its own
-            for g in range(groups):
-                got = F.scaled_dot_product_attention(
-                    qg[:, :, g, a:a + r], k_full[:, :, :n], v_full[:, :, :n], attn_mask=zeros[:r, :n],
-                    dropout_p=dropout_p, is_causal=False, scale=scale)
-                if out is None:
-                    out = got.new_empty((1, kv_heads, groups, rows, int(got.shape[-1])))
-                out[:, :, g, a:a + r] = got
-            zeros[:r, n - r:n] = 0
-        return out.reshape(1, heads, rows, -1)
+        got = [F.scaled_dot_product_attention(qg[:, :, g], k_full, v_full, attn_mask=mask, dropout_p=dropout_p,
+                                              is_causal=False, scale=scale) for g in range(groups)]
+        return torch.stack(got, dim=2).reshape(1, heads, rows, -1)
+
+    def _chunk_mask(self, device, dtype, start: int, rows: int, keys: int) -> torch.Tensor:
+        """The chunk's additive mask [rows, keys]: 0 where key j <= start + i (causal, bottom-right at the cached
+        length — torch's `is_causal` aligns top-left when the query is shorter than the keys), -inf elsewhere, which
+        also masks the whole pages' keys past the true end. One per device and chunk, written in place: zeros, the
+        triangle over the chunk's own columns, -inf past them (no boolean rows x keys beside it)."""
+        key = (str(device), dtype)
+        m = self._chunk_masks.get(key)
+        if m is None:
+            m = self._chunk_masks[key] = torch.zeros((rows, keys), dtype=dtype, device=device)
+            m[:, start:].fill_(float("-inf"))
+            m[:, start:start + rows].triu_(1)                                # row i keeps -inf strictly after its own key
+        return m
 
     def _prefill_over_spill(self, q, layer_idx: int, start: int, rows: int, scale) -> torch.Tensor:
         """A prefill chunk of a sequence whose first positions spilled to host memory (R30 mirror of nbxtensor
-        memory/paged_kv._chunk_attention_spilled): the card's part over its own pages, causal at the card's start, and
-        the spilled positions by the same math ON THE CARD, in the library's blocks of at most the card part's key
-        count; merged by log-sum-exp in a fixed order — exact. (The host partial is the decode step's, one row.)
-        This math writes its fp32 scores (3 alive: scores, mask, exp), so the chunk's rows are cut to what
-        `spill_scores_bytes` holds (the plan's; unstated: one page of rows, the smallest chunk a plan prices)."""
+        memory/paged_kv._chunk_attention_spilled): the card's keys and the spilled ones (the library's blocks), read in
+        key blocks by spans of query rows, each (span, block) one fp32 partial, merged by log-sum-exp in a fixed
+        order — exact. (The host partial is the decode step's, one row.) What it holds at once is cut to the session
+        chunk's reserve (`spill_scores_bytes`, `_spill_cut`): ONE score matrix and one fp32 key block."""
         cache = self.cache
-        tpp = cache.page_tokens
         card_start = start - cache.spilled
-        keys = -(-(card_start + rows) // tpp) * tpp
-        k_card, v_card = cache._whole(layer_idx, keys)                       # [1, H_kv, keys, D]
+        keys = card_start + rows                                             # the card's keys the chunk may read
+        k_card, v_card = cache._whole(layer_idx, -(-keys // cache.page_tokens) * cache.page_tokens)
         heads, d, kv_heads = int(q.shape[1]), int(q.shape[3]), int(k_card.shape[1])
         groups, cache_dtype = heads // kv_heads, k_card.dtype
         sc = float(scale) if scale is not None else d ** -0.5
-        cut = tpp if self.spill_scores_bytes is None else int(self.spill_scores_bytes) // (12 * heads * keys)
-        if cut < 1:
-            raise RuntimeError(f"ZERO FALLBACK: one row of a spilled prefill chunk writes {12 * heads * keys} bytes of "
-                               f"scores over {keys} keys; the plan leaves {self.spill_scores_bytes}")
-        spans = [(a, min(a + cut, rows)) for a in range(0, rows, cut)]
-        qr = q.to(cache_dtype).float()[0]                                    # q as the card reads it [H, rows, D]
-        qs = [qr[:, a:b].reshape(kv_heads, groups * (b - a), d) for a, b in spans]   # head-major
+        block, span = self._spill_cut(heads, kv_heads, d + int(v_card.shape[3]), keys)
+        qr = q.to(cache_dtype).float()[0].reshape(kv_heads, groups, rows, d)  # q as the card reads it
+        out = []
+        for a in range(0, rows, span):
+            b = min(a + span, rows)
+            qg, got = qr[:, :, a:b].reshape(kv_heads, groups * (b - a), d), None
+            row_key = card_start + torch.arange(a, b, device=q.device)       # the last card key each row may read
+            for c in range(0, card_start + b, block):                        # the card's keys, block by block
+                e = min(c + block, card_start + b)
+                allowed = None if e <= card_start + a + 1 else (
+                    torch.arange(c, e, device=q.device)[None, :] <= row_key[:, None]).repeat(groups, 1)
+                got = _merge_partials(got, _partial(qg, k_card[0, :, c:e].float(), v_card[0, :, c:e].float(), sc, allowed))
+            for kb, vb in cache.host_spill.blocks(layer_idx, block):          # every spilled position precedes the chunk
+                got = _merge_partials(got, _partial(qg, torch.from_numpy(kb).to(q.device),
+                                                    torch.from_numpy(vb).to(q.device), sc, None))
+            acc, _m, l = got
+            out.append((acc / torch.where(l > 0, l, torch.ones_like(l))[..., None]).reshape(heads, b - a, -1))
+        return torch.cat(out, dim=1)[None].to(cache_dtype)
 
-        def part(qg, k, v, bias=0.0):                                        # (acc, m, l) of the rows over k / v
-            s = torch.matmul(qg, k.transpose(1, 2)) * sc + bias              # [H_kv, groups * rows, positions]
-            m = s.amax(dim=2)
-            m = m.masked_fill(torch.isneginf(m), 0.0)                        # a row with no key yet
-            p = torch.exp(s - m[..., None])
-            return torch.matmul(p, v), m, p.sum(dim=2)
-        kc, vc, col = k_card[0].float(), v_card[0].float(), torch.arange(keys, device=q.device)[None, :]
-        got = [part(qg, kc, vc, torch.zeros((b - a, keys), device=q.device).masked_fill(
-            col > (card_start + torch.arange(a, b, device=q.device))[:, None], float("-inf")).repeat(groups, 1))
-            for qg, (a, b) in zip(qs, spans)]
-        del k_card, v_card, kc, vc
-        for kb, vb in cache.host_spill.blocks(layer_idx, keys):
-            kd, vd = torch.from_numpy(kb).to(q.device), torch.from_numpy(vb).to(q.device)
-            for i, qg in enumerate(qs):
-                (acc, m, l), (a2, m2, l2) = got[i], part(qg, kd, vd)
-                mn = torch.maximum(m, m2)
-                c1, c2 = torch.where(l > 0, torch.exp(m - mn), torch.zeros_like(l)), torch.exp(m2 - mn)
-                got[i] = (acc * c1[..., None] + a2 * c2[..., None], mn, l * c1 + l2 * c2)
-        out = torch.cat([(acc / torch.where(l > 0, l, torch.ones_like(l))[..., None]).reshape(heads, b - a, -1)
-                         for (acc, m, l), (a, b) in zip(got, spans)], dim=1)
-        return out[None].to(cache_dtype)
+    def _spill_cut(self, heads: int, kv_heads: int, kv_dims: int, keys: int) -> Tuple[int, int]:
+        """(key positions a block, query rows a span) of a spilled chunk under `spill_scores_bytes`: a quarter of it at
+        most for one fp32 key block (K and V of whole pages), the rest for the one score matrix a (span, block) writes
+        (4 bytes x heads x rows x positions). Unstated (a plan with no session chunk): one page of rows over `keys`.
+        Refused by name when one row over one page does not fit."""
+        tpp = self.cache.page_tokens
+        budget = self.spill_scores_bytes
+        if budget is None:
+            budget = 4 * heads * tpp * keys + 4 * kv_heads * kv_dims * tpp
+        block = max(tpp, min(-(-keys // tpp) * tpp, (int(budget) // 4) // (4 * kv_heads * kv_dims) // tpp * tpp))
+        span = (int(budget) - 4 * kv_heads * kv_dims * block) // (4 * heads * block)
+        if span < 1:
+            raise RuntimeError(f"ZERO FALLBACK: one row of a spilled prefill chunk over one block of {block} keys "
+                               f"writes {4 * heads * block} bytes of scores beside {4 * kv_heads * kv_dims * block} "
+                               f"bytes of keys; the plan leaves {budget}")
+        return block, span
 
     def _decode_over_spill(self, q, k_card, v_card, attn_mask, scale, layer_idx: int) -> torch.Tensor:
         """A decode step of a sequence whose oldest positions spilled to host memory: the card's partial over its

@@ -149,6 +149,16 @@ def served_reach(kv_plan, tier: Optional[KVTier], window: int) -> "tuple[int, st
                    f"the KV host tier's share of {tier.budget_bytes / 2 ** 20:.0f} MB), the model's window {window}")
 
 
+def session_chunk_reserve(kv_plan) -> Optional[int]:
+    """The bytes the plan reserved for a session chunk's attention over the cache, as the compiled wrapper spends them
+    on a spilled chunk (`price.session_chunk_attention_bytes`, the figure Prism priced from the same three fields);
+    None for a plan with no session chunk (a run's one pass): the wrapper keeps its one page of rows."""
+    if kv_plan is None or not getattr(kv_plan, "prefill_chunk", None):
+        return None
+    from neurobrix.core.state.price import session_chunk_attention_bytes
+    return session_chunk_attention_bytes(kv_plan.prefill_chunk, kv_plan.max_cache_len, kv_plan.dtype, "compiled")
+
+
 def attach_spill(cache, tier: Optional[KVTier], kv_plan, window: int) -> str:
     """A served session's cache past the plan's: when the model's window exceeds what the plan's cache holds on the
     card (residency first, c957cee3), the cache keeps at most the plan's pages per sequence on the card and spills its

@@ -139,24 +139,26 @@ def test_a_chunk_reads_the_spilled_positions_on_the_device_in_blocks_no_larger_t
     assert seen and all(n <= positions <= card_pages * PT for n, positions in seen)
 
 
-@pytest.mark.parametrize("budget, rows_at_once", [(None, PT), (12 * H * 2 * PT * 16, 16), (12 * H * 3 * PT, 1)])
-def test_a_spilled_chunk_larger_than_its_scores_budget_is_cut_in_rows(monkeypatch, budget, rows_at_once):
-    """The spilled chunk's math writes its fp32 scores: a chunk of many rows (the served plan's larger chunks, 2 048
-    rows x 65 664 keys = 17 GB a matrix, 2026-11-10) is cut to the rows the plan's `spill_scores_bytes` holds — one
-    page of rows when the plan states none — and equals causal attention over every position."""
+@pytest.mark.parametrize("budget", [None, 200_000, 600_000, 4_000_000])
+def test_a_spilled_chunk_holds_one_score_matrix_and_one_key_block_within_its_reserve(monkeypatch, budget):
+    """The spilled chunk's math writes fp32 scores: at one page of rows x 65 664 keys they were 3.2 GB, unpriced, and
+    ended a 79 931-token turn (2026-11-10). It reads the keys in blocks by spans of rows, ONE score matrix and one
+    fp32 key block alive, both inside the session chunk's reserve (`spill_scores_bytes`; unstated: one page of rows
+    over the card's keys) — and equals causal attention over every position."""
     prompt, chunk, card_pages = 6 * PT, 2 * PT, 2
     g = torch.Generator().manual_seed(5)
     rnd = lambda *s: torch.randn(*s, generator=g).to(torch.float16)                       # noqa: E731
     w = _wrapper(card_pages, "cpu")
     w.spill_scores_bytes = budget
     q, k, v = rnd(1, H, prompt, D), rnd(1, HK, prompt, D), rnd(1, HK, prompt, D)
-    widest, real_exp = [0], torch.exp
+    from neurobrix.core.runtime.graph import kv_cache_wrapper as module
+    worst, real = [0], module._partial
 
-    def exp(x):
-        if x.dim() == 3:                                                   # a scores matrix [H_kv, groups * rows, keys]
-            widest[0] = max(widest[0], int(x.shape[1]) // (H // HK))
-        return real_exp(x)
-    monkeypatch.setattr(torch, "exp", exp)
+    def partial(qg, kb, vb, sc, allowed):                                   # one score matrix + its fp32 key block
+        worst[0] = max(worst[0], 4 * int(qg.shape[0]) * int(qg.shape[1]) * int(kb.shape[1]) + 4 * (kb.numel() + vb.numel()))
+        assert kb.dtype == torch.float32 and vb.dtype == torch.float32
+        return real(qg, kb, vb, sc, allowed)
+    monkeypatch.setattr(module, "_partial", partial)
     for a in range(0, prompt, chunk):
         b = a + chunk
         for layer in range(LAYERS):
@@ -169,7 +171,9 @@ def test_a_spilled_chunk_larger_than_its_scores_budget_is_cut_in_rows(monkeypatc
             causal = torch.arange(b)[None, :] <= (a + torch.arange(chunk))[:, None]
             want = torch.softmax(((qq @ kk.transpose(1, 2)) * D ** -0.5).masked_fill(~causal, float("-inf")), -1) @ vv
             assert torch.allclose(got, want, atol=3e-3), (a, layer, (got - want).abs().max())
-    assert w.cache.spilled > 0 and widest[0] == rows_at_once
+    assert w.cache.spilled > 0 and worst[0] > 0
+    if budget is not None:
+        assert worst[0] <= budget, f"{worst[0]} bytes alive under a reserve of {budget}"
 
 
 def test_a_scores_budget_that_holds_no_row_is_refused_by_name():
@@ -180,5 +184,5 @@ def test_a_scores_budget_that_holds_no_row_is_refused_by_name():
     for a in range(0, 3 * PT, PT):
         for layer in range(LAYERS):
             w.cache.update(layer, rnd(1, HK, PT, D), rnd(1, HK, PT, D))
-    with pytest.raises(RuntimeError, match="one row of a spilled prefill chunk writes"):
+    with pytest.raises(RuntimeError, match="one row of a spilled prefill chunk over one block"):
         w._prefill_over_spill(rnd(1, H, PT, D), 0, 2 * PT, PT, D ** -0.5)

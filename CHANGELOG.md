@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the model's guidance is in force, in the dtype the container declares.
 - **A chat model's output layer is no longer counted twice in the memory plan** on the PyTorch engine: the plan
   reserved a second copy of the vocabulary projection's weight that the engine never makes there.
-- **Reading a long prompt takes less GPU memory on the PyTorch engine**: each slice of the prompt built a mask as
-  large as the slice times everything read so far, and a copy of the cached keys and values for every attention
-  head; it now works one page of rows at a time on the cache as stored.
+- **Reading a long prompt takes less GPU memory on the PyTorch engine**: each slice of the prompt copied the cached
+  keys and values once per attention head; it now reads the cache as stored. Past the GPU's cache, the part of the
+  prompt kept in host memory is read within a memory reserve the plan states, instead of an unplanned amount.
 
 ### Changed
 - **A long prompt sent to `neurobrix serve` is read several times faster on the PyTorch engine.** The daemon read a

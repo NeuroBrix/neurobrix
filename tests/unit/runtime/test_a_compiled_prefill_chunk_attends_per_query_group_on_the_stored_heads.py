@@ -1,9 +1,10 @@
-"""The compiled engine's prefill chunk over a session's cached keys (`KVCacheAttentionWrapper._prefill_over_pages`),
-with the served plan's large chunks: at 4 096 rows over 61 440 keys its dense rows x keys mask was 480 MiB in fp16 and
-ended the 79 931-token turn on a full V100 with an HTTP 500 (2026-11-10), beside K and V repeated for every query head.
-It attends one page of query rows at a time, each query group of a KV head on its own, over the KV heads as stored.
-What this would do if the code were wrong: a served long prompt out of memory at the card's reach, or — the cut made
-wrongly — a row reading keys after its own position."""
+"""The compiled engine's prefill chunk over a session's cached keys (`KVCacheAttentionWrapper._prefill_over_pages`).
+It repeated K and V for every query head (groups x the cached keys, about 1 GB at a V100's reach, at every layer of
+every pass); it now runs one attention per query group of a KV head, on the KV heads as stored, the chunk's rows whole
+— cutting the rows too (256 calls a layer) measured 141.9 s against 44.2 s on a 19 931-token turn (2026-11-10). Its
+dense [rows, keys] mask is the session chunk's priced reserve and is written in place.
+What this would do if the code were wrong: K / V copied per head again, a row reading keys after its own position, or
+a mask that lets a chunk read the page padding past the true end."""
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -52,20 +53,17 @@ def test_every_chunk_equals_causal_attention_over_every_position_so_far(monkeypa
             want = _oracle(q[:, :, a:b], k[:, :, :b], v[:, :, :b], a)
             assert got.shape == (1, H, b - a, D)
             assert torch.allclose(got[0].double(), want, atol=1e-5), (a, layer, (got[0].double() - want).abs().max())
-    assert seen
+    assert len(seen) == (H // HK) * LAYERS * len(range(0, total, chunk)), "one attention per query group, layer and chunk"
     for q_shape, k_shape, m_shape in seen:
         assert q_shape[1] == HK and k_shape[1] == HK, "K / V stay the KV heads: no expansion per query head"
-        assert q_shape[2] <= PT and m_shape[0] <= PT, "one page of query rows at a time"
-        assert m_shape[1] == k_shape[2] <= total, "a block reads the keys up to its last row, no further"
+        assert m_shape == (q_shape[2], k_shape[2]) and k_shape[2] % PT == 0, "the chunk's rows whole, over whole pages"
 
 
-def test_the_mask_a_chunk_holds_is_one_page_of_rows_whatever_the_chunk():
+def test_the_chunk_s_mask_is_causal_at_the_cached_length_and_closes_the_page_padding():
     w = _wrapper()
-    g = torch.Generator().manual_seed(1)
-    rows = 8 * PT
-    q, k, v = (torch.randn(1, h, rows, D, generator=g) for h in (H, HK, HK))
-    w.begin_chunk(0, rows, whole_pages=True)
-    w._prefill_over_pages(q, k, v, None, 0.0, D ** -0.5, 0)
-    (zeros, triangle), = w._chunk_masks.values()
-    assert tuple(zeros.shape) == (PT, rows) and tuple(triangle.shape) == (PT, PT)
-    assert not zeros.any(), "the buffer is given back as zeros after every block"
+    start, rows, keys = 2 * PT + 3, PT + 5, 4 * PT
+    m = w._chunk_mask(torch.device("cpu"), torch.float32, start, rows, keys)
+    allowed = torch.arange(keys)[None, :] <= (start + torch.arange(rows))[:, None]
+    assert tuple(m.shape) == (rows, keys) and m.dtype == torch.float32
+    assert (m[allowed] == 0).all() and torch.isneginf(m[~allowed]).all()
+    assert w._chunk_mask(torch.device("cpu"), torch.float32, start, rows, keys) is m, "one per device and chunk"

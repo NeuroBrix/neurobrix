@@ -1009,11 +1009,11 @@ class AutoregressiveHandler(FlowHandler):
                 kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype,
                                                       hardware=(getattr(executor, 'vendor', None), getattr(executor, 'arch', None)))
                 if kv_session is not None:            # a served session: past the plan's cache, the host spill (R30)
-                    from neurobrix.core.state.kv_tier import attach_spill
+                    from neurobrix.core.state.kv_tier import attach_spill, session_chunk_reserve
                     _log.info(attach_spill(kv_wrapper.cache, self.ctx.kv_tier,
                                            getattr(self.ctx.plan, 'kv_cache_plan', None),
                                            int(lm_config.get("max_position_embeddings") or 0)))
-                    kv_wrapper.spill_scores_bytes = getattr(executor, "_attention_scores_budget_bytes", None)
+                    kv_wrapper.spill_scores_bytes = session_chunk_reserve(getattr(self.ctx.plan, "kv_cache_plan", None))
                     executor.__dict__["_kv_served_wrapper"] = kv_wrapper
             if kv_session is not None:
                 kv_session.bind(executor, kv_wrapper, kv_wrapper.cache)
