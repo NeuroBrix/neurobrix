@@ -16,11 +16,11 @@ function, no adaptation layer. This scan lists, in `src/neurobrix` (both branche
               function (or one of its synonyms, `SYNONYMS`), and a literal table of dtype sizes.
 
 Every finding ends deleted, or justified in one sentence in `docs/nbxtensor/ENGINE_SLIM.md`; the open ones are listed in
-`docs/nbxtensor/engine_slim_list.tsv`, whose header records the engine's Python line count and the list's length — both
+`docs/nbxtensor/engine_slim_list.tsv`, whose header records the engine's code-line count and the list's length — both
 can only go down (`tests/unit/nbxtensor_boundary/test_the_engine_only_slims.py`).
 
     python tools/engine_slim_scan.py            # the findings, one per line: kind, path, symbol, detail
-    python tools/engine_slim_scan.py --lines    # the engine's Python line count
+    python tools/engine_slim_scan.py --lines    # the engine's code-line count
 
 Standard library only (ast). A scan, not a proof: its rules are syntactic, so a finding is a question a person answers
 (delete it, or write why it stays) — never deleted on the scan's word alone.
@@ -102,8 +102,14 @@ def _module_name(p: Path, repo: Path = REPO) -> str:
 
 
 def engine_lines(repo: Path = REPO) -> int:
-    """The engine's Python lines (every line of every `.py` under src/neurobrix)."""
-    return sum(len(p.read_text(encoding="utf-8").splitlines()) for p in _py_files(repo / "src" / "neurobrix"))
+    """The engine's CODE lines under src/neurobrix — no docstring, comment-only or blank line: the brick ratchet's own
+    count (`tools/brick_ratchet.code_lines`), one definition for both ratchets, so cutting a catch-all into named
+    pieces with their one-sentence docstrings, or writing a reason in a comment, never reads as growth."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("brick_ratchet", Path(__file__).with_name("brick_ratchet.py"))
+    bricks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bricks)
+    return sum(len(bricks.code_lines(p.read_text(encoding="utf-8"))) for p in _py_files(repo / "src" / "neurobrix"))
 
 
 class _Refs(ast.NodeVisitor):

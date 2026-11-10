@@ -1,0 +1,16 @@
+{
+ "measured": "2026-11-10, main 84652bf6b: the limits are each package's 95th percentile that day (tools/brick_ratchet.py --stats)",
+ "packages": {
+  "neurobrix": {"root": "src/neurobrix", "top": "neurobrix", "max_code_lines": 64, "max_depth": 4},
+  "nbxtensor": {"root": "nbxtensor/src/nbxtensor", "top": "nbxtensor", "max_code_lines": 37, "max_depth": 3}
+ },
+ "max_module_code_lines": 1500,
+ "direction": [
+  {"in": "nbxtensor/src/nbxtensor/", "never": ["neurobrix"], "why": "the library never knows the engine"},
+  {"in": "nbxtensor/src/nbxtensor/", "never": ["torch"], "why": "the library is torch-free"},
+  {"in": "src/neurobrix/core/", "never": ["neurobrix.cli", "neurobrix.serving"], "why": "the engine's core never knows its doors"},
+  {"in": "src/neurobrix/triton/", "never": ["neurobrix.cli", "neurobrix.serving", "torch"], "why": "the Triton branch never knows the doors, and is torch-free (R33)"},
+  {"in": "src/neurobrix/kernels/", "never": ["neurobrix.cli", "neurobrix.serving", "torch"], "why": "kernels are torch-free (R33)"},
+  {"in": "src/neurobrix/core/prism/", "never": ["neurobrix.core.flow", "neurobrix.triton.flow", "neurobrix.core.runtime.graph", "neurobrix.triton.sequence"], "why": "the planner decides; it never reaches into what executes"}
+ ]
+}

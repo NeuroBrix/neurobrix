@@ -1,4 +1,4 @@
-"""The engine only slims (Hocine Benkelaya 2026-10-29 22:39): its Python lines and its open slimming findings may only go down.
+"""The engine only slims (Hocine Benkelaya 2026-10-29 22:39): its code lines and its open slimming findings may only go down.
 
 `tools/engine_slim_scan.py` lists what the engine carries that nbxtensor makes unnecessary; every finding is either
 open in `docs/nbxtensor/engine_slim_list.tsv` or kept, with its reason, in `docs/nbxtensor/ENGINE_SLIM.md`. The same
@@ -7,8 +7,8 @@ two rules as the scatter guard, so the debt decreases by construction, and a rat
 1. A finding neither open nor kept fails: something was written into the engine that the library makes unnecessary
    (delete it, move it into nbxtensor, or write why it stays).
 2. An open or kept finding the scan no longer finds fails: it was resolved — delete its line.
-3. The engine's line count and the number of open findings never exceed the list's header; the header states the
-   open count truthfully.
+3. The engine's code-line count (no docstring, comment or blank line: `tools/brick_ratchet.code_lines`) and the
+   number of open findings never exceed the list's header; the header states the open count truthfully.
 
 What would this file do if the engine grew? A new dead or duplicated definition: rule 1 RED; new lines: rule 3 RED."""
 from __future__ import annotations
@@ -73,4 +73,4 @@ def test_the_engine_and_its_open_findings_only_go_down():
     lines, opened = S.engine_lines(), len(_open())
     assert opened == _header("open"), f"the list holds {opened} open findings, its header says {_header('open')}"
     assert lines <= _header("engine_lines"), (
-        f"the engine grew to {lines} Python lines (the list's header: {_header('engine_lines')}): it only slims")
+        f"the engine grew to {lines} code lines (the list's header: {_header('engine_lines')}): it only slims")

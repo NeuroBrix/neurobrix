@@ -274,13 +274,14 @@ Every finding ends in exactly one of three fates:
 3. **Kept in the engine** — policy (a decision of the engine: Prism, the flow, the formats, the families): one sentence
    says why, in the table below.
 
-Open findings are listed in `docs/nbxtensor/engine_slim_list.tsv`, whose header records the engine's Python line
+Open findings are listed in `docs/nbxtensor/engine_slim_list.tsv`, whose header records the engine's code-line
 count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_engine_only_slims.py` holds the rules:
 
 - a finding that is neither open in the list nor kept below fails — a new one was written: delete it, move it, or
   justify it here;
 - a listed or kept finding the scan no longer finds fails — it was resolved: delete its line;
-- the engine's line count and the number of open findings may only go down.
+- the engine's code-line count (no docstring, comment-only or blank line — the brick ratchet's count, re-based
+  2026-11-10 from 141 714 lines of text to 85 785 of code) and the number of open findings may only go down.
 
 ## Deleted
 
@@ -351,6 +352,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-10 | (no move) The RATCHET RAISED from 141 300 to 141 582 lines (+163 for `run`, then the daemon's reload and doctor's lines), POLICY: an Intel GPU refused at run time (the experimental Level Zero backend; the owner 13:09) — `core/prism/intel_refusal.py` (what the engine does with nbxtensor's typed IntelDeviceError: the sentence, the record under the driver and nbxtensor versions, the one restart on the CPU, the expiry), detection listing a recorded chip as a refused device (`core/prism/autodetect.py`), the command line's entry (`cli/commands/run.py`), the daemon's one reload on the CPU plan (`serving/server.py`), doctor's lines (`cli/commands/doctor.py`). The mechanism — the Level Zero runtime, the driver, the typed error — is nbxtensor's |
 | 2026-11-10 | (no move) The RATCHET RAISED by +13 lines (141 582 -> 141 595), the compiled mirror of a library mechanism (R30): a spilled prefill chunk's math in `core/runtime/graph/kv_cache_wrapper._prefill_over_spill` is torch's — it writes its fp32 scores — so its query rows are cut to one page of rows (or the plan's `attention_scores_budget_bytes` where the device writes full scores), refused by name when one row does not fit: the served plan's larger chunks (2 048 rows x 65 664 keys = 17 GB a matrix) made the uncut math impossible. The spilled positions themselves come from nbxtensor (`HostSpill.blocks`); the Triton engine's cut is the library's own attention route. Decided between the agents 17:07. |
 | 2026-11-10 | (no move) The RATCHET RAISED by +119 lines (141 595 -> 141 714), all policy: Prism's pricing of the generation head at the one row the flows feed it (`core/prism/flow_bindings.FlowBindings.head_rows`, `InputConfig.scoring`, `run.scoring_request`), the daemon's request carrying the flow facts, and a new named decision component, `core/prism/served_prefill.py` (its contract at its head: the rows a serving session's prefill chunk is priced at, raised while the plan's residents hold). No tensor, kernel or device-memory code: the chunks themselves run through the existing prefill path. |
+| 2026-11-10 | (no move) The header RE-BASED, not raised: `engine_lines` now counts CODE lines — no docstring, comment-only or blank line — the brick ratchet's own count (`tools/brick_ratchet.code_lines`), one definition for both ratchets. The same tree reads 141 714 lines of text and 85 785 lines of code; the header becomes 85 785. Why: the owner's rule of 2026-11-10 (code in bricks) has catch-all functions cut into named pieces, each with its one-sentence docstring, and this code carries its reasons in comments — under the old count both read as growth and the two ratchets pulled against each other (decided between the agents, 17:26). From here a row's figures are code lines. |
 
 ## Kept in the engine
 

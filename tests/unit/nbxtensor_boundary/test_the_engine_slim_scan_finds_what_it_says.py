@@ -85,10 +85,16 @@ def test_each_kind_is_found_and_nothing_in_use_is(tmp_path):
     assert not {s for k, p, s in got if k == "wrapper" and s in ("helper", "caller", "entry", "scaled")}, sorted(got)
 
 
-def test_the_line_count_is_the_engines_python_lines(tmp_path):
+def test_the_line_count_is_the_engines_code_lines(tmp_path):
+    """Code lines — no docstring, comment-only or blank line (the brick ratchet's count): a docstring or a reason
+    written in a comment never reads as growth. Red when every line of text is counted."""
     r = _repo(tmp_path)
-    expect = sum(len(p.read_text().splitlines()) for p in (r / "src" / "neurobrix").rglob("*.py"))
-    assert S.engine_lines(r) == expect > 0
+    before = S.engine_lines(r)
+    text_lines = sum(len(p.read_text().splitlines()) for p in (r / "src" / "neurobrix").rglob("*.py"))
+    assert 0 < before <= text_lines
+    _write(r, "src/neurobrix/counted.py", '"""A module\nof two docstring lines."""\n\n# a reason\nX = 1  # kept\n\n\n'
+                                           'def f():\n    """Says."""\n    return (\n        X)\n')
+    assert S.engine_lines(r) == before + 4          # X = 1, def f, return (, X)
 
 
 def test_a_file_it_cannot_read_is_refused_by_name(tmp_path):
