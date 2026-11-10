@@ -1,4 +1,4 @@
-"""The engine's grammar constraint (core/state/constraint.py over nbx_grammar): its vocabulary is the tokenizer's
+"""The engine's grammar constraint (core/state/constraint.py over nbxgrammar): its vocabulary is the tokenizer's
 token_bytes at the logits' width (ids the tokenizer does not know never allowed), built once and kept, and its masks
 lead only to output that validates. Card-less."""
 import json
@@ -8,7 +8,7 @@ import pytest
 
 from tests.unit.grammar_engine import load  # noqa: E402
 
-nbx_grammar = load()
+nbxgrammar = load()
 from neurobrix.core.state.constraint import GrammarConstraint, compile_json_schema  # noqa: E402
 
 TOKS = [b"{", b'"ok"', b":", b"true", b"false", b"}", b" ", None]   # id 7: a special token

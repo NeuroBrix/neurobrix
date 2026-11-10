@@ -255,9 +255,9 @@ component with the memory it measured and goes on, once, keeping the components 
 
 - On an Intel Mac the integrated GPU is named from system_profiler without its platform; it is not driven, and the
   engine runs on the CPU.
-- Constrained decoding needs the grammar engine's compiled library, which these wheels do not carry yet: from a
-  source checkout it is built with `cargo build --release` in `rust/nbx_grammar`; installed from PyPI, a constrained
-  request is refused by name (`501 constrained_decoding_not_installed`). It enforces a subset of JSON Schema (a
+- Constrained decoding needs the grammar engine, the `nbxgrammar` package, which `pip install neurobrix` installs on
+  Linux x86_64 and aarch64, macOS arm64 and x86_64 and Windows x86_64; on any other platform no wheel of it exists and a
+  constrained request is refused by name (`501 constrained_decoding_not_installed`). It enforces a subset of JSON Schema (a
   constraining keyword outside it is refused by name) and writes tool calls in the format the model's template
   declares.
 - No embedding model is in the catalogue yet: `/v1/embeddings` refuses every catalogue model by name.

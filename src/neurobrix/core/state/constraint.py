@@ -38,23 +38,23 @@ def allowed_tokens(words: np.ndarray, vocab: int) -> np.ndarray:
 
 
 def compile_json_schema(text: str):
-    """A JSON schema compiled by our grammar engine (nbx_grammar, rust/); ValueError naming the construct it cannot
+    """A JSON schema compiled by our grammar engine (nbxgrammar, its own package: pip install nbxgrammar); ValueError naming the construct it cannot
     enforce; a refusal by name when the engine is not installed."""
     try:
-        import nbx_grammar
+        import nbxgrammar
     except ImportError as e:
-        raise RuntimeError(f"ZERO FALLBACK: constrained decoding needs the grammar engine nbx_grammar ({e})") from e
-    return nbx_grammar.Grammar.json_schema(text)
+        raise RuntimeError(f"ZERO FALLBACK: constrained decoding needs the grammar engine nbxgrammar, not installed here: pip install nbxgrammar ({e})") from e
+    return nbxgrammar.Grammar.json_schema(text)
 
 
 def compile_description(text: str):
     """A grammar description (agent/envelope.py writes the tool-call envelopes in it) compiled by our grammar engine;
     ValueError naming what it cannot enforce."""
     try:
-        import nbx_grammar
+        import nbxgrammar
     except ImportError as e:
-        raise RuntimeError(f"ZERO FALLBACK: constrained decoding needs the grammar engine nbx_grammar ({e})") from e
-    return nbx_grammar.Grammar.description(text)
+        raise RuntimeError(f"ZERO FALLBACK: constrained decoding needs the grammar engine nbxgrammar, not installed here: pip install nbxgrammar ({e})") from e
+    return nbxgrammar.Grammar.description(text)
 
 
 class GrammarConstraint:
@@ -62,17 +62,17 @@ class GrammarConstraint:
     tokenizer class) is built once per tokenizer and logits width and kept in `cache` (the serving engine's)."""
 
     def __init__(self, grammar, tokenizer, eos_ids, cache: dict):
-        import nbx_grammar
+        import nbxgrammar
         self._grammar, self._tokenizer, self._eos, self._cache = grammar, tokenizer, list(eos_ids), cache
-        self._matcher = nbx_grammar.Matcher(grammar)
+        self._matcher = nbxgrammar.Matcher(grammar)
         self._vocab = None
 
     def _vocabulary(self, width: int):
         key = (self._tokenizer, int(width), tuple(self._eos))      # the object itself: an id is reused once freed
         if key not in self._cache:
-            import nbx_grammar
+            import nbxgrammar
             # the logits may be wider than the tokenizer (padded heads): an id it does not know has no bytes
-            self._cache[key] = nbx_grammar.Vocab([self._tokenizer.token_bytes(i) for i in range(int(width))], self._eos)
+            self._cache[key] = nbxgrammar.Vocab([self._tokenizer.token_bytes(i) for i in range(int(width))], self._eos)
         return self._cache[key]
 
     def mask(self, vocab: int) -> np.ndarray:

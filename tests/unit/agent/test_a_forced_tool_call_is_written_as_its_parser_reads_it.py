@@ -8,7 +8,7 @@ import pytest
 
 from tests.unit.grammar_engine import load  # noqa: E402
 
-nbx_grammar = load()
+nbxgrammar = load()
 from neurobrix.agent.envelope import envelope, reasoning_close  # noqa: E402
 from neurobrix.agent.parsers import JsonListToolCallParser, JsonToolCallParser, XmlToolCallParser  # noqa: E402
 
@@ -27,13 +27,13 @@ def encode(text):
 
 def _vocab():
     toks = [bytes([b]) for b in range(256)] + [None] * (max(MARKERS.values()) - 256 + 1)
-    return nbx_grammar.Vocab(toks, [EOS])
+    return nbxgrammar.Vocab(toks, [EOS])
 
 
 def _walk(desc, text):
     """Feed `text` as single bytes, its markers as their token steps; True when every step was allowed and the end
     of the turn is allowed after it."""
-    v, m = _vocab(), nbx_grammar.Matcher(nbx_grammar.Grammar.description(json.dumps(desc)))
+    v, m = _vocab(), nbxgrammar.Matcher(nbxgrammar.Grammar.description(json.dumps(desc)))
     i = 0
     while i < len(text):
         hit = next((k for k in MARKERS if text.startswith(k, i)), None)

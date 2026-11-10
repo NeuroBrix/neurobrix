@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   description, default, examples, ...) are read as annotations. A reasoning model answers after its reasoning ends,
   never inside it. `parallel_tool_calls: false` without a forced call is refused by name. Tool
   calls follow the format the model's chat template defines (`<tool_call>` JSON, Qwen3-Coder's XML, granite's list).
-  The grammar engine is NeuroBrix's own (rust/nbx_grammar); a machine without it answers these requests 501, by name.
+  The grammar engine is NeuroBrix's own, the `nbxgrammar` package (Rust, std only), installed with neurobrix where a
+  wheel of it exists (Linux x86_64 and aarch64, macOS arm64 and x86_64, Windows x86_64); elsewhere these requests answer
+  501, by name.
 - **A served conversation that leaves the KV cache comes back from host memory**: when another conversation takes the
   daemon's cache, the whole pages the first one held are parked in host memory and copied back when it returns, so its
   next turn prefills only what is new; the answers are the same tier on or off. The host memory it may hold is bounded

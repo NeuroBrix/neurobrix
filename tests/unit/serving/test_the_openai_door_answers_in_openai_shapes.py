@@ -518,10 +518,10 @@ def test_a_forced_tool_call_hands_the_templates_envelope_to_the_decode(make):
 
 
 def test_without_the_grammar_engine_a_constrained_request_is_refused_by_name(make, monkeypatch):
-    """On a machine where nbx_grammar is not installed, response_format json_schema and a forced tool call answer 501
+    """On a machine where nbxgrammar is not installed, response_format json_schema and a forced tool call answer 501
     naming it (never a generic 500) — the Dell's review 2026-11-09 23:06."""
     import sys
-    monkeypatch.setitem(sys.modules, "nbx_grammar", None)          # `import nbx_grammar` raises ImportError
+    monkeypatch.setitem(sys.modules, "nbxgrammar", None)          # `import nbxgrammar` raises ImportError
     eng = FakeEngine(template=" <tool_call> </tool_call>")
     eng.tokenizer.encode = lambda text, add_special_tokens=True: [900] if text.endswith("tool_call>") else list(text.encode())
     _, base = make(eng)

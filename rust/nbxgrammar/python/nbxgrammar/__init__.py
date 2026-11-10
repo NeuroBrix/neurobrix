@@ -1,6 +1,6 @@
-"""nbx_grammar: NeuroBrix's grammar engine (rust/nbx_grammar, std only) through its C ABI, loaded with ctypes - no
-binding library. The shared library lives beside this file (built by `cargo build --release`, placed by the package's
-build). Masks are int32 words, ceil(vocab / 32), bit v % 32 of word v // 32 = token v allowed."""
+"""nbxgrammar: NeuroBrix's grammar engine (this repository's Rust crate, std only) through its C ABI, loaded with ctypes - no
+binding library. The shared library lives beside this file (built by the package's build from the crate and placed
+here). Masks are int32 words, ceil(vocab / 32), bit v % 32 of word v // 32 = token v allowed."""
 from __future__ import annotations
 
 import ctypes
@@ -10,10 +10,10 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-_NAME = {"darwin": "libnbx_grammar.dylib", "win32": "nbx_grammar.dll"}.get(sys.platform, "libnbx_grammar.so")
+_NAME = {"darwin": "libnbxgrammar.dylib", "win32": "nbxgrammar.dll"}.get(sys.platform, "libnbxgrammar.so")
 _PATH = Path(__file__).with_name(_NAME)
 if not _PATH.is_file():
-    raise ImportError(f"nbx_grammar: its library {_PATH} is not built (cargo build --release in rust/nbx_grammar)")
+    raise ImportError(f"nbxgrammar: its library {_PATH} is not in the package (install a wheel: pip install nbxgrammar; from a checkout: pip install .)")
 _lib = ctypes.CDLL(str(_PATH))
 _P, _U32, _SZ = ctypes.c_void_p, ctypes.c_uint32, ctypes.c_size_t
 _lib.ng_vocab_new.restype = _P
@@ -47,7 +47,7 @@ class Vocab:
         self._h = _lib.ng_vocab_new(data, lens.ctypes.data_as(ctypes.POINTER(_U32)), self.size,
                                     e.ctypes.data_as(ctypes.POINTER(_U32)), len(e))
         if not self._h:
-            raise ValueError(f"nbx_grammar: an end-of-sequence id of {list(eos)} lies past the {self.size} tokens")
+            raise ValueError(f"nbxgrammar: an end-of-sequence id of {list(eos)} lies past the {self.size} tokens")
 
     def __del__(self):
         if getattr(self, "_h", None):
@@ -96,12 +96,12 @@ class Matcher:
     def mask(self, vocab: Vocab) -> np.ndarray:
         out = np.zeros(vocab.words, dtype=np.uint32)
         if _lib.ng_mask(vocab._h, self._h, out.ctypes.data_as(ctypes.POINTER(_U32)), vocab.words) != 0:
-            raise ValueError("nbx_grammar: a mask of the wrong size")
+            raise ValueError("nbxgrammar: a mask of the wrong size")
         return out.view(np.int32)
 
     def advance(self, vocab: Vocab, token: int) -> None:
         if _lib.ng_advance(vocab._h, self._h, int(token)) != 0:
-            raise ValueError(f"nbx_grammar: token {token} is not allowed here")
+            raise ValueError(f"nbxgrammar: token {token} is not allowed here")
 
     def accepting(self) -> bool:
         return bool(_lib.ng_accepting(self._h))

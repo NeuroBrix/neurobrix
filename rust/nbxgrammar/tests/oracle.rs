@@ -1,10 +1,10 @@
 //! The engine against two oracles: (1) the mask equals the brute force (every token's bytes fed to a fresh copy of the
 //! matcher; EOS only where the output may end); (2) every output a random walk completes parses as JSON and validates
 //! against its schema (an independent validator, here only).
-use nbx_grammar::json::{parse, Json};
-use nbx_grammar::matcher::Matcher;
-use nbx_grammar::schema::{compile, compile_description};
-use nbx_grammar::vocab::Vocab;
+use nbxgrammar::json::{parse, Json};
+use nbxgrammar::matcher::Matcher;
+use nbxgrammar::schema::{compile, compile_description};
+use nbxgrammar::vocab::Vocab;
 
 struct Rng(u64);
 impl Rng {
