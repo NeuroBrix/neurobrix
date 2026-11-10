@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.6] - unreleased
 
 ### Changed
+- **A long prompt sent to `neurobrix serve` is read several times faster on the PyTorch engine.** The daemon read a
+  prompt in slices of 128 tokens, each one a full pass of the model; it now takes the largest slice its memory plan
+  holds without giving up anything it keeps on the GPU. Measured on two V100-32GB with Qwen3-Coder-30B-A3B: a
+  19 931-token prompt answered in 44 s instead of 322 s, a 79 931-token one in 7 min 43 s instead of 39 min (with the
+  change below), same answers. Starting the daemon takes up to six more planning passes — about four
+  minutes for that model.
+
+### Fixed
+- **The memory plan no longer reserves room for answers the model never computes.** The plan counted the final
+  projection onto the vocabulary for every token of the prompt, while both engines compute it for the last token only:
+  1.2 MB per prompt token for a 151 936-token vocabulary. A long prompt given to `serve` no longer pushes model weights
+  off the GPU for it, and one given to `run` no longer can. (A scoring request, `--set global.score_mode=1`, does compute every position and is still
+  planned so.)
+
+### Changed
 - **A prompt longer than the GPU's cache is read faster**: the part of a long prompt that no longer fits the card's
   cache was attended on the CPU for every chunk of the prompt; it now passes back through the GPU block by block (same
   result). On the 79 931-token turn measured on two V100-32GB that CPU work was about half of each chunk past the

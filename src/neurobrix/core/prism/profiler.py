@@ -81,6 +81,9 @@ class InputConfig:
     # diffusion encoder's tokenized length, the denoiser's finalized text axis, a FLUX denoiser's
     # packed inputs. None: the name-driven map alone.
     flow: Optional[Any] = None
+    # A teacher-forced scoring request (`--set global.score_mode=1`): the flow's head runs EVERY prompt position, not
+    # the last one (`FlowBindings.head_rows`).
+    scoring: bool = False
     # The branches classifier-free guidance batches together (`run.request_input_config`: 2 when the
     # request's guidance is in force, so `batch_size` is already that multiple of the request's own
     # batch). None: the request runs no guidance, and there is no guidance batch to split.

@@ -240,6 +240,16 @@ def request_decode_bound(args, cached_defaults=None):
     return int(asked) + sum(len((getattr(args, a, None) or '').encode('utf-8')) for a in ('prompt', 'system'))
 
 
+def scoring_request(args) -> bool:
+    """Whether the request is a teacher-forced scoring one (`--set global.score_mode=<true value>`): its flow runs the
+    head over every prompt position, so Prism prices the head at the prompt's rows (`FlowBindings.head_rows`)."""
+    for item in getattr(args, "set", None) or []:
+        key, eq, value = str(item).partition("=")
+        if eq and key.strip() == "global.score_mode" and value.strip().lower() not in ("", "0", "false"):
+            return True
+    return False
+
+
 def request_input_config(args, manifest: dict, family, cache_path):
     """The InputConfig Prism plans a request with: the request's own facts (--height, --width,
     the input image's size, the prompt as a batch of one, guidance doubling the batch), then the
@@ -424,6 +434,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
                        else getattr(args, "max_tokens", None)),
         steps=(getattr(args, "steps", None) or cached_defaults.get("num_inference_steps")),
         flow=_flow,
+        scoring=scoring_request(args),
         guidance_passes=guidance_passes,
         mode=resolve_mode(family, args),
         dtype=dtype,

@@ -133,6 +133,22 @@ class FlowBindings:
         from neurobrix.core.state.price import DEFAULT_PROMPT_MARGIN
         return int(defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
 
+    def head_rows(self, comp: str, input_config=None) -> Optional[int]:
+        """The rows the flow feeds its generation HEAD in one pass: 1 — both engines project the last position only
+        (`core/flow/autoregressive.py` `get_logits(hidden[:, -1:, :])`, the Triton strategies' `hidden.select(1, T - 1)`),
+        at the prompt's pass as at every token's. Bound by name, the head's sequence axis took the request's prompt
+        rows: Qwen3-Coder-30B-A3B's 151 936-wide head was priced 1.2 MB a prompt row, 1 184 MB between a 128-row and
+        a 1 024-row prefill chunk, for logits no engine computes (2026-11-10). None for any other component, and for
+        a scoring request (`InputConfig.scoring`, `--set global.score_mode=1`), whose head does run every position
+        (`get_logits_all`): its rows are the request's."""
+        head = (self.flow.get("generation") or {}).get("head_component")
+        if not head or self.cache_path is None or getattr(input_config, "scoring", False):
+            return None
+        from neurobrix.core.prism.time_estimate import resolve_flow_name
+        names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
+            if (self.cache_path / "components").exists() else []
+        return 1 if resolve_flow_name(head, names) == comp else None
+
     def encoder_lengths(self) -> Dict[str, int]:
         """{pre-loop text encoder: tokenized length} of an iterative (diffusion) flow."""
         if self.flow.get("type") != "iterative_process":
@@ -356,6 +372,11 @@ class FlowBindings:
             for sid, info in table.items():
                 if info.get("name") in ("seq_len", "sequence_length"):
                     out[sid] = prefill
+        head = self.head_rows(comp, input_config)
+        if head is not None:
+            for sid, info in table.items():
+                if info.get("name") in ("seq_len", "sequence_length"):
+                    out[sid] = head
         enc_len = self.encoder_lengths()
         if comp in enc_len:
             for sid, info in table.items():

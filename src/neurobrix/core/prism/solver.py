@@ -3898,6 +3898,13 @@ class PrismSolver:
             return [int(d) for d in profiler._resolve_shape(meta, smap)]
         return shape_of
 
+    def solve_served(self, container, profile, input_config, mode: str = "compiled"):
+        """(plan, input config) of a serving session: the served plan, its prefill chunk raised while the plan holds
+        (core/prism/served_prefill.py — the decision is that module's, every solve is this one's)."""
+        from neurobrix.core.prism.served_prefill import raise_while_the_plan_holds
+        return raise_while_the_plan_holds(
+            lambda cfg: self.solve_smart(container, profile, cfg, serve_mode=True, mode=mode), input_config)
+
     def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
                     mode: str = "compiled", replan: bool = True):
         """The plan sized by the pool's facts; and when the machine is busy NOW (the execution door: what is free is
@@ -5207,10 +5214,12 @@ class PrismSolver:
         from neurobrix.core.state import price as P
         if kv.session_reach is None:
             return None, "no serving session is planned (no session reach): one chunk per request"
+        # the phrase `served_prefill` reads a chunk chosen without certified times by: its constant, never restated
+        from neurobrix.core.prism.served_prefill import UNTIMED
         untimed = self._mode not in TRITON_ENGINES
         if untimed and not getattr(self, "_serve_requested", False):
             # a run prices its prefill at its own request's rows (`InputConfig.seq_len`): its one pass is priced
-            return None, (f"one chunk per turn: the {self._mode} engine keeps no certified kernel times to price a "
+            return None, (f"one chunk per turn: the {self._mode} engine keeps {UNTIMED} to price a "
                           f"chunk from, and a run's prefill is priced at its own rows")
         if profile is None or not kv_devices or getattr(container, "cache_path", None) is None:
             return None, "one chunk per turn: the plan names no decoder card to price a chunk on"
@@ -5235,6 +5244,9 @@ class PrismSolver:
                                        PAGED_DECODE_TILE_CANDIDATES)
         rows = P.session_prefill_rows(defaults)
         if untimed:
+            # the rows this plan PRICES a served turn's prefill at: the request's when it states them (`served_prefill`
+            # raises them while the plan holds), else the container's prompt margin
+            rows = int(getattr(getattr(self, "_input_config", None), "seq_len", 0) or 0) or rows
             # No certified time to price a chunk on this engine: a served turn runs in chunks of the rows the plan
             # prices a session's prefill at (whole pages), never as one pass the plan did not price — on the compiled
             # engine a 79 931-token turn of Qwen3-Coder-30B-A3B served on two V100-32GB asked its 5.95 GiB causal mask
@@ -5242,7 +5254,7 @@ class PrismSolver:
             # beyond the priced rows is the next step.
             C = P.prefill_chunk_candidates(page, rows)[-1]
             return C, (f"chunks of {C} rows: the rows the plan prices a served turn's prefill at (whole pages of "
-                       f"{page}); the {self._mode} engine keeps no certified kernel times to choose a larger one")
+                       f"{page}); the {self._mode} engine keeps {UNTIMED} to choose among them")
         record = PC.chunk_record(Path(str(container.cache_path)), vendor, arch, cls,
                                  "triton" if self._mode == "triton" else "triton-sequential")
         return PC.choose(record, P.prefill_chunk_candidates(page, rows), rows, PC.certified_times(vendor, arch, cls))

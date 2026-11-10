@@ -162,16 +162,24 @@ class InferenceEngine:
                                              _vsf(manifest, cached_defaults, _topo_components))])
 
         self._hw_profile = hw_profile
+        # the flow's per-component facts, as a run's plan reads them (`run.request_input_config`): the generation
+        # head's one row, the generating model's prompt rows
+        from neurobrix.core.prism.flow_bindings import FlowBindings
         input_config = self._input_config = InputConfig(
             batch_size=2,
             height=height,
             width=width,
             dtype="float16",
             vae_scale=vae_scale,
+            flow=(FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
+                  if _topo_path.exists() else None),
         )
 
         solver = PrismSolver()
-        self._plan = solver.solve_smart(self._container, hw_profile, input_config, serve_mode=True)
+        # the session's plan, its prefill chunk raised while the plan holds (PrismSolver.solve_served); the input
+        # config it was priced at is the daemon's, so a re-plan prices the same rows
+        self._plan, input_config = solver.solve_served(self._container, hw_profile, input_config, mode=self.mode)
+        self._input_config = input_config
 
         # 3b. Resolve primary device from plan
         self._device = self._plan.primary_device
