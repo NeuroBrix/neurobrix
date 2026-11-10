@@ -84,3 +84,33 @@ def test_the_daemon_states_no_batch_and_no_dtype_of_its_own():
             literal = {k.arg for k in node.keywords if k.arg in ("batch_size", "dtype")
                        and isinstance(k.value, ast.Constant)}
             assert not literal, f"the daemon's InputConfig states {sorted(literal)} as literals"
+
+
+def _head_graph():
+    """A linear head as the trace writes it: aten::t of the weight, then aten::mm with the hidden rows."""
+    t = lambda shape, **kw: {"shape": list(shape), "dtype": "float16", **kw}                     # noqa: E731
+    op = lambda uid, kind, ins, outs: {"op_uid": uid, "op_type": kind, "input_tensor_ids": ins,   # noqa: E731
+                                       "output_tensor_ids": outs,
+                                       "attributes": {"args": [{"type": "tensor", "tensor_id": i} for i in ins]}}
+    ops = [op("t::0", "aten::t", ["param::w"], ["wt"]), op("mm::0", "aten::mm", ["input::h", "wt"], ["logits"])]
+    return {"tensors": {"input::h": t([1, 64], is_input=True), "param::w": t([1000, 64]), "wt": t([64, 1000]),
+                        "logits": t([1, 1000])},
+            "ops": {o["op_uid"]: o for o in ops}, "execution_order": [o["op_uid"] for o in ops],
+            "input_tensor_ids": ["input::h"], "output_tensor_ids": ["logits"], "torch_dtype": "float16"}
+
+
+def test_a_head_run_with_amp_off_copies_no_operand_to_fp32(tmp_path):
+    """On fp16 hardware an uncontracted mm runs under the fp32 wrapper, which copies its weight to fp32 while it runs
+    — priced, rightly, for a component with AMP on. The flow's text head has AMP off: no wrapper, no copy (Qwen3-Coder:
+    1 187 MB planned for a copy no run makes, 2026-11-10)."""
+    from neurobrix.core.prism.runtime_widths import conservative_contract, plan_time_contract, runtime_widths
+    fb = _bindings(tmp_path, {"type": "autoregressive_text", "lm_component": "language_model",
+                              "head_component": "lm_head"})
+    kw = dict(attention_operands="narrowest", has_native_bf16=False, stores_fp64=False)
+    on = runtime_widths(_head_graph(), "float16", "compiled", contract=conservative_contract("test"), **kw)
+    assert ("wt", 4) in on.casts.get("mm::0", []), on.casts                # the copy exists where AMP is on
+    head = plan_time_contract(tmp_path, "lm_head", _head_graph(), "float16", fb)
+    assert head.amp is False
+    off = runtime_widths(_head_graph(), "float16", "compiled", contract=head, **kw)
+    assert not off.casts.get("mm::0"), off.casts
+    assert plan_time_contract(tmp_path, "language_model", None, "bfloat16", fb).amp is True

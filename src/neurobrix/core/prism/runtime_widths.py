@@ -163,6 +163,9 @@ class PrecisionContract:
     fp32_op_uids: FrozenSet[str]
     narrow_op_uids: FrozenSet[str]
     why: str = ""
+    #: False: the flow runs this component with AMP off (`DtypeEngine.amp_enabled`): `compile_op` wraps nothing, so no
+    #: operand is copied to another dtype while an op runs (the compiled engine's text generation head)
+    amp: bool = True
 
 
 def conservative_contract(why: str) -> PrecisionContract:
@@ -170,7 +173,7 @@ def conservative_contract(why: str) -> PrecisionContract:
 
 
 def plan_time_contract(cache_path, component_name: str, dag: Optional[Dict[str, Any]],
-                       compute_dtype: str) -> PrecisionContract:
+                       compute_dtype: str, flow=None) -> PrecisionContract:
     """The contract `precision_contract.resolve` (precision_contract.py:213-283) would hand
     this component, computed WITHOUT its side effects (it prints, binds a calibration census
     and reads the arch through the launcher) — by calling the same functions it calls.
@@ -185,6 +188,11 @@ def plan_time_contract(cache_path, component_name: str, dag: Optional[Dict[str, 
       * `record.prefer` (:250-259) is keyed by the launcher's arch fingerprint, read from the
         driver: ANY 'conservative' preference makes the plan price the conservative path.
     """
+    if flow is not None and flow.head_runs_without_amp(component_name):
+        # `flow`: the request's FlowBindings. The flow turns this head's AMP off (core/flow/autoregressive.py): the
+        # fp32 wrapper that would copy its vocabulary x hidden weight to fp32 is never built (Qwen3-Coder-30B: 1 187 MB
+        # priced for a copy no run makes — the Dell's reading, 2026-11-10 18:16)
+        return PrecisionContract(False, frozenset(), frozenset(), "the flow runs this head with AMP off", amp=False)
     c = str(compute_dtype).replace("torch.", "")
     if c != "float16":                                   # precision_contract.py:231-233
         return conservative_contract(f"compute dtype {c}: the contract exists for float16 only")
@@ -954,7 +962,7 @@ class _AtenRules(_Rules):
         c = self.c
         name = op.get("op_type", "").split("::")[-1].split(".")[0]
         fl = [(t, d) for t, d, zero in self.floats(ins, w) if not zero]
-        if not fl or name in _CASTS or name in ATEN_AMP_CREATION_FILL_OPS:
+        if not fl or not self.contract.amp or name in _CASTS or name in ATEN_AMP_CREATION_FILL_OPS:
             return []
 
         def to(target):

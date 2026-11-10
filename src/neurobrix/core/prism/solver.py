@@ -4715,7 +4715,7 @@ class PrismSolver:
             conservative_contract, plan_time_contract, runtime_widths)
         cache_path = getattr(container, "cache_path", None)
         if cache_path:
-            contract = plan_time_contract(cache_path, comp.name, comp.graph, compute_dtype)
+            contract = plan_time_contract(cache_path, comp.name, comp.graph, compute_dtype, input_config.flow)
         else:
             contract = conservative_contract("the container has no cache path to read a record from")
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
