@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ## [0.1.1] - unreleased
+### Changed
+- **The Intel launch driver goes through its runtime's contract** (no behaviour change; the backend stays
+  experimental, not yet validated on hardware): `backend/level_zero.py` is the only module that knows a Level Zero
+  struct, constant or entry point of a module's life — `LevelZeroRuntime.build_module` (answers `ModuleBuilt`: the
+  result, the module, the build log; a failure is answered, the retry is the driver's decision), `create_kernel`,
+  `kernel_properties`, `destroy_kernel`, `destroy_module`, `set_argument`, `set_group_size`, `append_launch`,
+  `current_device`. `backend/level_zero_driver.py` imported 14 private names and issued 12 raw `ze*` calls; it now
+  imports none and issues none, and holds the one decision that is a driver's (the 256-register rebuild, its two
+  constants beside it). `backend/launcher.py` names publicly what a driver in another file uses: `ModuleDriver`,
+  `ctypes_slot`. Proven without a card: the exact ze calls of ten load and launch paths, recorded before the move,
+  reproduced by it.
 ### Removed
 - **`DeviceAllocator.peer_copy`**, added the same day and never published. It was written for the compiled
   engine's card-to-card hand-offs, on the assumption that the library could copy PyTorch's device memory by its raw

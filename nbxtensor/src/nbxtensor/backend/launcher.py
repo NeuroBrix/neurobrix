@@ -344,7 +344,7 @@ class Driver:
         raise NotImplementedError
 
 
-class _ModuleDriver(Driver):
+class ModuleDriver(Driver):
     """The launcher contract's surface (`backend/launcher_contract.py`) shared by the drivers that load a vendor binary
     as a module and launch it by function handle — CUDA (cubin) and HIP (hsaco): compile once, launch many times;
     streams and events are the allocator's. The same checker that gates the Metal driver gates both."""
@@ -462,7 +462,7 @@ class _ModuleDriver(Driver):
         return self._allocator().event_elapsed_ms(start, end)
 
 
-class CudaDriver(_ModuleDriver):
+class CudaDriver(ModuleDriver):
     """libcuda through ctypes. The context is the primary context of the
     allocator's current device, already alive through the runtime API."""
 
@@ -631,7 +631,7 @@ class CudaDriver(_ModuleDriver):
         cache_key = (int(function.value), kinds)
         slot = self._arg_buffers.get(cache_key)
         if slot is None:
-            storage = [_ctypes_slot(kind) for kind in kinds]
+            storage = [ctypes_slot(kind) for kind in kinds]
             arr = (ctypes.c_void_p * len(storage))(*[ctypes.addressof(c) for c in storage])
             slot = self._arg_buffers[cache_key] = (storage, arr)
         storage, arr = slot
@@ -667,7 +667,7 @@ def _amd_device_file(arch: str) -> dict:
     return found
 
 
-class HipDriver(_ModuleDriver):
+class HipDriver(ModuleDriver):
     """The HIP runtime's module API through ctypes, modelled on `CudaDriver`; no AMD card has run it yet.
 
     Read from Triton 3.8's own AMD backend (site-packages/triton/backends/amd/): the binary is `hsaco` (compiler.py,
@@ -790,7 +790,7 @@ class HipDriver(_ModuleDriver):
         cache_key = (int(function.value), kinds)
         slot = self._arg_buffers.get(cache_key)
         if slot is None:
-            storage = [_ctypes_slot(kind) for kind in kinds]
+            storage = [ctypes_slot(kind) for kind in kinds]
             arr = (ctypes.c_void_p * len(storage))(*[ctypes.addressof(c) for c in storage])
             slot = self._arg_buffers[cache_key] = (storage, arr)
         storage, arr = slot
@@ -879,7 +879,7 @@ _CTYPES_SLOT = {"ptr": ctypes.c_uint64, "u64": ctypes.c_uint64, "bits64": ctypes
                 "f64": ctypes.c_double}
 
 
-def _ctypes_slot(kind: str):
+def ctypes_slot(kind: str):
     """The C cell one launch parameter of this kind lives in — the same widths the packing
     produced when it built a fresh object per launch."""
     cell = _CTYPES_SLOT.get(kind)

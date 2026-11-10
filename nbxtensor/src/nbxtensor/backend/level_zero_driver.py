@@ -7,15 +7,16 @@ import ctypes
 import threading
 from typing import Dict, Optional, Tuple
 
-from nbxtensor.backend.launcher import _ModuleDriver, _ctypes_slot
-from nbxtensor.backend.level_zero import (_GRF_RETRY_FLAG, _KERNEL_FLAG_FORCE_RESIDENCY, _MODULE_FORMAT_IL_SPIRV,
-                                          _SPILL_RETRY_BYTES, _ST_KERNEL_DESC, _ST_KERNEL_PROPS, _ST_MODULE_DESC,
-                                          LevelZeroRuntime, _as_int, _GroupCount, _KernelDesc, _KernelProps,
-                                          _ModuleDesc, EXTENSION_FACTS, IntelDeviceError, device_extensions,
+from nbxtensor.backend.launcher import ModuleDriver, ctypes_slot
+from nbxtensor.backend.level_zero import (EXTENSION_FACTS, IntelDeviceError, LevelZeroRuntime, device_extensions,
                                           device_file_for, result_name, runtime)
 
+#: Intel's own driver (driver.c, `compileLevelZeroObjects`): a module is rebuilt once with 256 registers a thread when
+#: its build fails, or when its kernel spills past this many bytes, and no register mode was chosen
+GRF_RETRY_FLAG, SPILL_RETRY_BYTES = "-cl-intel-256-GRF-per-thread", 1000
 
-class LevelZeroDriver(_ModuleDriver):
+
+class LevelZeroDriver(ModuleDriver):
     """Intel GPUs: SPIR-V modules from Intel's Triton backend, kernels by name, arguments by index, an in-order
     immediate command list as the stream (module docstring of `backend.level_zero` for the sources)."""
 
@@ -43,7 +44,7 @@ class LevelZeroDriver(_ModuleDriver):
     def _check(self, rc: int, what: str) -> None:
         if rc != 0:
             raise IntelDeviceError(f"NeuroBrix launcher: {what} failed ({result_name(rc)})", what, rc,
-                                   device=self.rt._current)
+                                   device=self.rt.current_device)
 
     def target(self):
         """`GPUTarget("xpu", <properties>, 32)` as Intel's driver builds it (driver.py `_construct_target`), torch- and
@@ -93,60 +94,41 @@ class LevelZeroDriver(_ModuleDriver):
     def max_shared_memory_per_block(self) -> int:
         return int(self.rt.compute_properties().maxSharedLocalMemory)
 
-    def _module(self, binary: bytes, flags: str):
-        mod, log = ctypes.c_void_p(), ctypes.c_void_p()
-        buf = ctypes.create_string_buffer(binary, len(binary))
-        desc = _ModuleDesc(stype=_ST_MODULE_DESC, format=_MODULE_FORMAT_IL_SPIRV, inputSize=len(binary),
-                           pInputModule=ctypes.cast(buf, ctypes.c_void_p), pBuildFlags=flags.encode())
-        rc = self.rt.lib.zeModuleCreate(self.rt.context(), self.rt.device(), ctypes.byref(desc), ctypes.byref(mod),
-                                        ctypes.byref(log))
-        text = self._build_log(log)
-        return rc, mod, text
-
-    def _build_log(self, log) -> str:
-        if not log.value:
-            return ""
-        n = ctypes.c_size_t(0)
-        self.rt.lib.zeModuleBuildLogGetString(log, ctypes.byref(n), None)
-        buf = ctypes.create_string_buffer(n.value or 1)
-        self.rt.lib.zeModuleBuildLogGetString(log, ctypes.byref(n), buf)
-        self.rt.lib.zeModuleBuildLogDestroy(log)
-        return buf.value.decode(errors="replace")
-
     def _kernel(self, mod, name: str):
-        k = ctypes.c_void_p()
-        desc = _KernelDesc(stype=_ST_KERNEL_DESC, flags=_KERNEL_FLAG_FORCE_RESIDENCY, pKernelName=name.encode())
-        self._check(self.rt.lib.zeKernelCreate(mod, ctypes.byref(desc), ctypes.byref(k)), f"zeKernelCreate({name})")
-        props = _KernelProps(stype=_ST_KERNEL_PROPS)
-        self._check(self.rt.lib.zeKernelGetProperties(k, ctypes.byref(props)), "zeKernelGetProperties")
-        return k, props
+        """The kernel `name` of `mod` and its facts (declared arguments, spill)."""
+        built = self.rt.create_kernel(mod, name)
+        self._check(built.result, f"zeKernelCreate({name})")
+        facts = self.rt.kernel_properties(built.kernel)
+        self._check(facts.result, "zeKernelGetProperties")
+        return built.kernel, facts
 
     def load(self, binary: bytes, name: str, shared: int, build_flags: str = ""):
         """The kernel `name` of a SPIR-V module, built once per (device, binary, flags). Rebuilt with 256 registers
         per thread when the build fails or the kernel spills past 1000 bytes and no register mode was chosen —
         Intel's own driver does the same (driver.c)."""
-        key = (self.rt._current, binary, build_flags)
+        key = (self.rt.current_device, binary, build_flags)
         loaded = self._loaded.get((key, name))
         if loaded is not None:
             return loaded
         mod, k = self._modules.get(key), None
         if mod is None:
-            rc, mod, text = self._module(binary, build_flags)
+            built = self.rt.build_module(binary, build_flags)
             grf_chosen = "GRF" in build_flags
-            if rc != 0 and not grf_chosen:
-                rc, mod, text = self._module(binary, f"{build_flags} {_GRF_RETRY_FLAG}".strip())
+            if built.result != 0 and not grf_chosen:
+                built = self.rt.build_module(binary, f"{build_flags} {GRF_RETRY_FLAG}".strip())
                 grf_chosen = True
-            if rc != 0:
-                raise IntelDeviceError(f"NeuroBrix launcher: zeModuleCreate failed ({result_name(rc)}) for {name}: "
-                                       f"{text.strip()[:600]}", "zeModuleCreate", rc, text.strip(),
-                                       device=self.rt._current)
+            if built.result != 0:
+                raise IntelDeviceError(f"NeuroBrix launcher: zeModuleCreate failed ({result_name(built.result)}) for "
+                                       f"{name}: {built.log.strip()[:600]}", "zeModuleCreate", built.result,
+                                       built.log.strip(), device=self.rt.current_device)
+            mod = built.module
             k, props = self._kernel(mod, name)
-            if props.spillMemSize > _SPILL_RETRY_BYTES and not grf_chosen:
-                rc, mod2, text = self._module(binary, f"{build_flags} {_GRF_RETRY_FLAG}".strip())
-                if rc == 0:                       # the rebuilt module replaces the spilling one, its kernel with it
-                    self._check(self.rt.lib.zeKernelDestroy(k), "zeKernelDestroy")
-                    self._check(self.rt.lib.zeModuleDestroy(mod), "zeModuleDestroy")
-                    mod, k = mod2, None
+            if props.spill_bytes > SPILL_RETRY_BYTES and not grf_chosen:
+                rebuilt = self.rt.build_module(binary, f"{build_flags} {GRF_RETRY_FLAG}".strip())
+                if rebuilt.result == 0:           # the rebuilt module replaces the spilling one, its kernel with it
+                    self._check(self.rt.destroy_kernel(k), "zeKernelDestroy")
+                    self._check(self.rt.destroy_module(mod), "zeModuleDestroy")
+                    mod, k = rebuilt.module, None
             self._modules[key] = mod
         if k is None:
             k, props = self._kernel(mod, name)
@@ -154,7 +136,7 @@ class LevelZeroDriver(_ModuleDriver):
         if shared > limit:
             from triton.runtime.errors import OutOfResources
             raise OutOfResources(shared, limit, "shared memory")
-        self._kernels[int(k.value)] = {"args": int(props.numKernelArgs), "shared": int(shared), "name": name}
+        self._kernels[int(k.value)] = {"args": props.declared_args, "shared": int(shared), "name": name}
         self._loaded[(key, name)] = k
         return k
 
@@ -164,7 +146,7 @@ class LevelZeroDriver(_ModuleDriver):
             raise RuntimeError(f"NeuroBrix launcher: trailing buffers ({trailing!r}) were computed for a kernel the "
                                f"Level Zero driver cannot bind them for — a driver/metadata mismatch, not launched")
         from nbxtensor.memory.allocator import DeviceAllocator
-        h = _as_int(function)
+        h = int(getattr(function, "value", function) or 0)
         info = self._kernels.get(h)
         if info is None:
             raise RuntimeError(f"NeuroBrix launcher: kernel handle {h:#x} was not loaded by this driver — not launched")
@@ -182,23 +164,17 @@ class LevelZeroDriver(_ModuleDriver):
         bx, by, bz = (tuple(int(b) for b in block) + (1, 1, 1))[:3]
         if gx * gy * gz <= 0:
             return
-        lib, k = self.rt.lib, ctypes.c_void_p(h)
+        k = ctypes.c_void_p(h)
         with self._launch_lock:
             kinds = tuple(kind for kind, _v in params)
             cells = self._arg_buffers.get((h, kinds))
             if cells is None:             # one C cell per argument, built once per (kernel, kinds) as CudaDriver's
-                cells = self._arg_buffers[(h, kinds)] = [_ctypes_slot(kind) for kind in kinds]
+                cells = self._arg_buffers[(h, kinds)] = [ctypes_slot(kind) for kind in kinds]
             for i, (cell, (_kind, value)) in enumerate(zip(cells, params)):
                 cell.value = value
-                self._check(lib.zeKernelSetArgumentValue(k, ctypes.c_uint32(i), ctypes.c_size_t(ctypes.sizeof(cell)),
-                                                         ctypes.byref(cell)), f"zeKernelSetArgumentValue({i})")
+                self._check(self.rt.set_argument(k, i, ctypes.sizeof(cell), cell), f"zeKernelSetArgumentValue({i})")
             if slm:
-                self._check(lib.zeKernelSetArgumentValue(k, ctypes.c_uint32(len(params)),
-                                                         ctypes.c_size_t(int(shared)), None),
+                self._check(self.rt.set_argument(k, len(params), int(shared), None),
                             "zeKernelSetArgumentValue(shared local memory)")
-            self._check(lib.zeKernelSetGroupSize(k, ctypes.c_uint32(bx), ctypes.c_uint32(by), ctypes.c_uint32(bz)),
-                        "zeKernelSetGroupSize")
-            count = _GroupCount(gx, gy, gz)
-            self._check(lib.zeCommandListAppendLaunchKernel(self.rt.command_list(stream), k, ctypes.byref(count),
-                                                            None, ctypes.c_uint32(0), None),
-                        "zeCommandListAppendLaunchKernel")
+            self._check(self.rt.set_group_size(k, bx, by, bz), "zeKernelSetGroupSize")
+            self._check(self.rt.append_launch(stream, k, gx, gy, gz), "zeCommandListAppendLaunchKernel")

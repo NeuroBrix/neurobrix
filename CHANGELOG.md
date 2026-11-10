@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.6] - unreleased
 
 ### Changed
+- Follows nbxtensor (the experimental Intel backend's internals regrouped; nothing a user sees).
+
+### Changed
 - Follows nbxtensor (an internal call added the same day and never used is removed; nothing a user sees).
 
 ### Fixed

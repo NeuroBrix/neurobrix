@@ -2826,6 +2826,8 @@ the guard `tests/unit/nbxtensor_boundary/test_every_public_name_is_in_the_api.py
 
 ```python
 class Driver                   # what a backend implements: load a binary, launch it, name the compile target it wants
+class ModuleDriver(Driver)     # the base of the drivers that load a vendor binary as a module (CUDA, HIP, Level Zero)
+def ctypes_slot(kind: str)     # the C cell one launch parameter of this kind lives in
 class CudaDriver(Driver)       # libcuda through ctypes
 class HipDriver(Driver)        # the HIP runtime's module API (hsaco code objects; proven against a stand-in, no AMD card has run it)
 class CudaCompiledKernel       # the result of compiling once, launched many times (contract object)
@@ -3219,12 +3221,21 @@ def gpu_facts(lib=None) -> Optional[list]    # per GPU, in the runtime's order: 
                                              # max_allocation_bytes (maxMemAllocSize); None when no loader is installed
 def result_name(rc: int) -> str   # a ze_result_t's name
 def runtime() -> LevelZeroRuntime # the process-wide runtime
+# the launch driver's operations (LevelZeroRuntime methods; the only place a ze struct of a module's life is built):
+#   build_module(spirv, flags) -> ModuleBuilt     create_kernel(module, name) -> KernelBuilt
+#   kernel_properties(kernel) -> KernelFacts      destroy_kernel(kernel) / destroy_module(module) -> ze result
+#   set_argument(kernel, index, size, cell | None) / set_group_size(kernel, x, y, z) / append_launch(stream, kernel,
+#   x, y, z) -> ze result                         current_device -> the index this thread selected
+class ModuleBuilt(NamedTuple)     # result (0: built), module, log — a failed build is answered, never raised
+class KernelBuilt(NamedTuple)     # result, kernel
+class KernelFacts(NamedTuple)     # result, declared_args, spill_bytes
 ```
 
 ### `nbxtensor.backend.level_zero_driver` — Intel GPUs: the launch driver
 
 ```python
-class LevelZeroDriver(Driver)     # SPIR-V modules from Intel's Triton, Intel's argument ABI, an in-order immediate list as stream
+class LevelZeroDriver(ModuleDriver)   # SPIR-V modules from Intel's Triton, Intel's argument ABI, an in-order immediate list as
+                                    # stream; its one decision: the 256-register rebuild (GRF_RETRY_FLAG, SPILL_RETRY_BYTES)
 ```
 
 ### `nbxtensor.terminal` — the terminal rule of a command line built on the library (`python -m nbxtensor`, `neurobrix`)

@@ -24,7 +24,7 @@ from __future__ import annotations
 import ctypes
 import functools
 import threading
-from typing import Dict, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple
 
 #: the Level Zero loader (`libze1` on Ubuntu), tried in order
 from nbxtensor.backend.libnames import LEVEL_ZERO as LIBS   # noqa: E402
@@ -38,7 +38,6 @@ _DEVICE_TYPE_GPU, _QUEUE_GROUP_COMPUTE, _QUEUE_FLAG_IN_ORDER = 1, 1, 2
 _MODULE_FORMAT_IL_SPIRV, _KERNEL_FLAG_FORCE_RESIDENCY = 0, 1
 _EVENT_POOL_HOST_VISIBLE, _EVENT_SCOPE_HOST = 1, 4
 _UINT64_MAX = 0xFFFFFFFFFFFFFFFF
-_GRF_RETRY_FLAG, _SPILL_RETRY_BYTES = "-cl-intel-256-GRF-per-thread", 1000      # Intel's driver.c
 _ERR_UNSUPPORTED_FEATURE, _ERR_INVALID_ARGUMENT, _ERR_DEVICE_LOST = 0x78000003, 0x78000004, 0x70000001
 
 #: ze_result_t names (ze_api.h), for a refusal that says what Level Zero said
@@ -277,6 +276,28 @@ XPU_BACKEND = {
 }
 
 
+class ModuleBuilt(NamedTuple):
+    """What `LevelZeroRuntime.build_module` answers: the ze result (0: built), the module handle (null on a failure)
+    and the compiler's build log (read, then destroyed)."""
+    result: int
+    module: ctypes.c_void_p
+    log: str
+
+
+class KernelBuilt(NamedTuple):
+    """What `LevelZeroRuntime.create_kernel` answers: the ze result and the kernel handle."""
+    result: int
+    kernel: ctypes.c_void_p
+
+
+class KernelFacts(NamedTuple):
+    """What `LevelZeroRuntime.kernel_properties` answers: the ze result, the arguments the kernel declares and the
+    bytes it spills."""
+    result: int
+    declared_args: int
+    spill_bytes: int
+
+
 class LevelZeroRuntime:
     """The C ABI of a CUDA-style runtime (`cudaMalloc(&p, n)`, `cudaMemcpy(dst, src, n, kind)`, streams, events),
     served over Level Zero: one context per driver, an in-order immediate command list per device as its default
@@ -304,6 +325,67 @@ class LevelZeroRuntime:
     @property
     def _current(self) -> int:
         return getattr(self._thread, "index", 0)
+
+    @property
+    def current_device(self) -> int:
+        """The index of the device this thread has selected (what a launch driver keys its caches and errors by)."""
+        return self._current
+
+    # -- modules and kernels: the launch driver's operations ---------------------
+    # Every ze struct, constant and entry point of a module's life is here; the driver (`backend.level_zero_driver`)
+    # decides (which flags, whether to rebuild) and names its own failures: each operation answers the ze result.
+    def build_module(self, spirv: bytes, flags: str) -> ModuleBuilt:
+        """A SPIR-V module built for the current device with `flags`; a failure is ANSWERED, never raised (the retry
+        is the driver's decision). The build log is read and destroyed either way."""
+        mod, log = ctypes.c_void_p(), ctypes.c_void_p()
+        buf = ctypes.create_string_buffer(spirv, len(spirv))
+        desc = _ModuleDesc(stype=_ST_MODULE_DESC, format=_MODULE_FORMAT_IL_SPIRV, inputSize=len(spirv),
+                           pInputModule=ctypes.cast(buf, ctypes.c_void_p), pBuildFlags=flags.encode())
+        rc = self.lib.zeModuleCreate(self.context(), self.device(), ctypes.byref(desc), ctypes.byref(mod),
+                                     ctypes.byref(log))
+        return ModuleBuilt(rc, mod, self._build_log(log))
+
+    def _build_log(self, log) -> str:
+        if not log.value:
+            return ""
+        n = ctypes.c_size_t(0)
+        self.lib.zeModuleBuildLogGetString(log, ctypes.byref(n), None)
+        buf = ctypes.create_string_buffer(n.value or 1)
+        self.lib.zeModuleBuildLogGetString(log, ctypes.byref(n), buf)
+        self.lib.zeModuleBuildLogDestroy(log)
+        return buf.value.decode(errors="replace")
+
+    def destroy_module(self, module) -> int:
+        return self.lib.zeModuleDestroy(module)
+
+    def create_kernel(self, module, name: str) -> KernelBuilt:
+        """The kernel `name` of `module`, created with ZE_KERNEL_FLAG_FORCE_RESIDENCY."""
+        k = ctypes.c_void_p()
+        desc = _KernelDesc(stype=_ST_KERNEL_DESC, flags=_KERNEL_FLAG_FORCE_RESIDENCY, pKernelName=name.encode())
+        return KernelBuilt(self.lib.zeKernelCreate(module, ctypes.byref(desc), ctypes.byref(k)), k)
+
+    def kernel_properties(self, kernel) -> KernelFacts:
+        props = _KernelProps(stype=_ST_KERNEL_PROPS)
+        rc = self.lib.zeKernelGetProperties(kernel, ctypes.byref(props))
+        return KernelFacts(rc, int(props.numKernelArgs), int(props.spillMemSize))
+
+    def destroy_kernel(self, kernel) -> int:
+        return self.lib.zeKernelDestroy(kernel)
+
+    def set_argument(self, kernel, index: int, size: int, cell) -> int:
+        """Argument `index` of `kernel`: `size` bytes read from `cell` (a ctypes object), or a size alone (`cell`
+        None: the shared local memory)."""
+        return self.lib.zeKernelSetArgumentValue(kernel, ctypes.c_uint32(index), ctypes.c_size_t(size),
+                                                 None if cell is None else ctypes.byref(cell))
+
+    def set_group_size(self, kernel, x: int, y: int, z: int) -> int:
+        return self.lib.zeKernelSetGroupSize(kernel, ctypes.c_uint32(x), ctypes.c_uint32(y), ctypes.c_uint32(z))
+
+    def append_launch(self, stream: int, kernel, x: int, y: int, z: int) -> int:
+        """`kernel` over x * y * z groups, appended to the stream's immediate command list (no event)."""
+        count = _GroupCount(x, y, z)
+        return self.lib.zeCommandListAppendLaunchKernel(self.command_list(stream), kernel, ctypes.byref(count), None,
+                                                        ctypes.c_uint32(0), None)
 
     # -- handles ---------------------------------------------------------------
     def _check(self, rc: int, what: str) -> None:
