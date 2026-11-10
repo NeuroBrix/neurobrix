@@ -1,7 +1,9 @@
 # NeuroBrix Individual Contributor Assignment Agreement — version 1.0
 
-Modelled on the Project Harmony Contributor Assignment Agreement v1.0 (https://www.harmonyagreements.org), adapted to
-the NeuroBrix projects. Thank you for your interest in contributing to the NeuroBrix projects. To keep the projects able
+(referred to as "the NeuroBrix Contributor Assignment Agreement")
+
+Modelled on the Project Harmony Contributor Assignment Agreement v1.0 (https://www.harmonyagreements.org), used under
+the Creative Commons Attribution 3.0 Unported license, modified for the NeuroBrix projects. Thank you for your interest in contributing to the NeuroBrix projects. To keep the projects able
 to evolve, be licensed and be maintained over time, the rights in every Contribution are held by one party: the Owner.
 This Agreement transfers those rights to the Owner and gives You back a broad license to Your own Contribution.
 
@@ -30,7 +32,7 @@ with the Project to which it was submitted.
 ## 2. Assignment of rights
 
 2.1 You hereby assign to the Owner, as far as the law allows, all right, title and interest in and to the copyright and
-all other economic (exploitation) rights in Your Contribution, worldwide, for the full term of those rights, including
+all other economic (exploitation) rights in each Contribution, upon its Submission, worldwide, for the full term of those rights, including
 the right to bring action for past, present and future infringement.
 
 2.2 Where an assignment is not possible or not effective under the law that applies, You grant the Owner an exclusive,
@@ -92,8 +94,8 @@ including any warranties or conditions of TITLE, NON-INFRINGEMENT, MERCHANTABILI
 ## 8. Miscellaneous
 
 If any provision of this Agreement is held invalid or unenforceable, the remaining provisions stay in force, and the
-invalid provision is replaced by a valid one that comes closest to its intent. This Agreement applies to all Your
-Contributions to any of the Projects, past and future, from the date You accept it.
+invalid provision is replaced by a valid one that comes closest to its intent. This Agreement applies to every Contribution
+You have Submitted to any of the Projects before accepting it, and to every Contribution You Submit after.
 
 ## 9. Acceptance
 

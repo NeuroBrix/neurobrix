@@ -1,7 +1,7 @@
 # NeuroBrix Entity Contributor Assignment Agreement — version 1.0
 
 Modelled on the Project Harmony Entity Contributor Assignment Agreement v1.0 (https://www.harmonyagreements.org),
-adapted to the NeuroBrix projects. This Agreement lets a legal entity (the "Entity") authorise contributions by its
+used under the Creative Commons Attribution 3.0 Unported license, modified for the NeuroBrix projects. This Agreement lets a legal entity (the "Entity") authorise contributions by its
 Designated Employees to the NeuroBrix projects, and transfers the rights in them to the Owner.
 
 ## 1. Definitions
