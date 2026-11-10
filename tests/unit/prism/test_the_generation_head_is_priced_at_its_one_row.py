@@ -1,6 +1,6 @@
 """The flow's generation head is priced at the ONE row both engines feed it (`core/flow/autoregressive.py`
 `get_logits(hidden[:, -1:, :])`, the Triton strategies' `hidden.select(1, T - 1)`), and a serving session's prefill
-chunk is raised while the plan's residents hold (`core/prism/served_prefill.py`, through `PrismSolver.solve_served`).
+chunk is raised while the plan's residents hold (`core/prism/served_prefill.py`).
 
 Before (2026-11-10): the head's `seq_len` symbol was bound by name to the request's prompt rows. Qwen3-Coder-30B-A3B's
 151 936-wide head was priced 1.2 MB a prompt row — 1 184 MB between a 128-row and a 1 024-row prefill chunk, for
@@ -13,7 +13,7 @@ What this test does if the code is wrong:
    whose head does run every position — is priced at one row) — red;
 2. the profiler's map of the head's graph binds its sequence symbol to the request's rows — red on main (1024);
 3. a served compiled plan keeps the prompt margin's chunk when larger ones hold the plan, raises past the first size
-   that moves a resident, or a plan with certified times is touched — red (on main: no `solve_served`);
+   that moves a resident, or a plan with certified times is touched — red (on main: no such module);
 4. `--set global.score_mode=1` is not read as a scoring request, or `=0` is — red.
 
 No card. Run: python -m pytest tests/unit/prism/test_the_generation_head_is_priced_at_its_one_row.py
@@ -21,6 +21,7 @@ No card. Run: python -m pytest tests/unit/prism/test_the_generation_head_is_pric
 import dataclasses
 import json
 
+from neurobrix.core.prism.served_prefill import solve_served as SP_solve_served
 from tests.unit.prism._pinned_machine import container_root, profile, V100_16GB, pin_no_calibration
 
 MODEL = "TinyLlama-1.1B-Chat-v1.0"
@@ -72,7 +73,7 @@ def _served(monkeypatch, mode):
 def test_a_served_compiled_plan_raises_its_chunk_while_the_plan_holds(monkeypatch):
     solver, c, cfg = _served(monkeypatch, "compiled")
     base = solver.solve_smart(c, profile(V100_16GB), cfg, serve_mode=True, mode="compiled")
-    plan, used = solver.solve_served(c, profile(V100_16GB), cfg, mode="compiled")
+    plan, used = SP_solve_served(c, profile(V100_16GB), cfg, mode="compiled")
     kv = plan.kv_cache_plan
     assert base.kv_cache_plan.prefill_chunk == 128, base.kv_cache_plan.prefill_chunk_reason   # the prompt margin
     # TinyLlama on a 16 GB card: every size up to the cache's reach holds the plan
@@ -80,7 +81,7 @@ def test_a_served_compiled_plan_raises_its_chunk_while_the_plan_holds(monkeypatc
     from neurobrix.core.prism.served_prefill import resident_signature, UNTIMED
     assert f"compiled engine keeps {UNTIMED}" in kv.prefill_chunk_reason
     assert resident_signature(plan) == resident_signature(base)
-    assert used.flow is cfg.flow and dataclasses.replace(used, seq_len=None) == cfg
+    assert used.flow is cfg.flow and used.prefill_keys == 2048 and dataclasses.replace(used, seq_len=None, prefill_keys=None, prefill_key_dtype=None) == cfg
 
 
 def test_the_raise_ends_at_the_first_size_that_moves_a_resident(monkeypatch):
@@ -90,7 +91,7 @@ def test_the_raise_ends_at_the_first_size_that_moves_a_resident(monkeypatch):
     # a resident gives way from 1 024 priced rows on (as Qwen3-Coder's expert block does at 4 096 on two V100-32GB)
     monkeypatch.setattr(SP, "resident_signature",
                         lambda plan: real(plan) + ((plan.kv_cache_plan.prefill_chunk or 0) >= 1024,))
-    plan, used = solver.solve_served(c, profile(V100_16GB), cfg, mode="compiled")
+    plan, used = SP_solve_served(c, profile(V100_16GB), cfg, mode="compiled")
     assert plan.kv_cache_plan.prefill_chunk == used.seq_len == 512, (plan.kv_cache_plan.prefill_chunk, used.seq_len)
 
 
@@ -104,7 +105,7 @@ def test_a_size_no_plan_fits_ends_the_raise(monkeypatch):
             raise RuntimeError("This model cannot run on this machine")
         return real(self, container, prof, input_config, **kw)
     monkeypatch.setattr(PrismSolver, "solve_smart", refusing)
-    plan, used = solver.solve_served(c, profile(V100_16GB), cfg, mode="compiled")
+    plan, used = SP_solve_served(c, profile(V100_16GB), cfg, mode="compiled")
     assert plan.kv_cache_plan.prefill_chunk == used.seq_len == 256
 
 
@@ -113,14 +114,14 @@ def test_the_solver_says_untimed_with_the_modules_own_phrase(monkeypatch):
     from neurobrix.core.prism import served_prefill as SP
     monkeypatch.setattr(SP, "UNTIMED", "no timing at all")
     solver, c, cfg = _served(monkeypatch, "compiled")
-    plan, used = solver.solve_served(c, profile(V100_16GB), cfg, mode="compiled")
+    plan, used = SP_solve_served(c, profile(V100_16GB), cfg, mode="compiled")
     assert "no timing at all" in plan.kv_cache_plan.prefill_chunk_reason and used.seq_len == 2048
 
 
 def test_an_engine_with_certified_times_keeps_its_own_choice(monkeypatch):
     solver, c, cfg = _served(monkeypatch, "triton")
     base = solver.solve_smart(c, profile(V100_16GB), cfg, serve_mode=True, mode="triton")
-    plan, used = solver.solve_served(c, profile(V100_16GB), cfg, mode="triton")
+    plan, used = SP_solve_served(c, profile(V100_16GB), cfg, mode="triton")
     assert used is cfg
     assert (plan.kv_cache_plan.prefill_chunk, plan.kv_cache_plan.prefill_chunk_reason) == (
         base.kv_cache_plan.prefill_chunk, base.kv_cache_plan.prefill_chunk_reason)

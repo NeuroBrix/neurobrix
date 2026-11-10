@@ -177,10 +177,10 @@ class InferenceEngine:
                   if _topo_path.exists() else None),
         )
 
-        solver = PrismSolver()
-        # the session's plan, its prefill chunk raised while the plan holds (PrismSolver.solve_served); the input
+        # the session's plan, its prefill chunk raised while the plan holds (core/prism/served_prefill.py); the input
         # config it was priced at is the daemon's, so a re-plan prices the same rows
-        self._plan, input_config = solver.solve_served(self._container, hw_profile, input_config, mode=self.mode)
+        from neurobrix.core.prism.served_prefill import solve_served
+        self._plan, input_config = solve_served(self._container, hw_profile, input_config, mode=self.mode)
         self._input_config = input_config
 
         # 3b. Resolve primary device from plan

@@ -3898,13 +3898,6 @@ class PrismSolver:
             return [int(d) for d in profiler._resolve_shape(meta, smap)]
         return shape_of
 
-    def solve_served(self, container, profile, input_config, mode: str = "compiled"):
-        """(plan, input config) of a serving session: the served plan, its prefill chunk raised while the plan holds
-        (core/prism/served_prefill.py — the decision is that module's, every solve is this one's)."""
-        from neurobrix.core.prism.served_prefill import raise_while_the_plan_holds
-        return raise_while_the_plan_holds(
-            lambda cfg: self.solve_smart(container, profile, cfg, serve_mode=True, mode=mode), input_config)
-
     def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
                     mode: str = "compiled", replan: bool = True):
         """The plan sized by the pool's facts; and when the machine is busy NOW (the execution door: what is free is
@@ -6755,6 +6748,9 @@ class PrismSolver:
         one chunk's, before any rung prices it."""
         self._profile = profile
         self._container_for_cuts = container
+        from neurobrix.core.prism.served_prefill import price_chunk_mask   # a session's chunk mask over the cached keys
+        price_chunk_mask(component_memory, self._kv_declared(container), getattr(self, "_input_config", None),
+                         self._mode, self._overhead_bytes)
         for name, mem in component_memory.items():
             vt = self._vendor_tiling_declaration(name)
             if vt is not None:          # a declaration IS the vendor's reference cut (none says "memory")

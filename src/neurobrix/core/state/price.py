@@ -157,3 +157,19 @@ def session_prefill_rows(defaults: Mapping[str, Any]) -> int:
     """The prefill rows the plan prices a serving session's activations at: the container's prompt margin, the state
     engine's prompt budget (`flow_bindings.FlowBindings.prompt_prefill_length` when the request states no prompt)."""
     return int(defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
+
+
+def session_chunk_attention_bytes(rows: int, keys: int, kv_dtype: str, engine: str) -> int:
+    """The ONE reserve a serving session's prefill chunk has for its attention over the cached keys, read by Prism
+    (which prices it into the decoder's activations, core/prism/served_prefill.py) and by both engines' KV wrappers
+    (which spend it): rows x keys at the item size of the chunk's dense additive mask — the cache's dtype on the
+    compiled engine (`engine` "compiled"), float32 on the Triton engine. A plain chunk holds that mask; a chunk over
+    positions spilled to host memory holds no such mask and cuts its query rows so its scores fit the same bytes.
+    `rows` and `keys` are the plan's own: `KVCachePlan.prefill_chunk` and `max_cache_len`.
+
+    Unpriced, both ran a card out of memory once the plan stopped over-pricing the head (2026-11-10, Qwen3-Coder-30B-A3B
+    on two V100-32GB, a 79 931-token turn): the 480 MiB mask of a 4 096-row chunk at 61 440 keys, then the 3.2 GB of
+    scores a spilled chunk wrote at one page of rows."""
+    if int(rows) <= 0 or int(keys) <= 0:
+        raise ValueError(f"session_chunk_attention_bytes: rows {rows}, keys {keys}")
+    return int(rows) * int(keys) * _itemsize.itemsize("float32" if engine == "triton" else kv_dtype)

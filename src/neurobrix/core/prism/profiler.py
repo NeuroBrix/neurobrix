@@ -84,6 +84,12 @@ class InputConfig:
     # A teacher-forced scoring request (`--set global.score_mode=1`): the flow's head runs EVERY prompt position, not
     # the last one (`FlowBindings.head_rows`).
     scoring: bool = False
+    # The cached keys a serving session's prefill chunk attends beside its own rows: the session cache's reach on the
+    # card (`core/prism/served_prefill.py` states it once the cache is sized). None: a run, whose one pass attends
+    # its own rows only.
+    prefill_keys: Optional[int] = None
+    # The dtype those cached keys are stored in (`KVCachePlan.dtype`), stated with them.
+    prefill_key_dtype: Optional[str] = None
     # The branches classifier-free guidance batches together (`run.request_input_config`: 2 when the
     # request's guidance is in force, so `batch_size` is already that multiple of the request's own
     # batch). None: the request runs no guidance, and there is no guidance batch to split.

@@ -7,10 +7,14 @@ are the fastest turn.
 
 Contract.
 - In: `solve(input_config) -> ExecutionPlan`, the caller's own served solve (Prism decides every plan; this module
-  only asks), and the session's `input_config` (a dataclass with `seq_len`, the rows a turn's prefill is priced at).
+  only asks; `solve_served` builds it on a PrismSolver), and the session's `input_config` (a dataclass with `seq_len`, the rows a turn's prefill is priced at).
 - Out: `(plan, input_config)` — the plan of the largest priced rows, doubling from the first plan's chunk up to the
   cache's reach, at which the plan HOLDS (`resident_signature` unchanged), and the config that plan was solved with:
-  the caller keeps it, so a later re-plan prices the same rows.
+  the caller keeps it, so a later re-plan prices the same rows. Every plan it returns for a kept or raised chunk is
+  solved with the chunk's rows AND the cached keys it attends (`InputConfig.seq_len`, `prefill_keys` = the first
+  plan's reach, `prefill_key_dtype`), so the reserve its attention over the whole cache spends — one figure,
+  `price.session_chunk_attention_bytes`, which both engines' wrappers read from the plan's own chunk, reach and dtype
+  — is in the price (`chunk_mask_bytes`); the plan the raise holds is the first one priced so.
 - Unchanged, the first plan and the caller's config, when the plan has no KV cache, no chunk, or a chunk chosen from
   certified times (core/prism/prefill_chunk.py): that choice is not this module's.
 - Refuses nothing: a size no plan fits (the solve's RuntimeError) or that moves a resident ends the raise at the size
@@ -41,24 +45,60 @@ def resident_signature(plan) -> tuple:
                          for n, a in plan.components.items())))
 
 
+def chunk_mask_bytes(input_config, mode: str) -> int:
+    """The reserve a serving session's prefill chunk has for its attention over the cached keys
+    (`price.session_chunk_attention_bytes`, the one figure both engines' wrappers spend), at the request's rows, cached
+    keys and their dtype (`InputConfig.seq_len`, `prefill_keys`, `prefill_key_dtype`). 0 for a request that states no
+    cached keys: a run's one pass attends its own rows, which the walk prices."""
+    rows, keys = (int(getattr(input_config, f, 0) or 0) for f in ("seq_len", "prefill_keys"))
+    if not rows or not keys:
+        return 0
+    from neurobrix.core.prism.host_footprint import engine_of
+    from neurobrix.core.state.price import session_chunk_attention_bytes
+    return session_chunk_attention_bytes(rows, keys, input_config.prefill_key_dtype, engine_of(mode))
+
+
+def price_chunk_mask(component_memory, declared, input_config, mode: str, overhead: Callable) -> None:
+    """Add `chunk_mask_bytes` to the priced activations of the flow's decoder — `declared[0]`, the solver's
+    `_kv_declared` (None: the flow decodes nothing) — in `component_memory` {name: ComponentMemory}, and restate its
+    overhead by the solver's own rule (`overhead(weight_bytes, activation_bytes, profiled)`)."""
+    mem, more = (component_memory.get(declared[0]) if declared else None), chunk_mask_bytes(input_config, mode)
+    if mem is None or not more:
+        return
+    mem.activation_bytes = int(mem.activation_bytes) + more
+    mem.overhead_bytes = overhead(mem.weight_bytes, mem.activation_bytes, mem.activation_profiled)
+
+
+def solve_served(container, profile, input_config, mode: str = "compiled") -> Tuple[Any, Any]:
+    """(plan, input config) of a serving session — what the daemon calls: Prism's served plan, the prefill chunk
+    raised while the plan holds."""
+    from neurobrix.core.prism.solver import PrismSolver
+    solver = PrismSolver()
+    return raise_while_the_plan_holds(
+        lambda cfg: solver.solve_smart(container, profile, cfg, serve_mode=True, mode=mode), input_config)
+
+
 def raise_while_the_plan_holds(solve: Callable[[Any], Any], input_config) -> Tuple[Any, Any]:
     """(plan, input config) of the largest priced rows at which the served plan holds — the module's contract."""
     plan = solve(input_config)
     kv = plan.kv_cache_plan
     if kv is None or not kv.prefill_chunk or UNTIMED not in str(kv.prefill_chunk_reason):
         return plan, input_config
-    held, cfg, rows = resident_signature(plan), input_config, int(kv.prefill_chunk) * 2
-    while rows <= int(kv.max_cache_len):
-        trial_cfg = dataclasses.replace(input_config, seq_len=rows)
+    # from here every solve prices the chunk with the cached keys it attends (the session's reach): the first one at
+    # the chunk the plan already has, and that priced plan is the one the raise must hold
+    keys, rows, held, cfg = int(kv.max_cache_len), int(kv.prefill_chunk), None, input_config
+    while rows <= keys:
+        trial_cfg = dataclasses.replace(input_config, seq_len=rows, prefill_keys=keys, prefill_key_dtype=str(kv.dtype))
         try:
             trial = solve(trial_cfg)
         except RuntimeError as exc:
             log.info("Prism: the served prefill chunk stays at %d rows — no plan at %d rows (%s)",
                      rows // 2, rows, (str(exc).splitlines() or [""])[0])
             break
-        if resident_signature(trial) != held:
+        if held is not None and resident_signature(trial) != held:
             log.info("Prism: the served prefill chunk stays at %d rows — at %d the plan gives up a resident",
                      rows // 2, rows)
             break
+        held = resident_signature(trial) if held is None else held
         plan, cfg, rows = trial, trial_cfg, rows * 2
     return plan, cfg
