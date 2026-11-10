@@ -50,7 +50,7 @@ def test_an_intel_integrated_gpu_is_named_beside_the_nvidia_card(laptop, os_type
     assert brand == "nvidia" and A._driven(devices) == [RTX]
     (igpu,) = A._refusals(devices)
     assert igpu["pci_id"] == "8086:9a60" and igpu["integrated"] is True and igpu["platform"].startswith("Tiger Lake")
-    assert "compile target" in igpu["refused"]
+    assert "Level Zero loader" in igpu["refused"]          # Gen12 is tried since 2026-11-10; here its runtime is absent
 
 
 @pytest.mark.parametrize("os_type", ["Linux", "Windows"])

@@ -17,104 +17,95 @@
 intel:
   vendor_id: 0x8086
   no_target:              # why no backend drives a platform, named by its rows
-    gen9_to_gen12: "Intel's Triton backend names no compile target for it (intel-xpu-backend-for-triton v3.8.0, third_party/intel/backend/arch_parser.c), and PyTorch's XPU support lists no such GPU (docs.pytorch.org/docs/2.15/notes/get_start_xpu.html)"
-    wildcat_lake: "Intel's Triton backend maps no Wildcat Lake architecture (arch_parser.c v3.8.0 has no case for SYCL's intel_gpu_wcl)"
+    gen9_to_gen11: "Intel's current compute runtime does not drive it: Gen8, Gen9 and Gen11 are served only by the legacy1 packages (intel/compute-runtime README, 'Support for legacy platforms'), which Intel's Triton compiler (SPIR-V 1.4 with SPV_INTEL extensions, intel-xpu-backend-for-triton v3.8.0) was never built against"
   platforms:
     - platform: "Skylake (Gen9)"
       integrated: true
       source: INTEL_SKL_IDS
       ids: [0x1906, 0x1913, 0x190E, 0x1915, 0x1902, 0x190A, 0x190B, 0x1917, 0x1916, 0x1921, 0x191E, 0x1912, 0x191A, 0x191B, 0x191D, 0x1923, 0x1926, 0x1927, 0x192A, 0x192B, 0x192D, 0x1932, 0x193A, 0x193B, 0x193D]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Broxton (Gen9 LP)"
       integrated: true
       source: INTEL_BXT_IDS
       ids: [0x0A84, 0x1A84, 0x1A85, 0x5A84, 0x5A85]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Gemini Lake (Gen9 LP)"
       integrated: true
       source: INTEL_GLK_IDS
       ids: [0x3184, 0x3185]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Kaby Lake (Gen9.5)"
       integrated: true
       source: INTEL_KBL_IDS
       ids: [0x5906, 0x5913, 0x590E, 0x5915, 0x5902, 0x5908, 0x590A, 0x590B, 0x5916, 0x5921, 0x591E, 0x5912, 0x5917, 0x591A, 0x591B, 0x591D, 0x5926, 0x5923, 0x5927, 0x593B, 0x591C, 0x87C0]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Coffee Lake (Gen9.5)"
       integrated: true
       source: INTEL_CFL_IDS
       ids: [0x3E90, 0x3E93, 0x3E99, 0x3E91, 0x3E92, 0x3E96, 0x3E98, 0x3E9A, 0x3E9C, 0x3E94, 0x3E9B, 0x3EA9, 0x3EA5, 0x3EA6, 0x3EA7, 0x3EA8, 0x87CA]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Whiskey Lake (Gen9.5)"
       integrated: true
       source: INTEL_WHL_IDS
       ids: [0x3EA1, 0x3EA4, 0x3EA0, 0x3EA3, 0x3EA2]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Comet Lake (Gen9.5)"
       integrated: true
       source: INTEL_CML_IDS
       ids: [0x9BA2, 0x9BA4, 0x9BA5, 0x9BA8, 0x9BC2, 0x9BC4, 0x9BC5, 0x9BC6, 0x9BC8, 0x9BE6, 0x9BF6, 0x9B21, 0x9BAA, 0x9BAC, 0x9B41, 0x9BCA, 0x9BCC]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Cannon Lake (Gen10)"
       integrated: true
       source: INTEL_CNL_IDS
       ids: [0x5A44, 0x5A4C, 0x5A54, 0x5A5C, 0x5A40, 0x5A41, 0x5A42, 0x5A49, 0x5A4A, 0x5A50, 0x5A51, 0x5A52, 0x5A59, 0x5A5A]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Ice Lake (Gen11)"
       integrated: true
       source: INTEL_ICL_IDS
       ids: [0x8A50, 0x8A52, 0x8A53, 0x8A54, 0x8A56, 0x8A57, 0x8A58, 0x8A59, 0x8A5A, 0x8A5B, 0x8A5C, 0x8A70, 0x8A71, 0x8A51, 0x8A5D]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Elkhart Lake (Gen11)"
       integrated: true
       source: INTEL_EHL_IDS
       ids: [0x4541, 0x4551, 0x4555, 0x4557, 0x4570, 0x4571]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Jasper Lake (Gen11)"
       integrated: true
       source: INTEL_JSL_IDS
       ids: [0x4E51, 0x4E55, 0x4E57, 0x4E61, 0x4E71]
-      no_target: gen9_to_gen12
+      no_target: gen9_to_gen11
     - platform: "Tiger Lake (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_TGL_IDS
       ids: [0x9A60, 0x9A68, 0x9A70, 0x9A40, 0x9A49, 0x9A59, 0x9A78, 0x9AC0, 0x9AC9, 0x9AD9, 0x9AF8]
-      no_target: gen9_to_gen12
     - platform: "Rocket Lake (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_RKL_IDS
       ids: [0x4C80, 0x4C8A, 0x4C8B, 0x4C8C, 0x4C90, 0x4C9A]
-      no_target: gen9_to_gen12
     - platform: "Alder Lake-S (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_ADLS_IDS
       ids: [0x4680, 0x4682, 0x4688, 0x468A, 0x468B, 0x4690, 0x4692, 0x4693]
-      no_target: gen9_to_gen12
     - platform: "Alder Lake-P (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_ADLP_IDS
       ids: [0x46A0, 0x46A1, 0x46A2, 0x46A3, 0x46A6, 0x46A8, 0x46AA, 0x462A, 0x4626, 0x4628, 0x46B0, 0x46B1, 0x46B2, 0x46B3, 0x46C0, 0x46C1, 0x46C2, 0x46C3]
-      no_target: gen9_to_gen12
     - platform: "Alder Lake-N (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_ADLN_IDS
       ids: [0x46D0, 0x46D1, 0x46D2, 0x46D3, 0x46D4]
-      no_target: gen9_to_gen12
     - platform: "Raptor Lake-S (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_RPLS_IDS
       ids: [0xA780, 0xA781, 0xA782, 0xA783, 0xA788, 0xA789, 0xA78A, 0xA78B]
-      no_target: gen9_to_gen12
     - platform: "Raptor Lake-U (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_RPLU_IDS
       ids: [0xA721, 0xA7A1, 0xA7A9, 0xA7AC, 0xA7AD]
-      no_target: gen9_to_gen12
     - platform: "Raptor Lake-P (Gen12, Xe-LP)"
       integrated: true
       source: INTEL_RPLP_IDS
       ids: [0xA720, 0xA7A0, 0xA7A8, 0xA7AA, 0xA7AB]
-      no_target: gen9_to_gen12
     - platform: "Meteor Lake-U (Xe-LPG)"
       integrated: true
       source: INTEL_MTL_U_IDS
@@ -147,7 +138,6 @@ intel:
       integrated: true
       source: INTEL_WCL_IDS
       ids: [0xFD80, 0xFD81]
-      no_target: wildcat_lake
     - platform: "Nova Lake-S"
       integrated: true
       source: INTEL_NVLS_IDS
@@ -160,7 +150,6 @@ intel:
       integrated: false
       source: INTEL_DG1_IDS
       ids: [0x4905, 0x4906, 0x4907, 0x4908, 0x4909]
-      no_target: gen9_to_gen12
     - platform: "Alchemist (DG2, Xe-HPG)"
       integrated: false
       source: INTEL_DG2_IDS

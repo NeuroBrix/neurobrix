@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.6] - unreleased
 
 ### Changed
+- **Intel Gen12 graphics and Wildcat Lake are tried instead of refused** (experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): Tiger Lake, Rocket Lake, Alder Lake,
+  Raptor Lake, DG1 and Wildcat Lake chips are described as devices when their Level Zero runtime is installed, where
+  detection used to refuse them for lack of a compile target (the target's name does not change the compiled kernel:
+  measured). Without the runtime they are named with what to install, and the model runs on the CPU. Gen9 to Gen11
+  graphics stay refused, under their own reason: Intel's current compute runtime does not drive them.
+
+### Changed
 - **The grammar engine's source lives in its own repository only**, [NeuroBrix/nbxgrammar](https://github.com/NeuroBrix/nbxgrammar): the copy under `rust/` is gone from this one, and a source checkout uses the `nbxgrammar` wheel `pip install` brings, as an installed neurobrix does.
 
 ## [0.6.5] - 2026-11-10

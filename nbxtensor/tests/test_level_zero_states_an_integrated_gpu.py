@@ -70,13 +70,14 @@ def test_an_integrated_and_a_discrete_gpu_state_their_own_facts():
 
 
 def test_a_gpu_no_device_file_describes_is_no_device_of_the_runtime(monkeypatch):
-    """A Tiger Lake iGPU (0x9A49) beside a Battlemage card: Level Zero reports both, Intel's Triton targets only the card
-    — the iGPU is neither a fact the detection reads nor the runtime's device 0 nor what names the backend."""
-    lib = FakeZe([(0x9A49, 0x1, [12 * GIB], 4 * GIB, b"Intel(R) Iris(R) Xe Graphics"),
+    """An Ice Lake iGPU (0x8A52, no device file: Gen11 is the legacy runtime's) beside a Battlemage card: were Level
+    Zero to report both, the iGPU is neither a fact the detection reads nor the runtime's device 0 nor what names the
+    backend. (Tiger Lake stood here until 2026-11-10: Gen12 has a device file now, experimental, and is tried.)"""
+    lib = FakeZe([(0x8A52, 0x1, [12 * GIB], 4 * GIB, b"Intel(R) Iris(R) Plus Graphics"),
                   (0xE20B, 0x0, [12 * GIB], 12 * GIB, b"Intel(R) Arc(TM) B580 Graphics")])
     assert [f["pci_device_id"] for f in Z.gpu_facts(lib)] == [0xE20B]
     assert Z._gpu_devices(lib) == [(0xD0, 0xE1)]
-    assert Z._gpu_devices(FakeZe([(0x9A49, 0x1, [12 * GIB], 4 * GIB, b"Iris Xe")])) == []
+    assert Z._gpu_devices(FakeZe([(0x8A52, 0x1, [12 * GIB], 4 * GIB, b"Iris Plus")])) == []
 
 
 def test_no_loader_is_no_answer_not_no_gpu(monkeypatch):
@@ -90,10 +91,13 @@ def test_the_device_file_of_a_pci_id_is_found_or_none():
     assert name == "lnl" and desc["compute_capability"] == "lnl"
     assert device_files.for_pci_id("intel", 0x7D55)[0] == "mtl"
     assert device_files.for_pci_id("intel", 0x7D45)[0] == "arl_s"       # MTL-U: SYCL's mtl_u = arl_s
-    assert device_files.for_pci_id("intel", 0x9A49) is None             # Tiger Lake: no compile target
+    name, desc = device_files.for_pci_id("intel", 0x9A49)              # Tiger Lake: tried since 2026-11-10 (xe_lp)
+    assert name == "xe_lp" and desc["validation_status"] == "experimental" and desc["compute_capability"]
+    assert device_files.for_pci_id("intel", 0x4680)[0] == "xe_lp"       # Alder Lake-S
+    assert device_files.for_pci_id("intel", 0x8A52) is None             # Ice Lake (Gen11): the legacy runtime's
     assert Z.device_file_for(0x64A0)[0] == "lnl"
-    with pytest.raises(RuntimeError, match="0x9a49"):
-        Z.device_file_for(0x9A49)
+    with pytest.raises(RuntimeError, match="0x8a52"):
+        Z.device_file_for(0x8A52)
 
 
 def test_every_display_controller_of_the_bus_is_listed_whatever_its_vendor(tmp_path):

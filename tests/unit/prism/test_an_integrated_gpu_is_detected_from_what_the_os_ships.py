@@ -128,7 +128,9 @@ def test_a_tiger_lake_laptop_is_refused_by_name_and_plans_on_its_cpu(monkeypatch
     assert tgl["model"] == "Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics]" and tgl["bus"] == "0000:00:02.0"
     assert (tgl["platform"], tgl["integrated"]) == ("Tiger Lake (Gen12, Xe-LP)", True)
     assert (dg1["platform"], dg1["integrated"]) == ("DG1 (Gen12, Xe-LP)", False)
-    assert "arch_parser.c" in tgl["refused"] and "arch_parser.c" in dg1["refused"]      # the reason, with its source
+    # Gen12 is TRIED since 2026-11-10 (the owner's order: devices/intel/xe_lp.yml, experimental); this laptop has no
+    # Level Zero loader, and THAT is the reason it is refused, with what to install
+    assert "Level Zero loader" in tgl["refused"] and "Level Zero loader" in dg1["refused"]
     assert not {"xpu-smi", "sycl-ls"} & set(asked)                                       # no oneAPI tool is asked
     hw = _loaded(monkeypatch, tmp_path, profile)
     assert hw.devices == [] and [d["pci_id"] for d in hw.refused_devices] == ["8086:9a49", "8086:4905"]
@@ -144,7 +146,7 @@ def test_the_plan_of_a_machine_whose_gpu_is_refused_says_it_and_its_cpu_threads(
                          refused_devices=list(hw.refused_devices))
     said = explain_plan(plan)
     assert "device refused  Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics] (8086:9a49, Tiger Lake (Gen12, " \
-           "Xe-LP), integrated): Intel's Triton backend" in said
+           "Xe-LP), integrated): the Level Zero loader" in said
     assert [d["pci_id"] for d in plan_record(plan)["refused_devices"]] == ["8086:9a49", "8086:4905"]
 
 
@@ -192,7 +194,7 @@ def test_a_windows_laptop_is_read_from_win32_videocontroller_and_refused_by_name
     devices, brand = autodetect._detect_gpus("Windows")
     (refused,) = devices
     assert brand == "none" and refused["platform"] == platform and refused["model"] == listed[0]["Name"]
-    assert "arch_parser.c" in refused["refused"] and "wmic" not in asked
+    assert "Level Zero loader" in refused["refused"] and "wmic" not in asked     # tried once its runtime is there
 
 
 def test_a_windows_laptop_whose_chip_a_backend_drives_is_unified(monkeypatch, tmp_path):
@@ -294,3 +296,23 @@ def test_an_intel_mac_with_a_radeon_refuses_both_gpus_and_plans_on_its_cpu(monke
     assert brand == "none" and autodetect._driven(devices) == []
     assert sorted(d["model"] for d in devices) == ["AMD Radeon Pro 555X", "Intel UHD Graphics 630"]
     assert all("macOS" in d["refused"] for d in devices)
+
+
+def test_an_ice_lake_laptop_is_refused_naming_the_legacy_runtime(monkeypatch, tmp_path):
+    """Gen9-Gen11 stay refused at detection, with their own reason and its source (Intel's current compute runtime does
+    not drive them): never the reason of another generation."""
+    ice = {"Name": "Intel(R) Iris(R) Plus Graphics", "PNPDeviceID": "PCI\\VEN_8086&DEV_8A52&SUBSYS_00000000&REV_07"}
+    _machine(monkeypatch, tmp_path, windows=[ice])
+    (refused,) = autodetect._detect_gpus("Windows")[0]
+    assert refused["platform"] == "Ice Lake (Gen11)" and "legacy1" in refused["refused"]
+
+
+def test_a_tiger_lake_laptop_with_its_level_zero_runtime_is_tried(monkeypatch, tmp_path):
+    """The owner, 2026-11-10 13:09: the chip is tried when its Level Zero driver is present — a device of the profile,
+    one memory pool with the host, never refused at detection."""
+    _machine(monkeypatch, tmp_path, windows=[IRIS_XE_WINDOWS], level_zero=_ze(0x9A49, IRIS_XE_WINDOWS["Name"],
+                                                                              ram_mb=16 * 1024))
+    devices, brand = autodetect._detect_gpus("Windows")
+    (dev,) = devices
+    assert brand == "intel" and "refused" not in dev and dev["architecture"] == "xe_lp"
+

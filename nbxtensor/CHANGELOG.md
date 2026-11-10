@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - unreleased
+
+### Added
+- **Device files for Intel Gen12 graphics (`xe_lp`) and Wildcat Lake (`wcl`)**, experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome: the Level Zero driver tries
+  these chips; their extension facts are read from the chip's OpenCL ICD, never assumed. Intel's Triton compiler emits
+  the same SPIR-V whatever architecture name it is handed (measured off-card with triton-xpu 3.8.0, torch never
+  imported), so a chip it names no architecture for can be compiled for; the chip's own driver accepts or refuses.
+
 ## [0.1.0] - 2026-11-10
 ### Changed
 - **Contributions are made under the NeuroBrix Contributor Assignment Agreement** (docs/legal/ of the neurobrix repository, an individual and an entity version): signed once by a comment on the first pull request, for every NeuroBrix project; the `NeuroBrix CLA` check on every pull request says who has yet to sign. CONTRIBUTING.md explains it.
