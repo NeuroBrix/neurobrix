@@ -247,3 +247,14 @@ fn a_reasoning_closes_by_its_end_token_and_the_cached_until_mask_equals_the_brut
     let mut m = Matcher::new(&plain);
     assert!(m.feed_all(b"hmm ") && m.token_steps().is_empty());   // without end_token the text alone closes it
 }
+
+
+#[test]
+fn a_schema_inside_a_description_takes_no_space_before_its_root() {
+    // D5 (the rack's Thinking json_schema answer: "\n\n {"): the schema part of a sequence is a JSON root too
+    let d = parse(r#"{"seq": [{"lit": "x\n\n"}, {"schema": {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}}]}"#).unwrap();
+    let g = compile_description(&d).unwrap();
+    let ok = |t: &str| { let mut m = Matcher::new(&g); m.feed_all(t.as_bytes()) && m.accepting() };
+    assert!(ok("x\n\n{\"a\": 1}") && ok("x\n\n{ \"a\" : 1 }"));
+    assert!(!ok("x\n\n {\"a\": 1}"), "a space before the part's root");
+}

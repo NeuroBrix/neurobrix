@@ -239,7 +239,11 @@ impl<'s> Matcher<'s> {
 
     fn start_value(&mut self, node: u32, ws: u8, b: u8) -> bool {
         let top = self.stack.len() - 1;
-        if is_ws(b) && self.json_value(node) && self.stack.len() > 2 {      // never before the root value
+        // a space only before a value INSIDE a JSON array or object: never before a JSON root, whether it is the grammar's
+        // root or a part of a description (after a literal, in a sequence: the rack's '\n\n {' after a reasoning, D5)
+        let inside = self.stack.len() >= 2
+            && matches!(self.stack[self.stack.len() - 2], Frame::Arr { .. } | Frame::Obj { .. });
+        if is_ws(b) && self.json_value(node) && inside {
             if ws >= WS_MAX { return false; }
             self.stack[top] = Frame::Value { node, ws: ws + 1 };
             return true;
