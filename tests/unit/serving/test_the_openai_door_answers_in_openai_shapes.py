@@ -92,6 +92,15 @@ class FakeEngine:
                 self.active -= 1
         return ids
 
+    reach = 1 << 30                       # the positions a served session holds (InferenceEngine.session_reach)
+
+    def check_context(self, messages, tools=None, **kw):
+        from neurobrix.serving.engine import ContextLengthExceeded
+        need = sum(len(str(m.get("content", ""))) for m in messages) + (kw.get("max_tokens") or 64)
+        if need > self.reach:
+            raise ContextLengthExceeded(f"these messages need {need} positions and a session holds at most {self.reach}")
+        return need
+
     def complete_turn(self, messages, tools=None, **kw):
         self.calls.append(("complete", messages, tools, kw))
         ids = self._decode(kw.get("max_tokens"))
@@ -548,3 +557,17 @@ def test_a_json_schema_answer_on_a_reasoning_prompt_follows_the_reasoning_s_end(
     srv2, base2 = make(FakeEngine())
     status, body, _ = _post(base2 + "/v1/chat/completions", req)
     assert status == 200 and seen[-1] == ("schema", schema), seen[-1]
+
+
+
+def test_a_request_past_the_served_reach_is_a_named_400_before_it_runs(make):
+    """A prompt and its decode bound past what a served session holds (InferenceEngine.session_reach: the card, then the
+    host spill's reach): 400 context_length_exceeded, OpenAI's code, before any work runs — never a 500."""
+    eng = FakeEngine()
+    eng.reach = 50
+    srv, base = make(eng)
+    status, body, _ = _post(base + "/v1/chat/completions", {
+        "model": "fake-model", "messages": [{"role": "user", "content": "x" * 80}], "max_tokens": 8})
+    _assert_error(status, body, 400, param="messages")
+    assert body["error"]["code"] == "context_length_exceeded" and "50" in body["error"]["message"]
+    assert not [c for c in eng.calls if c[0] == "complete"]                 # nothing ran

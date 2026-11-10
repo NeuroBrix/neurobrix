@@ -246,3 +246,20 @@ def test_a_served_cache_spills_past_the_plan_s_cache_only_when_the_window_is_lon
     note = attach_spill(on, tier, plan, 1000)
     assert on.card_pages == -(-100 // TPP) and on.host_spill.budget_bytes == tier.spill_budget()
     assert "on" in note and str(on.host_spill.reach()) in note
+
+
+def test_the_served_reach_is_the_card_then_the_host_spill_within_the_window():
+    """served_reach (core/state/kv_tier): the one ceiling both serving doors read — the card's reach (the plan's
+    session reach), plus the host spill's on the tier's share when a tier serves and the window is longer, never past
+    the window (the rack's Qwen3-Coder: 65 664 on the card, a 79 963-position request refused before the spill)."""
+    from types import SimpleNamespace
+    from neurobrix.core.state.kv_tier import served_reach, spill_position_bytes
+    plan = SimpleNamespace(max_cache_len=100, session_reach=90, num_layers=LAYERS, num_kv_heads=H, k_head_dim=D,
+                           v_head_dim=D)
+    tier = KVTier(budget_mb=1, pinned=False, source="test", slice_positions=2 * TPP)
+    host = tier.spill_budget() // spill_position_bytes(plan)
+    assert served_reach(plan, None, 10 ** 6)[0] == 90                    # no tier: the card's reach
+    assert served_reach(plan, tier, 80)[0] == 90                          # the window within the card: no spill
+    total, source = served_reach(plan, tier, 10 ** 6)
+    assert total == 90 + host and "host memory" in source                 # the card, then the host's share
+    assert served_reach(plan, tier, 120)[0] == 120                        # never past the window

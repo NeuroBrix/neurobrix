@@ -20,7 +20,7 @@ from neurobrix.core.device_utils import device_empty_cache, device_sync, device_
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from neurobrix.serving.session import ConversationSession, play_turn, session_ceiling
+from neurobrix.serving.session import ConversationSession, play_turn
 import logging
 _log = logging.getLogger(__name__)
 
@@ -43,6 +43,10 @@ def daemon_identity() -> Dict[str, Any]:
             "operations": ["generate", "chat", "complete", "template", "new_chat", "status", "cancel",
                            "shutdown"]}
 
+
+
+class ContextLengthExceeded(RuntimeError):
+    """A request whose prompt and decode bound exceed what a served session holds (OpenAI: context_length_exceeded)."""
 
 class _ReadKeys(dict):
     """A request's params that remember which keys the handler looked at, so a
@@ -216,6 +220,9 @@ class InferenceEngine:
         from neurobrix.core.state.kv_tier import kv_tier_for
         self._executor.kv_tier, tier_note = kv_tier_for(self._plan, hw_profile)    # conversations parked off the card
         _log.debug(f"[NeuroBrix] {tier_note}")
+        if getattr(self._plan, "kv_cache_plan", None) is not None:
+            reach, source = self.session_reach()
+            _log.info(f"[NeuroBrix] served context: up to {reach} positions a session ({source})")
 
         # Set persistent mode BEFORE setup/execute so GraphExecutors get the flag
         if self._warm_serving:
@@ -411,6 +418,34 @@ class InferenceEngine:
         result.update(self._extract_llm_output(outputs))
         return result
 
+    def _window(self) -> int:
+        """The model's own context window, as the package states it (its lm_config), or 0."""
+        return int(((self._pkg.defaults or {}).get("lm_config") or {}).get("max_position_embeddings") or 0)
+
+    def session_reach(self) -> "tuple[int, str]":
+        """The positions a served session may hold and their source: core/state/kv_tier.served_reach (the card, then
+        the host spill's reach when it is on)."""
+        from neurobrix.core.state.kv_tier import served_reach
+        return served_reach(getattr(self._plan, "kv_cache_plan", None), self._executor.kv_tier, self._window())
+
+    def check_context(self, messages: list, tools: Optional[list] = None, **kwargs) -> int:
+        """The positions a completion over `messages` needs (rendered prompt + its decode bound), refused BEFORE it runs
+        when past the session's reach (ContextLengthExceeded: the OpenAI door's 400 context_length_exceeded)."""
+        decode = self._decode_inputs(kwargs)
+        tokenizer = self._executor.modules.get("tokenizer")
+        if tokenizer is None:
+            raise RuntimeError("ZERO FALLBACK: No tokenizer module in executor.")
+        template_kwargs: Dict[str, Any] = {"tokenize": True, "add_generation_prompt": True}
+        if tools:
+            template_kwargs["tools"] = tools
+        from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output
+        rendered = len(_flatten_tokenizer_output(tokenizer.apply_chat_template(messages, **template_kwargs)))
+        need, (reach, source) = rendered + self._max_tokens(decode), self.session_reach()
+        if need > reach:
+            raise ContextLengthExceeded(f"these messages need {need} positions ({rendered} rendered + "
+                                        f"{need - rendered} to generate) and a session holds at most {reach} — {source}.")
+        return need
+
     def _max_tokens(self, decode: Dict[str, Any]) -> int:
         """A decode bound nobody declared truncates silently; the request wins, then the container, then a refusal."""
         from neurobrix.core.runtime_values import resolve as _resolve_runtime
@@ -485,7 +520,7 @@ class InferenceEngine:
             tokenizer = self._executor.modules.get("tokenizer")
             if tokenizer is None:
                 raise RuntimeError("ZERO FALLBACK: No tokenizer module in executor.")
-            ceiling, source = session_ceiling(getattr(self._plan, "kv_cache_plan", None))
+            ceiling, source = self.session_reach()
             self._session = ConversationSession(tokenizer=tokenizer, ceiling=ceiling, ceiling_source=source)
 
         result = play_turn(self._session, message, self._max_tokens(decode),
@@ -539,11 +574,11 @@ class InferenceEngine:
             tokenizer.apply_chat_template(messages, **template_kwargs))]
         if self._agent_kv is None:
             from nbxtensor.memory.kv_session import KVSession
-            ceiling, source = session_ceiling(getattr(self._plan, "kv_cache_plan", None))
+            ceiling, source = self.session_reach()
             self._agent_kv = KVSession(ceiling, source)
         max_tokens = self._max_tokens(decode)
         if len(token_ids) + max_tokens > self._agent_kv.ceiling:
-            raise RuntimeError(
+            raise ContextLengthExceeded(
                 f"these messages need {len(token_ids) + max_tokens} positions ({len(token_ids)} rendered + "
                 f"{max_tokens} to generate) and a session holds at most {self._agent_kv.ceiling} — "
                 f"{self._agent_kv.source}.")

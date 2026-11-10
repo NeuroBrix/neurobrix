@@ -23,6 +23,8 @@ class _Reached(Exception):
 
 
 class _Executor:
+    kv_tier = None          # as RuntimeExecutor: no KV host tier unless serving sets one
+
     def execute(self, inputs, kv_session=None):
         raise _Reached(inputs)
 

@@ -129,6 +129,26 @@ class KVTier:
                 "parked": self.parked_pages, "restored": self.restored_pages, "source": self.source}
 
 
+def spill_position_bytes(kv_plan) -> int:
+    """Host bytes one spilled position costs across the decoder's layers (float32 K and V: memory/host_spill.py)."""
+    return 4 * kv_plan.num_kv_heads * (kv_plan.k_head_dim + kv_plan.v_head_dim) * kv_plan.num_layers
+
+
+def served_reach(kv_plan, tier: Optional[KVTier], window: int) -> "tuple[int, str]":
+    """(positions, what they come from) a served session may hold — the ONE ceiling both doors read and the ready line
+    states: the card's reach (serving.session.session_ceiling: the plan's session reach, else its cache), then, when
+    the KV host tier serves and the model's window is longer, the host spill's reach on the tier's share now, never past
+    the window. A request past it is refused before it runs."""
+    from neurobrix.serving.session import session_ceiling
+    card, source = session_ceiling(kv_plan)
+    if tier is None or not window or window <= card:
+        return card, source
+    host = tier.spill_budget() // spill_position_bytes(kv_plan)
+    total = min(int(window), card + host)
+    return total, (f"{card} positions on the card ({source}) + {total - card} in host memory (the mid-decode spill on "
+                   f"the KV host tier's share of {tier.budget_bytes / 2 ** 20:.0f} MB), the model's window {window}")
+
+
 def attach_spill(cache, tier: Optional[KVTier], kv_plan, window: int) -> str:
     """A served session's cache past the plan's: when the model's window exceeds what the plan's cache holds on the
     card (residency first, c957cee3), the cache keeps at most the plan's pages per sequence on the card and spills its
@@ -136,7 +156,8 @@ def attach_spill(cache, tier: Optional[KVTier], kv_plan, window: int) -> str:
     Off (said) without a tier, or when the plan's cache already reaches the window. Returns the sentence that says it."""
     if tier is None or kv_plan is None:
         return "KV mid-decode spill: off (no KV host tier)"
-    card = int(kv_plan.max_cache_len)
+    from neurobrix.serving.session import session_ceiling
+    card = session_ceiling(kv_plan)[0]                 # the card's figure the served reach adds the host's to
     if not window or window <= card:
         return f"KV mid-decode spill: off (the plan's cache of {card} positions reaches the model's window {window})"
     from nbxtensor.memory.host_spill import HostSpill

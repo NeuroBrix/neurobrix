@@ -387,6 +387,11 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             raise errors.unsupported("response_format", "a json_schema answer and tools in one request: the grammar would "
                                      "also bind the tool calls")
         extra = {"grammar": grammar} if grammar is not None else {}
+        from neurobrix.serving.engine import ContextLengthExceeded
+        try:                               # past what a served session holds: refused before it runs (OpenAI's code)
+            engine.check_context(messages, tools=tools, **decode)
+        except ContextLengthExceeded as e:
+            raise errors.ApiError(400, str(e), param="messages", code="context_length_exceeded") from e
         work = lambda: engine.complete_turn(messages, tools=tools, **extra, **decode)   # noqa: E731
         spool = None
     else:
