@@ -33,6 +33,6 @@ def test_the_replay_bucket_is_the_keys_split():
     from nbxtensor.memory.paged_kv import PagedTritonKVCache
     for length in (0, 1, 63, 255, 256, 257, 4000, 70000):
         cache = types.SimpleNamespace(pool=object(), tables=[types.SimpleNamespace(pages=[0] * 2000)],
-                                      page_tokens=64, length=length, batch=1, _uid=7, generation=0)
+                                      page_tokens=64, length=length, batch=1, _uid=7, generation=0, spilled=0)
         k = PagedTritonKVCache.replay_key(cache, 0)
         assert k is not None and k[1] == _key(length + 1)[0], (length, k)

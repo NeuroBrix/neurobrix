@@ -200,12 +200,24 @@ def restore_scattered(k_pools, v_pools, host, host_pages, pages, fence=None, own
 class PagedTritonKVCache
     # per-layer page pools on each layer's card, the block table, append/decode through it, truncate, gather_pages; on_reallocate(uid, generation)
     # the host tier's protocol: tier_layout, tier_length, tier_offload, tier_restore, tier_resume
+    # the mid-decode spill: card_pages (pages per sequence on the card, 0 unbounded) and host_spill (a HostSpill): past
+    # card_pages the oldest written pages move to the host, `spilled` positions held there, the decode adds their partial;
+    # one sequence; a prompt past the card's pages, a gather or a tier park of a spilled sequence refused by name
 def chunk_mask(device_idx, start, rows, keys, memo) -> NBXTensor
     # a prefill chunk's fp32 0/-inf mask [rows, keys], causal at the cached length, the keys past the end masked
 def require_causal_mask(attn_mask, rows, memo, where) -> None
     # refuse by name a graph mask that is not the causal pattern over the chunk's rows
 def chunk_attention(cache, layer_idx, q, start, heads, scale, dropout_p, memo)
     # a prefill chunk attending over the cache's keys gathered as whole pages
+```
+
+`nbxtensor.memory.host_spill` — the positions a decoding sequence spilled from the card's pages to host memory
+
+```python
+class HostSpill(num_layers, kv_heads, k_dim, v_dim, budget_bytes)
+    # per layer K / V float32 [H_kv, positions, D], written once per spilled page (append(layer, k_pages, v_pages)),
+    # grown by doubling up to the budget (refused by name past it: reach(), position_bytes()); partial(layer, q,
+    # groups, scale) -> the attention partial over them; truncate(length), clear(), length, nbytes()
 ```
 
 `nbxtensor.memory.arena`
@@ -1050,8 +1062,13 @@ def paged_kv_append(new, pool, slot_mapping)
     # Write new positions into a layer's paged pool (state engine step 2, ops/paged_decode_attn.py).
 def paged_kv_gather(pool, block_table, positions, heads, dtype)
     # A layer's K (or V) of every sequence as whole pages, contiguous [B, heads, positions, D] (a prefill chunk over a session's cache reads its keys through it)
-def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None)
-    # Decode attention (one query position) read through the page table — the vector split-KV kernel of ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
+def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None, host_partial=None)
+    # Decode attention (one query position) read through the page table — the vector split-KV kernel of ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`; host_partial (acc, m, l) of spilled positions joins as the last split.
+def host_decode_partial(q, k, v, n_tokens, groups, scale)   # nbxtensor.ops.host_decode_partial
+    # the split kernel's partial (unnormalised acc, max m, sum l, natural exp, float32) over host positions k / v
+    # [H_kv, positions, D] float32 for query rows q [H, D]; an empty part neutral (m -inf, l 0)
+def merge_partials(parts)   # nbxtensor.ops.host_decode_partial
+    # the reduce's fixed-order log-sum-exp combine on the host: [H, D_v]
 def decode_reduce(opart, mpart, lpart, out)
     # The fixed-order combine of a split decode (`flash_decode_reduce_kernel`), one program per query row; its warps are the key's certified configuration
 def math_attention_cost(q, k, v, mask=None, is_causal=False, native_bf16=None, force_accum=None, contract_half=None, unit=None)

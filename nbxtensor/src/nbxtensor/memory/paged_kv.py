@@ -39,7 +39,7 @@ class PagedTritonKVCache:
 
     def __init__(self, num_layers: int, num_kv_heads: int, k_head_dim: int, v_head_dim: int, max_cache_len: int,
                  dtype: NBXDtype, page_tokens: int, async_release: bool, window_ceiling: int = 0,
-                 decode_budget: int = 0, initial_cache_len: int = 0, fence=None):
+                 decode_budget: int = 0, initial_cache_len: int = 0, fence=None, card_pages: int = 0, host_spill=None):
         if page_tokens <= 0 or max_cache_len <= 0:
             raise ValueError(f"PagedTritonKVCache: page_tokens {page_tokens}, max_cache_len {max_cache_len}")
         self.num_layers = int(num_layers)
@@ -53,6 +53,12 @@ class PagedTritonKVCache:
         self.decode_budget = int(decode_budget or 0)
         self.initial_cache_len = int(initial_cache_len or 0)
         self.fence = fence
+        # the mid-decode spill (memory/host_spill.py): at most `card_pages` pages per sequence on the card (0: no bound
+        # but the pools'), the oldest whole pages moved to `host_spill` past it; `spilled` positions live there, the
+        # card's tables and device lengths count from it
+        self.card_pages = int(card_pages or 0)
+        self.host_spill = host_spill
+        self.spilled = 0
         self.async_release = bool(async_release)   # the vendor file's memory.async_release, never assumed
         self.batch = 0
         self.layer_device: List[Optional[int]] = [None] * self.num_layers   # the card each layer runs on
@@ -191,11 +197,20 @@ class PagedTritonKVCache:
 
     def _reserve(self, length: int) -> None:
         """Every sequence holds `length` positions' pages, the pools grown first when they cannot; the block table
-        republished when a page was granted."""
-        if length > self.capacity:
-            self._grow(length)
+        republished when a page was granted. Past `card_pages`, the oldest pages spill to the host first."""
+        card = int(length) - self.spilled
+        if self.card_pages and -(-card // self.page_tokens) > self.card_pages:
+            # only whole pages already written move (a reservation also covers positions not yet appended); the
+            # reservation is capped at the card's pages and each step checks its own positions fit (_fits)
+            written = (self.length - self.spilled) // self.page_tokens
+            movable = min(-(-card // self.page_tokens) - self.card_pages, written)
+            if movable:
+                self._spill(movable)
+            card = min(int(length) - self.spilled, self.card_pages * self.page_tokens)
+        if card > self.capacity:
+            self._grow(card)
         for t in self.tables:
-            t.reserve(length)
+            t.reserve(card)
         if len(self.tables[0].pages) != self._published_pages:
             rows, width = _block_table(self.tables)
             table = np.full((self.batch, self.pages_per_sequence), -1, dtype=np.int32)
@@ -204,6 +219,40 @@ class PagedTritonKVCache:
             for bt in self.block_tables.values():       # every card's copy, together
                 self._write_in_place(bt, table)
             self._published_pages = len(self.tables[0].pages)
+
+    def _spill(self, pages: int) -> None:
+        """Move each sequence's `pages` oldest pages to the host spill (every layer, converted once there); their ids
+        are reused for the newest positions (the pools never reallocate: replay addresses stay), the card's positions
+        and device lengths shift by the spilled count."""
+        if self.host_spill is None:
+            raise RuntimeError(f"ZERO FALLBACK: the sequence needs more than the card's {self.card_pages} pages of "
+                               f"{self.page_tokens} positions and this cache has no host spill — past the cache's reach")
+        if self.batch != 1:
+            raise RuntimeError(f"ZERO FALLBACK: the mid-decode spill holds one sequence; this batch has {self.batch}")
+        if self.fence is not None:
+            self.fence.drain(self)
+        table = self.tables[0]
+        moved = table.pages[:pages]
+        for i in range(self.num_layers):
+            if self.k_pools[i] is None:
+                continue
+            DeviceAllocator.set_device(self.layer_device[i])
+            k = np.stack([self.k_pools[i].select(0, p).numpy() for p in moved])
+            v = np.stack([self.v_pools[i].select(0, p).numpy() for p in moved])
+            self.host_spill.append(i, k, v)
+        n = pages * self.page_tokens
+        table.pages = table.pages[pages:] + moved
+        table.length = max(table.length - n, 0)
+        self.spilled += n
+        self._published_pages = -1                       # same page count, new order: republish
+        self._write_lens(self.length)
+
+    def _fits(self, end: int) -> None:
+        """Positions up to `end` (exclusive) can be written: on the card after any spill."""
+        if self.card_pages and end - self.spilled > self.card_pages * self.page_tokens:
+            raise RuntimeError(f"ZERO FALLBACK: writing up to position {end} with {self.spilled} spilled and the card's "
+                               f"{self.card_pages} pages of {self.page_tokens} — a prompt past the card's reach (its "
+                               f"chunks would attend over spilled positions)")
 
     def capacity_for(self, prompt_end: int) -> int:
         """Positions per sequence the pools hold once a request whose prompt ends at `prompt_end` is prefilled: the
@@ -235,14 +284,15 @@ class PagedTritonKVCache:
         if layer_idx == 0:
             real_t = t if real is None else int(real)
             self._reserve(max(self._request_length(self.length + real_t), self.length + t))
+            self._fits(self.length + t)
         start = self.length
         DeviceAllocator.set_device(self.layer_device[layer_idx])     # the slots go to the layer's card
         for b in range(self.batch):
-            slots = np.asarray(self.tables[b].slots(range(start, start + t)), dtype=np.int32)
+            slots = np.asarray(self.tables[b].slots(range(start - self.spilled, start + t - self.spilled)), dtype=np.int32)
             dev_slots = NBXTensor.from_numpy(slots)
             _nbx_attention_wrappers.paged_kv_append(k[b].permute(1, 0, 2), self.k_pools[layer_idx], dev_slots)
             _nbx_attention_wrappers.paged_kv_append(v[b].permute(1, 0, 2), self.v_pools[layer_idx], dev_slots)
-        self._write_in_place(self.lens[layer_idx], np.full((self.batch,), start + t, dtype=np.int32))
+        self._write_in_place(self.lens[layer_idx], np.full((self.batch,), start + t - self.spilled, dtype=np.int32))
         if layer_idx == self.num_layers - 1:
             self.length = start + t
 
@@ -257,8 +307,9 @@ class PagedTritonKVCache:
         if int(k.shape[2]) != 1:
             raise RuntimeError(f"PagedTritonKVCache.decode: {int(k.shape[2])} new positions — a decode step brings one")
         new_len = self.length + 1
-        if layer_idx == 0 and new_len > len(self.tables[0].pages) * self.page_tokens:
+        if layer_idx == 0 and new_len > self.spilled + len(self.tables[0].pages) * self.page_tokens:
             self._reserve(new_len)                              # past the request's reservation: one more page
+            self._fits(new_len)
         k2 = k.reshape(self.batch, self.num_kv_heads, self.k_head_dim).contiguous()
         v2 = v.reshape(self.batch, self.num_kv_heads, self.v_head_dim).contiguous()
         kp, vp, lens = self.k_pools[layer_idx], self.v_pools[layer_idx], self.lens[layer_idx]
@@ -273,10 +324,18 @@ class PagedTritonKVCache:
             BLOCK_D=max(triton.next_power_of_2(max(self.k_head_dim, self.v_head_dim)), 16),
             D_K=self.k_head_dim, D_V=self.v_head_dim, num_warps=1)
         paged_lens_advance_kernel[(self.batch,)](lens, 1)
-        out = _nbx_attention_wrappers.paged_decode_attention(q, kp, vp, bt, lens, scale, new_len, q_round=q_round)
+        host = self._host_partial(layer_idx, q, scale, q_round) if self.spilled else None
+        out = _nbx_attention_wrappers.paged_decode_attention(q, kp, vp, bt, lens, scale, new_len - self.spilled,
+                                                             q_round=q_round, host_partial=host)
         if layer_idx == self.num_layers - 1:
             self.length = new_len
         return out
+
+    def _host_partial(self, layer_idx: int, q, scale: float, q_round):
+        """The spilled positions' partial for this step's query rows, q read as the card reads it (rounded to q_round)."""
+        heads = int(q.shape[1])
+        qh = (q.to(q_round) if q_round is not None and q.nbx_dtype != q_round else q).to(NBXDtype.float32).numpy()
+        return self.host_spill.partial(layer_idx, qh.reshape(heads, -1), heads // self.num_kv_heads, scale)
 
     # -- a session's cache between turns (memory/kv_session.py) --------------------------------------------------
     def truncate(self, length: int) -> None:
@@ -287,6 +346,11 @@ class PagedTritonKVCache:
             raise RuntimeError(f"ZERO FALLBACK: truncating the KV cache to {length} positions; it holds {self.length}")
         if length == self.length:
             return
+        if length < self.spilled:                        # the kept prefix ends inside the host's positions
+            self.host_spill.truncate(length)
+            self.spilled = length
+            for t in self.tables:
+                t.length = 0
         self.length = length
         if self.pool is not None:
             self._write_lens(length)
@@ -296,6 +360,9 @@ class PagedTritonKVCache:
         whole number of pages, contiguous `[B, heads, positions, D]` in `dtype` (`paged_kv_gather`). The pages must be
         granted (a prefill reserved them)."""
         from nbxtensor.ops import attention_wrappers as _aw
+        if self.spilled:
+            raise RuntimeError(f"ZERO FALLBACK: gathering layer {layer_idx}'s pages of a sequence whose first "
+                               f"{self.spilled} positions spilled to the host — a prefill chunk past the card's reach")
         if positions > len(self.tables[0].pages) * self.page_tokens:
             raise RuntimeError(f"ZERO FALLBACK: gathering {positions} positions of layer {layer_idx}; the sequence "
                                f"holds {len(self.tables[0].pages)} pages of {self.page_tokens}")
@@ -308,7 +375,8 @@ class PagedTritonKVCache:
         return self.length
 
     def _write_lens(self, value: int) -> None:
-        arr = np.full((self.batch,), int(value), dtype=np.int32)
+        """Every layer's device length for the sequence's `value` positions: the card's share of them."""
+        arr = np.full((self.batch,), int(value) - self.spilled, dtype=np.int32)
         for i in range(self.num_layers):
             if self.lens[i] is not None:
                 self._write_in_place(self.lens[i], arr)
@@ -325,8 +393,8 @@ class PagedTritonKVCache:
         carries the split count (the read's grid) and the pools' identity (uid, generation): a growth reallocates them
         and retires every plan recorded against the old addresses."""
         from nbxtensor.ops.paged_decode_attn import paged_decode_splits
-        if self.pool is None or not self.tables:
-            return None
+        if self.pool is None or not self.tables or self.spilled:
+            return None                                  # a spilled step runs host code: no recorded replay
         nxt = self.length + 1
         if nxt > len(self.tables[0].pages) * self.page_tokens:
             return None
@@ -380,7 +448,8 @@ class PagedTritonKVCache:
         """An empty cache of this geometry — a decode branch (a CFG negative context)."""
         twin = PagedTritonKVCache(self.num_layers, self.num_kv_heads, self.k_head_dim, self.v_head_dim,
                                   self.max_cache_len, self.dtype, self.page_tokens, self.async_release,
-                                  self.window_ceiling, self.decode_budget, self.initial_cache_len, self.fence)
+                                  self.window_ceiling, self.decode_budget, self.initial_cache_len, self.fence,
+                                  self.card_pages)        # no host spill of its own: past the card, refused by name
         twin.on_reallocate = self.on_reallocate
         return twin
 
@@ -394,6 +463,9 @@ class PagedTritonKVCache:
         return self.num_layers, *(p.numel() // int(p.shape[0]) * p.element_size() for p in (self.k_pools[0], self.v_pools[0]))
 
     def tier_length(self) -> int:
+        if self.spilled:
+            raise RuntimeError(f"ZERO FALLBACK: the KV host tier reads a sequence whose first {self.spilled} positions "
+                               f"spilled mid-decode — a spilled conversation is not parked")
         return self.length
 
     def tier_offload(self, pages, host, host_pages) -> None:
@@ -416,6 +488,9 @@ class PagedTritonKVCache:
         for t in self.tables:
             t.free()
         self.length = 0
+        self.spilled = 0
+        if self.host_spill is not None:
+            self.host_spill.clear()
         self._published_pages = -1
         if self.pool is not None:
             self._write_lens(0)
