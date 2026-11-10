@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   family with a named refusal, and no vector is ever derived from a chat model.
 
 ### Changed
+- **Contributions are made under the NeuroBrix Contributor Assignment Agreement** (docs/legal/ of the neurobrix repository, an individual and an entity version): signed once by a comment on the first pull request, for every NeuroBrix project; the `NeuroBrix CLA` check on every pull request says who has yet to sign. CONTRIBUTING.md explains it.
 - **The hub's official address is neurobrix.org**: `neurobrix hub` and `neurobrix import` reach `https://neurobrix.org` by default, and the CLI texts, README and project URLs name it; the documentation is at docs.neurobrix.org, and the contact addresses (security, conduct, contributors, models, partners, the authors' e-mail in the package metadata) are @neurobrix.org. `NEUROBRIX_REGISTRY` still overrides it; the 0.6.x versions already installed keep working, the API under neurobrix.es stays served.
 
 ### Fixed

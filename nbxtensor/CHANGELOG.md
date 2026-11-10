@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Contributions are made under the NeuroBrix Contributor Assignment Agreement** (docs/legal/ of the neurobrix repository, an individual and an entity version): signed once by a comment on the first pull request, for every NeuroBrix project; the `NeuroBrix CLA` check on every pull request says who has yet to sign. CONTRIBUTING.md explains it.
 - **The authors' contact address is contact@neurobrix.org** (the package metadata), the project's address being neurobrix.org.
 
 ### Added

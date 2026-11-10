@@ -1,0 +1,29 @@
+# The NeuroBrix CLA check: every author of a pull request has signed the NeuroBrix Contributor Assignment Agreement.
+# The check's code and the signatures live in the private repository NeuroBrix/cla-signatures (one copy for every
+# NeuroBrix repository); the pull request's own code is never checked out or run.
+name: CLA
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  statuses: write
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+jobs:
+  cla:
+    if: github.event_name == 'pull_request_target' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the signatures
+        env:
+          PR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STORE_TOKEN: ${{ secrets.CLA_STORE_TOKEN }}
+        run: |
+          curl -fsSL -H "Authorization: Bearer $STORE_TOKEN" -H "Accept: application/vnd.github.raw" \
+            https://api.github.com/repos/NeuroBrix/cla-signatures/contents/check.py -o "$RUNNER_TEMP/check.py"
+          python3 "$RUNNER_TEMP/check.py"
