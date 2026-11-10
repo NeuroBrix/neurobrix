@@ -164,9 +164,10 @@ def attach_spill(cache, tier: Optional[KVTier], kv_plan, window: int) -> str:
     cache.card_pages = -(-card // cache.page_tokens)
     cache.host_spill = HostSpill(kv_plan.num_layers, kv_plan.num_kv_heads, kv_plan.k_head_dim, kv_plan.v_head_dim,
                                  tier.spill_budget)
-    return (f"KV mid-decode spill: on — {cache.card_pages * cache.page_tokens} positions on the card, then up to "
-            f"{cache.host_spill.reach()} in host memory ({cache.host_spill.position_bytes()} bytes each, the tier's "
-            f"share of {tier.budget_bytes / 2 ** 20:.0f} MB), the model's window {window}")
+    on_card = cache.card_pages * cache.page_tokens
+    return (f"KV mid-decode spill: on — {on_card} positions on the card, then up to "
+            f"{min(cache.host_spill.reach(), window - on_card)} in host memory ({cache.host_spill.position_bytes()} "
+            f"bytes each, the tier's share of {tier.budget_bytes / 2 ** 20:.0f} MB), the model's window {window}")
 
 
 def kv_tier_for(plan, profile) -> "tuple[Optional[KVTier], str]":

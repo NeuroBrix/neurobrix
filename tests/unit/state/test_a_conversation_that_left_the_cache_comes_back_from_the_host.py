@@ -245,7 +245,8 @@ def test_a_served_cache_spills_past_the_plan_s_cache_only_when_the_window_is_lon
     on = FakeCache()
     note = attach_spill(on, tier, plan, 1000)
     assert on.card_pages == -(-100 // TPP) and on.host_spill.budget_bytes == tier.spill_budget()
-    assert "on" in note and str(on.host_spill.reach()) in note
+    on_card = on.card_pages * TPP
+    assert "on" in note and f"up to {min(on.host_spill.reach(), 1000 - on_card)} in host memory" in note   # never past the window
 
 
 def test_the_served_reach_is_the_card_then_the_host_spill_within_the_window():

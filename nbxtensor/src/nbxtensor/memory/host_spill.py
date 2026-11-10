@@ -74,7 +74,9 @@ class HostSpill:
         if self.k[layer] is None:
             return host_decode_partial(q, np.zeros((self.kv_heads, 0, self.k_dim), np.float32),
                                        np.zeros((self.kv_heads, 0, self.v_dim), np.float32), 0, groups, scale)
-        return host_decode_partial(q, self.k[layer], self.v[layer], self.held[layer], groups, scale)
+        # the scores take, at once, at most what the budget leaves beside the spilled positions themselves
+        return host_decode_partial(q, self.k[layer], self.v[layer], self.held[layer], groups, scale,
+                                   scores_bytes=max(0, self.budget_bytes - self.nbytes()))
 
     def truncate(self, length: int) -> None:
         """Keep the first `length` spilled positions (a session's matched prefix)."""

@@ -99,3 +99,17 @@ def test_the_card_s_paged_decode_takes_the_host_partial_as_its_last_split(total,
                                  dev(order.astype(np.int32).reshape(1, -1)), dev(np.array([total - spilled], np.int32)),
                                  scale, total - spilled, host_partial=host)
     assert np.allclose(out.numpy().reshape(heads, d), _full(q, k, v, groups, scale), rtol=0, atol=2e-5)
+
+
+def test_bounded_scores_walk_the_positions_in_blocks_with_the_same_partial():
+    """scores_bytes bounds the scores held at once (a prefill chunk's rows over a long spill): the positions are walked
+    in blocks merged as they go — the same partial; a bound below one position a thread refused by name."""
+    rng = np.random.default_rng(3)
+    q = rng.standard_normal((32, 64)).astype(np.float32)
+    k, v = (rng.standard_normal((4, 5000, 64)).astype(np.float32) for _ in range(2))
+    whole = host_decode_partial(q, k, v, 5000, 8, 0.125)
+    for budget in (4 * 32 * 64 * 16, 4 * 32 * 777 * 16, 1 << 30):
+        assert all(np.allclose(a, b, atol=1e-4) for a, b in zip(host_decode_partial(q, k, v, 5000, 8, 0.125, budget),
+                                                                whole))
+    with pytest.raises(RuntimeError, match="host budget"):
+        host_decode_partial(q, k, v, 5000, 8, 0.125, scores_bytes=8)

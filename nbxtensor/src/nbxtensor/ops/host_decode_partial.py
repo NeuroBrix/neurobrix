@@ -20,12 +20,14 @@ Partial = Tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
 def host_decode_partial(q: np.ndarray, k: np.ndarray, v: np.ndarray, n_tokens: int, groups: int,
-                        scale: float) -> Partial:
+                        scale: float, scores_bytes: Optional[int] = None) -> Partial:
     """q [H, D] (the step's query rows, rounded as the card reads them) · k [H_kv, cap, D] / v [H_kv, cap, D_v] the
     spilled positions in order, float32, in the attention's own layout (memory/host_spill.py writes them so once per
     page: a per-step transpose and fp16 -> fp32 conversion cost 7x the math, measured 2026-11-10 on 131 072 positions)
     · n_tokens the positions held (<= cap) · groups = H / H_kv -> (acc [H, D_v], m [H], l [H]) float32.
-    No position (n_tokens == 0): m = -inf, l = 0, acc = 0, neutral in the merge."""
+    No position (n_tokens == 0): m = -inf, l = 0, acc = 0, neutral in the merge. `scores_bytes`: the host memory the
+    scores may take at once (a prefill chunk's rows over every spilled position: 32 heads x 512 rows x 196 480 positions
+    were 12.9 GB) — each thread then walks its positions in blocks under its share of it; None: one block a thread."""
     heads, d = q.shape
     kv_heads, cap, d_k = k.shape
     d_v = v.shape[2]
@@ -42,7 +44,15 @@ def host_decode_partial(q: np.ndarray, k: np.ndarray, v: np.ndarray, n_tokens: i
     qg = q.astype(np.float32, copy=False).reshape(kv_heads, groups, d)          # query head h reads KV head h // groups
     # the positions cut over the pool's threads (the application's: NeuroBrix sets them from its hardware profile's
     # compute threads), inline under the threshold measured for this kind of work (backend/cpu/pool.py)
-    run = _piece(qg, k, v, np.float32(scale))
+    from nbxtensor.backend.cpu.pool import threads
+    block = None
+    if scores_bytes is not None:
+        block = int(scores_bytes) // (4 * heads * threads())
+        if block < 1:
+            raise RuntimeError(f"ZERO FALLBACK: the host partial's scores for {heads} query rows need "
+                               f"{4 * heads * threads()} bytes a position across {threads()} threads; "
+                               f"{scores_bytes} bytes are left in the host budget")
+    run = _piece(qg, k, v, np.float32(scale), block)
     parts = parallel_for(n_tokens, run, "host_decode_partial", probe=lambda n: _probe(n, kv_heads, groups, d, d_v))
     acc, m, l = parts[0]
     for a2, m2, l2 in parts[1:]:                                                # fixed order: deterministic
@@ -52,13 +62,25 @@ def host_decode_partial(q: np.ndarray, k: np.ndarray, v: np.ndarray, n_tokens: i
     return acc.reshape(heads, d_v), m.reshape(heads), l.reshape(heads)
 
 
-def _piece(qg: np.ndarray, k: np.ndarray, v: np.ndarray, sc):
-    """The partial of positions [a, b) of every head (acc [H_kv, groups, D_v], m, l): one piece of the pool's cut."""
-    def piece(a: int, b: int) -> Partial:
+def _piece(qg: np.ndarray, k: np.ndarray, v: np.ndarray, sc, block: Optional[int] = None):
+    """The partial of positions [a, b) of every head (acc [H_kv, groups, D_v], m, l): one piece of the pool's cut,
+    walked in blocks of `block` positions (its scores bounded) merged as it goes, one block when None."""
+    def one(a: int, b: int) -> Partial:
         s = np.matmul(qg, k[:, a:b].transpose(0, 2, 1)) * sc                    # [H_kv, groups, b - a]
         m = s.max(axis=2)
         p = np.exp(s - m[..., None])
         return np.matmul(p, v[:, a:b]), m, p.sum(axis=2)
+
+    def piece(a: int, b: int) -> Partial:
+        if block is None or b - a <= block:
+            return one(a, b)
+        acc, m, l = one(a, a + block)
+        for c in range(a + block, b, block):
+            a2, m2, l2 = one(c, min(c + block, b))
+            mn = np.maximum(m, m2)
+            c1, c2 = np.exp(m - mn), np.exp(m2 - mn)
+            acc, l, m = acc * c1[..., None] + a2 * c2[..., None], l * c1 + l2 * c2, mn
+        return acc, m, l
     return piece
 
 
