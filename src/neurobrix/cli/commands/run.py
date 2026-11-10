@@ -17,7 +17,7 @@ import logging
 import time
 from pathlib import Path
 
-from neurobrix.cli.utils import find_model
+from neurobrix.cli.utils import find_model, refuse_unread_flags
 
 from neurobrix.core.runtime_values import (MissingRuntimeValue,
                                           resolve as _resolve_runtime)
@@ -529,6 +529,7 @@ def cmd_run(args):
     # A confirmation run serves the certified directory only (the owner's method, 2026-09-28):
     # said to the engine before any kernel is defined, and never answered by a daemon, whose
     # process keeps its own autotune state.
+    refuse_unread_flags(args)
     if getattr(args, "certified_only", False):
         _os_dbg.environ["NBX_AUTOTUNE_CERTIFIED_ONLY"] = "1"
 
@@ -842,8 +843,6 @@ def cmd_run(args):
         inputs["global.prompt"] = args.prompt
     if getattr(args, 'audio', None):
         inputs["global.audio_path"] = args.audio
-    if getattr(args, 'reference_audio', None):
-        inputs["global.reference_audio_path"] = args.reference_audio
 
     if args.steps is not None:
         inputs["global.num_inference_steps"] = args.steps

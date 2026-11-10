@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Fixed
+- **`--reference-audio` and `--reference-image` are refused by name instead of being ignored.** `neurobrix run`
+  accepted both and no model read them: a request to clone a voice from a recording ran and spoke with the model's
+  own voice, as if the flag were absent. Cloning a voice from a reference and conditioning on a style image are not
+  wired in this version; the command now says so and stops before loading anything.
+
 ### Changed
 - Internal: the rules that decide what constrains a chat request's answer (a JSON schema, a forced tool call) are
   grouped in one place; every request is answered exactly as before (400 combinations compared).

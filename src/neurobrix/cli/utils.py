@@ -128,6 +128,23 @@ def find_model(model_name: str) -> Path:
     raise FileNotFoundError(error_msg)
 
 
+#: request flags the command line accepts and no flow reads yet, each with what it would have done: accepted in
+#: silence, the model ran as if the flag were absent (2026-11-10: `--reference-audio` with a voice to clone gave the
+#: bytes of the run without it). A flag leaves this table the day a flow reads it.
+UNREAD_FLAGS = {
+    "reference_audio": ("--reference-audio", "cloning a voice from a reference recording is not wired in this version; "
+                                             "the model speaks with its own or a preset voice (--speaker)"),
+    "reference_image": ("--reference-image", "conditioning on a style reference image is not wired in this version"),
+}
+
+
+def refuse_unread_flags(args) -> None:
+    """A flag no flow reads is refused by name before anything loads, never accepted and ignored (ZERO FALLBACK)."""
+    for field, (flag, why) in UNREAD_FLAGS.items():
+        if getattr(args, field, None):
+            raise SystemExit(f"ZERO FALLBACK: {flag} is given and nothing reads it: {why}. Remove the flag.")
+
+
 def format_size(size_bytes: int) -> str:
     """Format byte count as human-readable string."""
     if size_bytes > 1024**3:

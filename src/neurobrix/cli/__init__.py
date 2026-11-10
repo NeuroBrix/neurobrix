@@ -89,9 +89,9 @@ def _add_run_arguments(p):
     p.add_argument('--mask-image', default=None, dest='mask_image',
                             help='Inpainting mask image path (image inpainting mode)')
     p.add_argument('--reference-image', default=None, dest='reference_image',
-                            help='Style reference image path (image)')
+                            help='Style reference image (not wired in this version: refused by name)')
     p.add_argument('--reference-audio', default=None, dest='reference_audio',
-                            help='Voice clone reference audio path (tts)')
+                            help='Voice to clone from a recording (not wired in this version: refused by name)')
     p.add_argument('--speaker', default=None,
                             help='Speaker preset id (tts)')
     p.add_argument('--video', default=None, dest='video',

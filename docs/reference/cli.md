@@ -84,8 +84,8 @@ neurobrix run [options]
 | `--input-image` `INPUT_IMAGE` | — | Input image path (vlm, img2img, inpainting, upscaler, multimodal) |
 | `--input-video` `INPUT_VIDEO` | — | Input video path for understanding (vlm/multimodal) |
 | `--mask-image` `MASK_IMAGE` | — | Inpainting mask image path (image inpainting mode) |
-| `--reference-image` `REFERENCE_IMAGE` | — | Style reference image path (image) |
-| `--reference-audio` `REFERENCE_AUDIO` | — | Voice clone reference audio path (tts) |
+| `--reference-image` `REFERENCE_IMAGE` | — | Style reference image (not wired in this version: refused by name) |
+| `--reference-audio` `REFERENCE_AUDIO` | — | Voice to clone from a recording (not wired in this version: refused by name) |
 | `--speaker` `SPEAKER` | — | Speaker preset id (tts) |
 | `--video` `VIDEO` | — | Input video path (video v2v) |
 | `--num-frames` `NUM_FRAMES` | — | Number of frames to generate (video) |
@@ -441,8 +441,8 @@ neurobrix calibrate [options]
 | `--input-image` `INPUT_IMAGE` | — | Input image path (vlm, img2img, inpainting, upscaler, multimodal) |
 | `--input-video` `INPUT_VIDEO` | — | Input video path for understanding (vlm/multimodal) |
 | `--mask-image` `MASK_IMAGE` | — | Inpainting mask image path (image inpainting mode) |
-| `--reference-image` `REFERENCE_IMAGE` | — | Style reference image path (image) |
-| `--reference-audio` `REFERENCE_AUDIO` | — | Voice clone reference audio path (tts) |
+| `--reference-image` `REFERENCE_IMAGE` | — | Style reference image (not wired in this version: refused by name) |
+| `--reference-audio` `REFERENCE_AUDIO` | — | Voice to clone from a recording (not wired in this version: refused by name) |
 | `--speaker` `SPEAKER` | — | Speaker preset id (tts) |
 | `--video` `VIDEO` | — | Input video path (video v2v) |
 | `--num-frames` `NUM_FRAMES` | — | Number of frames to generate (video) |
@@ -578,8 +578,8 @@ neurobrix drift [options]
 | `--input-image` `INPUT_IMAGE` | — | Input image path (vlm, img2img, inpainting, upscaler, multimodal) |
 | `--input-video` `INPUT_VIDEO` | — | Input video path for understanding (vlm/multimodal) |
 | `--mask-image` `MASK_IMAGE` | — | Inpainting mask image path (image inpainting mode) |
-| `--reference-image` `REFERENCE_IMAGE` | — | Style reference image path (image) |
-| `--reference-audio` `REFERENCE_AUDIO` | — | Voice clone reference audio path (tts) |
+| `--reference-image` `REFERENCE_IMAGE` | — | Style reference image (not wired in this version: refused by name) |
+| `--reference-audio` `REFERENCE_AUDIO` | — | Voice to clone from a recording (not wired in this version: refused by name) |
 | `--speaker` `SPEAKER` | — | Speaker preset id (tts) |
 | `--video` `VIDEO` | — | Input video path (video v2v) |
 | `--num-frames` `NUM_FRAMES` | — | Number of frames to generate (video) |
