@@ -671,7 +671,8 @@ def paged_kv_gather(pool, block_table, positions, heads, dtype):
     return out
 
 
-def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None):
+def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None,
+                           host_partial=None):
     """Decode attention (one query position) read through the page table — the vector split-KV kernel of
     ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
 
@@ -679,7 +680,10 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     (-1 past each sequence) · seq_lens [B] int32 · max_seq_len: the longest of seq_lens (sizes the splits; read by the
     caller from its page tables, never from the device) — the position tile is the key's certified configuration among
     PAGED_DECODE_TILE_CANDIDATES dividing page_tokens · q_round: the dtype Q is read in (the cache's), rounded on load
-    as `_decode_attn_vec` does; the output is written in it. Output [B, H, 1, D_v] in q_round, else q's dtype."""
+    as `_decode_attn_vec` does; the output is written in it. Output [B, H, 1, D_v] in q_round, else q's dtype.
+    host_partial: the partial over the pages a sequence spilled to host memory (ops/host_decode_partial.py: acc
+    [B*H, D_v], m [B*H], l [B*H], numpy fp32; a row without spilled pages m = -inf, l = 0), joined as one more split
+    in the same fixed-order reduce — block_table and seq_lens then describe the card's pages only."""
     from nbxtensor.ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
                                                  paged_decode_splits, PAGED_DECODE_SPLIT_ALIGN)
     batch, nheads, tq, headdim = (int(x) for x in q.shape)
@@ -706,9 +710,10 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
 
     q2 = q.reshape(bhq, headdim)
     dev = f"cuda:{q._device_idx}"
-    opart = NBXTensor.empty((bhq, split, d_v), dtype=NBXDtype.float32, device=dev)
-    mpart = NBXTensor.empty((bhq, split), dtype=NBXDtype.float32, device=dev)
-    lpart = NBXTensor.empty((bhq, split), dtype=NBXDtype.float32, device=dev)
+    cols = split + (host_partial is not None)          # the host's partial, when there is one, is the last split
+    opart = NBXTensor.empty((bhq, cols, d_v), dtype=NBXDtype.float32, device=dev)
+    mpart = NBXTensor.empty((bhq, cols), dtype=NBXDtype.float32, device=dev)
+    lpart = NBXTensor.empty((bhq, cols), dtype=NBXDtype.float32, device=dev)
     out_dtype = q_round if q_round is not None else q.nbx_dtype
     q_to = _TL_DTYPE[q_round] if q_round is not None else None
     q_saturate = (q_round == NBXDtype.float16
@@ -727,6 +732,14 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
         mpart.stride(0),
         GQA_GROUPS=groups, BLOCK_D=BLOCK_D, D=headdim, D_V=d_v, SPLIT_ALIGN=PAGED_DECODE_SPLIT_ALIGN,
         Q_TO=q_to, Q_SATURATE=q_saturate)
+    if host_partial is not None:
+        import numpy as np
+        acc, m, l = (np.ascontiguousarray(x, dtype=np.float32) for x in host_partial)
+        if acc.shape != (bhq, d_v) or m.shape != (bhq,) or l.shape != (bhq,):
+            raise ValueError(f"paged_decode_attention: host partial {acc.shape} / {m.shape} / {l.shape} for {bhq} rows "
+                             f"of {d_v}")
+        for part, host in ((opart, acc.reshape(bhq, 1, d_v)), (mpart, m.reshape(bhq, 1)), (lpart, l.reshape(bhq, 1))):
+            part.narrow(1, split, 1).copy_(NBXTensor.from_numpy(host).to(device=dev))
     decode_reduce(opart, mpart, lpart, out)
     return out.reshape(batch, nheads, 1, d_v)
 
