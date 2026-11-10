@@ -373,7 +373,7 @@ def _sdpa_math_max_chunks() -> int:
         return 0
 
 
-def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
+def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None, return_lse=False):
     """Math-decomposed attention — deterministic for any head_dim.
 
     Used for non-power-of-2 head_dim (PixArt 72, Sana 112) where the
@@ -505,6 +505,7 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     # softmax along K dim — kernel handles fp16/fp32 internally,
     # returns same dtype as input. Score is fp32 from bmm so softmax
     # output is fp32.
+    lse = _scores_lse(scores) if return_lse else None   # [BH, M] = [B, H, T_q] in q's head order, before they die
     p = softmax(scores, dim=-1)
     # Fully-masked-row guard — parity with PyTorch's fused SDPA backends
     # (memory-efficient / flash), which NeuroBrix compiled mode uses as the
@@ -536,11 +537,30 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     if out_3d.nbx_dtype != q.nbx_dtype:
         out_3d = out_3d.to(q.nbx_dtype)
 
-    return out_3d.reshape(B, H, T_q, D_v)
+    out = out_3d.reshape(B, H, T_q, D_v)
+    return (out, lse.reshape(B, H, T_q)) if return_lse else out
+
+
+def _lse_rows(lse):
+    """A flash kernel's stored log-sum-exp rows [B, H, T_q] made contiguous, a fully masked row's NaN read as -inf."""
+    return _ew.nan_to_num_wrapper(lse.contiguous(), nan=float("-inf"), posinf=float("inf"), neginf=float("-inf"))
+
+
+def _scores_lse(scores):
+    """The natural-log log-sum-exp of each row of the scores [N, M, T_k] (scaled, masked) -> [N, M] float32: m + log sum
+    exp(s - m), a fully masked row (every key -inf) giving -inf (neutral in a log-sum-exp merge). Read in float32
+    whatever the scores' dtype (half on a device whose bmm keeps it: Apple)."""
+    from nbxtensor.ops import reduction_wrappers as _rw
+    if scores.nbx_dtype != NBXDtype.float32:
+        scores = scores.to(NBXDtype.float32)
+    m = _rw.amax_wrapper(scores, dim=-1, keepdim=True)
+    m0 = _ew.nan_to_num_wrapper(m, nan=0.0, posinf=0.0, neginf=0.0)       # a fully masked row: its max -inf -> 0
+    z = _rw.sum_wrapper(_ew.exp(_ew.sub(scores, m0)), dim=-1)              # 0 for that row: log 0 = -inf
+    return _ew.add(_ew.log_wrapper(z), m0.reshape(tuple(m0.shape[:-1])))
 
 
 def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
-                            chunk_rows):
+                            chunk_rows, return_lse=False):
     """Deterministic math attention for scores tensors OVER the budget —
     the P-NONDET-LONG-ROW fix (2026-08-23).
 
@@ -567,6 +587,7 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
     device_idx = q._device_idx if hasattr(q, '_device_idx') else 0
     out = NBXTensor.empty((B, H, T_q, D_v), dtype=q.nbx_dtype,
                           device=f"cuda:{device_idx}")
+    lse = NBXTensor.empty((B, H, T_q), dtype=NBXDtype.float32, device=f"cuda:{device_idx}") if return_lse else None
     bias_full = None
     if is_causal and attn_mask is None:
         bias_full = _ew._get_causal_bias(device_idx, T_q, T_k,
@@ -594,7 +615,7 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
                       else attn_mask[:, :, q0:q0 + c, :])
         try:
             o = _math_attention(q_c, k, v, attn_mask=mask_c,
-                                is_causal=False, scale=scale)
+                                is_causal=False, scale=scale, return_lse=return_lse)
         except DeviceOOMError as _oom:
             _asked = _ts.sdpa_scores_bytes(B, H, c, T_k)
             raise DeviceOOMError(
@@ -605,9 +626,12 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
                 requested=_oom.requested, device_idx=_oom.device_idx, live=_oom.live,
                 pool_cached=_oom.pool_cached, pool_blocks=_oom.pool_blocks,
                 driver_free=_oom.driver_free, driver_total=_oom.driver_total) from _oom
+        if return_lse:                   # the chunk's rows over EVERY key: its log-sum-exp is the rows' own
+            o, lse_c = o
+            lse[:, :, q0:q0 + c] = lse_c
         out[:, :, q0:q0 + c, :] = o
         q0 += c
-    return out
+    return (out, lse) if return_lse else out
 
 
 def paged_kv_append(new, pool, slot_mapping):
@@ -824,7 +848,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     return out.reshape(batch, nheads, 1, D_v)
 
 
-def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, split=False):
+def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, split=False, return_lse=False):
     """Flash forward on the m8n8k4 matrix unit (ops/flash_attention_m8n8k4.py); `bias` is the wrapper's
     memory-resident [B, H, Sq, Sk] bias view (unit stride on the key axis), not read when `has_bias` is False (the
     zero bias of a call with neither mask nor causality). `split`: the operands carried as hi + lo (the DtypeEngine's
@@ -856,13 +880,13 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
         _lk.bucket_of("M", seqlen_q), _lk.bucket_of("N", seqlen_k), DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias),
         SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb)
-    return o
+    return (o, lse.narrow(2, 0, int(q.shape[2]))) if return_lse else o
 
 
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
                                           scale=None, k_pre_transposed=None,
-                                          **kwargs):
+                                          return_lse=False, **kwargs):
     """aten::scaled_dot_product_attention via Triton Flash Attention.
 
     Args:
@@ -873,6 +897,10 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         dropout_p: dropout probability (ignored at inference)
         is_causal: causal masking
         scale: softmax scale (default: 1/sqrt(headdim))
+        return_lse: also return each query row's natural-log log-sum-exp over its keys [B, H, T_q] fp32 (scaled
+            and masked scores; -inf for a fully masked row), from the route that computes the attention — what a
+            caller merging this attention with another over other keys needs (the KV spill's prefill chunk). The
+            vector decode route, which keeps no per-row statistic past its splits' reduce, is not taken then.
 
     Reference: Dao-AILab _flash_attn_forward signature and grid computation.
     """
@@ -1038,7 +1066,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     def _q_cast(t):
         return t.to(q_round) if (q_round is not None and t._dtype != q_round) else t
 
-    if (seqlen_q == 1 and q._device != "cpu"
+    if (seqlen_q == 1 and q._device != "cpu" and not return_lse
             and _os_fd.environ.get("NBX_DECODE_VEC", "") == "1"):
         _dv_out = _ew._try_decode_vec(q, k, v, attn_mask, softmax_scale,
                                   batch, nheads, nheads_k, seqlen_k,
@@ -1142,7 +1170,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                        f"use_math={_use_math}")
     if _use_math == "chunked":
         return _math_attention_chunked(_q_cast(q), k, v, attn_mask, is_causal,
-                                       softmax_scale, _chunk_rows)
+                                       softmax_scale, _chunk_rows, return_lse=return_lse)
     if _use_math:
         # ---- VECTOR (SIMT) DECODE ATTENTION — DEFAULT on the math
         # route at Tq == 1 (ADOPTED 2026-08-23, three-outcome verdict
@@ -1159,7 +1187,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         # attention unchanged). NBX_FORCE_MATH_ATTENTION=1 keeps its
         # exact meaning (the pure bmm+softmax chain) and bypasses this.
         # NBX_DECODE_VEC=0 is the kill switch.
-        if (seqlen_q == 1 and not _use_math_forced
+        if (seqlen_q == 1 and not _use_math_forced and not return_lse
                 and _os_fd.environ.get("NBX_DECODE_VEC", "") != "0"):
             _dv_out = _ew._try_decode_vec(q, k, v, attn_mask, softmax_scale,
                                       batch, nheads, nheads_k,
@@ -1167,7 +1195,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             if _dv_out is not None:
                 return _dv_out
         return _math_attention(_q_cast(q), k, v, attn_mask=attn_mask,
-                                is_causal=is_causal, scale=softmax_scale)
+                                is_causal=is_causal, scale=softmax_scale, return_lse=return_lse)
 
     # Flash path from here on: flat-indexed kernel — materialise the K/V
     # views that the math path above consumes strided (see the entry
@@ -1227,7 +1255,10 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             scale=softmax_scale,
             # K was normalised above; saying so keeps the inner call from
             # re-reading a layout off a shape it can no longer interpret.
-            k_pre_transposed=False, **_kw)
+            k_pre_transposed=False, return_lse=return_lse, **_kw)
+        if return_lse:                   # the zero-padded dims add nothing to a score: the inner LSE is this one
+            out, lse = out
+            return out.narrow(-1, 0, _dv).contiguous(), lse
         return out.narrow(-1, 0, _dv).contiguous()
 
     # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using
@@ -1379,10 +1410,11 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     _mu_flash = _lk.unit_flash(headdim, q._dtype, k._dtype, v._dtype)
     if _mu_flash is not None:
         o = _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, _mu_flash[1], _bias_read,
-                          split=_mu_flash[0] == "split")
+                          split=_mu_flash[0] == "split", return_lse=return_lse)
+        o, lse = o if return_lse else (o, None)
         if attn_mask is not None:
             o = _ew.nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
-        return o
+        return (o, _lse_rows(lse)) if return_lse else o
 
     # The tl.dot flash with its tile CERTIFIED per key (workstream 1, roadmap C3) where the profile declares no hand
     # table of tiles (`launch_keys.flash_tiles_certified`): the autotuned handle of the same kernel, keyed on the
@@ -1414,7 +1446,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         )
         if attn_mask is not None:
             o = _ew.nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
-        return o
+        return (o, _lse_rows(lse.narrow(2, 0, seqlen_q))) if return_lse else o
 
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)
@@ -1556,7 +1588,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # _math_attention.
     if attn_mask is not None:
         o = _ew.nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
-    return o
+    return (o, _lse_rows(lse.narrow(2, 0, seqlen_q))) if return_lse else o
 
 
 # ---------------------------------------------------------------------------
