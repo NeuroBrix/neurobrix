@@ -76,6 +76,28 @@ pub struct Vocab {
     string_safe: Vec<u32>,
     /// every other token, walked when the matcher is in a plain string body
     string_rest: Trie,
+    /// per first byte of an until terminator, built on first use: the tokens that keep free text clean (whole
+    /// characters, no control byte but newline and tab, never that byte), and the trie of the others, walked
+    until: Vec<std::sync::OnceLock<(Vec<u32>, Trie)>>,
+}
+
+fn until_safe(t: &[u8], first: u8) -> bool {
+    // free text fed `t` from a clean point stays clean and never starts the terminator
+    let mut i = 0;
+    while i < t.len() {
+        let b = t[i];
+        if b == first { return false; }
+        let n = match b {
+            b'\n' | b'\t' | 0x20..=0x7F => 1,
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => return false,
+        };
+        if i + n > t.len() || std::str::from_utf8(&t[i..i + n]).is_err() { return false; }
+        i += n;
+    }
+    true
 }
 
 fn string_safe(t: &[u8]) -> bool {
@@ -107,7 +129,8 @@ impl Vocab {
         }
         let all = Trie::build(&tokens, |_| true);
         let rest = Trie::build(&tokens, |id| safe[id >> 5] >> (id & 31) & 1 == 0);
-        Vocab { tokens, eos, all, string_safe: safe, string_rest: rest }
+        let until = (0..256).map(|_| std::sync::OnceLock::new()).collect();
+        Vocab { tokens, eos, all, string_safe: safe, string_rest: rest, until }
     }
 
     pub fn words(&self) -> usize {
@@ -120,6 +143,17 @@ impl Vocab {
         if matches!(m.stack.last(), Some(Frame::Str { esc: 0, need: 0, .. })) {
             out.copy_from_slice(&self.string_safe);
             self.string_rest.walk(0, m, out);
+        } else if let Some(first) = m.until_clean() {
+            let (safe, rest) = self.until[first as usize].get_or_init(|| {
+                let mut safe = vec![0u32; self.words()];
+                for (id, t) in self.tokens.iter().enumerate() {
+                    if let Some(t) = t { if !t.is_empty() && until_safe(t, first) { safe[id >> 5] |= 1 << (id & 31); } }
+                }
+                let rest = Trie::build(&self.tokens, |id| safe[id >> 5] >> (id & 31) & 1 == 0);
+                (safe, rest)
+            });
+            out.copy_from_slice(safe);
+            rest.walk(0, m, out);
         } else {
             self.all.walk(0, m, out);
         }

@@ -116,6 +116,7 @@ impl<'s> Matcher<'s> {
     fn first_token(s: &Schema, n: usize) -> Option<u32> {
         match &s.nodes[n] {
             Node::Token(id) => Some(*id),
+            Node::Until { token, .. } => *token,
             Node::Seq(p) => Self::first_token(s, p[0]),
             Node::Repeat { node, min, .. } if *min > 0 => Self::first_token(s, *node),
             _ => None,
@@ -177,8 +178,21 @@ impl<'s> Matcher<'s> {
                 }
                 Some(Frame::Num { phase, .. }) if num_end(phase) => { st.pop(); }
                 Some(Frame::Lit { node, pos, cand }) if self.lit_complete(node, pos, cand) => { st.pop(); }
+                Some(Frame::Until { node, need: 0, .. }) => {
+                    if let Node::Until { token: Some(t), .. } = self.node(node) { out.push(*t); }
+                    return out;
+                }
                 _ => return out,
             }
+        }
+    }
+
+    /// The first byte of the terminator when the top frame is free text at a clean point (no partial match, no partial
+    /// UTF-8 character): the vocabulary's cached until-safe tokens for that byte apply as they are.
+    pub fn until_clean(&self) -> Option<u8> {
+        match self.stack.last() {
+            Some(Frame::Until { node, k: 0, need: 0, .. }) => match self.node(*node) { Node::Until { term, .. } => Some(term[0]), _ => None },
+            _ => None,
         }
     }
 
@@ -187,8 +201,13 @@ impl<'s> Matcher<'s> {
         loop {
             let top = self.stack.len() - 1;
             match self.stack[top] {
+                Frame::Until { node, need: 0, .. } => return match self.node(node) {
+                    Node::Until { token: Some(t), .. } if *t == id => { self.stack.pop(); true }
+                    _ => false,
+                },
                 Frame::Value { node, .. } => match self.node(node) {
                     Node::Token(t) if *t == id => { self.stack.pop(); return true; }
+                    Node::Until { token: Some(t), .. } if *t == id => { self.stack.pop(); return true; }
                     Node::Seq(_) => self.stack[top] = Frame::Seq { node, idx: 0 },
                     Node::Repeat { .. } => self.stack[top] = Frame::Rep { node, count: 0, phase: 0, sp: 0 },
                     _ => return false,
@@ -461,7 +480,7 @@ impl<'s> Matcher<'s> {
                     return false;
                 }
                 Frame::Until { node, k, need, lo, hi } => {
-                    let (term, fail) = match self.node(node) { Node::Until { term, fail } => (term, fail), _ => unreachable!() };
+                    let (term, fail) = match self.node(node) { Node::Until { term, fail, .. } => (term, fail), _ => unreachable!() };
                     let (n, l, h) = match utf8_step(need, lo, hi, b, true) { Some(x) => x, None => return false };
                     let mut k = k as usize;
                     while k > 0 && term[k] != b { k = fail[k - 1] as usize; }

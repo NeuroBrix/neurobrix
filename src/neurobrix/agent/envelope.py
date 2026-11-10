@@ -30,6 +30,14 @@ def marker(text: str, encode: Callable[[str], List[int]]) -> Dict[str, Any]:
     return {"token": int(ids[0])} if len(ids) == 1 else {"lit": text}
 
 
+def reasoning_close(end: str, encode: Callable[[str], List[int]]) -> Dict[str, Any]:
+    """The reasoning a prompt opens in, free text up to its end marker. A marker the tokenizer writes as ONE id (Qwen3's
+    `</think>`, a special token with no bytes) ends it as that id too: the model closes its reasoning with the token it
+    was trained on, never forced to spell the marker in plain bytes."""
+    ids = encode(end)
+    return {"until": end, "end_token": int(ids[0])} if len(ids) == 1 else {"until": end}
+
+
 def _params(tool: Dict[str, Any]) -> Dict[str, Any]:
     fn = tool.get("function") or {}
     p = fn.get("parameters") or {"type": "object", "properties": {}}

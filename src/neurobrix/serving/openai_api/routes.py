@@ -97,12 +97,13 @@ def _not_installed(param: str, e: Exception) -> errors.ApiError:
 def _tool_grammar(parser, tools, tokenizer, named, parallel, reasoning_end=None):
     """The forced tool call(s) as the dialect's envelope (agent/envelope.py) compiled by our grammar engine; a tool whose
     parameters it cannot enforce answers 400 naming it."""
-    from neurobrix.agent.envelope import encoder, envelope
+    from neurobrix.agent.envelope import encoder, envelope, reasoning_close
     from neurobrix.core.state.constraint import compile_description
     try:
-        env = envelope(parser, tools, encoder(tokenizer), named, parallel)
+        encode = encoder(tokenizer)
+        env = envelope(parser, tools, encode, named, parallel)
         if reasoning_end:                  # a prompt that opens in the reasoning: it closes first, then the call(s)
-            env = {"seq": [{"until": reasoning_end}, {"lit": "\n\n"}, env]}
+            env = {"seq": [reasoning_close(reasoning_end, encode), {"lit": "\n\n"}, env]}
         return compile_description(json.dumps(env))
     except ValueError as e:
         raise errors.ApiError(400, f"tools: {e}", param="tools") from e

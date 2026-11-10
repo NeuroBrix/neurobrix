@@ -208,3 +208,42 @@ fn whitespace_is_one_space_inside_a_value_and_none_around_the_root() {
     let mut m = Matcher::new(&g);
     assert!(m.feed_all(br#"{"a": 1}"#) && !m.clone().feed(b' ') && !m.feed(b'\n'));      // nothing after the root
 }
+
+#[test]
+fn a_reasoning_closes_by_its_end_token_and_the_cached_until_mask_equals_the_brute_force() {
+    // the reasoning of a Thinking template, closed by `</think>` written as ONE special id (no bytes to spell it) or as
+    // its text, then the answer; the mask taken from the until cache equals the brute force at every step
+    let mut rng = Rng(0xA0761D6478BD642F);
+    let mut toks = vocab(&mut rng).tokens;
+    for s in ["</", "think", ">", "</think>", "<", "x<y", "\n\n", "</thi", "nk>\n\n{", "Okay, ", " the user", "日"] {
+        toks.push(Some(s.as_bytes().to_vec()));
+    }
+    let end = toks.len() as u32;
+    toks.push(None);                                   // `</think>` as a special token
+    let eos = toks.len() as u32;
+    toks.push(None);
+    let v = Vocab::new(toks, vec![eos]);
+    let desc = format!(r#"{{"seq": [{{"until": "</think>", "end_token": {end}}}, {{"lit": "\n\n"}},
+                         {{"schema": {{"type": "object", "properties": {{"a": {{"type": "integer"}}}}, "required": ["a"]}}}}]}}"#);
+    let g = compile_description(&parse(&desc).unwrap()).unwrap();
+    let mut closed_by_token = 0;
+    for walk in 0..80 {
+        let mut m = Matcher::new(&g);
+        let mut in_reasoning = true;
+        for step in 0..120 {
+            let mut mask = vec![0u32; v.words()];
+            v.mask(&m, &mut mask);
+            assert_eq!(mask, brute(&v, &m), "walk {walk} step {step}");
+            let allowed: Vec<u32> = (0..v.tokens.len() as u32).filter(|&t| mask[(t >> 5) as usize] >> (t & 31) & 1 == 1).collect();
+            if in_reasoning && m.until_clean().is_some() { assert!(allowed.contains(&end), "walk {walk} step {step}"); }
+            let t = if allowed.contains(&end) && step > 0 && rng.below(25) == 0 { end } else { allowed[rng.below(allowed.len())] };
+            if t == eos { break; }
+            v.advance(&mut m, t).unwrap();
+            if t == end { closed_by_token += 1; in_reasoning = false; }
+        }
+    }
+    assert!(closed_by_token > 20, "closed by the token {closed_by_token} times");
+    let plain = compile_description(&parse(r#"{"seq": [{"until": "</think>"}, {"lit": "!"}]}"#).unwrap()).unwrap();
+    let mut m = Matcher::new(&plain);
+    assert!(m.feed_all(b"hmm ") && m.token_steps().is_empty());   // without end_token the text alone closes it
+}

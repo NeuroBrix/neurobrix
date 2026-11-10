@@ -26,9 +26,9 @@ pub enum Node {
     Choice { prefixes: Vec<Vec<u8>>, then: Vec<usize> },
     /// `node` repeated `min`..=`max` times, `sep` between two
     Repeat { node: usize, min: u32, max: u32, sep: Vec<u8> },
-    /// free text (UTF-8, no control byte but newline and tab) ended by the literal `term`, consumed;
-    /// `fail` its KMP failure table
-    Until { term: Vec<u8>, fail: Vec<u16> },
+    /// free text (UTF-8, no control byte but newline and tab) ended by the literal `term`, consumed, or by the token
+    /// `token` when the template writes that end as one id (a special token has no bytes to spell); `fail` term's KMP table
+    Until { term: Vec<u8>, fail: Vec<u16>, token: Option<u32> },
     /// exactly the token `id` (a template's dialect marker, special or plain): no bytes, the id itself
     Token(u32),
 }
@@ -123,14 +123,19 @@ impl Compiler {
             let node = self.part(r)?;
             return Ok(self.push(Node::Repeat { node, min, max, sep }));
         }
-        if let Some(t) = d.get("token") {
-            return match t { Json::Number(n) => Ok(self.push(Node::Token(n.parse().map_err(|_| "description: token id")?))),
-                             _ => Err("description: token must be an id".into()) };
-        }
         if d.get("until").is_some() {
             let term = text("until")?;
             let fail = kmp(&term);
-            return Ok(self.push(Node::Until { term, fail }));
+            let token = match d.get("end_token") {
+                None => None,
+                Some(Json::Number(n)) => Some(n.parse().map_err(|_| "description: end_token id")?),
+                _ => return Err("description: end_token must be an id".into()),
+            };
+            return Ok(self.push(Node::Until { term, fail, token }));
+        }
+        if let Some(t) = d.get("token") {
+            return match t { Json::Number(n) => Ok(self.push(Node::Token(n.parse().map_err(|_| "description: token id")?))),
+                             _ => Err("description: token must be an id".into()) };
         }
         Err("description: a part that is none of lit, schema, seq, choice, repeat, until, token".into())
     }

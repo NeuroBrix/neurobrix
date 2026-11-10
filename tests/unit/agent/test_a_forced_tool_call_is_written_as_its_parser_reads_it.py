@@ -9,10 +9,10 @@ import pytest
 from tests.unit.grammar_engine import load  # noqa: E402
 
 nbx_grammar = load()
-from neurobrix.agent.envelope import envelope  # noqa: E402
+from neurobrix.agent.envelope import envelope, reasoning_close  # noqa: E402
 from neurobrix.agent.parsers import JsonListToolCallParser, JsonToolCallParser, XmlToolCallParser  # noqa: E402
 
-MARKERS = {"<tool_call>": 1000, "</tool_call>": 1001, "<|tool_call|>": 1002}
+MARKERS = {"<tool_call>": 1000, "</tool_call>": 1001, "<|tool_call|>": 1002, "</think>": 1004}
 EOS = 1003
 TOOLS = [{"type": "function", "function": {"name": "get_weather", "parameters": {
             "type": "object", "properties": {"city": {"type": "string"}, "days": {"type": "integer"}},
@@ -26,7 +26,7 @@ def encode(text):
 
 
 def _vocab():
-    toks = [bytes([b]) for b in range(256)] + [None] * (EOS - 256 + 1)
+    toks = [bytes([b]) for b in range(256)] + [None] * (max(MARKERS.values()) - 256 + 1)
     return nbx_grammar.Vocab(toks, [EOS])
 
 
@@ -120,3 +120,14 @@ def test_an_xml_enum_parameter_is_written_bare_as_the_parser_reads_it():
     assert _walk(d, call.format("celsius")) and _walk(d, call.format("c"))
     assert not _walk(d, call.format('"celsius"')) and not _walk(d, call.format("kelvin"))
     assert XmlToolCallParser().parse(call.format("celsius")).calls[0].arguments == {"unit": "celsius", "n": "2"}
+
+
+
+def test_a_reasoning_closes_with_the_end_token_the_model_was_trained_on():
+    """Qwen3's `</think>` is one special id with no bytes: the forced call's reasoning must close by that id, never only
+    by spelling the marker in plain bytes (the rack's Thinking request could not emit it; 2026-11-10)."""
+    call = CASES["json"][1]
+    d = {"seq": [reasoning_close("</think>", encode), {"lit": "\n\n"}, envelope(CASES["json"][0], TOOLS, encode)]}
+    assert _walk(d, "The user wants Paris.</think>\n\n" + call)            # </think> walked as its id (1004)
+    spelled = lambda text: [b for b in text.encode()]                       # noqa: E731
+    assert reasoning_close("</think>", spelled) == {"until": "</think>"}    # a multi-id marker: its text alone
