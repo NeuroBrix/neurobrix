@@ -1120,13 +1120,11 @@ def _parse_nvidia_smi() -> List[Dict[str, Any]]:
         dtypes = _NVIDIA_DTYPE_MAP.get(cc_major, ["float32", "float16"])
         pcie_ver = _detect_pcie_version_sysfs(pci_bus)
 
-        runtime = _runtime_card_facts(idx)
         devices.append({
             "index": idx,
             "brand": "nvidia",
             "model": name,
             "memory_mb": mem_mb,
-            **runtime,
             "compute_capability": cc,
             "supports_dtypes": dtypes,
             "architecture": arch,
@@ -2417,7 +2415,7 @@ def _board_of(index: int, rows: Dict[int, Dict[str, Any]]) -> "Optional[int]":
     return None
 
 
-def _runtime_card_facts(index: int) -> dict:
+def runtime_card_facts(index: int) -> dict:
     """{runtime_total_mb, runtime_context_mb} of a dedicated card as the engine's runtime sees it — the total its
     allocator reports (cudaMemGetInfo) and this process's own context on it (`device_sharing`) — or {} when the runtime
     cannot answer (the census shadow then refuses the card by name). Read through the engine's allocator, never torch."""
@@ -2534,9 +2532,8 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     devices = data.get("devices") or []
     if not devices:
         return {}
-    stamp = _time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    stamp, q = _time.strftime("%Y-%m-%d %H:%M:%S %Z"), FIRST_LAUNCH
     added: Dict[str, Any] = {}
-    q = FIRST_LAUNCH
 
     def measured_of(d):
         return dict(d.get("measured") or _vendor_block(d, "measured") or {})
@@ -2592,6 +2589,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         added["host_measured"] = ["host_matmul_gflops", "host_memory_gbps"]
     # written BEFORE any child probe reads the profile: on a clean machine the first child refused the vmm_chunk_bytes
     # measured above and not yet written (the stable's install test, 2026-11-05)
+    added.update(P.complete_runtime_card_facts(devices, P.card_facts_in_a_child))
     if added:
         _write_first(path, data, devices, first)
     if engine is not None:

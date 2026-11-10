@@ -92,6 +92,9 @@ class _FakeDeviceAllocator:
     def set_device(self, idx):
         self.events.append(f"set:{idx}")
 
+    def restore_device(self, idx):          # release_flow_memory hands back the device it found
+        self.events.append(f"restore:{idx}")
+
     def sync_device(self):
         self.events.append("sync")
 
@@ -114,12 +117,13 @@ def test_release_flow_memory_sync_before_gc_single_device(monkeypatch):
     events = _patched_release(monkeypatch, "cuda:1")
     # sync the named device BEFORE gc runs the finalizers (err-700 class),
     # then restore the previously-current device, then collect, then flush.
-    assert events == ["get:7", "set:1", "sync", "set:7", "gc", "pool_flush"]
+    # the device found is handed back through restore_device (only a device this process selected)
+    assert events == ["get:7", "set:1", "sync", "restore:7", "gc", "pool_flush"]
 
 
 def test_release_flow_memory_syncs_every_compound_device(monkeypatch):
     events = _patched_release(monkeypatch, "fgp:cuda:0,cuda:1")
-    assert events == ["get:7", "set:0", "sync", "set:1", "sync", "set:7",
+    assert events == ["get:7", "set:0", "sync", "set:1", "sync", "restore:7",
                       "gc", "pool_flush"]
 
 

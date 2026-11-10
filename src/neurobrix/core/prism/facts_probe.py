@@ -335,3 +335,36 @@ def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int], off_first: Option
     from nbxtensor.memory import trace_replay as T
     gran = T.vmm_granularity(device)
     return None if gran is None else T.chunk_by_replay(device, gran, ks, reps, off_first=off_first)[0]
+
+
+def card_facts_in_a_child(index: int) -> dict:
+    """`autodetect.runtime_card_facts(index)` taken in its OWN short process: reading what the runtime takes on a card
+    means initialising it, and a launch holds a context only on the cards its plan names — the launching process must
+    not keep one on every card of the profile for having completed it. {} when the child cannot answer."""
+    import json
+    import subprocess
+    import sys
+    code = ("import json; from neurobrix.core.prism import autodetect as A; "
+            f"print('CARD_FACTS ' + json.dumps(A.runtime_card_facts({int(index)})))")
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300, env=env)
+    said = [line[len("CARD_FACTS "):] for line in out.stdout.splitlines() if line.startswith("CARD_FACTS ")]
+    return json.loads(said[-1]) if out.returncode == 0 and said else {}
+
+
+def complete_runtime_card_facts(devices, measure) -> dict:
+    """The runtime's total and its own context on each card of a GENERATED profile that states neither
+    (written at generation since 2026-10-27): measured now by `measure(index)` — `card_facts_in_a_child`: autodetect's own reading in its own process, {}
+    when the runtime cannot answer — and set on the device entry. A
+    profile generated before, or at a moment the runtime could not answer, stayed without them for ever and every
+    plan on it was refused by name, telling the user to delete the file (the two-card `default-*` profile of the rack,
+    2026-11-11). Returns {"runtime_card_facts": [device indices completed]} or {}."""
+    done = []
+    for device in devices:
+        if device.get("unified_memory") or device.get("runtime_context_mb") is not None:
+            continue
+        facts = measure(int(device.get("index", 0)))
+        if facts:
+            device.update(facts)
+            done.append(int(device.get("index", 0)))
+    return {"runtime_card_facts": done} if done else {}

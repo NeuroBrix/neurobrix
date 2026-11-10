@@ -18,7 +18,8 @@ What this file does if the code is wrong:
    there is the injection: it puts the process on every visible card, which the test states as the reason);
 3. Prism's read asks the runtime although the driver's tool answered — red (card-less);
 4. through the entry point, on the rack's profiles: the process ends on a card its plan does not name — red on main
-   for both plans (four cards; two cards for a one-card plan).
+   for both plans (four cards; two cards for a one-card plan); and without --hardware, where the launch detects what
+   it sees: red while detection asked the runtime about every visible card.
 
 Run: python -m pytest tests/unit/runtime/test_a_run_holds_a_context_on_its_plans_cards_only.py   (cards 2,3 visible
 for the two-card cases: no CUDA_VISIBLE_DEVICES, the profiles name the rack's cards)
@@ -127,7 +128,9 @@ def _profile_cards(name):
 
 
 def _run_and_list(model, profile):
-    out = subprocess.run([sys.executable, str(HELPER), "run", "--model", model, "--hardware", profile, "--prompt",
+    """The cards the process of one compiled run holds at its end; `profile` None: no --hardware (the generated one)."""
+    named = ["--hardware", profile] if profile else []
+    out = subprocess.run([sys.executable, str(HELPER), "run", "--model", model, *named, "--prompt",
                           "Say hello.", "--max-tokens", "8", "--seed", "7", "--compiled"], capture_output=True, text=True,
                          timeout=1500, cwd=str(REPO),
                          env=dict({k: v for k, v in os.environ.items() if k != "CUDA_VISIBLE_DEVICES"},
@@ -155,3 +158,12 @@ def test_a_one_card_plan_on_a_two_card_profile_ends_on_its_one_card():
     ids = _bus_ids()
     first = ids[_profile_cards("v100-32g-x2-nvlink")[0]]
     assert _run_and_list("TinyLlama/TinyLlama-1.1B-Chat-v1.0", "v100-32g-x2-nvlink") == [first]
+
+
+@pytest.mark.skipif(_cards() < 2 or not _cached("TinyLlama-1.1B-Chat-v1.0"), reason="two visible cards and the model")
+def test_a_run_without_a_named_profile_ends_on_one_card():
+    """No --hardware: the profile is the generated one of what the process sees, and DETECTING what it sees runs at
+    every launch. It asked the runtime about each visible card — a context on all of them, at every launch of the
+    most common command (seen 2026-11-11: two cards held for a plan on one). Detection now initialises no card."""
+    held = _run_and_list("TinyLlama/TinyLlama-1.1B-Chat-v1.0", None)
+    assert len(held) == 1, held

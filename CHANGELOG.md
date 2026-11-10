@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Fixed
+- **Without `--hardware`, a run no longer takes memory on every GPU of the machine.** To name the hardware profile
+  it generates, NeuroBrix looks at the GPUs it sees at every launch; that look asked the runtime about each of them,
+  which initialises it — about 300 MB taken on every visible GPU for the length of the run, whatever GPU the model
+  used. The look now touches none; what the runtime sees and takes on each GPU is read once, in a separate short
+  process, when the generated profile is written or completed. Measured on V100s with two GPUs visible: a model
+  planned on one held both, now one. (An earlier fix covered a profile named with `--hardware`; without one it
+  remained.)
+- **An older automatically generated hardware profile no longer refuses every run.** A profile written before two of
+  its measured figures existed (the GPU memory the runtime sees, and what the runtime itself takes on the card) was
+  refused with the advice to delete the file. Those figures are now measured and added to the generated profile at
+  the next launch. A profile you wrote yourself is never modified.
+
 ### Changed
 - Follows nbxtensor (an internal measure, off by default; nothing a user sees).
 
