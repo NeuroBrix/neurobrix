@@ -11,10 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **A served session states its context ceiling and reaches past the card into host memory**: `serve` prints "served context: up to N positions a session (... on the card + ... in host memory ...)" at start; past the card's KV cache the oldest pages move to host memory and decoding goes on (exact); a request longer than the ceiling is refused before it runs with the OpenAI error `400 context_length_exceeded`, naming the ceiling (it used to fail as a 500).
 - **Constrained decoding on the OpenAI API: `response_format: json_schema`, `tool_choice: required` or a named
-  function, `parallel_tool_calls: false`**: the model can only write what the schema or the template's tool-call format
+  function, `parallel_tool_calls: false` with a forced call**: the model can only write what the schema or the template's tool-call format
   allows, at every token, on both engines. JSON Schema: objects (properties, required; no other properties are
   generated), arrays (items, minItems, maxItems), strings, numbers, integers, booleans, null, enum, const, anyOf whose
-  alternatives start differently, $ref into $defs; any other keyword is refused by name (400), never ignored. Tool
+  alternatives start differently, $ref into $defs; any other constraining keyword is refused by name (400), never ignored, and annotations (title,
+  description, default, examples, ...) are read as annotations. A reasoning model answers after its reasoning ends,
+  never inside it. `parallel_tool_calls: false` without a forced call is refused by name. Tool
   calls follow the format the model's chat template defines (`<tool_call>` JSON, Qwen3-Coder's XML, granite's list).
   The grammar engine is NeuroBrix's own (rust/nbx_grammar); a machine without it answers these requests 501, by name.
 - **A served conversation that leaves the KV cache comes back from host memory**: when another conversation takes the
@@ -34,7 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The hub's official address is neurobrix.org**: `neurobrix hub` and `neurobrix import` reach `https://neurobrix.org` by default, and the CLI texts, README and project URLs name it; the documentation is at docs.neurobrix.org, and the contact addresses (security, conduct, contributors, models, partners, the authors' e-mail in the package metadata) are @neurobrix.org. `NEUROBRIX_REGISTRY` still overrides it; the 0.6.x versions already installed keep working, the API under neurobrix.es stays served.
 
 ### Fixed
-- **A long served prompt runs in chunks instead of running out of memory**: on the compiled engine a served turn is prefilled in chunks of the rows the plan prices (128 for Qwen3-Coder-30B-A3B), so a prompt of 80 000 tokens no longer asks a 6 GB causal mask in one pass; it reached past the card's cache into host memory and was answered.
+- **A long served prompt runs in chunks instead of running out of memory**: on the compiled engine a served turn is
+  prefilled in chunks of the rows the plan prices (128 for Qwen3-Coder-30B-A3B), so a prompt of 80 000 tokens no longer
+  asks a 6 GB causal mask in one pass; it reached past the card's cache into host memory and was answered — slowly: 39
+  minutes on two V100-32GB (625 chunks, the host's share of the attention included).
 - **A mixture-of-experts language model on two cards runs at the cards' speed, served or run**: on two V100-32GB, Qwen3-Coder-30B-A3B decoded at 6.7 s a token (every block streamed from host memory at every step) and Qwen3-30B-A3B-Thinking timed out; `run` on the same profile crashed or ran out of memory. The plan now holds the routed experts on both cards (0.33 s a token through `run`), a served session keeps the model loaded between requests instead of reloading 57 GB each time (a 64-token answer: about 55 s instead of 170 s), and its context cache is sized after the room the experts need, never before (served: about 31 s for 64 tokens; a served context of 65 664 tokens on two V100-32GB, where the window took 244 500 and left the experts on the host). A hardware profile that does not state a card's measured runtime total and context is now refused by name, where the plan used to assume the whole card was free.
 - **`neurobrix run` against a daemon ends at the daemon's answer**: after the daemon serving the asked model answered an
   error, the run went on to a cold attempt, refused with "a serving daemon is running with another model" for the very

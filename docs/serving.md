@@ -343,8 +343,11 @@ For comparison, a single `run` caps the cache at that request's `max_tokens + pr
 
 ### When the conversation outgrows the cache
 
-The session's ceiling is the plan's: its `session_reach` (the positions a serving session holds in the room the cache
-was sized from, within the declared window), or its `max_cache_len` when the decoder declares no window. A turn whose
+The session's ceiling is stated when `serve` starts ("served context: up to N positions a session"): the plan's
+`session_reach` (the positions a serving session holds in the room the cache was sized from, within the declared
+window; its `max_cache_len` when the decoder declares no window) plus, past them, the positions the KV host tier's
+share of host memory holds — the oldest pages move there and decoding goes on, exactly. Over HTTP a request past it is
+refused before it runs with `400 context_length_exceeded`. A turn whose
 rendered conversation plus `max_tokens` (the request's, else the container's) passes it is **refused by name**, with
 the ceiling and the plan fact it comes from; the conversation is left as it was. Nothing is summarised or dropped:
 start a new conversation (`/new`). The reply's `summarized` field stays in the protocol and is always `false`.
@@ -403,11 +406,13 @@ socket's `cancel` stops it, and a client that disconnects stops it at the next t
 ### What is read, what is refused
 
 Chat and completions read `max_tokens` / `max_completion_tokens`, `temperature`, `top_p`, `seed`, `stream`,
-`stream_options.include_usage`, `tools`, `tool_choice` (`auto`, `none`), `user`, and the engine's `top_k` and
-`repetition_penalty`. A parameter the engine does not honour is refused by name (400, `param` names it) — `stop`,
-`logprobs`, `n` > 1, `frequency_penalty` / `presence_penalty` other than 0, `logit_bias`, `response_format` other
-than text, `tool_choice: "required"` or a named function and `parallel_tool_calls: false` (forcing or limiting calls
-needs constrained decoding, which the engine does not do). Their neutral values (`n: 1`, `stop: null`, ...) are
+`stream_options.include_usage`, `tools`, `tool_choice` (`auto`, `none`, `required`, a named function),
+`parallel_tool_calls: false` (with a forced call only; refused by name otherwise), `response_format` `json_schema`,
+`user`, and the engine's `top_k` and `repetition_penalty`. A forced call and a `json_schema` answer are enforced by the
+grammar engine (501 `constrained_decoding_not_installed` where its library is not built). A parameter the engine does
+not honour is refused by name (400, `param` names it) — `stop`, `logprobs`, `n` > 1, `frequency_penalty` /
+`presence_penalty` other than 0, `logit_bias`, `response_format` `json_object` (no schema to enforce). Their neutral
+values (`n: 1`, `stop: null`, ...) are
 accepted. A request that finds `serving.http_max_queued` others already waiting gets 429 `server_busy`. An engine
 failure — a device out of memory, a named refusal — answers 500 with its message, and the daemon serves on.
 

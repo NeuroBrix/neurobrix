@@ -60,7 +60,7 @@ ready-made containers from the hub.
 ## Install and first run
 
 NeuroBrix needs Python 3.10 or newer. The current release is
-**0.6.3** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.3)).
+**0.6.5** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.5)).
 
 It has two engines. The **Triton engine** (`--triton`) runs on
 [nbxtensor](https://github.com/NeuroBrix/nbxtensor) and Triton and needs no PyTorch. The
@@ -176,8 +176,10 @@ instead of 421). Prism chooses the session's prefill chunk from the certified ke
 which, or why none); with that chunk, a turn served from the cache gives the same bytes as the same conversation
 prefilled together.
 
-A conversation has a ceiling, the plan's: how many positions a session can hold on this device, within the model's
-window (`run --explain-plan` shows it as `session_reach`). A turn that would pass it is refused with that ceiling;
+A conversation has a ceiling, stated when `serve` starts ("served context: up to N positions a session"): the
+positions the card's cache holds (`session_reach` in `run --explain-plan`) plus, past them, those the KV host tier's
+share of host memory holds, within the model's window. A turn that would pass it is refused with that ceiling (over
+HTTP: `400 context_length_exceeded`);
 older turns are never summarised or dropped. `/context` in `chat` shows the conversation's exact token count, the
 ceiling and the tokens the cache holds; `/new` starts again.
 
@@ -203,7 +205,8 @@ is refused without `--api-key-file <file>`, and every request then sends `Author
 served are those the loaded model's family has: `/v1/models`, `/v1/chat/completions` (streamed as Server-Sent Events,
 tool calls parsed from the format the model's chat template declares, a thinking model's reasoning in
 `reasoning_content`), `/v1/completions`, `/v1/images/generations`, `/v1/audio/speech` and
-`/v1/audio/transcriptions`. The `model` field is the model's one name.
+`/v1/audio/transcriptions`, and `/v1/embeddings` for an embedding family (none in the catalogue yet: refused by
+name). The `model` field is the model's one name.
 
 ```bash
 curl -s http://127.0.0.1:8765/v1/chat/completions -H 'Content-Type: application/json' -d '{
@@ -225,7 +228,7 @@ for chunk in client.chat.completions.create(model=model, stream=True,
         print(chunk.choices[0].delta.content, end="", flush=True)
 ```
 
-A parameter the engine does not honour (`stop`, `logprobs`, `n` > 1, a forced `tool_choice`, ...) is refused by name
+A parameter the engine does not honour (`stop`, `logprobs`, `n` > 1, ...) is refused by name
 in the OpenAI error object, never ignored. Every endpoint, parameter and setting: [Serving and chat](docs/serving.md).
 
 ---
@@ -248,25 +251,25 @@ from what the operating system ships (the PCI bus on Linux, Win32_VideoControlle
 whether it is integrated. When a run meets a device out-of-memory in one of its components, it re-plans that
 component with the memory it measured and goes on, once, keeping the components already finished.
 
-**Known limits of 0.6.3:**
+**Known limits of 0.6.5:**
 
 - On an Intel Mac the integrated GPU is named from system_profiler without its platform; it is not driven, and the
   engine runs on the CPU.
-- On a laptop with an NVIDIA card and an integrated GPU, only the NVIDIA card is detected; the integrated GPU is not
-  named.
-- The performance and efficiency cores of a hybrid CPU are told apart on macOS only, not yet on Linux or Windows.
-- A request served by `neurobrix serve` (socket or HTTP) does not re-plan after a device out-of-memory as `run` does:
-  it answers with the named refusal and the daemon stays loaded.
-- The HTTP API serves no `/v1/embeddings` (no family declares an embedding output yet) and does no constrained
-  decoding (`tool_choice: "required"` or a named function is refused).
-- A daemon holds one model and one conversation; the conversation cache stays on the device (no host or disk tier,
-  no sharing between sessions).
+- Constrained decoding needs the grammar engine's compiled library, which these wheels do not carry yet: from a
+  source checkout it is built with `cargo build --release` in `rust/nbx_grammar`; installed from PyPI, a constrained
+  request is refused by name (`501 constrained_decoding_not_installed`). It enforces a subset of JSON Schema (a
+  constraining keyword outside it is refused by name) and writes tool calls in the format the model's template
+  declares.
+- No embedding model is in the catalogue yet: `/v1/embeddings` refuses every catalogue model by name.
+- A very long single prompt on the compiled engine is prefilled in chunks of the rows the plan prices (128 for
+  Qwen3-Coder-30B-A3B): it is answered, slowly — 79 931 tokens took 39 minutes on two V100-32GB.
+- A daemon holds one model; a conversation past the card's cache spills to host memory one sequence at a time
+  (batch 1).
 - The macOS 14 Metal wheels (CPython 3.10-3.13) are published at
   [apple-v0.1.0+triton3.8.0-macos14](https://github.com/NeuroBrix/triton-ext/releases/tag/apple-v0.1.0%2Btriton3.8.0-macos14)
-  and install by hand; `python -m nbxtensor install-metal` selects them from nbxtensor 0.0.9 (0.6.4). In 0.6.3
-  `install-metal` installs the macOS 15 / CPython 3.12 build only.
+  and `python -m nbxtensor install-metal` selects them (since nbxtensor 0.0.9).
 
-The full list is in the [release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.3). Read them
+The full list is in the [release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.5). Read them
 before filing a bug.
 
 ### Models on the hub

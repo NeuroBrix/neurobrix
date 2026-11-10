@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoding; each step's attention over the spilled positions is computed on the host
   (`ops.host_decode_partial`) and joins the card's split partials in the same reduce launch — exact, the split-KV
   merge. Qwen3-30B's attention shape on an M4 Pro: 131 072 spilled positions cost 15 ms per layer and step.
+  A prompt longer than the card's pages is prefilled chunk by chunk over the card and the host
+  (`memory.paged_kv` `chunk_attention`); on a V100 host with 40 threads, 131 072 spilled positions cost 25.8 ms per
+  layer and step.
+- **An attention returns its rows' log-sum-exp**: `scaled_dot_product_attention_wrapper(return_lse=True)` returns the
+  natural-log LSE of each query row (fp32) on every route — math, chunked math, the flash kernels and the decode path —
+  so partial attentions over split keys merge exactly.
 - **`nbxtensor.ops.token_bitmask`**: a token bitmask applied to a decode step's fp32 logits in place (constrained
   decoding): every token whose bit is clear (bit v % 32 of int32 word v // 32, ceil(vocab / 32) words a row) set to
   -inf before the sampler; the mask on the logits' own device, the element-wise launch's certified tile; a mask of
