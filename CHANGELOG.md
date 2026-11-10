@@ -15,11 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   priced for two prompts at once, an upscaler for two images, and a model whose container declares another dtype was
   sized in the wrong one. It now follows the same rule as `neurobrix run`: one item per request, doubled only where
   the model's guidance is in force, in the dtype the container declares.
-- **A chat model's output layer is no longer counted twice in the memory plan** on the PyTorch engine: the plan
-  reserved a second copy of the vocabulary projection's weight that the engine never makes there.
+- **A chat model's output layer is no longer counted several times over in the memory plan** on the PyTorch engine
+  (six times its real size for a 151 936-token vocabulary): the plan reserved copies of the vocabulary projection's
+  weight that the engine never makes there.
 - **Reading a long prompt takes less GPU memory on the PyTorch engine**: each slice of the prompt copied the cached
   keys and values once per attention head; it now reads the cache as stored. Past the GPU's cache, the part of the
   prompt kept in host memory is read within a memory reserve the plan states, instead of an unplanned amount.
+- **A very long prompt could run a full GPU out of memory in `neurobrix serve`.** Reading a prompt slice against
+  everything already cached needs working memory that grows with the slice and with the cache; the plan did not count
+  it, and it fitted only where other memory had been over-counted. It is now one reserve the plan states and the
+  engine keeps to, and the plan chooses the slice with it. Measured on two V100-32GB with Qwen3-Coder-30B-A3B: a
+  19 931-token prompt in 42 s (44 s before), a 79 931-token one in 9 min — longer than the 7 min 43 s first stated
+  here, which was obtained on memory the plan had not counted and failed once the plan filled the GPU; same answers.
 
 ### Changed
 - **A long prompt sent to `neurobrix serve` is read several times faster on the PyTorch engine.** The daemon read a
