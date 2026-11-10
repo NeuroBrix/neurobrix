@@ -3114,6 +3114,16 @@ class PrismSolver:
                     # language model to make room, was then rejected for a 37 MB cache (2026-10-04).
                     total_allocated = int(self._layer_stream_window_bytes
                                           - self._layer_stream_kv_reserve_bytes)
+                # A SERVED cache takes what the model's full residency leaves, never the reverse (decided between
+                # the agents 2026-11-10 04:37; vLLM's order: weights first, the KV blocks from what remains): a
+                # component zero3 maps to a card the cache lives on keeps, before the window is sized, the residency
+                # its grant gives beside the session's floor cache — its weights at the device's cost, within the
+                # usable part. Sized first, the window (244 500 tokens, 23 GB) left Qwen3-Coder-30B-A3B's blocks 0-20
+                # on the host: 0.9 s a token served against 0.33 s run on the same two V100-32GB.
+                if getattr(self, "_serve_mode", False):
+                    total_allocated += self._served_residency_bytes(container, target_dtype_str, strat_allocs,
+                                                                    component_memory, strat_devices, profile,
+                                                                    total_allocated)
                 remaining = max(total_capacity - total_allocated, 0)
                 try:
                     # `target_dtype_str`, the dtype after the fp32 fallback if it fired — the
@@ -5112,6 +5122,37 @@ class PrismSolver:
             layers = int(self._kv_declared(container)[1]["layers"])
             cands.append(PolicyCandidate("offload", 2 * -(-need // layers), exact=True))
         return choose_policy(cands, int(room_bytes))
+
+    def _served_residency_bytes(self, container, target_dtype: str, strat_allocs: Dict, component_memory: Dict,
+                                strat_devices, profile, allocated_bytes: int) -> int:
+        """What the zero3 components on the cards a SERVED cache lives on keep resident before the window is sized: on
+        each such card, the usable part less what the plan already holds there and the session's floor cache, capped
+        at the component's weights at the device's cost. 0 where no zero3 component shares a card with the cache, or
+        the cache's state declares nothing."""
+        declared = self._kv_declared(container)
+        if declared is None:
+            return 0
+        from neurobrix.core.state.price import kv_min_tokens, DEFAULT_PROMPT_MARGIN
+        defaults = self._read_defaults(container) or {}
+        floor_bytes = kv_min_tokens(defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
+                                    True) * self._kv_token_bytes(container, target_dtype)
+        kv_cards = self._kv_devices(strat_allocs, profile)
+        mib = 1024 * 1024
+        reserved = 0
+        for name, a in strat_allocs.items():
+            dev = a[0] if isinstance(a, tuple) else a
+            if not (isinstance(dev, str) and dev.startswith("zero3:")) or name not in component_memory:
+                continue
+            card = dev.split(":", 1)[1]
+            if kv_cards is not None and card not in kv_cards:
+                continue
+            d = next((x for x in strat_devices if x.device_string == card), None)
+            if d is None or d.spec is None or getattr(d.spec, "has_unified_memory", False):
+                continue
+            weights = int(component_memory[name].weight_bytes * self._cost_multiplier_on(card, name, container, profile))
+            room = int(self._usable_mb(d) * mib) - int(allocated_bytes) - int(floor_bytes) - reserved
+            reserved += max(0, min(weights, room))
+        return reserved
 
     def _compute_kv_cache_plan(
         self, container, target_dtype: str, remaining_vram_bytes: int, profile=None, kv_devices=None

@@ -70,3 +70,16 @@ def test_a_card_whose_runtime_facts_the_profile_lacks_is_refused_by_name(monkeyp
     c = NBXContainer.load(str(container_root("TinyLlama-1.1B-Chat-v1.0")))
     with pytest.raises(ProfileFactMissing, match="runtime_context_mb"):
         PrismSolver().solve_smart(c, profile(spec), InputConfig(batch_size=1, dtype="float16"), mode="compiled")
+
+
+def test_a_served_cache_takes_what_the_models_residency_leaves(monkeypatch):
+    """Decided between the agents 2026-11-10 04:37: the served cache is sized after the model's residency, never
+    before it. Sized first, the window (244 500 tokens) left the home card's blocks on the host: 0.9 s a token served,
+    0.33 s run. What this would do if the code were wrong: the home card's experts get a 72 MB cache — RED."""
+    _machine(monkeypatch)
+    p = _solve(InputConfig(batch_size=2, dtype="float16"), serve=True)
+    model = p.components["model"]
+    held_mb = model.expert_cache_mb + sum(c["cache_mb"] for k, c in (model.expert_cards or {}).items() if k == "cuda:2")
+    assert held_mb > 10000, (model.expert_cache_mb, model.expert_cards)     # the home card's room went to the experts
+    kv = p.kv_cache_plan
+    assert kv is not None and kv.max_cache_len < 244500, kv           # below what the window took when sized first

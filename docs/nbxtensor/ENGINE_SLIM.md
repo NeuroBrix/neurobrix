@@ -171,6 +171,7 @@ no torch, R33). Measured: 140 537 (main) to 140 626, +89.
 | core/flow/base.py | +12 | `holds_every_component`: a flow that holds every component together during a request |
 | serving/engine.py | +8 | the daemon serves such a plan warm |
 | core/runtime/executor.py | +5 | each component's strategy as it will execute, at -v |
+| core/prism/solver.py (then) | +41 | a served cache sized after the model's residency (`_served_residency_bytes`; decided between the agents 04:37): 140 626 to 140 667 |
 
 ## The scan
 
