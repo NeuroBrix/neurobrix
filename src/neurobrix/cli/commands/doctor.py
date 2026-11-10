@@ -141,6 +141,9 @@ def check_compute_environment() -> list[str]:
     else:
         from nbxtensor.backend.install_help import report
         log.debug("  GPU drivers:    " + report().replace("\n", "\n                  "))
+    from neurobrix.core.prism import intel_refusal
+    for line in intel_refusal.doctor_lines():        # the experimental Intel backend: its label, its run-time refusals
+        print(f"  {line}")
 
     if not _torch_present():
         print("  PyTorch engine: not installed (optional; the Triton engine runs without it: --triton). To add it: "

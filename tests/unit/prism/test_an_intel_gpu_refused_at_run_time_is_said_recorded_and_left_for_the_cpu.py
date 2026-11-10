@@ -106,3 +106,18 @@ def test_detection_lists_a_recorded_chip_as_a_refused_device_with_its_reason(hom
     refused = autodetect._parse_xpu()
     assert len(refused) == 1 and "ZE_RESULT_ERROR_MODULE_BUILD_FAILURE" in refused[0]["refused"]
     assert "another version of either tries it again" in refused[0]["refused"]
+
+
+def test_doctor_says_the_label_and_what_was_refused_without_asking_level_zero(home, monkeypatch):
+    lines = R.doctor_lines()
+    assert len(lines) == 1 and "8086:7d55" in lines[0] and R.LABEL in lines[0] and R.REPORT_URL in lines[0]
+    R.record(DEV, "refused at run time: zeModuleCreate: ZE_RESULT_ERROR_MODULE_BUILD_FAILURE")
+    monkeypatch.setattr(R, "_versions", lambda: (_ for _ in ()).throw(AssertionError("Level Zero asked")))
+    lines = R.doctor_lines()                                   # the profile is gone: only the record speaks
+    assert len(lines) == 1 and "ZE_RESULT_ERROR_MODULE_BUILD_FAILURE" in lines[0] and "1.6.31294" in lines[0]
+
+
+def test_the_report_link_names_a_template_that_exists():
+    from pathlib import Path
+    name = R.REPORT_URL.split("template=")[1]
+    assert (Path(__file__).resolve().parents[3] / ".github" / "ISSUE_TEMPLATE" / name).is_file()

@@ -1,0 +1,57 @@
+name: Intel GPU report
+description: Tell us how NeuroBrix behaved on your Intel GPU (experimental backend, not yet validated on hardware by the NeuroBrix lab)
+title: "[Intel GPU]: "
+labels: ["intel-gpu", "hardware-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The Intel backend (Level Zero) is experimental: no Intel GPU has run it in the NeuroBrix lab yet. A report —
+        that it worked, or what it refused — is how it gets validated. Thank you.
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and machine
+      description: "The chip and the machine (laptop / desktop model), and the operating system"
+      placeholder: "e.g., Intel Arc A770 16GB, Ubuntu 24.04 — or Core Ultra 7 155H (Arc Graphics), Windows 11"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: What happened
+      options:
+        - It ran on the Intel GPU and the output is right
+        - It ran on the Intel GPU and the output is wrong
+        - NeuroBrix refused the GPU by name and ran on the CPU
+        - It failed
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `neurobrix doctor`
+      description: "Paste all of it: it names the GPU, the Level Zero driver and what NeuroBrix recorded"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The command and what it printed
+      description: "The `neurobrix run ...` or `serve` command, and the lines it printed — the refusal's sentence names the Level Zero call and its result"
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "`pip show neurobrix nbxtensor triton-xpu | grep -E 'Name|Version'`"
+    validations:
+      required: true

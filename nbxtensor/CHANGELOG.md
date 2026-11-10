@@ -6,10 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Changed
-- **A Level Zero failure is a typed refusal**: `backend.level_zero.IntelDeviceError` (a RuntimeError) carries the call, the `ze_result_t` by name and the module's build log, raised by the runtime, the launch driver and a SPIR-V module that does not build. The Intel backend is experimental — not yet validated on hardware by the NeuroBrix lab — and an application decides on this type what a refusal means.
 
 ## [0.1.1] - unreleased
+### Changed
+- **A Level Zero failure is a typed refusal**: `backend.level_zero.IntelDeviceError` (a RuntimeError) carries the call, the `ze_result_t` by name and the module's build log, raised by the runtime, the launch driver and a SPIR-V module that does not build. The Intel backend is experimental — not yet validated on hardware by the NeuroBrix lab — and an application decides on this type what a refusal means.
 
 ### Fixed
 - **Reading a device's memory leaves no context on another device**: `DeviceAllocator.free_memory_mb`,

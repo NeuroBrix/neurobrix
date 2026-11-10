@@ -139,3 +139,18 @@ def announce() -> None:
     said = os.environ.get(ENV)
     if said:
         print(f"Running again on the CPU — {said}", file=sys.stderr, flush=True)
+
+
+def doctor_lines() -> List[str]:
+    """What `neurobrix doctor` says of Intel GPUs: the experimental label when a generated profile of this machine
+    plans one, and every chip refused at run time with its record (read from the files: Level Zero is not asked)."""
+    from neurobrix.core.prism.autodetect import HARDWARE_DIR
+    out = []
+    planned = [d for p in sorted(Path(HARDWARE_DIR).glob("default*.yml")) for d in planned_devices(p.stem)]
+    if planned:
+        names = sorted({f"{d.get('model')} ({d.get('pci_id')})" for d in planned})
+        out.append(f"Intel GPU:      {', '.join(names)} — {LABEL}; reports welcome: {REPORT_URL}")
+    for pci, entry in sorted(_read().items()):
+        out.append(f"Intel GPU:      {pci} {entry['reason']} under Level Zero driver {entry['driver']}, nbxtensor "
+                   f"{entry['nbxtensor']} — it runs on the CPU until either version changes; please report it: {REPORT_URL}")
+    return out

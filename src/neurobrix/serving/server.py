@@ -150,6 +150,9 @@ class ServingDaemon:
         # `engine` is injected only by a test (a fake engine that yields tokens
         # without a model); the daemon builds its InferenceEngine.
         self._engine = engine if engine is not None else InferenceEngine(model_name, hardware_id, mode)
+        # an Intel GPU refused at run time (core/prism/intel_refusal.py): the daemon reloads once on the CPU plan — only
+        # when it resolved the machine's profile itself (an explicit --hardware is the user's: it is not replaced)
+        self._auto_hardware, self._intel_refused = not hardware_id, False
         self._idle_timeout = idle_timeout
         self._running = False
         self._server_socket: Optional[socket.socket] = None
@@ -281,6 +284,30 @@ class ServingDaemon:
             return
         from neurobrix.core.prism.autodetect import get_or_create_default_profile
         self._engine.hardware_id = get_or_create_default_profile()
+
+    def _reload_after_intel_refusal(self, exc: BaseException) -> Optional[str]:
+        """An Intel GPU's refusal (nbxtensor's IntelDeviceError in `exc`'s chain) on the daemon, called on the engine's
+        thread: said by name, recorded, the machine detected again and the model loaded ONCE on the plan it then gets
+        (the CPU's: the chip is a refused device there). Returns the sentence; None when `exc` holds no such refusal,
+        when the daemon already reloaded after one, or when its profile was given (`--hardware`: the user's)."""
+        from neurobrix.core.prism import intel_refusal
+        err = intel_refusal.intel_error(exc)
+        if err is None or self._intel_refused or not self._auto_hardware:
+            return None
+        self._intel_refused = True
+        old = self._engine
+        said = intel_refusal.sentence(intel_refusal.planned_devices(old.hardware_id), err)
+        _log.warning(f"[Daemon] {said}")
+        intel_refusal.record(intel_refusal.planned_devices(old.hardware_id), f"refused at run time: {err.call}: {err.result}")
+        try:
+            old.unload()
+        except Exception as e:                     # a half-loaded engine on a refused device: said, the reload goes on
+            _log.warning(f"[Daemon] releasing the refused device's engine: {e}")
+        self._engine = type(old)(old.model_name, None, old.mode)
+        self._resolve_hardware()
+        self._engine.load()
+        _log.warning(f"[Daemon] reloaded on {self._engine.hardware_id} after the Intel GPU's refusal")
+        return said
 
     def served_name(self) -> str:
         """The one name of the model this daemon serves (the API's model id): the hub name `import` recorded
@@ -414,7 +441,11 @@ class ServingDaemon:
             self._resolve_hardware()
             # Load model (weights to VRAM) — on the inference worker, the thread
             # every later engine call of this daemon runs on.
-            self._worker.call(self._engine.load, "load")
+            try:
+                self._worker.call(self._engine.load, "load")
+            except Exception as exc:               # an Intel GPU's refusal at load: said, then loaded on the CPU plan
+                if self._worker.call(lambda: self._reload_after_intel_refusal(exc), "reload") is None:
+                    raise
 
             # Bind socket — platform-adaptive
             server_socket = socket.socket(IPC_FAMILY, socket.SOCK_STREAM)
@@ -660,7 +691,8 @@ class ServingDaemon:
                     result = work()
                 except Exception as e:
                     traceback.print_exc()
-                    error = str(e)
+                    said = self._reload_after_intel_refusal(e)     # on the worker: the daemon's engine thread
+                    error = f"{said} This request was not served: send it again." if said else str(e)
                 finally:
                     honoured = decode_stop.honoured_at()
                     decode_stop.unbind()

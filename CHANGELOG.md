@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Changed
+- **An Intel GPU that refuses at run time is said by name, and the model runs on the CPU** (the Intel backend is
+  experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): when the chip or its Level Zero
+  driver refuses a call, `neurobrix run` prints which call failed and why (with the driver's build log), remembers the
+  chip as refused under that driver and nbxtensor version, and starts the request again once on the CPU, saying so in
+  its first line and in the plan; `neurobrix serve` reloads once on the CPU plan (a request that met the refusal is
+  answered with it and can be sent again). Another driver or nbxtensor version tries the chip again. `neurobrix doctor`
+  shows the label and what was refused; the new "Intel GPU report" issue template collects what happened on your card.
+
 ### Fixed
 - **A run touches only the cards its plan names**: on a machine with several GPUs, a run planned on one card also
   opened a context on card 0 (306 MB on a V100) with the PyTorch engine, and on every visible card with the Triton
