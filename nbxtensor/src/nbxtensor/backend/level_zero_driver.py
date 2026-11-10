@@ -11,7 +11,7 @@ from nbxtensor.backend.launcher import _ModuleDriver, _ctypes_slot
 from nbxtensor.backend.level_zero import (_GRF_RETRY_FLAG, _KERNEL_FLAG_FORCE_RESIDENCY, _MODULE_FORMAT_IL_SPIRV,
                                           _SPILL_RETRY_BYTES, _ST_KERNEL_DESC, _ST_KERNEL_PROPS, _ST_MODULE_DESC,
                                           LevelZeroRuntime, _as_int, _GroupCount, _KernelDesc, _KernelProps,
-                                          _ModuleDesc, EXTENSION_FACTS, device_extensions,
+                                          _ModuleDesc, EXTENSION_FACTS, IntelDeviceError, device_extensions,
                                           device_file_for, result_name, runtime)
 
 
@@ -42,7 +42,7 @@ class LevelZeroDriver(_ModuleDriver):
 
     def _check(self, rc: int, what: str) -> None:
         if rc != 0:
-            raise RuntimeError(f"NeuroBrix launcher: {what} failed ({result_name(rc)})")
+            raise IntelDeviceError(f"NeuroBrix launcher: {what} failed ({result_name(rc)})", what, rc)
 
     def target(self):
         """`GPUTarget("xpu", <properties>, 32)` as Intel's driver builds it (driver.py `_construct_target`), torch- and
@@ -136,8 +136,8 @@ class LevelZeroDriver(_ModuleDriver):
                 rc, mod, text = self._module(binary, f"{build_flags} {_GRF_RETRY_FLAG}".strip())
                 grf_chosen = True
             if rc != 0:
-                raise RuntimeError(f"NeuroBrix launcher: zeModuleCreate failed ({result_name(rc)}) for {name}: "
-                                   f"{text.strip()[:600]}")
+                raise IntelDeviceError(f"NeuroBrix launcher: zeModuleCreate failed ({result_name(rc)}) for {name}: "
+                                       f"{text.strip()[:600]}", "zeModuleCreate", rc, text.strip())
             k, props = self._kernel(mod, name)
             if props.spillMemSize > _SPILL_RETRY_BYTES and not grf_chosen:
                 rc, mod2, text = self._module(binary, f"{build_flags} {_GRF_RETRY_FLAG}".strip())

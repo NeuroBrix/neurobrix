@@ -152,6 +152,17 @@ def result_name(rc: int) -> str:
     return RESULT_NAMES.get(int(rc) & 0xFFFFFFFF, f"ze_result_t {int(rc):#x}")
 
 
+class IntelDeviceError(RuntimeError):
+    """A Level Zero call the Intel device or its driver refused: `call` (the function), `result` (the ze_result_t by
+    name) and `log` (the module's build log, when the call built one). The backend is experimental and no Intel card
+    has run it in the NeuroBrix lab: an application decides on this TYPE what a refusal means for it (NeuroBrix: said
+    by name, then the CPU), never on a message's text."""
+
+    def __init__(self, message: str, call: str, rc: int, log: str = "") -> None:
+        super().__init__(message)
+        self.call, self.result, self.log = str(call), result_name(rc), str(log or "")
+
+
 def _as_int(v) -> int:
     v = getattr(v, "value", v)
     return int(v or 0)
@@ -295,7 +306,7 @@ class LevelZeroRuntime:
     # -- handles ---------------------------------------------------------------
     def _check(self, rc: int, what: str) -> None:
         if rc != 0:
-            raise RuntimeError(f"nbxtensor Level Zero: {what} failed ({result_name(rc)})")
+            raise IntelDeviceError(f"nbxtensor Level Zero: {what} failed ({result_name(rc)})", what, rc)
 
     def context(self, index: Optional[int] = None) -> ctypes.c_void_p:
         """The context of the driver the device belongs to: one per driver, shared by its devices."""

@@ -401,3 +401,23 @@ def test_the_structures_are_the_published_bindings_layouts():
         cls = getattr(Z, name)
         assert (ctypes.sizeof(cls), getattr(cls, cls._fields_[-1][0]).offset) == (size, last), name
     assert (Z._ST_DEVICE_PROPERTIES_1_2, Z._ST_USABLE_MEM, Z._ST_KERNEL_PROPS) == (0x00020006, 0x00020041, 0x1E)
+
+
+def test_a_level_zero_failure_is_a_typed_refusal_naming_the_call_and_the_result(drv):
+    """Every Level Zero failure — a module that does not build (both attempts), a call of the runtime or of the driver —
+    raises IntelDeviceError: the call, the ze_result_t by NAME and the build log when there is one, as attributes, so a
+    caller decides on the type and never on a message's text (the experimental backend's policy: a named refusal, then
+    the CPU). It stays a RuntimeError. Red if a failure were raised untyped or lost its cause."""
+    lib, d = drv
+    lib.build_fail = 2
+    with pytest.raises(Z.IntelDeviceError) as e:
+        d.load(b"\x03\x02\x23\x07spirv", "k", 0)
+    err = e.value
+    assert isinstance(err, RuntimeError) and err.call == "zeModuleCreate"
+    assert err.result == Z.result_name(0x70000004) and "k" in str(err) and err.result in str(err)
+    with pytest.raises(Z.IntelDeviceError) as e:
+        d._check(0x70000001, "zeCommandListAppendLaunchKernel")
+    assert (e.value.call, e.value.result) == ("zeCommandListAppendLaunchKernel", Z.result_name(0x70000001))
+    with pytest.raises(Z.IntelDeviceError) as e:
+        d.rt._check(0x78000004, "zeMemAllocShared")
+    assert (e.value.call, e.value.result) == ("zeMemAllocShared", Z.result_name(0x78000004))

@@ -3208,6 +3208,7 @@ def prewarm_compiler() -> None                          # Triton's cache key (tr
 ```python
 class LevelZeroRuntime            # the C ABI of a CUDA-style runtime (malloc, memcpy, streams, events) served over Level Zero
 def level_zero_device_available() -> bool   # the loader opens and reports a GPU: the backend probe
+class IntelDeviceError(RuntimeError)   # a Level Zero call the device or its driver refused: .call, .result (the ze_result_t by name), .log (a module's build log)
 def load_library()                # the Level Zero loader (libze_loader), or None
 def device_extensions(device_id: int, lib=None) -> list   # the GPU's OpenCL extensions (what Intel's compiler is told)
 def device_file_for(device_id: int)          # (name, description) of the Intel device file listing this PCI id, or refused
