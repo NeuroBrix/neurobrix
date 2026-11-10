@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Fixed
+- **A run touches only the cards its plan names**: on a machine with several GPUs, a run planned on one card also
+  opened a context on card 0 (306 MB on a V100) with the PyTorch engine, and on every visible card with the Triton
+  engine — memory taken from cards other jobs were using. Synchronizations now name the plan's devices, and the
+  runtime's growth is read on the profile's cards only.
+
 ### Changed
 - **Intel Gen12 graphics and Wildcat Lake are tried instead of refused** (experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): Tiger Lake, Rocket Lake, Alder Lake,
   Raptor Lake, DG1 and Wildcat Lake chips are described as devices when their Level Zero runtime is installed, where

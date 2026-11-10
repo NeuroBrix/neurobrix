@@ -352,6 +352,16 @@ class DeviceAllocator:
             pass
 
     @staticmethod
+    def restore_device(previous: int) -> None:
+        """Back to the device that was current before a probe — only when this process had selected it. A device never
+        selected has no context; "restoring" it would create one (a probe of card 2 from a fresh process left 306 MB on
+        card 0, a card its plan did not name, 2026-11-10). The probed device then stays current, as the first device
+        the process touched."""
+        from nbxtensor.memory.device_memory import SELECTED
+        if int(previous) in SELECTED:
+            DeviceAllocator.set_device(int(previous))
+
+    @staticmethod
     def set_device(device_id: int):
         """Set current GPU device for allocations (runtime API only).
 
@@ -424,7 +434,7 @@ class DeviceAllocator:
             dm.set_device(int(index))
             _rc, free_b, _total_b = dm.mem_get_info()
             try:
-                dm.set_device(prev)
+                DeviceAllocator.restore_device(prev)
             except Exception:
                 pass
             return free_b / (1024 * 1024)
@@ -457,7 +467,7 @@ class DeviceAllocator:
             except Exception:
                 continue
         try:
-            dm.set_device(prev)
+            DeviceAllocator.restore_device(prev)
         except Exception:
             pass
         # C2: the probe loop above issued raw cudaSetDevice calls (and
@@ -506,7 +516,7 @@ class DeviceAllocator:
             except Exception:
                 continue
         try:
-            dm.set_device(prev)
+            DeviceAllocator.restore_device(prev)
         except Exception:
             pass
         _rt.invalidate_current_device_cache()
@@ -1358,7 +1368,7 @@ class DeviceAllocator:
         finally:
             if prev_dev is not None:
                 try:
-                    DeviceAllocator.set_device(prev_dev)
+                    DeviceAllocator.restore_device(prev_dev)
                 except Exception:
                     pass
 
@@ -1385,7 +1395,7 @@ class DeviceAllocator:
         finally:
             if prev_dev is not None:
                 try:
-                    DeviceAllocator.set_device(prev_dev)
+                    DeviceAllocator.restore_device(prev_dev)
                 except Exception:
                     pass
 
@@ -1655,7 +1665,7 @@ class DeviceAllocator:
                 raise RuntimeError(f"{fn_name} failed with error {ret}")
         finally:
             if prev is not None and prev != device_idx:
-                DeviceAllocator.set_device(prev)
+                DeviceAllocator.restore_device(prev)
 
     @staticmethod
     def mem_get_info(device_idx: Optional[int] = None) -> Tuple[int, int]:
@@ -1675,7 +1685,7 @@ class DeviceAllocator:
             return int(free_b), int(total_b)
         finally:
             if prev is not None and prev != device_idx:
-                DeviceAllocator.set_device(prev)
+                DeviceAllocator.restore_device(prev)
 
     @staticmethod
     def stream_synchronize(stream: int):
@@ -1914,7 +1924,7 @@ class DeviceAllocator:
             DeviceAllocator.set_device(src_dev)
             ret = getattr(rt, fn_name)(ctypes.c_int(dst_dev), ctypes.c_uint(0))
         finally:
-            DeviceAllocator.set_device(previous)
+            DeviceAllocator.restore_device(previous)
         # 704 = cudaErrorPeerAccessAlreadyEnabled. Idempotence is the point:
         # callers enable defensively and must not have to track state.
         if ret in (0, 704):

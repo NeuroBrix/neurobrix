@@ -478,7 +478,8 @@ def growth_baseline(execution_mode, hw_profile):
         return None
     from nbxtensor.memory.allocator import DeviceAllocator as _DAg
     from neurobrix.core.runtime import runtime_growth as _rg
-    _gdevs = list(range(_DAg.device_count()))
+    # the PROFILE's cards (rule 1): reading every visible card made the run open a context on each of them
+    _gdevs = [int(d.index) for d in hw_profile.devices if int(d.index) < _DAg.device_count()]
     return (_rg, _gdevs, _rg.untracked_mb(_gdevs)) if _gdevs else None
 
 
@@ -1070,9 +1071,8 @@ def cmd_run(args):
         # its own device — the ATen branch through torch, the Triton branch
         # through the allocator's runtime (R33: no torch in that process).
         if execution_mode in ("compiled", "sequential"):
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+            from neurobrix.core.device_utils import sync_plan
+            sync_plan(execution_plan)                 # the plan's devices, never the runtime's current one
         else:
             from nbxtensor.memory.allocator import DeviceAllocator
             if DeviceAllocator.device_count() > 0:

@@ -461,7 +461,7 @@ class WeightLoader:
 
         # Batch sync: ensure all GPU transfers complete before returning
         if device.startswith("cuda") or device.startswith("hip"):
-            torch.cuda.synchronize()
+            torch.cuda.synchronize(torch.device(device))      # the device loaded, never the runtime's current one
             # Every upload is done: the pinned blocks back in PyTorch's host cache go back to the OS, so a
             # streamed plan's next load starts from none (that cache never frees on its own).
             torch.accelerator.empty_host_cache()
@@ -746,7 +746,8 @@ class WeightLoader:
         # Batch sync: ensure all GPU transfers complete before returning
         devices_used = set(d for _, d in shard_items)
         if any(d.startswith("cuda") or d.startswith("hip") for d in devices_used):
-            torch.cuda.synchronize()
+            for _d in sorted(d for d in devices_used if d.startswith("cuda") or d.startswith("hip")):
+                torch.cuda.synchronize(torch.device(_d))      # each device loaded, never the runtime's current one
             # Every upload is done: the pinned blocks back in PyTorch's host cache go back to the OS, so a
             # streamed plan's next load starts from none (that cache never frees on its own).
             torch.accelerator.empty_host_cache()

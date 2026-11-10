@@ -139,7 +139,7 @@ def transfer_tensor(tensor: NBXTensor, target_dev: int) -> NBXTensor:
             if _prev != _src_idx:
                 DeviceAllocator.set_device(_src_idx)
                 DeviceAllocator.sync_device()
-                DeviceAllocator.set_device(_prev)
+                DeviceAllocator.restore_device(_prev)
             else:
                 DeviceAllocator.sync_device()
     DeviceAllocator.set_device(target_dev)

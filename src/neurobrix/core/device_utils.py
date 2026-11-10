@@ -59,6 +59,25 @@ def device_sync(device: Optional[str] = None) -> None:
         DeviceAllocator.device_synchronize(idx)
 
 
+def plan_devices(plan) -> list:
+    """The accelerator devices a plan names: each component's devices and the cards holding its experts — the only
+    devices a run may touch (rule 1). A device-less synchronize lands on the runtime's CURRENT device, card 0 in a
+    fresh process, and creates a context there though the plan names another card (306 MB on a V100, 2026-11-10)."""
+    out = []
+    for alloc in (getattr(plan, "components", None) or {}).values():
+        for d in list(getattr(alloc, "devices", None) or []) + list(getattr(alloc, "expert_cards", None) or {}):
+            d = str(d).split(":", 1)[1] if str(d).startswith("zero3:") else str(d)
+            if not d.startswith("cpu") and d not in out:
+                out.append(d)
+    return out
+
+
+def sync_plan(plan) -> None:
+    """Wait for the work queued on every device the plan names — never on a device it does not."""
+    for d in plan_devices(plan):
+        device_sync(d)
+
+
 def device_empty_cache(device: Optional[str] = None) -> None:
     """
     Release unused cached memory on device.

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.1] - unreleased
 
+### Fixed
+- **Reading a device's memory leaves no context on another device**: `DeviceAllocator.free_memory_mb`,
+  `mem_get_info`, `device_total_bytes` and the other probes "restored the previous device" after reading; in a process
+  that had selected none, that selected device 0 and made the runtime create a context there. A previous device is
+  restored only when the process had selected it (`DeviceAllocator.restore_device`).
+
 ### Added
 - **Device files for Intel Gen12 graphics (`xe_lp`) and Wildcat Lake (`wcl`)**, experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome: the Level Zero driver tries
   these chips; their extension facts are read from the chip's OpenCL ICD, never assumed. Intel's Triton compiler emits

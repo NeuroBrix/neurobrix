@@ -2383,9 +2383,10 @@ class GraphExecutor:
                     component, self.device, torch_dtype, only=_only)
         if only is None:
             # the loader measures itself (S2): the bytes it landed and the time, written into a generated profile
-            import torch as _torch_l
-            if _torch_l.cuda.is_available():
-                _torch_l.cuda.synchronize()
+            from neurobrix.core.device_utils import device_sync as _device_sync_l
+            for _d in sorted({str(self.device), *map(str, (shard_map or {}).values())}):
+                if not _d.startswith("cpu"):
+                    _device_sync_l(_d)             # the devices this load wrote, never the runtime's current one
             _on_host = str(self.device).startswith("cpu") or (bool(shard_map) and all(
                 str(v).startswith("cpu") for v in shard_map.values()))
             self._note_loader_rate("compiled", nbx_path, component, "host" if _on_host else "device",

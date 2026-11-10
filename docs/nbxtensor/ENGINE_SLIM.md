@@ -246,6 +246,8 @@ D4 commits, the engine measures 140 667 to 141 025 (+358): the same files, polic
 
 The served prefill chunk on an engine without certified times (core/prism/solver.py `_prefill_chunk`, +13, policy; 2026-11-10): 141 255 to 141 268.
 
+A run touches only its plan's cards (2026-11-10): core/device_utils.py `plan_devices` / `sync_plan` (+19, policy: WHICH devices a run synchronizes; the synchronization itself is the runtime's), the call sites net -1: 141 282 to 141 300.
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

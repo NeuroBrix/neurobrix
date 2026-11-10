@@ -41,7 +41,7 @@ def release_flow_memory(device=None) -> None:
         for i in idxs:
             DeviceAllocator.set_device(i)
             DeviceAllocator.sync_device()
-        DeviceAllocator.set_device(prev)
+        DeviceAllocator.restore_device(prev)
     gc.collect()
     DeviceAllocator.empty_cache_pool()
 

@@ -705,10 +705,9 @@ class AutoregressiveHandler(FlowHandler):
         # stamp per phase boundary; the prefill stamp waits for the GPU.
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
 
-        def _dev_sync():  # every visible device (block_scatter rows span the node)
-            if torch.cuda.is_available():
-                for _i in range(torch.cuda.device_count()):
-                    torch.cuda.synchronize(_i)
+        def _dev_sync():  # every device the plan names (block_scatter rows span them), never another card
+            from neurobrix.core.device_utils import sync_plan
+            sync_plan(self.ctx.plan)
 
         _mem_note = _phase_mem_note      # module-level: the session stamps use it too
 
@@ -731,8 +730,7 @@ class AutoregressiveHandler(FlowHandler):
         prompt_ids = [int(t) for t in input_ids[0].tolist()]
         generator.set_prompt_ids(prompt_ids)
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        _dev_sync()
 
         # A serving session's cache already holds the positions its ids match (core/state/kv_session.py); only the
         # rest is prefilled, in the plan's chunks when it plans one (KVCachePlan.prefill_chunk)
@@ -801,8 +799,7 @@ class AutoregressiveHandler(FlowHandler):
                 )
                 hidden = session.decode_step(decode_ids, inputs_embeds=decode_embeds)
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        _dev_sync()
 
         # ── OUTPUT + CLEANUP ───────────────────────────────
         generated_tokens = generator.get_generated_tokens()

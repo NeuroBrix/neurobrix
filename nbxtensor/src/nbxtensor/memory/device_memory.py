@@ -16,6 +16,13 @@ import ctypes
 from typing import Tuple
 
 
+#: The devices this process has selected through the runtime (`set_device`). Selecting a device makes the runtime create
+#: its context there (CUDA: ~306 MB on a V100, measured 2026-11-10), so a probe that "restores the previous device"
+#: when none was ever selected creates a context on device 0 — a card the plan may not name. A restore reads this set
+#: (`DeviceAllocator.restore_device`).
+SELECTED: set = set()
+
+
 class DeviceMemory:
     """The contract. Every method returns the backend's status code first (0 = success)."""
 
@@ -127,7 +134,10 @@ class AbiMemory(DeviceMemory):
         return self._fn("host_unregister")(ctypes.c_void_p(int(ptr)))
 
     def set_device(self, index):
-        return self._fn("set_device")(ctypes.c_int(int(index)))
+        rc = self._fn("set_device")(ctypes.c_int(int(index)))
+        if rc == 0:
+            SELECTED.add(int(index))       # the runtime creates the device's context when it is selected
+        return rc
 
     def get_device(self):
         d = ctypes.c_int()
