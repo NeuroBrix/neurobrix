@@ -8,7 +8,8 @@ the same five lines: PyTorch 2.14.0 puts the process on all four cards of the ra
 through the host on the two.
 
 Why through the host. The other way round the pool — the library's raw peer copy on the tensors' pointers
-(`DeviceAllocator.peer_copy`) — is refused by the driver (cudaMemcpy rc 1) as soon as PyTorch's allocator runs with
+(a `DeviceAllocator.peer_copy` written for it and withdrawn the same day for this reason, never published) —
+is refused by the driver (cudaMemcpy rc 1) as soon as PyTorch's allocator runs with
 expandable segments, which the engine turns on for the plans that need them (core/runtime/torch_allocator.py): that
 memory is mapped for its own card only and only PyTorch's allocator can grant it to a peer, inside the very copy
 this module avoids (measured 2026-11-10: plain allocator copied, expandable segments refused). One path that always

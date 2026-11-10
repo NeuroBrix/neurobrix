@@ -8,8 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ## [0.1.1] - unreleased
+### Removed
+- **`DeviceAllocator.peer_copy`**, added the same day and never published. It was written for the compiled
+  engine's card-to-card hand-offs, on the assumption that the library could copy PyTorch's device memory by its raw
+  pointers. Measured on the rack: with PyTorch's expandable segments — which the engine turns on — that memory is
+  mapped for its own card and the driver refuses the copy (`cudaMemcpy`, device to device: error 1); only PyTorch's
+  allocator can grant it to a peer. The engine hands off through the host instead; the call had no caller left, and
+  the library keeps no function nothing calls. The library's own card-to-card transfer (`transfer_tensor`: the pair
+  only, measured) is unchanged.
 ### Added
-- **`DeviceAllocator.peer_copy(dst_ptr, dst_dev, src_ptr, src_dev, nbytes)`**: a device-to-device copy on raw
+- (withdrawn the same day) **`DeviceAllocator.peer_copy(dst_ptr, dst_dev, src_ptr, src_dev, nbytes)`**: a device-to-device copy on raw
   pointers that touches its two devices only — the source synchronised, the pair's peer access granted once, the copy
   issued under the destination and the destination synchronised before it returns; the destination stays selected
   (the device found current is never restored). For a caller whose tensors are not the library's: PyTorch >= 2.10

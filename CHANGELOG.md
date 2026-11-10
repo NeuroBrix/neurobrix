@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Changed
+- Follows nbxtensor (an internal call added the same day and never used is removed; nothing a user sees).
+
 ### Fixed
 - **NeuroBrix on the PyTorch engine no longer takes memory on GPUs it does not use.** On a machine with several GPUs
   a model planned on two of them left about 300 MB taken on every other GPU, and a model planned on one GPU of a
