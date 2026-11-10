@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from neurobrix.serving.openai_api import errors
+from neurobrix.serving.openai_api import constraint_policy as policy, errors
 from neurobrix.serving.openai_api.turn import TurnReader, select_reasoning, typed_arguments
 
 # -- what each endpoint reads -------------------------------------------------------------------------------
@@ -69,53 +69,51 @@ _WHY = {
 }
 
 
-def _response_grammar(fmt: Any, tokenizer=None, reasoning_end=None):
-    """`response_format` of a chat request: None or text -> no grammar; json_schema -> its schema compiled by our grammar
-    engine (a construct it cannot enforce: 400 naming it); anything else refused by name. A prompt that opens in the
-    reasoning (`reasoning_end`, its end marker) closes it first, then the answer follows the schema: the answer is never
-    written inside the reasoning, and the turn ends only once the schema closes (vLLM's reasoning + structured outputs;
-    the rack's Qwen3-30B-A3B-Thinking wrote its JSON as reasoning and stopped, 2026-11-10)."""
-    if fmt is None or fmt == {"type": "text"}:
-        return None
-    if not isinstance(fmt, dict) or fmt.get("type") != "json_schema":
-        raise errors.unsupported("response_format", "only text or json_schema (json_object has no schema to enforce)")
-    schema = (fmt.get("json_schema") or {}).get("schema")
-    if not isinstance(schema, dict):
-        raise errors.ApiError(400, "response_format.json_schema.schema must be a JSON Schema object",
-                              param="response_format")
-    from neurobrix.core.state.constraint import compile_description, compile_json_schema
+def _refusal(e) -> errors.ApiError:
+    """The HTTP answer of a constraint the policy refuses (constraint_policy.ConstraintRefused): the policy names the
+    kind and the parameter, the status is this door's."""
+    if e.kind == "unsupported":
+        return errors.unsupported(e.param, e.why)
+    return errors.ApiError(400, e.why, param=e.param)
+
+
+#: what a compile failure of each kind of constraint is answered with: (the request field said in the message, the
+#: param of a 400 — the grammar engine cannot enforce it —, the param of a 501 — the engine is not installed). A forced
+#: call's envelope is built from `tools`, and it is `tool_choice` that asked for a grammar at all.
+_COMPILE_ANSWERS = {"answer": ("response_format", "response_format", "response_format"),
+                    "call": ("tools", "tools", "tool_choice")}
+
+
+def _compiled(want, tokenizer, kind: str):
+    """The grammar of what the policy decided (core/state/constraint.compile_constraint): what the grammar engine
+    cannot enforce answers 400 naming it; the engine absent on this machine is refused by name, never a 500."""
+    from neurobrix.core.state.constraint import compile_constraint
+    said, invalid_param, missing_param = _COMPILE_ANSWERS[kind]
     try:
-        if reasoning_end:
-            from neurobrix.agent.envelope import encoder, reasoning_close
-            return compile_description(json.dumps({"seq": [reasoning_close(reasoning_end, encoder(tokenizer)),
-                                                           {"lit": "\n\n"}, {"schema": schema}]}))
-        return compile_json_schema(json.dumps(schema))
+        return compile_constraint(want, tokenizer)
     except ValueError as e:
-        raise errors.ApiError(400, f"response_format: {e}", param="response_format") from e
-    except RuntimeError as e:          # the grammar engine absent on this machine: refused by name, never a 500
-        raise _not_installed("response_format", e) from e
-
-
-def _not_installed(param: str, e: Exception) -> errors.ApiError:
-    return errors.ApiError(501, f"constrained decoding is not installed on this machine ({e})", type_="server_error",
-                           param=param, code="constrained_decoding_not_installed")
-
-
-def _tool_grammar(parser, tools, tokenizer, named, parallel, reasoning_end=None):
-    """The forced tool call(s) as the dialect's envelope (agent/envelope.py) compiled by our grammar engine; a tool whose
-    parameters it cannot enforce answers 400 naming it."""
-    from neurobrix.agent.envelope import encoder, envelope, reasoning_close
-    from neurobrix.core.state.constraint import compile_description
-    try:
-        encode = encoder(tokenizer)
-        env = envelope(parser, tools, encode, named, parallel)
-        if reasoning_end:                  # a prompt that opens in the reasoning: it closes first, then the call(s)
-            env = {"seq": [reasoning_close(reasoning_end, encode), {"lit": "\n\n"}, env]}
-        return compile_description(json.dumps(env))
-    except ValueError as e:
-        raise errors.ApiError(400, f"tools: {e}", param="tools") from e
+        raise errors.ApiError(400, f"{said}: {e}", param=invalid_param) from e
     except RuntimeError as e:
-        raise _not_installed("tool_choice", e) from e
+        raise errors.ApiError(501, f"constrained decoding is not installed on this machine ({e})", type_="server_error",
+                              param=missing_param, code="constrained_decoding_not_installed") from e
+
+
+def _decided(decide, *facts):
+    """A decision of the constraint policy, its refusal answered as this door answers."""
+    try:
+        return decide(*facts)
+    except policy.ConstraintRefused as e:
+        raise _refusal(e) from e
+
+
+def _constrained(body, tokenizer, forced, tools, parser, named, reasoning_end):
+    """The grammar a chat request's decode follows, or None: decided by the policy (constraint_policy), compiled by the
+    execution seam. The answer's schema is compiled before the tools are weighed against it; a forced call's
+    envelope (the template's own, point 9a) after."""
+    want = _decided(policy.answer_constraint, body.get("response_format"), reasoning_end)
+    grammar = _compiled(want, tokenizer, "answer")
+    call = _decided(policy.with_tools, want, forced, tools, parser, named, body.get("parallel_tool_calls"), reasoning_end)
+    return grammar if call is want else _compiled(call, tokenizer, "call")
 
 
 def _is_neutral(key: str, value: Any) -> bool:
@@ -353,9 +351,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
     forced = choice == "required" or named is not None
     if forced and not tools:
         raise errors.ApiError(400, "tool_choice forces a call and the request declares no tools", param="tool_choice")
-    if body.get("parallel_tool_calls") is False and not forced:
-        raise errors.unsupported("parallel_tool_calls", "one call at most is enforced only with tool_choice required "
-                                 "or a named function (with auto the turn may also answer in prose)")
+    _decided(policy.single_call_needs_a_forced_call, body.get("parallel_tool_calls"), forced)
 
     tokenizer = engine.tokenizer
     template = engine.chat_template_text()
@@ -377,15 +373,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
             opens = prompt.rstrip().endswith(reasoning[0])
         reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
-        grammar = _response_grammar(body.get("response_format"), tokenizer, reasoning[1] if opens else None)
-        if forced:                         # the template's own envelope, enforced by our grammar engine (point 9a)
-            if grammar is not None:
-                raise errors.unsupported("response_format", "a json_schema answer and a forced tool call in one request")
-            grammar = _tool_grammar(parser, tools, tokenizer, named, body.get("parallel_tool_calls") is not False,
-                                    reasoning[1] if opens else None)
-        elif grammar is not None and tools:
-            raise errors.unsupported("response_format", "a json_schema answer and tools in one request: the grammar would "
-                                     "also bind the tool calls")
+        grammar = _constrained(body, tokenizer, forced, tools, parser, named, reasoning[1] if opens else None)
         extra = {"grammar": grammar} if grammar is not None else {}
         from neurobrix.serving.engine import ContextLengthExceeded
         try:                               # past what a served session holds: refused before it runs (OpenAI's code)
@@ -400,7 +388,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
         if mode is None:
             raise errors.not_served("/v1/chat/completions", model, served.family,
                                     "its family declares no chat or text-answer mode")
-        if _response_grammar(body.get("response_format")) is not None:
+        if _constrained(body, None, False, None, None, None, None) is not None:
             raise errors.not_served("/v1/chat/completions with response_format json_schema", model, served.family,
                                     "a grammar binds the agent path's decode; this family serves chat without it")
         if tools:

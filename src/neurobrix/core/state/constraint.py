@@ -8,7 +8,8 @@ v // 32 set when token v is allowed (the layout nbxtensor.ops.token_bitmask appl
 sequence only where its output may end."""
 from __future__ import annotations
 
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Any, List, Optional, Protocol
 
 import numpy as np
 
@@ -55,6 +56,56 @@ def compile_description(text: str):
     except ImportError as e:
         raise RuntimeError(f"ZERO FALLBACK: constrained decoding needs the grammar engine nbxgrammar, not installed here: pip install nbxgrammar ({e})") from e
     return nbxgrammar.Grammar.description(text)
+
+
+@dataclass(frozen=True)
+class ForcedCall:
+    """A tool call the turn must make: the template's dialect parser, the declared tools, the one function
+    `tool_choice` names (None: any of them), several calls allowed or one."""
+    parser: Any
+    tools: List[Any]
+    named: Optional[str]
+    parallel: bool
+
+
+@dataclass(frozen=True)
+class Constrain:
+    """What a decode must follow: `schema` (the answer is that JSON) or `call` (a forced tool call), after the
+    reasoning's close marker when `after_reasoning` names one."""
+    schema: Optional[dict] = None
+    call: Optional[ForcedCall] = None
+    after_reasoning: Optional[str] = None
+
+
+def compile_constraint(want, tokenizer):
+    """The grammar of what a request's decode must follow (a `Constrain`: a JSON schema or a forced tool call, after
+    the reasoning's end when it names one — decided by the serving layer, serving/openai_api/constraint_policy.py),
+    compiled by our grammar engine; None for None. The tool-call envelope and the reasoning's close are written with the tokenizer's own encoding
+    (agent/envelope.py). ValueError naming what the engine cannot enforce; a refusal by name when it is not installed."""
+    import json
+    if want is None:
+        return None
+    if want.call is None and not want.after_reasoning:
+        return compile_json_schema(json.dumps(want.schema))
+    from neurobrix.agent.envelope import encoder, envelope, reasoning_close
+    encode = encoder(tokenizer)
+    body = ({"schema": want.schema} if want.call is None
+            else envelope(want.call.parser, want.call.tools, encode, want.call.named, want.call.parallel))
+    if want.after_reasoning:               # a prompt that opens in the reasoning: it closes first, then the answer
+        body = {"seq": [reasoning_close(want.after_reasoning, encode), {"lit": "\n\n"}, body]}
+    return compile_description(json.dumps(body))
+
+
+def constraint_for(grammar, tokenizer, defaults, cache: dict):
+    """The generators' constraint of a compiled grammar (None for None): it ends on the model's end of sequence, read
+    from the container's defaults — refused by name when they declare none — and keeps its vocabulary in `cache`."""
+    if grammar is None:
+        return None
+    eos = defaults.get("eos_token_id")
+    if eos is None or eos == []:
+        raise RuntimeError("ZERO FALLBACK: a constrained decode ends on the model's end of sequence, and this "
+                           "container's defaults declare no eos_token_id")
+    return GrammarConstraint(grammar, tokenizer, eos if isinstance(eos, list) else [eos], cache)
 
 
 class GrammarConstraint:

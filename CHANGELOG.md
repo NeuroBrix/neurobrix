@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.6] - unreleased
 
 ### Changed
+- Internal: the rules that decide what constrains a chat request's answer (a JSON schema, a forced tool call) are
+  grouped in one place; every request is answered exactly as before (400 combinations compared).
+
+### Changed
 - Follows nbxtensor (the experimental Intel backend's internals regrouped; nothing a user sees).
 
 ### Changed
