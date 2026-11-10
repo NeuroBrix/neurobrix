@@ -16,7 +16,8 @@ proprietary compute asset of mode 2. The vendored reference corpus under
 
 ## The four stages, and why the stage matters more than the verdict
 
-triton-msl declares its pipeline as four named stages:
+The Metal backend in force (nbxtensor `backend/metal_backend.METAL_BACKENDS`: triton-ext's
+AppleGPU backend, `triton_apple_backend`) declares four named stages:
 
     ttir  ->  ttgir  ->  msl  ->  metallib
 
@@ -85,7 +86,7 @@ OPS_DIR = REPO_ROOT / "src" / "neurobrix" / "kernels" / "ops"
 #: the tensor library's kernel files (nbxtensor/ops, M1), scanned with the engine's
 LIB_OPS_DIR = REPO_ROOT / "nbxtensor" / "src" / "nbxtensor" / "ops"
 
-# Pipeline stages, in the order triton-msl declares them. `_STAGE_ORDER`
+# Pipeline stages, in the order the Metal backend declares them. `_STAGE_ORDER`
 # is what `--through` truncates and what failure attribution reports.
 _STAGE_ORDER = ["ttir", "ttgir", "msl", "metallib"]
 
@@ -368,7 +369,8 @@ class _StageTracer:
         pass
 
     def install(self):
-        from triton_msl.backend.compiler import MetalBackend
+        from nbxtensor.backend.metal_backend import backend_compiler_class
+        MetalBackend = backend_compiler_class()      # the backend in force, named in one table
         tracer = self
         original = MetalBackend.add_stages
 
@@ -403,26 +405,15 @@ class _StageTracer:
 
 
 def classify(exc) -> str:
-    """Map an exception onto the backend's own refusal taxonomy."""
-    try:
-        from triton_msl import errors as msl_errors
-    except Exception:
-        msl_errors = None
-
-    if msl_errors is not None:
-        for cls_name, label in (
-            ("MetalNonRecoverableError", "integrity_refusal"),
-            ("MetalUnsupportedError", "hardware_unsupported"),
-            ("MetalNotImplementedError", "not_implemented"),
-            ("MetalValidationError", "validation"),
-            ("MetalCompilationError", "msl_compile_error"),
-            ("MetalCodegenError", "codegen"),
-        ):
-            cls = getattr(msl_errors, cls_name, None)
-            if cls is not None and isinstance(exc, cls):
-                return label
-
+    """Name a refusal by what the backend in force can say of it: its own refusal type when it names one
+    (`metal_backend.is_backend_refusal`), Triton's `OutOfResources` (a hardware limit), else the exception's class —
+    triton-ext says "I cannot emit this" with a bare RuntimeError (measured 2026-09-17), so the stage is the finding."""
+    from nbxtensor.backend.metal_backend import is_backend_refusal
     name = type(exc).__name__
+    if is_backend_refusal(exc):
+        return "integrity_refusal"
+    if name == "OutOfResources":
+        return "hardware_unsupported"
     if name in ("CompilationError", "CompileTimeAssertionFailure"):
         return "frontend"
     return f"other:{name}"
@@ -534,7 +525,7 @@ def write_report(records, import_failures, meta, out_dir: Path):
         w(f"# Metal compile census — {stamp}\n\n")
         w(f"**{meta['machine']}**, macOS {meta['macos']}, "
           f"triton {meta['triton_version']}, "
-          f"triton-msl {meta['triton_msl_version']}, "
+          f"Metal backend {meta['metal_backend']} ({meta['metal_backend_version']}), "
           f"target `{meta['target']}`.\n\n")
         w(f"Target obtained from: {meta['target_source']}.\n\n")
         w(f"Pipeline run through stage **`{meta['through']}`** "
@@ -568,8 +559,8 @@ def write_report(records, import_failures, meta, out_dir: Path):
 
         if refused:
             w("## Refusals by category\n\n")
-            w("Categories are the backend's own error taxonomy "
-              "(`triton_msl/errors.py`), not ours.\n\n")
+            w("Categories: the backend's own refusal type when it names one, Triton's "
+              "`OutOfResources`, else the exception's class (`classify`).\n\n")
             w("| category | kernels |\n|---|---:|\n")
             for cat, rows in sorted(by_category.items(),
                                     key=lambda kv: -len(kv[1])):
@@ -657,45 +648,24 @@ def write_report(records, import_failures, meta, out_dir: Path):
     return md_path, json_path
 
 
+def _dist_version(top_module: str) -> str:
+    """The installed distribution that ships `top_module`, with its version."""
+    from importlib import metadata
+    for dist in metadata.packages_distributions().get(top_module, []):
+        return f"{dist} {metadata.version(dist)}"
+    return "unknown"
+
+
 def resolve_target():
-    """Return (GPUTarget, how-it-was-obtained), or (None, reason) after printing.
-
-    Normally the active driver names the target. On a machine with no Metal
-    Toolchain the triton-msl driver's `is_active()` returns False (it probes
-    `xcrun --find metal`), so Triton reports **zero** active drivers and cannot
-    name a target at all. That is a toolchain fact, not a coverage one, and it
-    must not stop a coverage census: the compile pipeline accepts an explicit
-    target, and the stages that measure coverage (`ttir`/`ttgir`/`msl`) never
-    touch the driver. So the target is rebuilt from the same source the driver
-    would have used — `triton_msl.backend.driver._detect_metal_arch()`, which
-    reads the Metal device name — and the report says it was explicit.
-    """
-    from triton.backends.compiler import GPUTarget
-    from triton.runtime import driver
-
+    """(GPUTarget, how it was obtained), or (None, reason) after printing: the target nbxtensor's launch path builds
+    (`backend/metal_backend.metal_target`: the backend in force's target name and the Metal device's architecture),
+    without activating a Triton driver — asking `driver.active` probes every registered backend, and upstream's AMD
+    probe imports torch."""
     try:
-        target = driver.active.get_current_target()
-        if target.backend != "metal":
-            print(f"REFUSING: the active Triton target is '{target.backend}', "
-                  f"not 'metal'. A census run anywhere but on the Metal "
-                  f"backend would measure the wrong compiler.",
-                  file=sys.stderr)
-            return None, "wrong backend"
-        return target, "active driver"
-    except Exception as exc:
-        from triton_msl.backend.driver import _detect_metal_arch, MetalDriver
-        if not MetalDriver.is_active():
-            arch = _detect_metal_arch()
-            if arch == "apple-unknown":
-                print("REFUSING: no Metal device found. This is not an Apple "
-                      "GPU machine.", file=sys.stderr)
-                return None, "no device"
-            return (GPUTarget("metal", arch, 32),
-                    f"explicit — the Metal driver is INACTIVE ({exc.__class__.__name__}: "
-                    f"no offline shader compiler), so the target was rebuilt "
-                    f"from the Metal device name")
-        print(f"REFUSING: could not resolve a Metal target: "
-              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        from nbxtensor.backend.metal_backend import metal_target, selected_metal_backend
+        return metal_target(), f"nbxtensor metal_target() — backend in force: {selected_metal_backend()}"
+    except Exception as exc:  # noqa: BLE001 — no Metal device or no backend: said, not guessed around
+        print(f"REFUSING: no Metal target on this machine: {type(exc).__name__}: {exc}", file=sys.stderr)
         return None, "unresolved"
 
 
@@ -719,8 +689,6 @@ def main() -> int:
         _atelier.root("campaigns") / f"metal_first_light_{stamp}")
 
     import triton
-    import triton_msl
-    from triton.backends.compiler import GPUTarget
 
     target, target_source = resolve_target()
     if target is None:
@@ -737,6 +705,8 @@ def main() -> int:
     tracer = _StageTracer(stop_after=args.through
                           if args.through != _STAGE_ORDER[-1] else None)
     tracer.install()
+    from nbxtensor.backend.metal_backend import selected_metal_backend
+    backend_cls = tracer._backend_cls
     records = []
     try:
         for i, kernel in enumerate(kernels, 1):
@@ -757,8 +727,8 @@ def main() -> int:
         "macos": platform.mac_ver()[0],
         "python": platform.python_version(),
         "triton_version": getattr(triton, "__version__", "unknown"),
-        "triton_msl_version": getattr(triton_msl, "__version__", "unknown"),
-        "triton_msl_codegen": getattr(triton_msl, "CODEGEN_VERSION", "unknown"),
+        "metal_backend": selected_metal_backend(),
+        "metal_backend_version": _dist_version(backend_cls.__module__.split(".")[0]),
         "target": f"{target.backend}/{target.arch}",
         "through": args.through,
         "target_source": target_source,
