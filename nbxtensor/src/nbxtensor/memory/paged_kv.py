@@ -581,8 +581,8 @@ def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, sta
     """A prefill chunk of a sequence whose first `cache.spilled` positions live in host memory (memory/host_spill.py):
     the card's part through the same attention over its own pages, with its rows' log-sum-exp (return_lse); the
     spilled positions (all precede the chunk: no key masked) through the SAME attention on the card, handed back in
-    blocks of at most the card part's own key count — a block's scores never exceed the card part's, so the chunk's
-    priced memory holds — each with its log-sum-exp; the parts merged by log-sum-exp in a fixed order — exact. One
+    blocks of at most the card part's own key count, the KV heads unexpanded in the query's dtype — a block never
+    takes more than the card part does — each with its log-sum-exp; the parts merged by log-sum-exp in a fixed order — exact. One
     sequence. (The spilled part used to be the host partial: 32 x 128 query rows over 14 336 positions cost
     85-122 ms a layer on a Xeon Gold 6230, 40 threads — half of a 10.5 s chunk of the 79 931-token turn measured
     2026-11-10; the host partial stays the decode step's, one row.)"""
@@ -604,15 +604,20 @@ def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, sta
     parts = [host(scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
                                                        scale=scale, k_pre_transposed=False, return_lse=True))]
     del kg, vg
-    rep = int(heads) // cache.num_kv_heads                                 # the graph's expansion, as the gather's
+    host_dtype = {NBXDtype.float16: np.float16, NBXDtype.float32: np.float32}.get(q._dtype)
+
+    def up(x):                             # a block [H_kv, n, D] on the card in q's dtype: the KV heads, unexpanded
+        if host_dtype is not None:         # (the attention reads its groups itself), cast on the host — the bytes
+            return NBXTensor.from_numpy(np.ascontiguousarray(x[None], dtype=host_dtype)).to(device=device)
+        return NBXTensor.from_numpy(np.ascontiguousarray(x[None])).to(device=device).to(q._dtype)   # numpy has no such dtype
     for kb, vb in cache.host_spill.blocks(layer_idx, keys):
         n = int(kb.shape[1])
         open_ = memo.get(("spill_block", q._device_idx, n))                # every key of a block is read: zeros,
         if open_ is None:                                                  # the mask's own form (the same kernel)
             open_ = memo[("spill_block", q._device_idx, n)] = NBXTensor.from_numpy(
                 np.zeros((rows, n), np.float32)).to(device=device)
-        kd, vd = (NBXTensor.from_numpy(np.ascontiguousarray(np.repeat(x, rep, axis=0) if rep > 1 else x)[None])
-                  .to(device=device).to(q._dtype) for x in (kb, vb))
+        kd = up(kb)                        # one after the other: never K and V both in the wider dtype
+        vd = up(vb)
         parts.append(host(scaled_dot_product_attention_wrapper(q, kd, vd, attn_mask=open_, dropout_p=dropout_p,
                                                                is_causal=False, scale=scale, k_pre_transposed=False,
                                                                return_lse=True)))

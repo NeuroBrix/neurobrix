@@ -105,6 +105,7 @@ class KVCacheAttentionWrapper:
         self._num_layers = config.num_layers
         self._num_kv_heads = config.num_kv_heads
         self._num_heads = num_heads  # 0 = auto-detect from Q
+        self.spill_scores_bytes: Optional[int] = None   # the plan's fp32 scores a spilled prefill chunk may write at once
         self._gqa_group_size = 0  # 0 = not yet computed
         self._position_offset = 0
         # During decode, K/V may be padded (e.g., [B, heads, 64, dim] instead of [B, heads, 1, dim])
@@ -421,35 +422,46 @@ class KVCacheAttentionWrapper:
         """A prefill chunk of a sequence whose first positions spilled to host memory (R30 mirror of nbxtensor
         memory/paged_kv._chunk_attention_spilled): the card's part over its own pages, causal at the card's start, and
         the spilled positions by the same math ON THE CARD, in the library's blocks of at most the card part's key
-        count; merged by log-sum-exp in a fixed order — exact. (The host partial is the decode step's, one row.)"""
+        count; merged by log-sum-exp in a fixed order — exact. (The host partial is the decode step's, one row.)
+        This math writes its fp32 scores (3 alive: scores, mask, exp), so the chunk's rows are cut to what
+        `spill_scores_bytes` holds (the plan's; unstated: one page of rows, the smallest chunk a plan prices)."""
         cache = self.cache
         tpp = cache.page_tokens
         card_start = start - cache.spilled
         keys = -(-(card_start + rows) // tpp) * tpp
         k_card, v_card = cache._whole(layer_idx, keys)                       # [1, H_kv, keys, D]
         heads, d, kv_heads = int(q.shape[1]), int(q.shape[3]), int(k_card.shape[1])
-        groups = heads // kv_heads
+        groups, cache_dtype = heads // kv_heads, k_card.dtype
         sc = float(scale) if scale is not None else d ** -0.5
-        qg = q.to(k_card.dtype).float()[0].reshape(kv_heads, groups * rows, d)   # q as the card reads it, head-major
-        allowed = torch.arange(keys, device=q.device)[None, :] <= (card_start + torch.arange(rows, device=q.device))[:, None]
-        mask = torch.zeros((rows, keys), device=q.device).masked_fill(~allowed, float("-inf")).repeat(groups, 1)
-        def part(k, v, bias=0.0):                                           # (acc, m, l) of the rows over k / v
+        cut = tpp if self.spill_scores_bytes is None else int(self.spill_scores_bytes) // (12 * heads * keys)
+        if cut < 1:
+            raise RuntimeError(f"ZERO FALLBACK: one row of a spilled prefill chunk writes {12 * heads * keys} bytes of "
+                               f"scores over {keys} keys; the plan leaves {self.spill_scores_bytes}")
+        spans = [(a, min(a + cut, rows)) for a in range(0, rows, cut)]
+        qr = q.to(cache_dtype).float()[0]                                    # q as the card reads it [H, rows, D]
+        qs = [qr[:, a:b].reshape(kv_heads, groups * (b - a), d) for a, b in spans]   # head-major
+
+        def part(qg, k, v, bias=0.0):                                        # (acc, m, l) of the rows over k / v
             s = torch.matmul(qg, k.transpose(1, 2)) * sc + bias              # [H_kv, groups * rows, positions]
             m = s.amax(dim=2)
             m = m.masked_fill(torch.isneginf(m), 0.0)                        # a row with no key yet
             p = torch.exp(s - m[..., None])
             return torch.matmul(p, v), m, p.sum(dim=2)
-        acc, m, l = part(k_card[0].float(), v_card[0].float(), mask)
-        cache_dtype = k_card.dtype
-        del k_card, v_card, mask
+        kc, vc, col = k_card[0].float(), v_card[0].float(), torch.arange(keys, device=q.device)[None, :]
+        got = [part(qg, kc, vc, torch.zeros((b - a, keys), device=q.device).masked_fill(
+            col > (card_start + torch.arange(a, b, device=q.device))[:, None], float("-inf")).repeat(groups, 1))
+            for qg, (a, b) in zip(qs, spans)]
+        del k_card, v_card, kc, vc
         for kb, vb in cache.host_spill.blocks(layer_idx, keys):
-            a2, m2, l2 = part(torch.from_numpy(kb).to(q.device), torch.from_numpy(vb).to(q.device))
-            mn = torch.maximum(m, m2)
-            c1 = torch.where(l > 0, torch.exp(m - mn), torch.zeros_like(l))
-            c2 = torch.exp(m2 - mn)
-            acc, l, m = acc * c1[..., None] + a2 * c2[..., None], l * c1 + l2 * c2, mn
-        out = acc / torch.where(l > 0, l, torch.ones_like(l))[..., None]
-        return out.reshape(1, heads, rows, -1).to(cache_dtype)
+            kd, vd = torch.from_numpy(kb).to(q.device), torch.from_numpy(vb).to(q.device)
+            for i, qg in enumerate(qs):
+                (acc, m, l), (a2, m2, l2) = got[i], part(qg, kd, vd)
+                mn = torch.maximum(m, m2)
+                c1, c2 = torch.where(l > 0, torch.exp(m - mn), torch.zeros_like(l)), torch.exp(m2 - mn)
+                got[i] = (acc * c1[..., None] + a2 * c2[..., None], mn, l * c1 + l2 * c2)
+        out = torch.cat([(acc / torch.where(l > 0, l, torch.ones_like(l))[..., None]).reshape(heads, b - a, -1)
+                         for (acc, m, l), (a, b) in zip(got, spans)], dim=1)
+        return out[None].to(cache_dtype)
 
     def _decode_over_spill(self, q, k_card, v_card, attn_mask, scale, layer_idx: int) -> torch.Tensor:
         """A decode step of a sequence whose oldest positions spilled to host memory: the card's partial over its

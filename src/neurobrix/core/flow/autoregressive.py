@@ -1013,6 +1013,7 @@ class AutoregressiveHandler(FlowHandler):
                     _log.info(attach_spill(kv_wrapper.cache, self.ctx.kv_tier,
                                            getattr(self.ctx.plan, 'kv_cache_plan', None),
                                            int(lm_config.get("max_position_embeddings") or 0)))
+                    kv_wrapper.spill_scores_bytes = getattr(executor, "_attention_scores_budget_bytes", None)
                     executor.__dict__["_kv_served_wrapper"] = kv_wrapper
             if kv_session is not None:
                 kv_session.bind(executor, kv_wrapper, kv_wrapper.cache)

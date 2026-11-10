@@ -137,3 +137,48 @@ def test_a_chunk_reads_the_spilled_positions_on_the_device_in_blocks_no_larger_t
             assert torch.allclose(got, want, atol=3e-3), (a, layer, (got - want).abs().max())
     assert w.cache.spilled > card_pages * PT                               # more spilled than one block holds
     assert seen and all(n <= positions <= card_pages * PT for n, positions in seen)
+
+
+@pytest.mark.parametrize("budget, rows_at_once", [(None, PT), (12 * H * 2 * PT * 16, 16), (12 * H * 3 * PT, 1)])
+def test_a_spilled_chunk_larger_than_its_scores_budget_is_cut_in_rows(monkeypatch, budget, rows_at_once):
+    """The spilled chunk's math writes its fp32 scores: a chunk of many rows (the served plan's larger chunks, 2 048
+    rows x 65 664 keys = 17 GB a matrix, 2026-11-10) is cut to the rows the plan's `spill_scores_bytes` holds — one
+    page of rows when the plan states none — and equals causal attention over every position."""
+    prompt, chunk, card_pages = 6 * PT, 2 * PT, 2
+    g = torch.Generator().manual_seed(5)
+    rnd = lambda *s: torch.randn(*s, generator=g).to(torch.float16)                       # noqa: E731
+    w = _wrapper(card_pages, "cpu")
+    w.spill_scores_bytes = budget
+    q, k, v = rnd(1, H, prompt, D), rnd(1, HK, prompt, D), rnd(1, HK, prompt, D)
+    widest, real_exp = [0], torch.exp
+
+    def exp(x):
+        if x.dim() == 3:                                                   # a scores matrix [H_kv, groups * rows, keys]
+            widest[0] = max(widest[0], int(x.shape[1]) // (H // HK))
+        return real_exp(x)
+    monkeypatch.setattr(torch, "exp", exp)
+    for a in range(0, prompt, chunk):
+        b = a + chunk
+        for layer in range(LAYERS):
+            w.cache.update(layer, k[:, :, a:b], v[:, :, a:b])
+            if not w.cache.spilled:
+                continue
+            got = w._prefill_over_spill(q[:, :, a:b], layer, a, chunk, D ** -0.5)[0].double()
+            qq, kk, vv = (x.double()[0] for x in (q[:, :, a:b], k[:, :, :b], v[:, :, :b]))
+            kk, vv = kk.repeat_interleave(H // HK, 0), vv.repeat_interleave(H // HK, 0)
+            causal = torch.arange(b)[None, :] <= (a + torch.arange(chunk))[:, None]
+            want = torch.softmax(((qq @ kk.transpose(1, 2)) * D ** -0.5).masked_fill(~causal, float("-inf")), -1) @ vv
+            assert torch.allclose(got, want, atol=3e-3), (a, layer, (got - want).abs().max())
+    assert w.cache.spilled > 0 and widest[0] == rows_at_once
+
+
+def test_a_scores_budget_that_holds_no_row_is_refused_by_name():
+    w = _wrapper(1, "cpu")
+    w.spill_scores_bytes = 1024
+    g = torch.Generator().manual_seed(1)
+    rnd = lambda *s: torch.randn(*s, generator=g).to(torch.float16)                       # noqa: E731
+    for a in range(0, 3 * PT, PT):
+        for layer in range(LAYERS):
+            w.cache.update(layer, rnd(1, HK, PT, D), rnd(1, HK, PT, D))
+    with pytest.raises(RuntimeError, match="one row of a spilled prefill chunk writes"):
+        w._prefill_over_spill(rnd(1, H, PT, D), 0, 2 * PT, PT, D ** -0.5)
