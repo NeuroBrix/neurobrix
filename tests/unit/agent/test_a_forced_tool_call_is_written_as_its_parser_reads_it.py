@@ -107,3 +107,16 @@ def test_a_named_function_is_exactly_one_call(dialect):
     two = one[:-1] + ', {"name": "get_time", "arguments": {"tz": "UTC"}}]' if dialect == "json_list" else one + "\n" + one
     d = envelope(parser, TOOLS, encode, only="get_time")
     assert _walk(d, one) and not _walk(d, two)
+
+
+
+def test_an_xml_enum_parameter_is_written_bare_as_the_parser_reads_it():
+    """Qwen3-Coder's dialect keeps a parameter's text: an enum value is its bare text, never its JSON literal
+    (the rack wrote unit = "\\"celsius\\"" on 1436f931b)."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {
+        "unit": {"type": "string", "enum": ["c", "celsius"]}, "n": {"enum": [1, 2]}}, "required": ["unit", "n"]}}}]
+    d = envelope(XmlToolCallParser(), tools, encode)
+    call = "<tool_call>\n<function=f>\n<parameter=unit>\n{}\n</parameter>\n<parameter=n>\n2\n</parameter>\n</function>\n</tool_call>"
+    assert _walk(d, call.format("celsius")) and _walk(d, call.format("c"))
+    assert not _walk(d, call.format('"celsius"')) and not _walk(d, call.format("kelvin"))
+    assert XmlToolCallParser().parse(call.format("celsius")).calls[0].arguments == {"unit": "celsius", "n": "2"}

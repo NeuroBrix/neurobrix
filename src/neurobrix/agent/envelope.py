@@ -8,7 +8,8 @@ format is the one its parser reads back: json (`<tool_call>\\n{"name": ..., "arg
 model emits it only as that id), any other marker its text. The function is chosen by its name, its arguments by the
 tool's own JSON schema. `required`: at least one call; a named function: only that one; `parallel`: False -> one call.
 After the calls, only the end of the turn. The xml dialect writes the required parameters in their declared order
-(stricter than the schema, never looser); a string parameter is free text up to its closing tag.
+(stricter than the schema, never looser); a string parameter is free text up to its closing tag, an enum or a const
+one of its values written bare (a string as its text, as the dialect's parser reads it back).
 """
 from __future__ import annotations
 
@@ -37,6 +38,11 @@ def _params(tool: Dict[str, Any]) -> Dict[str, Any]:
     return p
 
 
+def _raw(value: Any) -> str:
+    """A value as the xml dialect writes it: a string bare (the parser keeps it as text), anything else as its JSON."""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
 def _xml_call(tool: Dict[str, Any]) -> Dict[str, Any]:
     p = _params(tool)
     props, required = p.get("properties") or {}, list(p.get("required") or [])
@@ -44,7 +50,11 @@ def _xml_call(tool: Dict[str, Any]) -> Dict[str, Any]:
     for name in [k for k in props if k in required]:
         sch = props[name]
         parts.append({"lit": f"<parameter={name}>\n"})
-        if sch.get("type") == "string" and not ({"enum", "const"} & set(sch)):
+        if {"enum", "const"} & set(sch):        # the bare alternatives, never their JSON literals (the Dell's D3)
+            values = [sch["const"]] if "const" in sch else list(sch["enum"])
+            close = "\n</parameter>"            # in the literal: "a" and "ab" stay distinct alternatives
+            parts.append({"choice": [{"lit": _raw(v) + close, "then": {"lit": "\n"}} for v in values]})
+        elif sch.get("type") == "string":
             extra = set(sch) - {"type", "description", "title", "examples", "default"}
             if extra:          # free text cannot enforce them: refused by name, never dropped (the dialect writes it raw)
                 raise ValueError(f"parameter {name!r}: {sorted(extra)} cannot be enforced on a raw xml string value")
