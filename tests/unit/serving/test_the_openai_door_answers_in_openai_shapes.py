@@ -42,6 +42,10 @@ class PieceTokenizer:
     def decode(self, ids, skip_special_tokens=True):
         return "".join(self.pieces[i] for i in ids if not (skip_special_tokens and i in self.special))
 
+    def encode(self, text, add_special_tokens=False):
+        # a piece is one id, any other text one id per character past the pieces (a marker spelled in several)
+        return [self.pieces.index(text)] if text in self.pieces else [len(self.pieces) + i for i in range(len(text))]
+
     def apply_chat_template(self, messages, tokenize=True, add_generation_prompt=True, **kw):
         text = "".join(f"<{m['role']}>{m['content']}" for m in messages) + "<assistant>" + self.opening
         return list(range(len(text))) if tokenize else text
@@ -518,3 +522,29 @@ def test_without_the_grammar_engine_a_constrained_request_is_refused_by_name(mak
                   {"tools": tools, "tool_choice": "required"}):
         status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": msg, **extra})
         assert status == 501 and body["error"]["code"] == "constrained_decoding_not_installed", (extra, status, body)
+
+
+
+def test_a_json_schema_answer_on_a_reasoning_prompt_follows_the_reasoning_s_end(make, monkeypatch):
+    """A prompt that opens in the reasoning: the json_schema grammar closes the reasoning first (its end marker), then
+    the answer follows the schema — never the JSON written as reasoning with the turn ended there (the rack's
+    Qwen3-30B-A3B-Thinking, 2026-11-10). A prompt that does not open in it: the schema alone, as before."""
+    from tests.unit.grammar_engine import load
+    load()
+    from neurobrix.core.state import constraint
+    seen = []
+    monkeypatch.setattr(constraint, "compile_description", lambda text: seen.append(("description", json.loads(text))) or object())
+    monkeypatch.setattr(constraint, "compile_json_schema", lambda text: seen.append(("schema", json.loads(text))) or object())
+    schema = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+    req = {"model": "fake-model", "messages": [{"role": "user", "content": "hi"}],
+           "response_format": {"type": "json_schema", "json_schema": {"name": "c", "schema": schema}}}
+    srv, base = make(FakeEngine(pieces=["The user", "</think>", "\n\n", "{}"], template="<think> ... </think>",
+                                opening="<think>\n"))
+    status, body, _ = _post(base + "/v1/chat/completions", req)
+    assert status == 200, body
+    kind, desc = seen[-1]
+    assert kind == "description" and desc["seq"][0]["until"] == "</think>" and desc["seq"][1:] == [
+        {"lit": "\n\n"}, {"schema": schema}], desc
+    srv2, base2 = make(FakeEngine())
+    status, body, _ = _post(base2 + "/v1/chat/completions", req)
+    assert status == 200 and seen[-1] == ("schema", schema), seen[-1]

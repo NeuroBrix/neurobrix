@@ -69,9 +69,12 @@ _WHY = {
 }
 
 
-def _response_grammar(fmt: Any):
+def _response_grammar(fmt: Any, tokenizer=None, reasoning_end=None):
     """`response_format` of a chat request: None or text -> no grammar; json_schema -> its schema compiled by our grammar
-    engine (a construct it cannot enforce: 400 naming it); anything else refused by name."""
+    engine (a construct it cannot enforce: 400 naming it); anything else refused by name. A prompt that opens in the
+    reasoning (`reasoning_end`, its end marker) closes it first, then the answer follows the schema: the answer is never
+    written inside the reasoning, and the turn ends only once the schema closes (vLLM's reasoning + structured outputs;
+    the rack's Qwen3-30B-A3B-Thinking wrote its JSON as reasoning and stopped, 2026-11-10)."""
     if fmt is None or fmt == {"type": "text"}:
         return None
     if not isinstance(fmt, dict) or fmt.get("type") != "json_schema":
@@ -80,8 +83,12 @@ def _response_grammar(fmt: Any):
     if not isinstance(schema, dict):
         raise errors.ApiError(400, "response_format.json_schema.schema must be a JSON Schema object",
                               param="response_format")
-    from neurobrix.core.state.constraint import compile_json_schema
+    from neurobrix.core.state.constraint import compile_description, compile_json_schema
     try:
+        if reasoning_end:
+            from neurobrix.agent.envelope import encoder, reasoning_close
+            return compile_description(json.dumps({"seq": [reasoning_close(reasoning_end, encoder(tokenizer)),
+                                                           {"lit": "\n\n"}, {"schema": schema}]}))
         return compile_json_schema(json.dumps(schema))
     except ValueError as e:
         raise errors.ApiError(400, f"response_format: {e}", param="response_format") from e
@@ -370,7 +377,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
             opens = prompt.rstrip().endswith(reasoning[0])
         reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
-        grammar = _response_grammar(body.get("response_format"))
+        grammar = _response_grammar(body.get("response_format"), tokenizer, reasoning[1] if opens else None)
         if forced:                         # the template's own envelope, enforced by our grammar engine (point 9a)
             if grammar is not None:
                 raise errors.unsupported("response_format", "a json_schema answer and a forced tool call in one request")
