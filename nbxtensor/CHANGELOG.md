@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The authors' contact address is contact@neurobrix.org** (the package metadata), the project's address being neurobrix.org.
+
 ### Added
 - **A KV cache host tier**: `memory.kv_host_tier` (the prefix index of whole pages, the host page pool, the pages a
   sequence holds), `memory.kv_host_pages` (host pages laid out [page][layer][K, V], pinned or pageable; per-layer copies,

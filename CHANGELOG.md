@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   family with a named refusal, and no vector is ever derived from a chat model.
 
 ### Changed
-- **The hub's official address is neurobrix.org**: `neurobrix hub` and `neurobrix import` reach `https://neurobrix.org` by default, and the CLI texts, README and project URLs name it; the documentation is at docs.neurobrix.org. `NEUROBRIX_REGISTRY` still overrides it; the 0.6.x versions already installed keep working, the API under neurobrix.es stays served.
+- **The hub's official address is neurobrix.org**: `neurobrix hub` and `neurobrix import` reach `https://neurobrix.org` by default, and the CLI texts, README and project URLs name it; the documentation is at docs.neurobrix.org, and the contact addresses (security, conduct, contributors, models, partners, the authors' e-mail in the package metadata) are @neurobrix.org. `NEUROBRIX_REGISTRY` still overrides it; the 0.6.x versions already installed keep working, the API under neurobrix.es stays served.
 
 ### Fixed
 - **`neurobrix run` against a daemon ends at the daemon's answer**: after the daemon serving the asked model answered an

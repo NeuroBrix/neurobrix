@@ -102,7 +102,7 @@ NeuroBrix currently supports NVIDIA GPUs via PyTorch + CUDA + Triton, Apple Sili
 
 ## Integration Process
 
-1. **Contact us** at [partners@neurobrix.es](mailto:partners@neurobrix.es) with:
+1. **Contact us** at [partners@neurobrix.org](mailto:partners@neurobrix.org) with:
    - Your hardware specifications (GPU model, VRAM, interconnects)
    - Your target integration tier
    - Your timeline and engineering resources available
@@ -120,7 +120,7 @@ NeuroBrix currently supports NVIDIA GPUs via PyTorch + CUDA + Triton, Apple Sili
 ## Contact
 
 **Hardware Integration Program**
-Email: [partners@neurobrix.es](mailto:partners@neurobrix.es)
+Email: [partners@neurobrix.org](mailto:partners@neurobrix.org)
 Web: [neurobrix.org](https://neurobrix.org)
 Repository: [GitHub](https://github.com/NeuroBrix/neurobrix) | [GitLab](https://gitlab.com/neurobrix/neurobrix)
 

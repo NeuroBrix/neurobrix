@@ -67,7 +67,7 @@ To trace and publish your model, we need:
 
 **For:** Open-source models with permissive licenses
 
-- Submit a Model Request at [models@neurobrix.es](mailto:models@neurobrix.es) or via the issue tracker ([GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues))
+- Submit a Model Request at [models@neurobrix.org](mailto:models@neurobrix.org) or via the issue tracker ([GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues))
 - Our team evaluates and traces the model
 - Published on the Hub with full attribution
 - Community priority queue
@@ -82,7 +82,7 @@ To trace and publish your model, we need:
 - Joint announcements and case studies
 - Ongoing model updates and maintenance
 
-Contact [models@neurobrix.es](mailto:models@neurobrix.es) for partner publication.
+Contact [models@neurobrix.org](mailto:models@neurobrix.org) for partner publication.
 
 ### Enterprise Distribution
 
@@ -93,7 +93,7 @@ Contact [models@neurobrix.es](mailto:models@neurobrix.es) for partner publicatio
 - SLA-backed availability
 - Dedicated support channel
 
-Contact [enterprise@neurobrix.es](mailto:enterprise@neurobrix.es) for enterprise distribution.
+Contact [enterprise@neurobrix.org](mailto:enterprise@neurobrix.org) for enterprise distribution.
 
 ---
 
@@ -170,7 +170,7 @@ Browse the full catalog: [neurobrix.org/models](https://neurobrix.org/models)
 
 ## Submission Process
 
-1. **Contact us** at [models@neurobrix.es](mailto:models@neurobrix.es) with:
+1. **Contact us** at [models@neurobrix.org](mailto:models@neurobrix.org) with:
    - Model name and architecture
    - Link to weights and inference code
    - License type
@@ -189,7 +189,7 @@ Browse the full catalog: [neurobrix.org/models](https://neurobrix.org/models)
 ## Contact
 
 **Model Registry Program**
-Email: [models@neurobrix.es](mailto:models@neurobrix.es)
+Email: [models@neurobrix.org](mailto:models@neurobrix.org)
 Web: [neurobrix.org/models](https://neurobrix.org/models)
 Issues: [GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues)
 

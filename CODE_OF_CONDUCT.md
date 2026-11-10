@@ -30,7 +30,7 @@ This Code of Conduct applies to all project spaces including GitLab issues, merg
 
 Instances of unacceptable behavior may be reported to:
 
-**[conduct@neurobrix.es](mailto:conduct@neurobrix.es)**
+**[conduct@neurobrix.org](mailto:conduct@neurobrix.org)**
 
 All reports will be reviewed and investigated promptly and fairly. The project team is committed to maintaining confidentiality regarding the reporter.
 

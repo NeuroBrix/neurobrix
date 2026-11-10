@@ -218,7 +218,7 @@ Use an existing file in `src/neurobrix/config/hardware/` as the template, and se
 ## Community
 
 - **Issues:** [GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues)
-- **Email:** [contributors@neurobrix.es](mailto:contributors@neurobrix.es)
+- **Email:** [contributors@neurobrix.org](mailto:contributors@neurobrix.org)
 
 ---
 

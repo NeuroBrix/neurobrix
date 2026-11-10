@@ -6,7 +6,7 @@
 
 If you discover a security vulnerability in NeuroBrix, please report it responsibly by emailing:
 
-**[security@neurobrix.es](mailto:security@neurobrix.es)**
+**[security@neurobrix.org](mailto:security@neurobrix.org)**
 
 Include as much of the following as possible:
 
