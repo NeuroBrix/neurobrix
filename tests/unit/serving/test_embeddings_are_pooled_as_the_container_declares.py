@@ -4,7 +4,8 @@ catalogue model is an embedding model yet, and no embedding is derived from a ch
 
 What this test would do if the code were wrong: a pooling the engine chose (red: the declaration refused when absent), a
 dimension not the container's (red), base64 not the float vector's bytes (red), `dimensions` truncating silently (red),
-token-id input accepted (red), a chat family served embeddings (red), a torch tensor (compiled engine) misread (red)."""
+token-id input accepted (red), a chat family served embeddings (red), a torch tensor (compiled engine) misread (red),
+a hidden state left on the accelerator (either engine, any half dtype) not read back to the host (red)."""
 from __future__ import annotations
 
 import base64
@@ -106,3 +107,45 @@ def test_a_run_against_the_daemon_writes_the_vectors_where_it_asked(tmp_path):
     out = d._call_engine("generate", {"prompt": "a", "output_path": str(tmp_path / "v.json")})
     assert out["output_path"] == str(tmp_path / "v.json")
     assert _json.loads((tmp_path / "v.json").read_text())["embeddings"] == RESULT["embeddings"]
+
+
+DEVICE_HIDDEN = np.random.default_rng(7).standard_normal((2, 5, 64)).astype(np.float32)
+DEVICE_MASK = np.array([[1, 1, 1, 0, 0], [0, 1, 1, 1, 1]], dtype=np.int64)          # right and left padding
+DEVICE_DECL = {**DECL, "dimension": 64}
+ROUNDING = {"float32": 0.0, "float16": 2.0 ** -11, "bfloat16": 2.0 ** -8}           # half an ulp at 1, relative
+
+
+def _pooled(hidden, mask, kind):
+    out = D.extract_embeddings({DECL["output"]: hidden, DECL["mask"]: mask}, _executor({**DEVICE_DECL, "pooling": kind}))
+    return np.asarray(out["embeddings"])
+
+
+@pytest.mark.parametrize("dtype", sorted(ROUNDING))
+@pytest.mark.parametrize("kind", ["mean", "cls", "last"])
+def test_a_hidden_state_left_on_the_accelerator_by_the_compiled_engine_is_read_back(dtype, kind):
+    """The compiled engine leaves its hidden state on the device (CUDA, Apple MPS) in the model's dtype: it is read back
+    to the host before pooling (red: a device tensor handed to numpy, a half dtype misread)."""
+    torch = pytest.importorskip("torch")
+    device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else None
+    if device is None:                               # only a machine without an accelerator skips; any other error fails
+        pytest.skip("no torch accelerator on this machine")
+    t = torch.from_numpy(DEVICE_HIDDEN).to(device, getattr(torch, dtype))
+    want = l2_normalize(pool_hidden(t.float().cpu().numpy(), DEVICE_MASK, kind))
+    assert np.allclose(_pooled(t, torch.from_numpy(DEVICE_MASK).to(device), kind), want, rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("dtype", sorted(ROUNDING))
+@pytest.mark.parametrize("kind", ["mean", "cls", "last"])
+def test_a_hidden_state_left_on_the_accelerator_by_the_triton_engine_is_read_back(dtype, kind):
+    """The Triton engine leaves an NBXTensor on the device (CUDA, Metal) in the model's dtype: read back within that
+    dtype's own rounding of the values, then pooled (red: a device tensor read as an array, a half dtype misread)."""
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.memory.allocator import DeviceAllocator
+    from nbxtensor.tensor import NBXTensor
+    if DeviceAllocator.device_count() == 0:          # only a machine without an accelerator skips; any other error fails
+        pytest.skip("no accelerator on this machine")
+    x = NBXTensor.from_numpy(DEVICE_HIDDEN).to(device="cuda:0").to(dtype=getattr(NBXDtype, dtype))
+    host = D.final_as_array(x, None)
+    assert np.all(np.abs(host - DEVICE_HIDDEN) <= ROUNDING[dtype] * np.abs(DEVICE_HIDDEN))
+    mask = NBXTensor.from_numpy(DEVICE_MASK.astype(np.float32)).to(device="cuda:0")
+    assert np.allclose(_pooled(x, mask, kind), l2_normalize(pool_hidden(host, DEVICE_MASK, kind)), rtol=0, atol=1e-6)
