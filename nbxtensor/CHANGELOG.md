@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.1] - unreleased
 ### Added
+- **A measure of the `.to(<device>)` calls that move nothing** (`memory/to_device_census.py`, off by default):
+  `NBXTensor.to("cuda:N")` answers "already on device" whatever N. With `NBX_TO_DEVICE_CENSUS=<file>` a process
+  appends one JSON line at exit — every device-naming call it saw and, by caller, those naming another device than
+  the tensor's. No behaviour changes; the count decides whether that contract can refuse or move.
+
+### Changed
+- `NBXTensor.to` reads its positional argument in a named function (`_positional_target`); the method is 40 code
+  lines (49), same answers.
+### Added
 - **`NBXTensor.from_numpy(arr, dtype=None, device=None)`**: with `device` (an index or `"cuda:N"`) the device is
   selected, then the array placed; a device that names no index (`"cuda"`, `"cpu"`, a negative number) is refused by
   name, never read as device 0.

@@ -35,6 +35,7 @@ from .shape import (MAX_NDIM, broadcast_strides, contiguous_strides, is_contiguo
 from nbxtensor.dtype.nbx_dtype import (NBXDtype, _COMPLEX_DTYPES, _DTYPE_FROM_STR, _DTYPE_SIZES,  # noqa: F401
                                       _DTYPE_TYPESTR, _FLOATING_DTYPES, _NUMPY_DTYPE_MAP, dtype_size, parse_dtype)
 from nbxtensor.memory.allocator import DeviceAllocator, DeviceOOMError, ImpossibleExtentError  # noqa: F401
+from nbxtensor.memory import to_device_census as _to_census
 from nbxtensor.memory import allocator as _alloc
 from nbxtensor.backend import runtime as _rt, capabilities as _caps, faults as _faults  # noqa: F401
 import logging
@@ -405,6 +406,20 @@ def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
 # ============================================================================
 # NBXTensor
 # ============================================================================
+
+def _positional_target(a):
+    """What a positional `.to()` argument asks: (the dtype to cast to, or None; True when it names a device or a
+    tensor — the call then returns the tensor as it is). A string is a device ("cuda:0", "cpu") or a dtype name; any
+    other object is read by its text (a device-like object says "cuda", "cpu" or "device")."""
+    if isinstance(a, NBXDtype):
+        return a, False
+    if isinstance(a, NBXTensor):
+        return None, True
+    s = a if isinstance(a, str) else str(a)
+    if 'cuda' in s or 'cpu' in s or (not isinstance(a, str) and 'device' in s):
+        return None, True
+    return parse_dtype(s), False
+
 
 class NBXTensor:
     """Tensor descriptor for --triton mode.
@@ -1602,25 +1617,21 @@ class NBXTensor:
     # DTYPE CONVERSION
     # ========================================================================
 
+    def _note_device_naming(self, args, kwargs) -> None:
+        """Hand the devices this `.to()` call names to the census of namings that move nothing
+        (memory/to_device_census.py; asked only when that census is on)."""
+        where = "cpu" if self._device == "cpu" else f"cuda:{self._device_idx}"
+        for given in args[:1] + (("device" in kwargs) and (kwargs["device"],) or ()):
+            _to_census.count_device_naming(where, given, depth=3)
+
     def to(self, *args, **kwargs) -> 'NBXTensor':
+        if _to_census.PATH:
+            self._note_device_naming(args, kwargs)
         target = None
         if args:
-            a = args[0]
-            if isinstance(a, NBXDtype):
-                target = a
-            elif isinstance(a, str):
-                # Distinguish device string ("cuda:0") from dtype string ("float32")
-                if 'cuda' in a or 'cpu' in a:
-                    return self  # .to(device) — already on device
-                target = parse_dtype(a)
-            elif isinstance(a, NBXTensor):
-                return self
-            else:
-                # Check if it's a device-like object (has .type attribute = "cuda"/"cpu")
-                s = str(a)
-                if 'cuda' in s or 'cpu' in s or 'device' in s:
-                    return self  # .to(device) — already on device
-                target = parse_dtype(s)
+            target, as_it_is = _positional_target(args[0])
+            if as_it_is:
+                return self               # .to(device) / .to(tensor) — "already on device", whatever it names
         if 'dtype' in kwargs:
             d = kwargs['dtype']
             target = d if isinstance(d, NBXDtype) else parse_dtype(str(d))

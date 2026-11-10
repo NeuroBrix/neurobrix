@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.6] - unreleased
 
 ### Changed
+- Follows nbxtensor (an internal measure, off by default; nothing a user sees).
+
+### Changed
 - Follows nbxtensor; the Triton engine's expert tables name the GPU they are placed on in the call that places
   them (no change of result).
 

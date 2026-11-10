@@ -222,6 +222,17 @@ class HostSpill(num_layers, kv_heads, k_dim, v_dim, budget_bytes)
     # truncate(length), clear(), length, nbytes()
 ```
 
+`nbxtensor.memory.to_device_census` — the measure of `.to(<device>)` calls that name another device (off by default)
+
+```python
+ENV = "NBX_TO_DEVICE_CENSUS"      # names a file: a process then appends one JSON line at exit (pid, argv, calls, other)
+PATH                              # that file, read once at import; None: nothing is counted
+calls; other                      # the device-naming calls seen; {"<file>:<line> <where the tensor is> -> <device named>": count}
+def device_named(target) -> Optional[str]     # "cpu" / "cuda:N" a target names, None when it names none (a bare "cuda", a dtype)
+def count_device_naming(location, target, depth=1) -> None   # count one .to(target) on a tensor at `location`, by its caller
+def append_counts(path) -> None                # append this process's line
+```
+
 `nbxtensor.memory.arena`
 
 ```python
