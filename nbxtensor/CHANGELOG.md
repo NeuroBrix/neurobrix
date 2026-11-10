@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A decoding sequence may outgrow the card's KV pages**: past `card_pages`, `PagedTritonKVCache` moves its oldest
+  written pages to `memory.host_spill.HostSpill` (float32 in the attention's layout, bounded by a host budget) and keeps
+  decoding; each step's attention over the spilled positions is computed on the host
+  (`ops.host_decode_partial`) and joins the card's split partials in the same reduce launch — exact, the split-KV
+  merge. Qwen3-30B's attention shape on an M4 Pro: 131 072 spilled positions cost 15 ms per layer and step.
+
 ## [0.0.10] - 2026-11-10
 
 ### Changed
