@@ -915,6 +915,16 @@ class ActivationProfiler:
         return int(tiled_conv2d_band_bytes(x_shape, w_shape, attrs["stride"], attrs["padding"], attrs["dilation"],
                                            int(factor), int(width), int(width)))
 
+    @staticmethod
+    def weight_transposes_free(mode: str, input_config, comp_name: str) -> bool:
+        """True when the engine that will run `comp_name` reads a transposed weight in place, so its `aten::t` is no
+        buffer (`weight_transposes_read_in_place`): every component on the Triton engines; on the compiled engine the
+        one its flow runs with AMP off — the text generation head (`FlowBindings.head_runs_without_amp`; measured on
+        a V100, 2026-11-10: torch.mm(x, W.t()) holds 8.4 MB above a 594 MB weight)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        flow = getattr(input_config, "flow", None)
+        return engine_of(mode) == "triton" or (flow is not None and flow.head_runs_without_amp(comp_name))
+
     def estimate_peak_memory(
         self,
         input_config: Optional[InputConfig] = None,

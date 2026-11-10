@@ -351,39 +351,11 @@ def request_input_config(args, manifest: dict, family, cache_path):
     temporal_compression = _rt("temporal_compression_ratio", args, cached_defaults,
                                _fam_defaults, default=None)
 
-    # The batch the flow will ACTUALLY run. `batch_size=2` stood here for every
-    # model with the comment "CFG effectively doubles batch" — applied to
-    # upscalers and speech models, which run no classifier-free guidance, and
-    # overriding the batch_size: 1 that diffusion containers themselves declare.
-    # CFG doubles the batch only where guidance is in force, and the engine
-    # already treats `guidance_scale` as the declaration of that
-    # (core/flow/autoregressive.py refuses without it).
-    # A request carrying ONE image or ONE prompt is a batch of one. That is
-    # read off the request, not assumed: it is consulted after the request's own
-    # explicit --batch-size and after nothing else, so a container that declares
-    # a different batch still wins over the derivation only when the request
-    # names no single item.
     _single = 1 if (getattr(args, 'input_image', None)
                     or getattr(args, 'audio', None)
                     or getattr(args, 'prompt', None)) else None
-    batch_size = _rt("batch_size", args, cached_defaults, _fam_defaults,
-                     extra=[("the request's single input item", _single)],
-                     why="It is the batch Prism plans for.")
-    _guidance = _rt("guidance_scale", args, cached_defaults, _fam_defaults, default=None)
-    guidance_passes = None
-    if _guidance is not None and float(_guidance) > 1.0:
-        # [uncond, cond]: the two branches the CFG engines concatenate on the batch axis.
-        guidance_passes = 2
-        batch_size *= guidance_passes
-
-    # The dtype execution will resolve, not a literal. Every container on this
-    # rack declares one (float32 for swin2SR, bfloat16 for TinyLlama, float16
-    # for whisper), and "float16" stood here for all of them.
-    # The manifest is container-declared data as much as runtime/defaults.json,
-    # and three upscalers on this rack declare their dtype ONLY there.
-    dtype = _rt("dtype", args, cached_defaults, _fam_defaults,
-                extra=[("the container manifest's dtype", manifest.get("dtype"))],
-                why="It sizes every tensor in the plan.")
+    from neurobrix.core.prism.request_config import request_batch_and_dtype
+    batch_size, guidance_passes, dtype = request_batch_and_dtype(args, cached_defaults, _fam_defaults, manifest, _single)
 
     # The text's length where the flow's own preprocessing makes it without a tokenizer:
     # a phonemizer container (the audio flow's condition — `phoneme_vocab` declared, no

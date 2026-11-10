@@ -4424,9 +4424,9 @@ class PrismSolver:
                     widths = self._activation_widths(
                         comp, container, profiler, input_config, comp_dtype_str, profile)
                     # The Triton engines read a transposed weight in place; the compiled engine's
-                    # estimate keeps its bytes (profiler.weight_transposes_read_in_place says why).
-                    from neurobrix.core.prism.host_footprint import engine_of as _engine_of
-                    _in_place = _engine_of(getattr(self, "_mode", "compiled")) == "triton"
+                    # estimate keeps its bytes (profiler.weight_transposes_read_in_place says why) except for
+                    # the component its flow runs with AMP off — the text generation head.
+                    _in_place = profiler.weight_transposes_free(getattr(self, "_mode", "compiled"), input_config, comp.name)
                     ap = profiler.estimate_peak_memory(
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
@@ -8797,7 +8797,7 @@ class PrismSolver:
         ap = profiler.estimate_peak_memory(
             input_config=input_config, dtype_bytes=dtype_bytes, zero_alloc_uids=fusion | f2a | chains,
             inplace_adds=inplace, widths=widths, source_holding_uids=fusion | f2a,
-            in_place_weight_reads=(engine == "triton"), attention_scratch=self._attention_scratch(profile, comp_dtype),
+            in_place_weight_reads=profiler.weight_transposes_free(engine, input_config, comp.name), attention_scratch=self._attention_scratch(profile, comp_dtype),
             conv3d_workspace=self._conv3d_workspace(profile, comp_dtype), op_workspace=self._op_workspace(profile),
             tiled_convs=tiled)
         return int(self._scale_activations_to_request(comp, ap.peak_bytes, input_config)), str(ap.peak_op_uid or "")

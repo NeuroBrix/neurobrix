@@ -1133,6 +1133,7 @@ class AutoregressiveHandler(FlowHandler):
             # lm_head is a trivial Linear (4 ops). Disable AMP — logits are
             # scores, not activations. fp32 upcast would allocate vocab_size×hidden
             # (800MB+) for no quality benefit and cause OOM on memory-tight GPUs.
+            # Prism prices the head by this line (FlowBindings.head_runs_without_amp): change both or neither.
             if hasattr(lm_head_executor, '_dtype_engine'):
                 lm_head_executor._dtype_engine.amp_enabled = False
 

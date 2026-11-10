@@ -149,6 +149,22 @@ class FlowBindings:
             if (self.cache_path / "components").exists() else []
         return 1 if resolve_flow_name(head, names) == comp else None
 
+    def head_runs_without_amp(self, comp: str) -> bool:
+        """True when `comp` is the TEXT generation head, which the compiled flow runs with AMP off
+        (`core/flow/autoregressive.py` `_create_strategy`: "logits are scores, not activations" — the fp32 upcast would
+        copy vocabulary x hidden). With AMP off no dtype wrapper copies an operand (`DtypeEngine.compile_op`), so the
+        head's transposed weight is read as the view it is: its bytes are no activation on the compiled engine either
+        (`profiler.weight_transposes_read_in_place`, the Triton engines' rule). Not the image-token head nor a VLM's
+        head: the flow leaves their AMP on, and their price is unchanged."""
+        gen = self.flow.get("generation") or {}
+        head = gen.get("head_component")
+        if gen.get("type") != "autoregressive_text" or not head or self.cache_path is None:
+            return False
+        from neurobrix.core.prism.time_estimate import resolve_flow_name
+        names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
+            if (self.cache_path / "components").exists() else []
+        return resolve_flow_name(head, names) == comp
+
     def encoder_lengths(self) -> Dict[str, int]:
         """{pre-loop text encoder: tokenized length} of an iterative (diffusion) flow."""
         if self.flow.get("type") != "iterative_process":

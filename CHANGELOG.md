@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Fixed
+- **`neurobrix serve` plans memory for the request it will get, not for a fixed pair.** The daemon planned every model
+  as a batch of two in float16 — values written into it on its first day — whatever the model: a chat model was
+  priced for two prompts at once, an upscaler for two images, and a model whose container declares another dtype was
+  sized in the wrong one. It now follows the same rule as `neurobrix run`: one item per request, doubled only where
+  the model's guidance is in force, in the dtype the container declares.
+- **A chat model's output layer is no longer counted twice in the memory plan** on the PyTorch engine: the plan
+  reserved a second copy of the vocabulary projection's weight that the engine never makes there.
+
 ### Changed
 - **A long prompt sent to `neurobrix serve` is read several times faster on the PyTorch engine.** The daemon read a
   prompt in slices of 128 tokens, each one a full pass of the model; it now takes the largest slice its memory plan

@@ -165,11 +165,13 @@ class InferenceEngine:
         # the flow's per-component facts, as a run's plan reads them (`run.request_input_config`): the generation
         # head's one row, the generating model's prompt rows
         from neurobrix.core.prism.flow_bindings import FlowBindings
+        # the batch (one item a request; doubled where the container's guidance is in force) and the dtype, by the
+        # rule a run plans with — `batch_size=2` and "float16" stood here for every served family
+        from neurobrix.core.prism.request_config import served_plan_fields
         input_config = self._input_config = InputConfig(
-            batch_size=2,
+            **served_plan_fields(self._family, cached_defaults, manifest),
             height=height,
             width=width,
-            dtype="float16",
             vae_scale=vae_scale,
             flow=(FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
                   if _topo_path.exists() else None),
