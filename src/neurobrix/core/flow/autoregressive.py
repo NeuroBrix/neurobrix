@@ -998,6 +998,11 @@ class AutoregressiveHandler(FlowHandler):
             if kv_wrapper is None:
                 kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype,
                                                       hardware=(getattr(executor, 'vendor', None), getattr(executor, 'arch', None)))
+                if kv_session is not None:            # a served session: past the plan's cache, the host spill (R30)
+                    from neurobrix.core.state.kv_tier import attach_spill
+                    _log.info(attach_spill(kv_wrapper.cache, self.ctx.kv_tier,
+                                           getattr(self.ctx.plan, 'kv_cache_plan', None),
+                                           int(lm_config.get("max_position_embeddings") or 0)))
             if kv_session is not None:
                 kv_session.bind(executor, kv_wrapper, kv_wrapper.cache)
             # Register interceptors

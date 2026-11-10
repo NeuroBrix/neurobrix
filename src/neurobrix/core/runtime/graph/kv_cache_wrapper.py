@@ -306,6 +306,8 @@ class KVCacheAttentionWrapper:
 
         # Update cache (lazy allocation on k's device)
         k_full, v_full = self.cache.update(layer_idx, k, v)
+        if self.cache.spilled and not self._is_prefill:
+            return self._decode_over_spill(q, k_full, v_full, attn_mask, scale, layer_idx)
 
         # GQA: Re-expand cached K/V from num_kv_heads to num_heads for SDPA
         if self._gqa_group_size > 1:
@@ -412,6 +414,34 @@ class KVCacheAttentionWrapper:
         return F.scaled_dot_product_attention(
             q, k_full, v_full, attn_mask=mask, dropout_p=dropout_p, is_causal=False, scale=scale,
             **({"enable_gqa": True} if k_full.shape[1] != q.shape[1] else {}))
+
+    def _decode_over_spill(self, q, k_card, v_card, attn_mask, scale, layer_idx: int) -> torch.Tensor:
+        """A decode step of a sequence whose oldest positions spilled to host memory: the card's partial over its
+        positions (unnormalised acc, max m, sum l, fp32, as the Triton split kernel's) and the host's over the spilled
+        ones (nbxtensor ops/host_decode_partial, the same op as the Triton engine's), merged by log-sum-exp — exact.
+        q [1, H, 1, D] · k_card / v_card [1, H_kv, T_card, D] (the KV heads, never expanded) -> [1, H, 1, D_v]."""
+        if attn_mask is not None:
+            require_causal_frozen_mask(attn_mask, 1, int(attn_mask.shape[-1]),
+                                       f"KV interceptor (layer {layer_idx}, decode over spilled positions)")
+        cache_dtype = k_card.dtype
+        heads, d = int(q.shape[1]), int(q.shape[3])
+        kv_heads = int(k_card.shape[1])
+        groups = heads // kv_heads
+        sc = float(scale) if scale is not None else d ** -0.5
+        qr = q.to(cache_dtype).float()                                     # q as the card reads it
+        qg = qr.reshape(kv_heads, groups, d)
+        s = torch.matmul(qg, k_card[0].float().transpose(1, 2)) * sc       # [H_kv, groups, T_card]
+        m = s.amax(dim=2)
+        p = torch.exp(s - m[..., None])
+        acc, l = torch.matmul(p, v_card[0].float()), p.sum(dim=2)
+        h_acc, h_m, h_l = (torch.from_numpy(x).to(q.device) for x in self.cache.host_spill.partial(
+            layer_idx, qr.reshape(heads, d).cpu().numpy(), groups, sc))
+        h_acc, h_m, h_l = h_acc.reshape(kv_heads, groups, -1), h_m.reshape(kv_heads, groups), h_l.reshape(kv_heads, groups)
+        mn = torch.maximum(m, h_m)
+        c1 = torch.where(torch.isneginf(m), torch.zeros_like(m), torch.exp(m - mn))
+        c2 = torch.where(torch.isneginf(h_m), torch.zeros_like(h_m), torch.exp(h_m - mn))
+        out = (acc * c1[..., None] + h_acc * c2[..., None]) / (l * c1 + h_l * c2)[..., None]
+        return out.reshape(1, heads, 1, -1).to(cache_dtype)
 
     def reset_for_new_sequence(self) -> None:
         """Reset cache for a new generation sequence."""

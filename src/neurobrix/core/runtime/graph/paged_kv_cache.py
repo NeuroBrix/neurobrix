@@ -37,7 +37,12 @@ class PagedKVCache:
         self.v_pools: Dict[int, torch.Tensor] = {}
         self.lens: Dict[int, int] = {}
         self._seq_len = 0
-        self.spilled = 0        # positions spilled to host memory mid-decode (the Triton cache's protocol; the KV tier reads it)
+        # the mid-decode spill (R30 mirror of nbxtensor memory/paged_kv): at most `card_pages` pages per sequence on the
+        # card, the oldest written pages moved to `host_spill` (nbxtensor memory/host_spill.HostSpill) past them; the
+        # first `spilled` positions live there and the page tables count the card's positions from it
+        self.card_pages = 0
+        self.host_spill = None
+        self.spilled = 0
         self.holder = None      # the serving session whose positions the cache holds (core/state/kv_session), or None
 
     # -- capacity --------------------------------------------------------------------------------------------------
@@ -90,11 +95,37 @@ class PagedKVCache:
             authority = "the model's context window" if getattr(self.config, "ceiling_is_window", False) \
                 else "the plan's cache"
             raise RuntimeError(f"ZERO FALLBACK: {length} positions exceed {authority} ({self.config.max_cache_len})")
-        lacking = sum(max(0, self._pages_for(length) - len(t.pages)) for t in self.tables) - self.pool.free_pages
+        card = int(length) - self.spilled
+        if self.card_pages and self._pages_for(card) > self.card_pages:
+            # only whole pages already written move; the reservation is capped at the card's pages
+            written = (self._seq_len - self.spilled) // self.page_tokens
+            movable = min(self._pages_for(card) - self.card_pages, written)
+            if movable:
+                self._spill(movable)
+            card = min(int(length) - self.spilled, self.card_pages * self.page_tokens)
+        lacking = sum(max(0, self._pages_for(card) - len(t.pages)) for t in self.tables) - self.pool.free_pages
         if lacking > 0:
             self.pool.grow(lacking)
         for t in self.tables:
-            t.reserve(length)
+            t.reserve(card)
+
+    @torch.inference_mode()
+    def _spill(self, pages: int) -> None:
+        """Move the sequence's `pages` oldest pages to the host spill (every layer, float32 there); their ids are reused
+        for the newest positions and the card's positions shift by the spilled count."""
+        if self.host_spill is None:
+            raise RuntimeError(f"ZERO FALLBACK: the sequence needs more than the card's {self.card_pages} pages of "
+                               f"{self.page_tokens} positions and this cache has no host spill — past the cache's reach")
+        if self.batch != 1:
+            raise RuntimeError(f"ZERO FALLBACK: the mid-decode spill holds one sequence; this batch has {self.batch}")
+        table = self.tables[0]
+        moved = table.pages[:pages]
+        for layer, kp in self.k_pools.items():
+            idx = torch.tensor(moved, device=kp.device, dtype=torch.long)
+            self.host_spill.append(layer, kp[idx].float().cpu().numpy(), self.v_pools[layer][idx].float().cpu().numpy())
+        table.pages = table.pages[pages:] + moved
+        table.length = max(table.length - pages * self.page_tokens, 0)
+        self.spilled += pages * self.page_tokens
 
     # -- the interface the wrapper calls -----------------------------------------------------------------------------
     def update(self, layer_idx: int, k: torch.Tensor, v: torch.Tensor,
@@ -108,10 +139,16 @@ class PagedKVCache:
         start = self.lens.get(layer_idx, 0)
         t = int(k.shape[2])
         end = start + t
-        if end > len(self.tables[0].pages) * self.page_tokens:
+        if end - self.spilled > len(self.tables[0].pages) * self.page_tokens:
             self._reserve(end, None if real is None else start + int(real))
+            if end - self.spilled > len(self.tables[0].pages) * self.page_tokens:
+                raise RuntimeError(f"ZERO FALLBACK: writing up to position {end} with {self.spilled} spilled and the "
+                                   f"card's {self.card_pages} pages of {self.page_tokens} — a prompt past the card's "
+                                   f"reach (its chunks would attend over spilled positions)")
         kp, vp = self._layer_pools(layer_idx, k.device)
         tpp = self.page_tokens
+        # the card's positions of this step (the first `spilled` live on the host)
+        start, end = start - self.spilled, end - self.spilled
         positions = torch.arange(start, end, device=k.device)
         ks, vs = [], []
         for b, table in enumerate(self.tables):
@@ -121,15 +158,18 @@ class PagedKVCache:
             n = self._pages_for(end)
             ks.append(kp[pages[:n]].permute(1, 0, 2, 3).reshape(kp.shape[1], n * tpp, kp.shape[3])[:, :end])
             vs.append(vp[pages[:n]].permute(1, 0, 2, 3).reshape(vp.shape[1], n * tpp, vp.shape[3])[:, :end])
-        self.lens[layer_idx] = end
+        self.lens[layer_idx] = end + self.spilled
         if layer_idx == 0:
-            self._seq_len = end
+            self._seq_len = end + self.spilled
         return torch.stack(ks), torch.stack(vs)
 
     def get_seq_len(self) -> int:
         return self._seq_len
 
     def get_cache(self, layer_idx: int):
+        if self.spilled:
+            raise RuntimeError(f"ZERO FALLBACK: reading layer {layer_idx}'s whole cache of a sequence whose first "
+                               f"{self.spilled} positions spilled to the host")
         if layer_idx not in self.k_pools or not self.lens.get(layer_idx):
             return None, None
         end, tpp = self.lens[layer_idx], self.page_tokens
@@ -148,6 +188,11 @@ class PagedKVCache:
         length = int(length)
         if length < 0 or length > self._seq_len:
             raise RuntimeError(f"ZERO FALLBACK: truncating the KV cache to {length} positions; it holds {self._seq_len}")
+        if length < self.spilled:                        # the kept prefix ends inside the host's positions
+            self.host_spill.truncate(length)
+            self.spilled = length
+            for t in self.tables:
+                t.length = 0
         for layer in list(self.lens):
             self.lens[layer] = min(self.lens[layer], length)
         self._seq_len = length
@@ -157,6 +202,9 @@ class PagedKVCache:
         pages, gathered through the page tables (the positions past the layer's length are whatever the slots hold:
         the caller masks them)."""
         tpp = self.page_tokens
+        if self.spilled:
+            raise RuntimeError(f"ZERO FALLBACK: gathering layer {layer_idx}'s pages of a sequence whose first "
+                               f"{self.spilled} positions spilled to the host — a prefill chunk past the card's reach")
         if positions % tpp or positions > len(self.tables[0].pages) * tpp:
             raise RuntimeError(f"ZERO FALLBACK: gathering {positions} positions of layer {layer_idx} as whole pages of "
                                f"{tpp}; the sequence holds {len(self.tables[0].pages)} pages")
@@ -178,6 +226,9 @@ class PagedKVCache:
         return self.config.num_layers, kp[0].numel() * kp.element_size(), vp[0].numel() * vp.element_size()
 
     def tier_length(self) -> int:
+        if self.spilled:
+            raise RuntimeError(f"ZERO FALLBACK: the KV host tier reads a sequence whose first {self.spilled} positions "
+                               f"spilled mid-decode — a spilled conversation is not parked")
         return self._seq_len
 
     def _host_rows(self, host, host_pages) -> np.ndarray:
@@ -223,6 +274,9 @@ class PagedKVCache:
             t.free()
         self.lens.clear()
         self._seq_len = 0
+        self.spilled = 0
+        if self.host_spill is not None:
+            self.host_spill.clear()
 
     def get_layer_devices(self) -> Dict[int, torch.device]:
         return {i: p.device for i, p in self.k_pools.items()}

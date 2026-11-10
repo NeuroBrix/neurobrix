@@ -230,3 +230,19 @@ def test_a_spilled_conversation_is_never_parked_and_the_spill_takes_what_the_par
     cache.spilled = TPP
     assert tier.park(list(range(500, 530)), cache) == 0
     assert tier.prepare(s, cache, list(range(1, 42)) + [9]) == 0 and tier.parked_pages == 5
+
+
+def test_a_served_cache_spills_past_the_plan_s_cache_only_when_the_window_is_longer():
+    """attach_spill (core/state/kv_tier): a served cache keeps the plan's cache on the card and spills past it on the
+    tier's share when the model's window is longer; off, said, without a tier or when the plan reaches the window."""
+    from types import SimpleNamespace
+    from neurobrix.core.state.kv_tier import attach_spill
+    plan = SimpleNamespace(max_cache_len=100, num_layers=LAYERS, num_kv_heads=H, k_head_dim=D, v_head_dim=D)
+    tier = KVTier(budget_mb=1, pinned=False, source="test", slice_positions=2 * TPP)
+    off = FakeCache()
+    assert "off" in attach_spill(off, None, plan, 1000) and not hasattr(off, "host_spill")
+    assert "off" in attach_spill(off, tier, plan, 100) and not hasattr(off, "host_spill")
+    on = FakeCache()
+    note = attach_spill(on, tier, plan, 1000)
+    assert on.card_pages == -(-100 // TPP) and on.host_spill.budget_bytes == tier.spill_budget()
+    assert "on" in note and str(on.host_spill.reach()) in note

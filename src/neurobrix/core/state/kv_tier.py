@@ -129,6 +129,25 @@ class KVTier:
                 "parked": self.parked_pages, "restored": self.restored_pages, "source": self.source}
 
 
+def attach_spill(cache, tier: Optional[KVTier], kv_plan, window: int) -> str:
+    """A served session's cache past the plan's: when the model's window exceeds what the plan's cache holds on the
+    card (residency first, c957cee3), the cache keeps at most the plan's pages per sequence on the card and spills its
+    oldest pages to host memory past them (nbxtensor memory/host_spill.py) on the tier's share of the one host budget.
+    Off (said) without a tier, or when the plan's cache already reaches the window. Returns the sentence that says it."""
+    if tier is None or kv_plan is None:
+        return "KV mid-decode spill: off (no KV host tier)"
+    card = int(kv_plan.max_cache_len)
+    if not window or window <= card:
+        return f"KV mid-decode spill: off (the plan's cache of {card} positions reaches the model's window {window})"
+    from nbxtensor.memory.host_spill import HostSpill
+    cache.card_pages = -(-card // cache.page_tokens)
+    cache.host_spill = HostSpill(kv_plan.num_layers, kv_plan.num_kv_heads, kv_plan.k_head_dim, kv_plan.v_head_dim,
+                                 tier.spill_budget)
+    return (f"KV mid-decode spill: on — {cache.card_pages * cache.page_tokens} positions on the card, then up to "
+            f"{cache.host_spill.reach()} in host memory ({cache.host_spill.position_bytes()} bytes each, the tier's "
+            f"share of {tier.budget_bytes / 2 ** 20:.0f} MB), the model's window {window}")
+
+
 def kv_tier_for(plan, profile) -> "tuple[Optional[KVTier], str]":
     """The serving daemon's tier for `plan` on `profile`, and the sentence that says it. The budget is the host law
     Prism plans by: the installed RAM less the system's measured share (PrismSolver._less_the_system_share), less the

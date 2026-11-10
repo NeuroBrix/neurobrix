@@ -741,6 +741,9 @@ class TritonAutoregressiveHandler:
             if kv_cache is None:
                 kv_cache = paged_kv_cache(kv_params, getattr(self.ctx.plan, 'kv_cache_plan', None))
                 memo[key] = kv_cache
+                from neurobrix.core.state.kv_tier import attach_spill
+                _log.info(attach_spill(kv_cache, self.ctx.kv_tier, getattr(self.ctx.plan, 'kv_cache_plan', None),
+                                       _window))
             else:
                 # Warm hit: the per-request sizing inputs follow THIS
                 # request (a larger --max-tokens must size the need the
