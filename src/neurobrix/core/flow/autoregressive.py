@@ -995,6 +995,19 @@ class AutoregressiveHandler(FlowHandler):
             # SDPA, or the recompute reference, never asks for one. A serving session keeps its
             # wrapper (and the positions its cache holds) from turn to turn on this executor.
             kv_wrapper = kv_session.held(executor) if kv_session is not None else None
+            # A served session takes the executor's ONE served cache (R30 mirror of triton/flow/autoregressive.py's
+            # executor-scoped cache): the conversation it held before is parked in the KV host tier first, when one
+            # serves, then the cache is reset — so a conversation that left the cache can come back from the host (a
+            # new cache per session parked nothing: the Dell's device cell, 2026-11-10 11:41).
+            served = executor.__dict__.get("_kv_served_wrapper") if kv_session is not None else None
+            if kv_wrapper is None and served is not None:
+                prev = served.cache.holder
+                if self.ctx.kv_tier is not None and prev is not None and not served.cache.spilled \
+                        and served.cache.tier_length():
+                    self.ctx.kv_tier.park(prev.token_ids, served.cache)
+                served.reset_for_new_sequence()
+                served.cache.holder = None
+                kv_wrapper = served
             if kv_wrapper is None:
                 kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype,
                                                       hardware=(getattr(executor, 'vendor', None), getattr(executor, 'arch', None)))
@@ -1003,6 +1016,7 @@ class AutoregressiveHandler(FlowHandler):
                     _log.info(attach_spill(kv_wrapper.cache, self.ctx.kv_tier,
                                            getattr(self.ctx.plan, 'kv_cache_plan', None),
                                            int(lm_config.get("max_position_embeddings") or 0)))
+                    executor.__dict__["_kv_served_wrapper"] = kv_wrapper
             if kv_session is not None:
                 kv_session.bind(executor, kv_wrapper, kv_wrapper.cache)
             # Register interceptors

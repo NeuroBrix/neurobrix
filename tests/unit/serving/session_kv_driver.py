@@ -111,13 +111,15 @@ def main() -> int:
                     row.append(hashlib.sha256(bytes(buf)).hexdigest())
                 out.append(row)
         else:
+            import torch                            # the compiled engine's cache only: a Triton run never loads it (R33)
             cache = handle.cache
             for layer in range(cache.config.num_layers):
                 k, v = cache.get_cache(layer)
                 if int(k.shape[2]) != n:
                     raise RuntimeError(f"layer {layer} holds {int(k.shape[2])} positions, expected {n}")
-                out.append([hashlib.sha256(k.contiguous().cpu().numpy().tobytes()).hexdigest(),
-                            hashlib.sha256(v.contiguous().cpu().numpy().tobytes()).hexdigest()])
+                # the raw bytes, whatever the cache's dtype (numpy has no bfloat16: Apple's compiled cache)
+                out.append([hashlib.sha256(k.contiguous().cpu().view(torch.uint8).numpy().tobytes()).hexdigest(),
+                            hashlib.sha256(v.contiguous().cpu().view(torch.uint8).numpy().tobytes()).hexdigest()])
         return out
 
     ceiling, source = session_ceiling(kv_plan)
