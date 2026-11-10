@@ -188,7 +188,15 @@ class InferenceEngine:
         #   eager = weights stay in VRAM (single_gpu, pp, fgp, tp)
         #   lazy  = weights reload per request (pp_lazy, lazy_sequential, zero3)
         loading_mode = getattr(self._plan, 'loading_mode', 'lazy')
-        self._warm_serving = (loading_mode == "eager")
+        # A lazy plan whose flow holds every component together during a request (a text decode: the language model
+        # and its head) releases nothing between requests that the next one would not reload: it serves warm too. Cold,
+        # Qwen3-Coder-30B-A3B on two V100-32GB reloaded 57.6 GB and recopied 31 GB of experts onto its second card at
+        # every request — about 150 s of a 170 s, 64-token answer (2026-11-10).
+        from neurobrix.core.flow.base import holds_every_component
+        from neurobrix.core.prism.host_footprint import engine_of
+        _topology = json.load(open(_topo_path)) if _topo_path.exists() else {}
+        self._warm_serving = (loading_mode == "eager"
+                              or holds_every_component(_topology, engine_of(self.mode), self._plan.components))
 
         # 5. Load RuntimePackage
         loader = NBXRuntimeLoader()

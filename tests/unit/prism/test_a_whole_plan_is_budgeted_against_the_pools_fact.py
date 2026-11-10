@@ -32,6 +32,8 @@ def test_prepare_devices_reads_the_driver_for_a_discrete_card(monkeypatch):
     from nbxtensor.memory.allocator import DeviceAllocator as D
     class _Dev:
         memory_mb = 32000
+        runtime_total_mb = 32000           # the card as its runtime reads it (rule 1: the profile states it)
+        runtime_context_mb = 0
         has_unified_memory = False
         index = 0
         def get_device_string(self):

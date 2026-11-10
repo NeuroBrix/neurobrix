@@ -312,6 +312,20 @@ class CompiledOp:
 # COMPILED SEQUENCE WITH CLOSURE-BASED RESOLUTION
 # ============================================================================
 
+def _placement_of(op, args, ops=()) -> str:
+    """The placement facts of a failed multi-device op, for its error: the device its plan gave it, whether it was
+    marked as a boundary, the device of each tensor input, and the op that produced each input slot with its planned
+    device."""
+    slots = list(getattr(op, 'all_input_slots', None) or ())
+    devs = [f"{type(a).__name__}@{a.device}" for a in args if hasattr(a, 'device')]
+    producers = []
+    for s in slots:
+        p = next((o for o in ops if s in (o.output_slots or ())), None)
+        producers.append(f"{s}<-{p.op_uid}@{p.device}" if p is not None else f"{s}<-(weight or input)")
+    return (f" — op device {op.device}, marked as a device boundary: {bool(op.needs_transfer)}, "
+            f"tensor inputs on {devs}, produced by {producers}")
+
+
 class CompiledSequence(SequenceSteps):
     """
     Pre-compiled execution sequence with zero runtime isinstance() checks.
@@ -3973,11 +3987,11 @@ class CompiledSequence(SequenceSteps):
                         else:
                             _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                             raise RuntimeError(_oom_annotate(
-                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}{_placement_of(op, args, self._ops)}", e)) from e
                     else:
                         _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                         raise RuntimeError(_oom_annotate(
-                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}{_placement_of(op, args, self._ops)}", e)) from e
             else:
                 # ── SLOW PATH: GPU boundary — device alignment needed ──
                 # Rule: CUDA always wins over CPU — compute happens on GPU
@@ -4080,6 +4094,17 @@ class CompiledSequence(SequenceSteps):
                         _live_dump_on_oom(e, locals().get('arena'), getattr(self, '_tid_of_slot', None) or {})
                         raise RuntimeError(_oom_annotate(
                         f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
+                # A boundary op's outputs live on the device the plan gave it — the device the forward
+                # propagation of compute_op_devices recorded for its output slots, so the ops after it take the
+                # fast path. An op that reads the arena itself (the fused MoE, its experts held on another card)
+                # is handed no moved arguments and returns on the card its input came from: brought to `target`.
+                if target is not None:
+                    if isinstance(result, torch.Tensor):
+                        if result.device != target:
+                            result = result.to(target)
+                    elif isinstance(result, (list, tuple)) and any(
+                            isinstance(r, torch.Tensor) and r.device != target for r in result):
+                        result = type(result)(r.to(target) if isinstance(r, torch.Tensor) else r for r in result)
 
             slots = op.output_slots
             # === NBX_OPLOG: every-op execution log (None vs l2) — covers the

@@ -30,5 +30,9 @@ def test_a_dedicated_card_in_the_shadow_is_the_runtimes_total_less_its_context(m
 
 
 def test_a_dedicated_card_without_the_measured_facts_is_refused_by_name(monkeypatch):
+    spec = copy.deepcopy(V100_16GB)
+    for d in spec["devices"]:                    # the profile as generated before the runtime facts existed
+        d.pop("runtime_total_mb", None)
+        d.pop("runtime_context_mb", None)
     with pytest.raises(RuntimeError, match="runtime_total_mb"):
-        _reading(monkeypatch, copy.deepcopy(V100_16GB))
+        _reading(monkeypatch, spec)

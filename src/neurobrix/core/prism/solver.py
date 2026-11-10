@@ -355,6 +355,11 @@ class KVCachePlan:
         return self.memory_bytes / (1024 * 1024)
 
 
+class ProfileFactMissing(RuntimeError):
+    """A fact the plan needs that the hardware profile does not declare (rule 1): refused by name, never read as 0 and
+    never taken for a reading that failed."""
+
+
 @dataclass
 class DeviceState:
     """
@@ -1060,6 +1065,17 @@ class PrismSolver:
             if (isinstance(dev, str) and dev.startswith("zero3:")
                     and not _device_is_unified(dev, profile)):
                 cost = int(m.activation_bytes + m.overhead_bytes)
+                # A ROUTED component the grant (`_zero3_resident_budgets`) will serve as an expert store holds at
+                # least its dense part and the widest layer's top_k experts on the card: that floor is the plan's
+                # before the cache is sized. Priced at its activations alone, a served session's cache took the
+                # room first — Qwen3-Coder-30B-A3B on two V100-32GB: 24 576 MB of KV, no room left for the store,
+                # every block streamed from the host at every token (6.7 s a token, 2026-11-10).
+                floor = (self._expert_store_floor(name, m.weight_mb * self._cost_multiplier_on(dev, name, container,
+                                                                                              profile),
+                                                  self._cost_multiplier_on(dev, name, container, profile))
+                         if container is not None else None)
+                if floor is not None:
+                    cost += int((floor[0] + floor[1]) * 1024 * 1024)
             elif store_mb is not None:
                 # an expert store on a unified device: its dense part and the floor of its expert
                 # cache beside its activations — the routed experts stay in the container's pages.
@@ -1481,6 +1497,16 @@ class PrismSolver:
                 f"dtype that engine computes them in: {pairs}. The store maps stored bytes and converts "
                 f"none (core/runtime/expert_files.py) — the load would refuse it; a file-backed expert "
                 f"must be stored in its compute dtype")
+
+    def _cost_multiplier_on(self, device: str, name: str, container, profile) -> float:
+        """The cost multiplier of `name`'s dtype on the profile's device `device` ("zero3:cuda:2" or "cuda:2") — the
+        figure `DeviceState.get_cost_multiplier` gives the placement."""
+        dev_str = device.split(":", 1)[1] if device.startswith("zero3:") else device
+        spec = next((d for d in profile.devices if d.get_device_string() == dev_str), None)
+        if spec is None:
+            return 1.0 if dev_str == "cpu" else DeviceState(dev_str, 0.0).get_cost_multiplier(
+                self._get_component_dtype(container, name))
+        return DeviceState(dev_str, 0.0, spec=spec).get_cost_multiplier(self._get_component_dtype(container, name))
 
     def _expert_store_budget(self, name: str, weight_mb: float, room_mb: float,
                              mult: float) -> Optional[Tuple[float, float]]:
@@ -2988,6 +3014,20 @@ class PrismSolver:
                         total_capacity = min(total_capacity, sum(
                             int(self._usable_mb(d) * 1024 * 1024)
                             for d in strat_devices if d.device_string in _store_devs))
+                    # The same holds on a DISCRETE card for a component zero3 maps there: its residency (the
+                    # resident blocks, or an expert store's dense part and expert cache) is granted from the USABLE
+                    # part after the cache (`_zero3_resident_budgets`). Sized against the budget, a served cache took
+                    # the difference: Qwen3-Coder-30B-A3B served on two V100-32GB, 25 769 MB of cache against
+                    # 32 195 MB, left 763 MB of the 29 619 usable — under the store's floor, so every block streamed
+                    # from the host at every token (6.7 s a token, 2026-11-10).
+                    _z3_devs = {(a[0] if isinstance(a, tuple) else a).split(":", 1)[1] for a in strat_allocs.values()
+                                if isinstance((a[0] if isinstance(a, tuple) else a), str)
+                                and (a[0] if isinstance(a, tuple) else a).startswith("zero3:")}
+                    _bounded = (_store_devs | _z3_devs) & {d.device_string for d in _cards}
+                    if _bounded:
+                        total_capacity = min(total_capacity, sum(
+                            int(self._usable_mb(d) * 1024 * 1024) if d.device_string in _bounded
+                            else int(self._effective_capacity_mb(d) * 1024 * 1024) for d in _cards))
 
                 if strat_name == "zero3":
                     # Weights leave the device only where the host is a
@@ -5290,6 +5330,18 @@ class PrismSolver:
             # pass (2026-10-27) planned Qwen3-30B-A3B triton weight_sharding at 15 867 MB per V100-16GB the shadow
             # (15 845 MB usable) refuses.
             ctx = getattr(dev, "runtime_context_mb", None)
+            if ctx is None and r.measured:
+                # Rule 1 (the profile is the machine's identity card): a fact the plan needs and the profile does not
+                # declare is refused by name, never read as 0. Read as 0 here, the card the process has not touched yet
+                # was budgeted its whole pool: Qwen3-Coder-30B-A3B on `v100-32g-x2-nvlink` held 32 257 MB of experts on
+                # a card with 32 192 MB free once its context existed, the door re-planned, and the fallback plans
+                # crashed (weight_sharding) or streamed the whole model at every token (serve, 6.7 s a token;
+                # 2026-11-10).
+                raise ProfileFactMissing(
+                    f"ZERO FALLBACK: the hardware profile declares no runtime_context_mb (nor runtime_total_mb) for "
+                    f"{dev.get_device_string()} — the runtime's own context on that card, which a plan for it must leave "
+                    f"free. A profile generated on the machine carries both (delete it and run without --hardware to "
+                    f"regenerate it), or add the two measured figures to the profile's device entry")
             if ctx is not None and r.measured and r.own_context_mb < float(ctx):
                 missing = float(ctx) - r.own_context_mb
                 r = dataclasses.replace(r, own_context_mb=float(ctx), free_mb=max(0.0, r.free_mb - missing))
@@ -5300,6 +5352,8 @@ class PrismSolver:
                 over = r.capacity_mb - float(total)
                 r = dataclasses.replace(r, capacity_mb=float(total), free_mb=max(0.0, r.free_mb - over))
             return r
+        except ProfileFactMissing:
+            raise                           # the profile's gap, not a reading that failed: refused by name
         except Exception as exc:  # noqa: BLE001 — a reading that cannot be taken is a shared pool, said
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
                                  measured=False, source=f"no reading: {type(exc).__name__}")
@@ -6153,66 +6207,51 @@ class PrismSolver:
             # Determine if attention dominates (for smarter sharding)
             attn_per_block_mb = mem.attention_per_block_bytes / (1024 * 1024) if mem.attention_dominates else 0
 
-            # Find minimum GPUs needed (dtype-aware)
-            n_gpus = 2
+            # The fewest cards whose SPLIT holds: the weight files dealt greedily (largest first, to the least loaded
+            # card) and each card's actual bytes, at the device's cost, beside the activations of the ops it runs, judged
+            # against the part one component may hold (`_usable_mb`, the authority every placement reads). It read the
+            # raw budget with a 0.1 hedge and booked an even split: Qwen3-Coder-30B-A3B on two V100-32GB planned
+            # 28 854 MB a card and its head on the first, and ran out of memory on that card in its first prefill
+            # (2026-11-10 03:23, 31.7 GB in use).
+            cost_mult = available[0].get_cost_multiplier(model_dtype)
+            act_per_gpu = attn_per_block_mb if attn_per_block_mb > 0 else mem.activation_mb
+            comp_shards = sorted(shard_sizes.get(comp_name, {}).items(), key=lambda x: x[1], reverse=True)
+            mib = 1024 * 1024
+            chosen = None
             for n in range(2, len(available) + 1):
-                cost_mult = available[0].get_cost_multiplier(model_dtype)
-                weight_per_gpu = (mem.weight_mb * cost_mult) / n
-                # the weights divide across the n cards; the activations do not — every card that runs an op holds
-                # that op's activations (an attention-dominated component holds one block's at a time)
-                act_per_gpu = attn_per_block_mb if attn_per_block_mb > 0 else mem.activation_mb
-                overhead = (weight_per_gpu + act_per_gpu) * 0.1 if act_per_gpu > 0 else 0
-                per_gpu_total = weight_per_gpu + act_per_gpu + overhead
-
-                if per_gpu_total <= available[n-1].capacity_mb:
-                    n_gpus = n
+                group = available[:n]
+                if profile.topology:
+                    for start in range(len(available) - n + 1):
+                        g = available[start:start + n]
+                        if profile.topology.devices_have_fast_interconnect([self._get_device_index(d.device_string)
+                                                                            for d in g]):
+                            group = g
+                            break
+                loads = [0.0] * n
+                shard_map = {}
+                for shard_name, shard_bytes in comp_shards:
+                    i = loads.index(min(loads))
+                    shard_map[shard_name] = group[i].device_string
+                    loads[i] += shard_bytes / mib * cost_mult
+                if all(loads[i] + act_per_gpu <= self._usable_mb(group[i]) - group[i].used_mb for i in range(n)):
+                    chosen = (group, loads, shard_map)
                     break
-            else:
+            if chosen is None:
                 return None
-
-            required = (mem.weight_mb * available[0].get_cost_multiplier(model_dtype)) + mem.activation_mb
-
-            # Prefer NVLink-connected GPUs for TP (minimize cross-device transfer cost)
-            if n_gpus <= len(available) and profile.topology:
-                # Try to find n_gpus devices that are all fast-interconnected
-                best_group = None
-                for start in range(len(available) - n_gpus + 1):
-                    group = available[start:start + n_gpus]
-                    indices = [self._get_device_index(g.device_string) for g in group]
-                    if profile.topology.devices_have_fast_interconnect(indices):
-                        best_group = group
-                        break
-                tp_gpus = best_group if best_group else available[:n_gpus]
-            else:
-                tp_gpus = available[:n_gpus]
-
-            per_gpu = required / n_gpus
-
-            for gpu in tp_gpus:
-                gpu.allocate(comp_name, per_gpu)
+            tp_gpus, loads, shard_map = chosen
+            for gpu, load in zip(tp_gpus, loads):
+                gpu.allocate(comp_name, load + act_per_gpu)
                 tp_used.add(gpu.device_string)
-
-            # Distribute weight shards across TP GPUs (round-robin by size descending)
-            comp_shards = sorted(
-                shard_sizes.get(comp_name, {}).items(),
-                key=lambda x: x[1], reverse=True,
-            )
-            gpu_loads = [0.0] * n_gpus
-            shard_map = {}
-            for shard_name, shard_bytes in comp_shards:
-                # Assign to GPU with least load (greedy balancing)
-                min_idx = gpu_loads.index(min(gpu_loads))
-                shard_map[shard_name] = tp_gpus[min_idx].device_string
-                gpu_loads[min_idx] += shard_bytes
             allocations[comp_name] = (f"tp:{','.join(g.device_string for g in tp_gpus)}", shard_map)
 
-        # Allocate regular components
-        remaining = [d for d in fresh if d.device_string not in tp_used] or [fresh[0]]
+        # Allocate regular components: on a card the split leaves free, else beside a shard — each against the part
+        # one component may hold, less what the plan already puts on that card
+        remaining = [d for d in fresh if d.device_string not in tp_used] + [d for d in fresh if d.device_string in tp_used]
         regular = [(n, m) for n, m in sorted_comps if n not in allocations]
 
         for comp_name, mem in regular:
             required = mem.weight_mb + mem.activation_mb
-            target = next((d for d in remaining if d.can_fit(required)), None)
+            target = next((d for d in remaining if required <= self._usable_mb(d) - d.used_mb), None)
             if target is None:
                 return None
             target.allocate(comp_name, required)

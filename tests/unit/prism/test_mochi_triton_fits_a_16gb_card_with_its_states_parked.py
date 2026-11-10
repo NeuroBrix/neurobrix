@@ -52,7 +52,7 @@ def _solve(monkeypatch, memory_mb, total_mb):
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config, no_door
     from neurobrix.core.prism import PrismSolver
     prof = copy.deepcopy(V100_16GB)
-    prof["devices"][0].update(memory_mb=memory_mb)
+    prof["devices"][0].update(memory_mb=memory_mb, runtime_total_mb=total_mb)   # the card as its runtime reads it
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, total_mb, 306, "an idle V100")

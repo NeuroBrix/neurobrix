@@ -1160,6 +1160,11 @@ class RuntimeExecutor:
                     'expert_cards': expert_cards,
                 }
 
+        for _n, _a in allocations.items():     # what each component executes under, as the strategy will read it
+            logger.debug(f"[Strategy] {_n}: {_a['strategy']} on {_a['device']}"
+                         + (f", experts held on {sorted(_a['expert_cards'])}" if _a['expert_cards'] else "")
+                         + (f", expert cache {_a['expert_cache_mb']:.0f} MB" if _a['expert_cache_mb'] else ""))
+
         # Get loading_mode from Prism plan (DATA-DRIVEN)
         loading_mode = getattr(self.plan, 'loading_mode', 'lazy')
 

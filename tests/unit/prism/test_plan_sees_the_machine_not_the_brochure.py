@@ -42,6 +42,8 @@ def _spec(*, unified: bool, memory_mb: int = 18186) -> DeviceSpec:
         architecture="apple_silicon" if unified else "ampere",
         brand=DeviceBrand.APPLE if unified else DeviceBrand.NVIDIA,
         unified_memory=unified,
+        # a discrete card states its runtime facts (rule 1); the scenarios read it whole, with no context of ours
+        runtime_total_mb=None if unified else memory_mb, runtime_context_mb=None if unified else 0,
     )
 
 

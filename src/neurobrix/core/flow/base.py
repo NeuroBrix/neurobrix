@@ -419,6 +419,18 @@ def _autoregressive_saved(flow: Dict[str, Any]) -> Optional[set]:
     return None
 
 
+def holds_every_component(topology: Dict[str, Any], engine: Optional[str], components) -> bool:
+    """True when a served session of this flow holds every one of `components` loaded together during a request: the
+    flow declares no phases (each component is held beside every other — what Prism prices then, the SUM), or one of
+    its served phases names them all. A daemon whose plan holds them together releases nothing between requests that
+    the next one does not load again: it serves warm (serving/engine.py)."""
+    phases = resident_together(topology, engine, served=True)
+    if phases is None:
+        return True
+    wanted = set(components)
+    return any(wanted <= set(p) for p in phases)
+
+
 #: flow type -> the components whose graph output the flow hands to the output boundary (the tensor
 #: the run saves). Prism prices the boundary's host bytes from the largest output among them; a flow
 #: type not here declares nothing and the largest output of ANY component bounds it.

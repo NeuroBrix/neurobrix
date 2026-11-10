@@ -157,6 +157,21 @@ copies over its torch pools (its paged cache is the engine's, torch-side: nbxten
 | serving/engine.py, serving/openai_api/routes.py | +4, +3 | the daemon's tier from its plan and profile; `usage.prompt_tokens_details.cached_tokens` |
 | core/flow/base.py, core/runtime/executor.py, config/system.yml | +3, +2, +3 | the tier handed to the flow; `serving.kv_host_tier_mb` (null = the computed budget) |
 
+## A routed model on two cards, planned and served at speed (2026-11-10): policy and the compiled engine's own loop
+
+The owner's order of 2026-11-10 02:49 (a served Qwen3-30B-A3B at 6.7 s a token): Prism's placement and budget rules,
+the daemon's warm/cold decision and the compiled engine's multi-device loop — planning, serving and the torch branch's
+execution, none of them a tensor mechanism of nbxtensor (the compiled engine's loop is torch-side; nbxtensor imports
+no torch, R33). Measured: 140 537 (main) to 140 626, +89.
+
+| file | lines | what it holds |
+|---|---|---|
+| core/prism/solver.py | +39 | a card whose runtime facts the profile lacks refused by name (`ProfileFactMissing`, let through the reading's handler); weight_sharding sized against `_usable_mb` with its split's real bytes and the head placed against what each card holds; a served cache on a card holding a zero3 component sized against the usable part, a routed component's expert-store floor counted as resident there; `_cost_multiplier_on` |
+| core/runtime/graph/compiled_sequence.py | +25 | a boundary op's outputs delivered on its planned card (an arena-reading op such as the fused MoE); a failed multi-device op's error names its placement and each input's producer |
+| core/flow/base.py | +12 | `holds_every_component`: a flow that holds every component together during a request |
+| serving/engine.py | +8 | the daemon serves such a plan warm |
+| core/runtime/executor.py | +5 | each component's strategy as it will execute, at -v |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
@@ -415,6 +430,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/core/module/tokenizer/sp_tokenizer.py | decode | the tokenizer protocol's decode, called by name on whichever tokenizer the container names |
 | wrapper | src/neurobrix/core/module/tokenizer/sp_tokenizer.py | vocab_size | the tokenizer protocol's vocabulary size, called by name on whichever tokenizer the container names |
 | wrapper | src/neurobrix/core/module/tokenizer/tiktoken_bpe.py | token_to_id | the tokenizer protocol's token lookup, called by name on whichever tokenizer the container names |
+| wrapper | src/neurobrix/core/prism/solver.py | ProfileFactMissing | the refusal of a fact the profile lacks (rule 1) as its own type, so the device reading's handler (a reading that cannot be taken is a shared pool) lets it through instead of swallowing it |
 | wrapper | src/neurobrix/core/prism/solver.py | get_allocation | the plan's lookup the flows ask through hasattr on any plan object |
 | wrapper | src/neurobrix/core/runtime/graph/execution_context.py | get_tensor | the execution context's protocol, called by name on either branch's context |
 | wrapper | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | get_cache_len | the KV cache wrapper's protocol shared with the Triton cache, called by name on either |

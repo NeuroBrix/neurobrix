@@ -88,6 +88,7 @@ V100_16GB = {           # the rack's `default-ff6008b7`, one V100-SXM2-16GB, 202
     "cpu": {"io_workers": 8, "model": "Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz", "cores": 40, "threads": 80,
             "ram_mb": 257530, "architecture": "x86_64", "features": ["avx2", "avx512f"]},
     "devices": [{"index": 0, "brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "memory_mb": 16384,
+                 "runtime_total_mb": 16151, "runtime_context_mb": 306,   # the profile's measured runtime facts
                  "compute_capability": "7.0", "supports_dtypes": ["float32", "float16"],
                  "architecture": "volta", "pcie_version": "3.0"}],
     "interconnect": {"groups": []},
