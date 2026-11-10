@@ -17,6 +17,7 @@ class FakeCache:
         self.k = [np.zeros((pages, H, TPP, D), np.float16) for _ in range(LAYERS)]
         self.v = [np.zeros((pages, H, TPP, D), np.float16) for _ in range(LAYERS)]
         self.pages, self.length, self._next = [], 0, 0
+        self.spilled = 0                        # positions a mid-decode spill moved to the host (none here)
 
     def _reserve(self, n):
         while len(self.pages) * TPP < n:
@@ -214,3 +215,18 @@ def test_the_budget_is_a_ceiling_a_park_allocates_one_slice_not_the_budget():
     _turn(tier, s, cache, list(range(40, 75)))                 # 4 whole pages
     _turn(tier, s, cache, [903, 904, 905])                     # parked: two more slices, still far below the ceiling
     assert tier.host.capacity == 6 and tier.parked_pages == 6
+
+
+def test_a_spilled_conversation_is_never_parked_and_the_spill_takes_what_the_parked_pages_leave():
+    """One host budget for the tier's parked pages and a decoding sequence's mid-decode spill (nbxtensor
+    memory/host_spill.py): the spill's share is the budget less what the parked pages hold; a spilled sequence (its
+    oldest positions are not in the card's pages) is neither parked nor replaced by a parked continuation."""
+    cache, s = FakeCache(), Session()
+    tier = KVTier(budget_mb=1, pinned=False, source="test", slice_positions=2 * TPP)
+    assert tier.spill_budget() == tier.budget_bytes                     # nothing parked: the whole budget
+    _turn(tier, s, cache, list(range(1, 42)))
+    _turn(tier, s, cache, list(range(500, 530)))                       # the first conversation parked
+    assert tier.parked_pages == 5 and tier.spill_budget() == tier.budget_bytes - tier.host_bytes() < tier.budget_bytes
+    cache.spilled = TPP
+    assert tier.park(list(range(500, 530)), cache) == 0
+    assert tier.prepare(s, cache, list(range(1, 42)) + [9]) == 0 and tier.parked_pages == 5

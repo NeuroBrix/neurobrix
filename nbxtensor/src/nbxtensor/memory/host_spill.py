@@ -5,8 +5,9 @@ card's as the reduce's last split.
 
 Per layer, K and V as float32 in the attention's own layout [H_kv, positions, D], written ONCE per spilled page: a
 per-step conversion and transpose cost 7x the math (measured 2026-11-10, 131 072 positions, M4 Pro). The price is twice
-the card's half-precision bytes per position; `budget_bytes` (the serving layer's, from the profile and the user's cap)
-bounds it, and a spill past it is refused by name. Grows by doubling up to the budget, never allocated at max_len.
+the card's half-precision bytes per position; `budget_bytes` (the serving layer's, from the profile and the user's cap:
+an int, or a callable giving the bytes the spill may hold now — the share of one host budget the KV tier's parked pages
+leave) bounds it, and a spill past it is refused by name. Grows by doubling up to the budget, never at max_len.
 """
 from __future__ import annotations
 
@@ -18,9 +19,9 @@ from nbxtensor.ops.host_decode_partial import host_decode_partial
 
 
 class HostSpill:
-    def __init__(self, num_layers: int, kv_heads: int, k_dim: int, v_dim: int, budget_bytes: int):
+    def __init__(self, num_layers: int, kv_heads: int, k_dim: int, v_dim: int, budget_bytes):
         self.num_layers, self.kv_heads, self.k_dim, self.v_dim = int(num_layers), int(kv_heads), int(k_dim), int(v_dim)
-        self.budget_bytes = int(budget_bytes)
+        self._budget = budget_bytes if callable(budget_bytes) else (lambda b=int(budget_bytes): b)
         self.k: List[Optional[np.ndarray]] = [None] * self.num_layers
         self.v: List[Optional[np.ndarray]] = [None] * self.num_layers
         self.held = [0] * self.num_layers                    # positions each layer holds
@@ -29,8 +30,12 @@ class HostSpill:
         """Host bytes one spilled position costs across every layer (float32 K and V)."""
         return 4 * self.kv_heads * (self.k_dim + self.v_dim) * self.num_layers
 
+    @property
+    def budget_bytes(self) -> int:
+        return int(self._budget())
+
     def reach(self) -> int:
-        """Positions the budget can hold."""
+        """Positions the budget can hold now."""
         return self.budget_bytes // self.position_bytes()
 
     @property

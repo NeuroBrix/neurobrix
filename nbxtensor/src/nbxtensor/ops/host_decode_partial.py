@@ -40,18 +40,10 @@ def host_decode_partial(q: np.ndarray, k: np.ndarray, v: np.ndarray, n_tokens: i
         return (np.zeros((heads, d_v), np.float32), np.full(heads, -np.inf, np.float32), np.zeros(heads, np.float32))
     from nbxtensor.backend.cpu.pool import parallel_for
     qg = q.astype(np.float32, copy=False).reshape(kv_heads, groups, d)          # query head h reads KV head h // groups
-    sc = np.float32(scale)
-
-    def piece(a: int, b: int) -> Partial:
-        # the positions [a, b) of every head: one partial, merged with the others below
-        s = np.matmul(qg, k[:, a:b].transpose(0, 2, 1)) * sc                    # [H_kv, groups, b - a]
-        m = s.max(axis=2)
-        p = np.exp(s - m[..., None])
-        return np.matmul(p, v[:, a:b]), m, p.sum(axis=2)                        # acc [H_kv, groups, D_v]
-
     # the positions cut over the pool's threads (the application's: NeuroBrix sets them from its hardware profile's
     # compute threads), inline under the threshold measured for this kind of work (backend/cpu/pool.py)
-    parts = parallel_for(n_tokens, piece, "host_decode_partial", probe=lambda n: _probe(n, kv_heads, groups, d, d_v))
+    run = _piece(qg, k, v, np.float32(scale))
+    parts = parallel_for(n_tokens, run, "host_decode_partial", probe=lambda n: _probe(n, kv_heads, groups, d, d_v))
     acc, m, l = parts[0]
     for a2, m2, l2 in parts[1:]:                                                # fixed order: deterministic
         mn = np.maximum(m, m2)
@@ -60,17 +52,23 @@ def host_decode_partial(q: np.ndarray, k: np.ndarray, v: np.ndarray, n_tokens: i
     return acc.reshape(heads, d_v), m.reshape(heads), l.reshape(heads)
 
 
-def _probe(n: int, kv_heads: int, groups: int, d: int, d_v: int):
-    """The work of `n` spilled positions, for the pool's threshold measurement: a callable of (start, stop)."""
-    rng = np.random.default_rng(0)
-    q = rng.standard_normal((kv_heads, groups, d)).astype(np.float32)
-    k = rng.standard_normal((kv_heads, n, d)).astype(np.float32)
-    v = rng.standard_normal((kv_heads, n, d_v)).astype(np.float32)
+def _piece(qg: np.ndarray, k: np.ndarray, v: np.ndarray, sc):
+    """The partial of positions [a, b) of every head (acc [H_kv, groups, D_v], m, l): one piece of the pool's cut."""
+    def piece(a: int, b: int) -> Partial:
+        s = np.matmul(qg, k[:, a:b].transpose(0, 2, 1)) * sc                    # [H_kv, groups, b - a]
+        m = s.max(axis=2)
+        p = np.exp(s - m[..., None])
+        return np.matmul(p, v[:, a:b]), m, p.sum(axis=2)
+    return piece
 
-    def run(a: int, b: int):
-        p = np.exp(np.matmul(q, k[:, a:b].transpose(0, 2, 1)))
-        return np.matmul(p, v[:, a:b])
-    return run
+
+def _probe(n: int, kv_heads: int, groups: int, d: int, d_v: int):
+    """The SAME work on `n` spilled positions, for the pool's threshold measurement (a cheaper stand-in measured a
+    threshold the real work did not have: 4 096 positions split slower on the rack, 2026-11-10)."""
+    rng = np.random.default_rng(0)
+    return _piece(rng.standard_normal((kv_heads, groups, d)).astype(np.float32),
+                  rng.standard_normal((kv_heads, n, d)).astype(np.float32),
+                  rng.standard_normal((kv_heads, n, d_v)).astype(np.float32), np.float32(d ** -0.5))
 
 
 def merge_partials(parts: Sequence[Optional[Partial]]) -> np.ndarray:

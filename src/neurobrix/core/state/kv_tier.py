@@ -58,8 +58,21 @@ class KVTier:
                         break
         return self.pool.take() if self.pool.free_pages else None
 
+    def host_bytes(self) -> int:
+        """Host memory the parked pages' slices hold now."""
+        return 0 if self.host is None else self.host.capacity * self.host.page_bytes
+
+    def spill_budget(self) -> int:
+        """The bytes a decoding sequence's mid-decode spill (nbxtensor memory/host_spill.py) may hold now: the same host
+        budget, less what the parked pages hold — one budget for both, never twice it. A spilled sequence is not parked
+        (below), so the tier grows only once its spill is cleared."""
+        return max(0, self.budget_bytes - self.host_bytes())
+
     def park(self, ids: Sequence[int], cache) -> int:
-        """The whole pages of `ids` the cache holds, parked (those not parked yet). Returns how many were copied."""
+        """The whole pages of `ids` the cache holds, parked (those not parked yet). Returns how many were copied. A
+        sequence that spilled mid-decode is not parked (its oldest positions are not in the card's pages): 0."""
+        if cache.spilled:
+            return 0
         tpp = cache.page_tokens
         whole = min(len(ids), cache.tier_length()) // tpp
         if whole == 0 or not self._ready(cache):
@@ -83,7 +96,10 @@ class KVTier:
 
     def prepare(self, kv_session, cache, prompt_ids: Sequence[int]) -> int:
         """Before a session's prefill: the cache's held conversation parked where the request leaves it, then the
-        parked continuation of `prompt_ids` restored. Returns the positions restored (0: none)."""
+        parked continuation of `prompt_ids` restored. Returns the positions restored (0: none). A spilled held sequence
+        is neither parked nor replaced by a parked one: the session's own prefix match keeps what it shares."""
+        if cache.spilled:
+            return 0
         held = list(kv_session.token_ids)
         common = 0
         while common < min(len(held), len(prompt_ids)) and held[common] == int(prompt_ids[common]):

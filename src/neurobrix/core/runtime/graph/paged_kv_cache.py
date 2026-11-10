@@ -37,6 +37,7 @@ class PagedKVCache:
         self.v_pools: Dict[int, torch.Tensor] = {}
         self.lens: Dict[int, int] = {}
         self._seq_len = 0
+        self.spilled = 0        # positions spilled to host memory mid-decode (the Triton cache's protocol; the KV tier reads it)
         self.holder = None      # the serving session whose positions the cache holds (core/state/kv_session), or None
 
     # -- capacity --------------------------------------------------------------------------------------------------
