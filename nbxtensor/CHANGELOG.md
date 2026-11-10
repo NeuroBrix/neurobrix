@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ## [0.1.1] - unreleased
+### Added
+- **`DeviceAllocator.peer_copy(dst_ptr, dst_dev, src_ptr, src_dev, nbytes)`**: a device-to-device copy on raw
+  pointers that touches its two devices only — the source synchronised, the pair's peer access granted once, the copy
+  issued under the destination and the destination synchronised before it returns; the destination stays selected
+  (the device found current is never restored). For a caller whose tensors are not the library's: PyTorch >= 2.10
+  creates a context on every visible card at its first GPU-to-GPU copy (306 MiB on cards a plan does not name,
+  measured 2026-11-10 on four V100), where this library's own transfer stays on the pair (measured the same day).
+  Returns whether direct peer access is in force.
+
+### Fixed
+- **A spilled prefill chunk's uploads select their device**: `memory/paged_kv` placed the blocks handed back to the
+  card, their masks and the merged result with `NBXTensor.from_numpy(x).to(device=...)`. `from_numpy` lands on the
+  CURRENT device and `.to("cuda:N")` moves nothing, so they were on the query's device only because an earlier call
+  had left it current. They now select it (`_upload`). No wrong placement was observed; on a cache whose layers live
+  on two cards it was one reordering away.
 ### Changed
 - **A prefill chunk reads the positions spilled to host memory through the card**: `memory/paged_kv`'s spilled chunk
   attention hands the spilled K / V back to the card in blocks (`HostSpill.blocks`, at most the card part's own key

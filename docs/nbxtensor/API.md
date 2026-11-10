@@ -222,6 +222,15 @@ class HostSpill(num_layers, kv_heads, k_dim, v_dim, budget_bytes)
     # truncate(length), clear(), length, nbytes()
 ```
 
+`nbxtensor.memory.allocator` — the raw device-to-device copy for memory that is not the library's
+
+```python
+DeviceAllocator.peer_copy(dst_ptr, dst_dev, src_ptr, src_dev, nbytes) -> bool
+    # touches the two devices only: src selected and synchronised, src -> dst peer access granted once, the copy
+    # issued under dst, dst synchronised (the caller may free the source at once); dst stays selected — the device
+    # found current is not restored. True: direct peer access in force; False: the driver stages it through the host.
+```
+
 `nbxtensor.memory.arena`
 
 ```python

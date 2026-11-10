@@ -156,3 +156,56 @@ def test_a_chunk_reads_the_spilled_positions_through_the_card_in_blocks_no_large
     assert spill.spilled > card_pages * PT                                  # more spilled than one block holds
     assert seen and all(n <= card_pages * PT and n <= positions for n, positions, _ in seen)
     assert max(held for _, _, held in seen) > card_pages * PT              # several blocks were needed, and merged
+
+
+def test_every_upload_of_a_spilled_chunk_selects_the_query_s_device_first(monkeypatch):
+    """`NBXTensor.from_numpy` lands on the CURRENT device and `.to("cuda:N")` moves nothing: a spilled chunk's uploads
+    (its blocks, their masks, its merged result) select the query's device themselves instead of trusting whatever a
+    call before them left current (found by the Dell reading the contract, 2026-11-10). What this would do if the code
+    were wrong: on a cache whose layers live on two cards, a block uploaded to the other card and read as the query's."""
+    from nbxtensor.memory import paged_kv
+    from nbxtensor.memory.paged_kv import chunk_attention
+    prompt, chunk, card_pages = 4 * PT, PT, 1
+    rng = np.random.default_rng(3)
+    q = rng.standard_normal((1, H, prompt, D)).astype(np.float16)
+    k = rng.standard_normal((1, HK, prompt, D)).astype(np.float16)
+    v = rng.standard_normal((1, HK, prompt, D)).astype(np.float16)
+    cache = _cache(card_pages)
+    log, real_set, real_from = [], DeviceAllocator.set_device, NBXTensor.from_numpy
+    monkeypatch.setattr(DeviceAllocator, "set_device", staticmethod(lambda d: (log.append(("set", int(d))), real_set(d))[1]))
+    spilled_uploads = []
+
+    def from_numpy(arr, *a, **kw):
+        if recording[0]:
+            spilled_uploads.append(log[-1] if log else None)
+        return real_from(arr, *a, **kw)
+    recording = [False]
+    monkeypatch.setattr(NBXTensor, "from_numpy", staticmethod(from_numpy))
+    real_spilled = paged_kv._chunk_attention_spilled
+
+    def spilled(cache_, layer, qq, *a, **kw):
+        qq_dev = int(qq._device_idx)
+        log.append(("set", -1))                                            # whatever was current is forgotten
+        recording[0] = True
+        try:
+            return real_spilled(cache_, layer, qq, *a, **kw)
+        finally:
+            recording[0] = False
+            wanted.append(qq_dev)
+    wanted = []
+    monkeypatch.setattr(paged_kv, "_chunk_attention_spilled", spilled)
+    from nbxtensor.ops import attention_wrappers
+    real_attention = attention_wrappers.scaled_dot_product_attention_wrapper
+
+    def attention(*args, **kw):                                            # every attention leaves ANOTHER device
+        out = real_attention(*args, **kw)                                  # current, as a cache on two cards may
+        log.append(("set", 99))
+        return out
+    monkeypatch.setattr(attention_wrappers, "scaled_dot_product_attention_wrapper", attention)
+    for a in range(0, prompt, chunk):
+        memo = {}
+        for layer in range(LAYERS):
+            cache.prefill(layer, real_from(k[:, :, a:a + chunk]), real_from(v[:, :, a:a + chunk]))
+            chunk_attention(cache, layer, real_from(q[:, :, a:a + chunk]), a, HK, D ** -0.5, 0.0, memo)
+    assert cache.spilled > 0 and spilled_uploads and wanted
+    assert all(u == ("set", wanted[0]) for u in spilled_uploads), spilled_uploads[:6]

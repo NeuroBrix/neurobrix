@@ -1933,6 +1933,32 @@ class DeviceAllocator:
             f"enable peer access {src_dev}->{dst_dev} failed (error {ret})")
 
     @staticmethod
+    def peer_copy(dst_ptr: int, dst_dev: int, src_ptr: int, src_dev: int, nbytes: int) -> bool:
+        """Copy `nbytes` of device memory at `src_ptr` (on `src_dev`) to `dst_ptr` (on `dst_dev`), raw pointers — for
+        a caller whose tensors are not this library's (the compiled engine hands torch's `data_ptr()`: PyTorch >= 2.10
+        puts a context on EVERY visible card at its first GPU-to-GPU copy, measured 2026-11-10).
+
+        Contract. It touches the two devices only: selects `src_dev`, synchronises it (the device-to-device memcpy does
+        not wait for what is queued on the source: it is enqueued on the calling device's stream — `memcpy_direct`),
+        grants `src_dev -> dst_dev` peer access once (`ensure_peer_access`), selects `dst_dev`, issues the copy and
+        synchronises `dst_dev` — so the caller may free or overwrite the source as soon as this returns. `dst_dev`
+        is left selected: the device found current is NOT restored (in a process that selected none the runtime
+        reports device 0, and selecting it would create a context there). Returns whether direct peer access is in
+        force; False is not an error — the driver stages the same copy through host memory, slower."""
+        dst_dev, src_dev, nbytes = int(dst_dev), int(src_dev), int(nbytes)
+        if nbytes < 0 or (nbytes and (not dst_ptr or not src_ptr)):
+            raise ValueError(f"peer_copy: {nbytes} bytes from {src_ptr:#x} (device {src_dev}) to {dst_ptr:#x} "
+                             f"(device {dst_dev})")
+        DeviceAllocator.set_device(src_dev)
+        DeviceAllocator.sync_device()
+        direct = DeviceAllocator.ensure_peer_access(src_dev, dst_dev)
+        DeviceAllocator.set_device(dst_dev)
+        if nbytes:
+            DeviceAllocator.memcpy(int(dst_ptr), int(src_ptr), nbytes, kind=3)
+            DeviceAllocator.sync_device()
+        return direct
+
+    @staticmethod
     def ensure_triton_device(device_idx: int):
         """Set GPU device for Triton JIT context. Zero torch. Universal.
 

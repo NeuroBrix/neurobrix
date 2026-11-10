@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - unreleased
 
+### Changed
+- Follows nbxtensor (an internal placement made explicit in the Triton engine's long-prompt path; no change of
+  result).
+
 ### Fixed
 - **`neurobrix serve` plans memory for the request it will get, not for a fixed pair.** The daemon planned every model
   as a batch of two in float16 — values written into it on its first day — whatever the model: a chat model was
