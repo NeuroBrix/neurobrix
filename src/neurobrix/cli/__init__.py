@@ -660,7 +660,7 @@ def main():
             if _rc:
                 sys.exit(int(_rc))
         elif args.command == 'run':
-            from neurobrix.cli.commands.run import cmd_run
+            from neurobrix.cli.commands.run import run_command as cmd_run
             # cmd_run returns a non-zero status on refusal paths (mode-flag
             # conflict, gate errors) — a loud refusal that exits 0 turns
             # every harness cell into a silent false-green (the tseq

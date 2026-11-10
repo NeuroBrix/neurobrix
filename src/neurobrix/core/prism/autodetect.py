@@ -358,6 +358,9 @@ def get_or_create_default_profile() -> str:
 
     hardware_id = f"default-{tag}"
     path = HARDWARE_DIR / f"{hardware_id}.yml"
+    from neurobrix.core.prism import intel_refusal
+    if path.exists() and intel_refusal.stale():       # an Intel refusal recorded under another driver / nbxtensor
+        path.unlink()                                  # version: the machine is detected again, the chip tried again
     if path.exists():
         _complete_measured_fields(path)
         return hardware_id
@@ -1305,6 +1308,11 @@ def _parse_xpu() -> List[Dict[str, Any]]:
                                      "installed for it) — `neurobrix doctor` names the packages"))
             continue
         taken.add(index)
+        from neurobrix.core.prism import intel_refusal
+        why = intel_refusal.recorded(f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}")
+        if why:                              # refused at run time under these versions: planned without, said
+            out.append(_refused(gpu, why))
+            continue
         out.append(_intel_device(index, facts[index], found, gpu))
     return out
 

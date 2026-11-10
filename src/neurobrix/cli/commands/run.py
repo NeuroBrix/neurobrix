@@ -517,6 +517,20 @@ def arm_replan(executor, execution_mode, container, hw_profile, input_config, ca
     executor.replan = Replan(is_device_oom=lambda e: in_chain(e, is_oom), record_growth=record, solve=solve)
 
 
+def run_command(args):
+    """`neurobrix run` as the command line enters it. An Intel GPU's refusal at run time (the experimental Level Zero
+    backend) is said by name, recorded, and the request started again once on the CPU (core/prism/intel_refusal.py);
+    anything else is the run's own."""
+    from neurobrix.core.prism import autodetect, intel_refusal
+    intel_refusal.announce()
+    try:
+        return cmd_run(args)
+    except Exception as exc:
+        if not intel_refusal.handle(exc, intel_refusal.planned_devices(autodetect.ACTIVE_HARDWARE_ID),
+                                    ["-m", "neurobrix"] + sys.argv[1:]):
+            raise
+
+
 def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
