@@ -244,6 +244,8 @@ parser. Measured: 140 836 to 140 868, +32.
 Point 9a's sections above were measured on their own base; on main c957cee3, rebased with the Mac's reasoning-close and
 D4 commits, the engine measures 140 667 to 141 025 (+358): the same files, policy as stated in each section.
 
+The served prefill chunk on an engine without certified times (core/prism/solver.py `_prefill_chunk`, +13, policy; 2026-11-10): 141 255 to 141 268.
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

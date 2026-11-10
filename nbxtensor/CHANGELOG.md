@@ -7,20 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-11-10
+### Changed
+- **Contributions are made under the NeuroBrix Contributor Assignment Agreement** (docs/legal/ of the neurobrix repository, an individual and an entity version): signed once by a comment on the first pull request, for every NeuroBrix project; the `NeuroBrix CLA` check on every pull request says who has yet to sign. CONTRIBUTING.md explains it.
+- **The authors' contact address is contact@neurobrix.org** (the package metadata), the project's address being neurobrix.org.
+
 ### Added
 - **A decoding sequence may outgrow the card's KV pages**: past `card_pages`, `PagedTritonKVCache` moves its oldest
   written pages to `memory.host_spill.HostSpill` (float32 in the attention's layout, bounded by a host budget) and keeps
   decoding; each step's attention over the spilled positions is computed on the host
   (`ops.host_decode_partial`) and joins the card's split partials in the same reduce launch — exact, the split-KV
   merge. Qwen3-30B's attention shape on an M4 Pro: 131 072 spilled positions cost 15 ms per layer and step.
-
-## [0.0.10] - 2026-11-10
-
-### Changed
-- **Contributions are made under the NeuroBrix Contributor Assignment Agreement** (docs/legal/ of the neurobrix repository, an individual and an entity version): signed once by a comment on the first pull request, for every NeuroBrix project; the `NeuroBrix CLA` check on every pull request says who has yet to sign. CONTRIBUTING.md explains it.
-- **The authors' contact address is contact@neurobrix.org** (the package metadata), the project's address being neurobrix.org.
-
-### Added
 - **`nbxtensor.ops.token_bitmask`**: a token bitmask applied to a decode step's fp32 logits in place (constrained
   decoding): every token whose bit is clear (bit v % 32 of int32 word v // 32, ceil(vocab / 32) words a row) set to
   -inf before the sampler; the mask on the logits' own device, the element-wise launch's certified tile; a mask of
