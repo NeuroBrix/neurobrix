@@ -397,6 +397,8 @@ class KVCacheAttentionWrapper:
             require_causal_frozen_mask(attn_mask, rows, rows, f"KV interceptor (layer {layer_idx}, prefill chunk)",
                                        align_lengths=True)
         self.cache.update(layer_idx, k, v, real=self._chunk_real)
+        if self.cache.spilled:
+            return self._prefill_over_spill(q, layer_idx, start, rows, scale)
         tpp = self.cache.page_tokens
         keys = -(-(start + rows) // tpp) * tpp
         k_full, v_full = self.cache.whole_pages(layer_idx, keys)
@@ -414,6 +416,40 @@ class KVCacheAttentionWrapper:
         return F.scaled_dot_product_attention(
             q, k_full, v_full, attn_mask=mask, dropout_p=dropout_p, is_causal=False, scale=scale,
             **({"enable_gqa": True} if k_full.shape[1] != q.shape[1] else {}))
+
+    def _prefill_over_spill(self, q, layer_idx: int, start: int, rows: int, scale) -> torch.Tensor:
+        """A prefill chunk of a sequence whose first positions spilled to host memory (R30 mirror of nbxtensor
+        memory/paged_kv._chunk_attention_spilled): the card's part over its own pages, causal at the card's start, in
+        torch with its rows' log-sum-exp; the host's over every spilled position (all precede the chunk) by the
+        library's host partial, the chunk's rows as more query rows of each KV head; merged by log-sum-exp — exact."""
+        cache = self.cache
+        tpp = cache.page_tokens
+        card_start = start - cache.spilled
+        keys = -(-(card_start + rows) // tpp) * tpp
+        k_card, v_card = cache._whole(layer_idx, keys)                       # [1, H_kv, keys, D]
+        heads, d = int(q.shape[1]), int(q.shape[3])
+        kv_heads = int(k_card.shape[1])
+        groups = heads // kv_heads
+        sc = float(scale) if scale is not None else d ** -0.5
+        qr = q.to(k_card.dtype).float()                                      # q as the card reads it
+        qg = qr[0].reshape(kv_heads, groups * rows, d)                       # row (h, r) = h * rows + r, head-major
+        allowed = torch.arange(keys, device=q.device)[None, :] <= (card_start + torch.arange(rows, device=q.device))[:, None]
+        mask = torch.zeros((rows, keys), device=q.device).masked_fill(~allowed, float("-inf")).repeat(groups, 1)
+        s = torch.matmul(qg, k_card[0].float().transpose(1, 2)) * sc + mask  # [H_kv, groups * rows, keys]
+        m = s.amax(dim=2)
+        m0 = torch.where(torch.isneginf(m), torch.zeros_like(m), m)
+        p = torch.exp(s - m0[..., None])
+        acc, l = torch.matmul(p, v_card[0].float()), p.sum(dim=2)
+        h_acc, h_m, h_l = (torch.from_numpy(x).to(q.device) for x in cache.host_spill.partial(
+            layer_idx, qr[0].reshape(heads * rows, d).cpu().numpy(), groups * rows, sc))
+        h_acc, h_m, h_l = (h_acc.reshape(kv_heads, groups * rows, -1), h_m.reshape(kv_heads, groups * rows),
+                           h_l.reshape(kv_heads, groups * rows))
+        mn = torch.maximum(m0, h_m)
+        c1 = torch.where(l > 0, torch.exp(m0 - mn), torch.zeros_like(l))
+        c2 = torch.where(h_l > 0, torch.exp(h_m - mn), torch.zeros_like(h_l))
+        den = l * c1 + h_l * c2
+        out = (acc * c1[..., None] + h_acc * c2[..., None]) / torch.where(den > 0, den, torch.ones_like(den))[..., None]
+        return out.reshape(1, heads, rows, -1).to(k_card.dtype)
 
     def _decode_over_spill(self, q, k_card, v_card, attn_mask, scale, layer_idx: int) -> torch.Tensor:
         """A decode step of a sequence whose oldest positions spilled to host memory: the card's partial over its

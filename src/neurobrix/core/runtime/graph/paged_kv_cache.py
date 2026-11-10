@@ -201,10 +201,14 @@ class PagedKVCache:
         """Layer `layer_idx`'s K / V `[B, H_kv, positions, D]` over its first `positions` positions, a whole number of
         pages, gathered through the page tables (the positions past the layer's length are whatever the slots hold:
         the caller masks them)."""
-        tpp = self.page_tokens
         if self.spilled:
             raise RuntimeError(f"ZERO FALLBACK: gathering layer {layer_idx}'s pages of a sequence whose first "
-                               f"{self.spilled} positions spilled to the host — a prefill chunk past the card's reach")
+                               f"{self.spilled} positions spilled to the host (the prefill chunk reads both parts)")
+        return self._whole(layer_idx, positions)
+
+    def _whole(self, layer_idx: int, positions: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """The card's first `positions` positions of the layer as whole pages (after a spill: counted from it)."""
+        tpp = self.page_tokens
         if positions % tpp or positions > len(self.tables[0].pages) * tpp:
             raise RuntimeError(f"ZERO FALLBACK: gathering {positions} positions of layer {layer_idx} as whole pages of "
                                f"{tpp}; the sequence holds {len(self.tables[0].pages)} pages")

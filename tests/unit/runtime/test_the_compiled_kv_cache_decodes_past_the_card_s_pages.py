@@ -76,3 +76,28 @@ def test_past_the_reach_is_refused_by_name():
     w = _wrapper(1, "cpu")
     with pytest.raises(RuntimeError, match="past the card's reach"):
         w.cache.update(0, torch.zeros(1, HK, 130, D, dtype=torch.float16), torch.zeros(1, HK, 130, D, dtype=torch.float16))
+
+
+@pytest.mark.parametrize("device", _devices())
+@pytest.mark.parametrize("prompt, chunk, card_pages", [(400, 64, 2), (300, 100, 3)])
+def test_a_prompt_past_the_card_prefills_chunk_by_chunk_over_both_parts(device, prompt, chunk, card_pages):
+    """A prompt longer than the card's pages in the plan's chunks: each chunk's attention over the card's pages and the
+    spilled ones equals causal attention over every position so far (fp64 oracle)."""
+    g = torch.Generator().manual_seed(prompt)
+    rnd = lambda *s: torch.randn(*s, generator=g).to(torch.float16).to(device)           # noqa: E731
+    w = _wrapper(card_pages, device)
+    q, k, v = rnd(1, H, prompt, D), rnd(1, HK, prompt, D), rnd(1, HK, prompt, D)
+    for a in range(0, prompt, chunk):
+        b = min(a + chunk, prompt)
+        for layer in range(LAYERS):
+            w.cache.update(layer, k[:, :, a:b], v[:, :, a:b])
+            if not w.cache.spilled:
+                continue
+            got = w._prefill_over_spill(q[:, :, a:b], layer, a, b - a, D ** -0.5)[0].cpu().double()
+            qq, kk, vv = (x.cpu().double()[0] for x in (q[:, :, a:b], k[:, :, :b], v[:, :, :b]))
+            kk, vv = kk.repeat_interleave(H // HK, 0), vv.repeat_interleave(H // HK, 0)
+            s = (qq @ kk.transpose(1, 2)) * D ** -0.5
+            causal = torch.arange(b)[None, :] <= (a + torch.arange(b - a))[:, None]
+            want = torch.softmax(s.masked_fill(~causal, float("-inf")), -1) @ vv
+            assert torch.allclose(got, want, atol=3e-3), (device, a, layer, (got - want).abs().max())
+    assert w.cache.spilled > 0
