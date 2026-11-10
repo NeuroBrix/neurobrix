@@ -302,3 +302,25 @@ one); trial L on the local 0.6.4 wheels. The new rule held: every sentence of th
 against the code and the tests by an agent that did not write it (the Mac: 15 promises, all held). Published: PyPI
 `nbxtensor` 0.0.9 and `neurobrix` 0.6.4 (the tested wheels, read back by sha256), GitHub and GitLab releases. PyPI
 trials L (Linux) and M (Mac, CPython 3.11, the macOS 14 wheels) green.
+
+## 2026-11-10 13:50 — NEUROBRIX 0.6.5, NBXTENSOR 0.1.0 AND NBXGRAMMAR 0.1.0 ARE PUBLISHED (the owner's GO, 12:52)
+
+The next useful version (the owner, 2026-11-09 18:58): the serving daemon re-plans after a device out-of-memory,
+constrained decoding on the OpenAI API (`response_format: json_schema`, forced tool calls) by NeuroBrix's own grammar
+engine, `/v1/embeddings` and an embedding family, the KV host tier and the mid-decode spill (a served context past the
+card, stated at start, `400 context_length_exceeded` past it), hybrid laptops described; with the owner's order of
+02:49 on the slowness of mixture-of-experts models on two cards (Qwen3-Coder-30B-A3B served 6.7 s → about 0.5 s a token,
+run 0.33 s). Three bricks, each its own version: the grammar engine became its own package and public repository,
+`nbxgrammar` 0.1.0 (Rust, std only, one wheel per platform: Linux x86_64 and aarch64, macOS arm64 and x86_64, Windows
+x86_64, built and smoke-tested by its CI, the Linux library byte-identical between the rack and the CI); nbxtensor left
+0.0.x for 0.1.0 (the owner, 12:57); neurobrix 0.6.5 pins both exactly, nbxgrammar behind the five platform markers
+(the Mac's condition, held: every pinned platform had its wheel on PyPI before the engine). The freeze `83732b95`
+(tagged at `e26bc5f1`, the CHANGELOG heading only): plans 0 of 196 moved in execution against 0.6.3, the five shas
+identical in the torch-free environment, the whole suite once and the device suite (one regression found — a test
+whose reference the tier restored into — fixed, and the compiled engine's park found missing and added), the serve/KV
+cells of both engines tier on and off, trials L-G and M+G on the final wheels; every promise reread by the Mac (README,
+docs, CHANGELOGs, notes; the owner's rule: Intel and AMD GPUs are targets, integrated Intel GPUs described and named,
+never "driven"). Published, each read back: PyPI `nbxgrammar` 0.1.0 (six files), `nbxtensor` 0.1.0, `neurobrix` 0.6.5
+(publish.yml); tags `v0.6.5`, `nbxtensor-v0.1.0`, nbxgrammar `v0.1.0`; GitHub and GitLab releases; the organisation
+page. PyPI trials L (Linux, both legs) and M (Mac, CPython 3.11, nothing local) green: constrained decoding installed by
+`pip install neurobrix` and answering a valid JSON.
