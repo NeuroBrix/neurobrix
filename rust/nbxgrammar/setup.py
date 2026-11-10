@@ -24,7 +24,14 @@ class BuildWithCrate(build_py):
     def run(self):
         target = os.environ.get("NBXGRAMMAR_CARGO_TARGET")
         cmd = ["cargo", "build", "--release", "--locked"] + (["--target", target] if target else [])
-        subprocess.run(cmd, cwd=ROOT, check=True)
+        # the library carries no path of the building machine, and two builds of one tree give one library: the
+        # crate's root remapped in any embedded source path, and on macOS an @rpath install name (the default is the
+        # absolute build path, which also moved the UUID and the signature from one directory to another)
+        flags = [f"--remap-path-prefix={ROOT}=nbxgrammar"]
+        if sys.platform == "darwin":
+            flags.append(f"-Clink-arg=-Wl,-install_name,@rpath/{LIB}")
+        env = dict(os.environ, RUSTFLAGS=" ".join(filter(None, [os.environ.get("RUSTFLAGS", "")] + flags)))
+        subprocess.run(cmd, cwd=ROOT, check=True, env=env)
         built = ROOT / "target" / (target or "") / "release" / LIB
         shutil.copy2(built, ROOT / "python" / "nbxgrammar" / LIB)
         super().run()
