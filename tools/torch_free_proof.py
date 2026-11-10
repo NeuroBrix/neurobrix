@@ -39,11 +39,12 @@ import sys
 import time
 from pathlib import Path
 
+from one_name import cli_name  # the one name a command line passes (tools/one_name.py)
+
 RECORDER = '''\
 """Recorder of torch import attempts (tools/torch_free_proof.py): every `import torch` / `torch.*` attempted in this
 process is appended to $NBX_TORCH_ATTEMPTS with its call site, then left to fail as it would."""
 import importlib.abc, json, os, sys, traceback
-from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 
 
 class _TorchAttempts(importlib.abc.MetaPathFinder):
@@ -127,6 +128,7 @@ def main(argv=None) -> int:
     ap.add_argument("--command", action="append", default=[])
     a = ap.parse_args(argv)
     tree, out = Path(a.tree).resolve(), Path(a.out).resolve()
+    sys.path.insert(0, str(tree / "src"))       # the tree's engine: `cli_name` reads its name record
     (out / "recorder").mkdir(parents=True, exist_ok=True)
     (out / "recorder" / "sitecustomize.py").write_text(RECORDER)
     attempts = out / "torch_attempts.jsonl"
