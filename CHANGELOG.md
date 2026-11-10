@@ -10,13 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.6] - unreleased
 
 ### Changed
-- **An Intel GPU that refuses at run time is said by name, and the model runs on the CPU** (the Intel backend is
-  experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): when the chip or its Level Zero
-  driver refuses a call, `neurobrix run` prints which call failed and why (with the driver's build log), remembers the
-  chip as refused under that driver and nbxtensor version, and starts the request again once on the CPU, saying so in
-  its first line and in the plan; `neurobrix serve` reloads once on the CPU plan (a request that met the refusal is
-  answered with it and can be sent again). Another driver or nbxtensor version tries the chip again. `neurobrix doctor`
-  shows the label and what was refused; the new "Intel GPU report" issue template collects what happened on your card.
+- **An Intel GPU that refuses at run time is said by name, and the model runs without it** (the Intel backend is
+  experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): when the Level Zero driver says
+  the chip cannot do what was asked (a kernel it does not build, an unsupported feature or version), `neurobrix run`
+  prints which call failed and why (with the driver's build log), remembers THAT chip as refused under that driver and
+  nbxtensor version, and starts the request again once, planned without it (on the CPU when it was the only device),
+  saying so in its first line and in the plan; `neurobrix serve` loads the model again once the same way (a request that
+  met the refusal is answered with it and can be sent again). A profile given with `--hardware` is never replaced: the
+  refusal says what to do. Any other error (a lost device, memory) stays the run's own, named. Another driver or
+  nbxtensor version tries the chip again. `neurobrix doctor` shows the label and what was refused; the new "Intel GPU
+  report" issue template collects what happened on your card.
 
 ### Fixed
 - **A run touches only the cards its plan names**: on a machine with several GPUs, a run planned on one card also

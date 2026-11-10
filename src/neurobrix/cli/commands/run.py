@@ -523,12 +523,15 @@ def run_command(args):
     anything else is the run's own."""
     from neurobrix.core.prism import autodetect, intel_refusal
     intel_refusal.announce()
+    autodetect.ACTIVE_HARDWARE_ID = None       # this run's: set once its profile is chosen (cmd_run)
     try:
         return cmd_run(args)
     except Exception as exc:
-        if not intel_refusal.handle(exc, intel_refusal.planned_devices(autodetect.ACTIVE_HARDWARE_ID),
-                                    ["-m", "neurobrix"] + sys.argv[1:]):
-            raise
+        # does not return when it starts the request again; a profile given with --hardware is never replaced, and
+        # a refusal before any profile was chosen names no device: the error stands
+        intel_refusal.handle(exc, autodetect.ACTIVE_HARDWARE_ID, bool(getattr(args, "hardware", None)),
+                             ["-m", "neurobrix"] + sys.argv[1:])
+        raise
 
 
 def cmd_run(args):
@@ -774,8 +777,9 @@ def cmd_run(args):
     # vendor file states; the loader's rate is measured by the loader itself at its first real load (S2, 2026-10-27)
     from neurobrix.core.prism import autodetect as _autodetect
     from neurobrix.core.prism.host_footprint import engine_of as _engine_of
+    _autodetect.ACTIVE_HARDWARE_ID = hardware_id       # the profile this run's loaders measure themselves into (set
+    # before the first device is touched: a device's refusal there names the profile that planned it)
     _autodetect.ensure_measured_facts(hardware_id, _engine_of(execution_mode), container_dir=cache_path)
-    _autodetect.ACTIVE_HARDWARE_ID = hardware_id       # the profile this run's loaders measure themselves into
     hw_profile = load_profile(hardware_id)
     log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 

@@ -42,7 +42,8 @@ class LevelZeroDriver(_ModuleDriver):
 
     def _check(self, rc: int, what: str) -> None:
         if rc != 0:
-            raise IntelDeviceError(f"NeuroBrix launcher: {what} failed ({result_name(rc)})", what, rc)
+            raise IntelDeviceError(f"NeuroBrix launcher: {what} failed ({result_name(rc)})", what, rc,
+                                   device=self.rt._current)
 
     def target(self):
         """`GPUTarget("xpu", <properties>, 32)` as Intel's driver builds it (driver.py `_construct_target`), torch- and
@@ -137,7 +138,8 @@ class LevelZeroDriver(_ModuleDriver):
                 grf_chosen = True
             if rc != 0:
                 raise IntelDeviceError(f"NeuroBrix launcher: zeModuleCreate failed ({result_name(rc)}) for {name}: "
-                                       f"{text.strip()[:600]}", "zeModuleCreate", rc, text.strip())
+                                       f"{text.strip()[:600]}", "zeModuleCreate", rc, text.strip(),
+                                       device=self.rt._current)
             k, props = self._kernel(mod, name)
             if props.spillMemSize > _SPILL_RETRY_BYTES and not grf_chosen:
                 rc, mod2, text = self._module(binary, f"{build_flags} {_GRF_RETRY_FLAG}".strip())

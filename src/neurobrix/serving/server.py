@@ -286,27 +286,34 @@ class ServingDaemon:
         self._engine.hardware_id = get_or_create_default_profile()
 
     def _reload_after_intel_refusal(self, exc: BaseException) -> Optional[str]:
-        """An Intel GPU's refusal (nbxtensor's IntelDeviceError in `exc`'s chain) on the daemon, called on the engine's
-        thread: said by name, recorded, the machine detected again and the model loaded ONCE on the plan it then gets
-        (the CPU's: the chip is a refused device there). Returns the sentence; None when `exc` holds no such refusal,
-        when the daemon already reloaded after one, or when its profile was given (`--hardware`: the user's)."""
+        """An Intel GPU's refusal (core/prism/intel_refusal.py: nbxtensor's IntelDeviceError in `exc`'s chain, with a
+        result that says the chip cannot do it, naming a device this daemon's profile plans) — called on the engine's
+        thread: said by name, recorded, the machine detected again and a NEW engine loaded once on the plan it then
+        gets; the refused device's engine is released only once the new one is loaded, so a reload that fails leaves
+        the daemon as it was (its error raised: the caller's). Returns the sentence; None when there is no such
+        refusal, when the daemon already reloaded after one, or when its profile was given (`--hardware`)."""
         from neurobrix.core.prism import intel_refusal
         err = intel_refusal.intel_error(exc)
-        if err is None or self._intel_refused or not self._auto_hardware:
+        if err is None or err.result not in intel_refusal.CANNOT or self._intel_refused or not self._auto_hardware:
+            return None
+        old = self._engine
+        devices = intel_refusal.refused_devices(intel_refusal.planned_devices(old.hardware_id), err)
+        if not devices:
             return None
         self._intel_refused = True
-        old = self._engine
-        said = intel_refusal.sentence(intel_refusal.planned_devices(old.hardware_id), err)
+        said = intel_refusal.sentence(devices, err, "the daemon loads the model again without it.")
         _log.warning(f"[Daemon] {said}")
-        intel_refusal.record(intel_refusal.planned_devices(old.hardware_id), f"refused at run time: {err.call}: {err.result}")
+        intel_refusal.record(devices, f"refused at run time: {err.call}: {err.result}", old.hardware_id)
+        new = type(old)(old.model_name, None, old.mode)
+        from neurobrix.core.prism.autodetect import get_or_create_default_profile
+        new.hardware_id = get_or_create_default_profile()
+        new.load()
+        self._engine = new
         try:
             old.unload()
-        except Exception as e:                     # a half-loaded engine on a refused device: said, the reload goes on
+        except Exception as e:                     # the refused device's engine: its release failing is said, not fatal
             _log.warning(f"[Daemon] releasing the refused device's engine: {e}")
-        self._engine = type(old)(old.model_name, None, old.mode)
-        self._resolve_hardware()
-        self._engine.load()
-        _log.warning(f"[Daemon] reloaded on {self._engine.hardware_id} after the Intel GPU's refusal")
+        _log.warning(f"[Daemon] reloaded on {new.hardware_id} after the Intel GPU's refusal")
         return said
 
     def served_name(self) -> str:
@@ -691,8 +698,12 @@ class ServingDaemon:
                     result = work()
                 except Exception as e:
                     traceback.print_exc()
-                    said = self._reload_after_intel_refusal(e)     # on the worker: the daemon's engine thread
-                    error = f"{said} This request was not served: send it again." if said else str(e)
+                    try:                                           # on the worker: the daemon's engine thread
+                        said = self._reload_after_intel_refusal(e)
+                        error = f"{said} This request was not served: send it again." if said else str(e)
+                    except Exception as e2:                        # the reload itself failed: both are the answer
+                        traceback.print_exc()
+                        error = f"{e}; and the reload after the Intel GPU's refusal failed: {e2}"
                 finally:
                     honoured = decode_stop.honoured_at()
                     decode_stop.unbind()

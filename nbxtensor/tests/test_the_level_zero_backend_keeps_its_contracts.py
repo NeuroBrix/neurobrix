@@ -413,7 +413,7 @@ def test_a_level_zero_failure_is_a_typed_refusal_naming_the_call_and_the_result(
     with pytest.raises(Z.IntelDeviceError) as e:
         d.load(b"\x03\x02\x23\x07spirv", "k", 0)
     err = e.value
-    assert isinstance(err, RuntimeError) and err.call == "zeModuleCreate"
+    assert isinstance(err, RuntimeError) and err.call == "zeModuleCreate" and err.device == d.rt._current == 0
     assert err.result == Z.result_name(0x70000004) and "k" in str(err) and err.result in str(err)
     with pytest.raises(Z.IntelDeviceError) as e:
         d._check(0x70000001, "zeCommandListAppendLaunchKernel")
