@@ -21,7 +21,7 @@ distributed through the [NeuroBrix Hub](https://neurobrix.org/models).
 
 <p align="center">
   <a href="https://neurobrix.org/models">Hub</a> &nbsp;|&nbsp;
-  <a href="https://docs.neurobrix.es">Documentation</a> &nbsp;|&nbsp;
+  <a href="https://docs.neurobrix.org">Documentation</a> &nbsp;|&nbsp;
   <a href="https://github.com/NeuroBrix/neurobrix/releases">Releases</a> &nbsp;|&nbsp;
   <a href="https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIBUTING.md">Contributing</a> &nbsp;|&nbsp;
   <a href="https://gitlab.com/neurobrix/neurobrix">GitLab mirror</a>
@@ -408,7 +408,7 @@ not filed as public issues.
 - Issues and pull requests: [GitHub](https://github.com/NeuroBrix/neurobrix/issues), mirrored on
   [GitLab](https://gitlab.com/neurobrix/neurobrix)
 - Model hub: [neurobrix.org/models](https://neurobrix.org/models)
-- Documentation: [docs.neurobrix.es](https://docs.neurobrix.es) and the [docs/](./docs) directory
+- Documentation: [docs.neurobrix.org](https://docs.neurobrix.org) and the [docs/](./docs) directory
 - Building applications and coding agents: [docs/BUILD_WITH_AGENTS.md](./docs/BUILD_WITH_AGENTS.md)
 - Roadmap: [docs/roadmap.md](./docs/roadmap.md)
 - Changes: [CHANGELOG.md](./CHANGELOG.md)
