@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-11
+
+A corrective version: it follows nbxtensor 0.1.2, which closes a defect of the Apple backend by which a result could
+be wrong without an error.
+
 ### Fixed
+- **Apple: a mixture-of-experts result could be wrong without an error, in a store the engine does not build there.**
+  nbxtensor's Metal driver could answer an address read through a pinned table from the wrong buffer (its 0.1.2
+  [changelog](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md) has the mechanism). What it could
+  reach: the expert store that COPIES experts into an arena, on Apple only. It was found by a test that builds that
+  store directly; the engine does not build it on Apple, where a unified device's store binds its experts in place.
+  It was not reached on any user path we could run: with the published 0.6.6 through `neurobrix serve`, on the two
+  plans the mixture-of-experts model that fits a 24 GB Mac takes (resident, and streamed layer by layer), no pinned
+  address out of two million was answered past its buffer. The expert-store plan itself was not run on Apple
+  hardware (its models are 31 GB), so this says what was observed, not that no model could be affected. CUDA is not
+  concerned. The driver now refuses such an address by name.
 - **The expert store keeps its residency on the card only where the backend's kernels can read it.** That decode
   path launches over tables of device addresses taken from the host, which holds on CUDA and HIP; it was armed for
   any Triton store that copies half-precision experts, whatever the backend. No Apple run reached it (an Apple
@@ -6611,7 +6626,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.6...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.7...main
+[0.6.7]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.3...v0.6.4

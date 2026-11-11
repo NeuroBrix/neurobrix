@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-11
+
 ### Added
 - `backend.capabilities.backend_kernels_read_data_ptr()`: whether a tensor's `data_ptr()` is the address a kernel
   dereferences, stated per backend (CUDA and HIP yes; Metal no — a kernel there reads a pinned wrap's address,
@@ -375,7 +377,8 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.9...v0.1.0
 [0.0.8]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.5...v0.0.8
