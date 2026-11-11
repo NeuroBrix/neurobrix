@@ -53,7 +53,24 @@ class Vmm:
         self._prop = _Prop()
         self._prop.type = _ALLOC_PINNED
         self._prop.location = _Loc(_LOC_DEVICE, self.device)
-        self._access = _Access(_Loc(_LOC_DEVICE, self.device), _PROT_RW)
+        self._access = self._reachable_from()
+
+    def _reachable_from(self):
+        """The access grant of every chunk this device maps: the device itself, then every other device of the process
+        that can reach it as a peer (`cuDeviceCanAccessPeer`). A VMM mapping is readable ONLY from the devices its
+        grant names — enabling peer access between two contexts does nothing for it — so a chunk granted to its owner
+        alone could not be copied card to card: `cudaMemcpy` answered "invalid value" for any tensor of the expandable
+        range (a dense model split over two cards died at its first hand-off of more than a pool block, 2026-11-11;
+        NVIDIA's statement of the rule: forums.developer.nvidia.com/t/148875)."""
+        count, owner = ctypes.c_int(0), ctypes.c_int()
+        peers = []
+        if self.lib.cuDeviceGetCount(ctypes.byref(count)) == 0 and self.lib.cuDeviceGet(ctypes.byref(owner), self.device) == 0:
+            for other in range(count.value):
+                dev, can = ctypes.c_int(), ctypes.c_int(0)
+                if (other != self.device and self.lib.cuDeviceGet(ctypes.byref(dev), other) == 0
+                        and self.lib.cuDeviceCanAccessPeer(ctypes.byref(can), dev, owner) == 0 and can.value == 1):
+                    peers.append(other)
+        return (_Access * (1 + len(peers)))(*(_Access(_Loc(_LOC_DEVICE, d), _PROT_RW) for d in (self.device, *peers)))
 
     @staticmethod
     def load(libs) -> Optional[object]:
@@ -105,8 +122,8 @@ class Vmm:
                                ctypes.c_ulonglong(handle), ctypes.c_ulonglong(0))
         if rc != 0:
             return rc
-        rc = self.lib.cuMemSetAccess(ctypes.c_uint64(va), ctypes.c_size_t(nbytes), ctypes.byref(self._access),
-                                     ctypes.c_size_t(1))
+        rc = self.lib.cuMemSetAccess(ctypes.c_uint64(va), ctypes.c_size_t(nbytes), self._access,
+                                     ctypes.c_size_t(len(self._access)))
         if rc != 0:
             self.lib.cuMemUnmap(ctypes.c_uint64(va), ctypes.c_size_t(nbytes))
         return rc

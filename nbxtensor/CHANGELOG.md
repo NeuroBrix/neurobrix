@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it before copying a re-bound weight onto its recorded buffer.
 
 ### Fixed
+- **A tensor of a card's expandable pool can be handed to another card.** The pool grows by mapping chunks into one
+  virtual range; a mapped chunk is readable only from the devices its access grant names, and the grant named the
+  owning card alone. Any card-to-card copy of a tensor living in the range failed (`cudaMemcpy failed rc=1 (kind=3)`);
+  only small tensors, held in ordinary blocks, crossed. Each chunk is now granted to its card and to every card that
+  can reach it as a peer. One card: nothing changes.
 - **A routed layer whose experts sit on two cards is read at the right experts.** `memory.pointer_tables.build_ptr_tables`
   gave each card a table of its own experts alone, packed, while the grouped GEMM reads a table at the expert's number
   in the layer: on a card that does not hold experts 0..n-1 it read another expert's weights, or past the table's end.

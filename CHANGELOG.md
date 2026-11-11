@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pointer-table fix — and the shares are added per token); and the decode cache was planned against the room of both
   cards while it lives on the first (it is now sized against that card and what it already holds).
 
+- **A dense model split over two cards runs.** With a plan that puts a model's blocks on two cards
+  (GLM-4.1V-9B-Thinking on two 16 GB cards), the Triton engine stopped at the first hand-off between the cards with
+  `cudaMemcpy failed rc=1 (kind=3)` — in 0.6.7 too. The cause is in the tensor library (a tensor of the expandable
+  pool could not be copied card to card); nbxtensor's fix is in this version.
+
 ## [0.6.7] - 2026-11-11
 
 A corrective version: it follows nbxtensor 0.1.2, which closes a defect of the Apple backend by which a result could
