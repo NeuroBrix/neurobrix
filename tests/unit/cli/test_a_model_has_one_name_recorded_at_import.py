@@ -150,3 +150,22 @@ def test_the_command_line_refuses_the_entry_name_of_a_recorded_model_in_one_line
     assert p.returncode == 1, p.stderr
     assert p.stderr.strip().splitlines() == [
         "Error: the model installed as Kokoro-82M is named hexgrad/Kokoro-82M: use --model hexgrad/Kokoro-82M"], p.stderr
+
+
+def test_a_name_that_leads_to_a_recorded_entry_gets_the_one_message_and_not_found_lists_what_run_accepts(cache):
+    """The new user's three tries (2026-11-11, on the published 0.6.5): the name typed at `import` answered "not
+    found" with a list of FOLDER names, each of which `run` then refused. What this test does if the code is wrong:
+    with the list read from the folders the second assertion fails; with only a bare directory name refused, the
+    organisation-prefixed one returns "not found" and the first fails."""
+    (cache / "Sana_1600M_1024px_MultiLing").mkdir()
+    (cache / "Sana_1600M_1024px_MultiLing" / "manifest.json").write_text(json.dumps({"model_name": "x", "family": "image"}))
+    names.record_name(cache / "Sana_1600M_1024px_MultiLing", "Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers")
+    names.record_name(cache / "TinyLlama-1.1B-Chat-v1.0", "TinyLlama/TinyLlama-1.1B-Chat-v1.0")
+    for typed in ("Efficient-Large-Model/Sana_1600M_1024px_MultiLing", "Sana_1600M_1024px_MultiLing"):
+        with pytest.raises(names.NameRefused, match="use --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers"):
+            names.resolve(cache, typed)
+    assert names.accepted_names(cache) == ["Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers", "Kokoro-82M",
+                                           "TinyLlama/TinyLlama-1.1B-Chat-v1.0"]
+    for accepted in names.accepted_names(cache):                    # every listed name is one `--model` takes
+        names.resolve(cache, accepted)
+    assert names.resolve(cache, "Someone/Unknown") == ("Someone/Unknown", None)

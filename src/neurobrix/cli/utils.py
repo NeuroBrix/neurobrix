@@ -102,11 +102,8 @@ def find_model(model_name: str) -> Path:
         return cache_model
 
     # Not found — provide helpful error
-    available = []
-    if CACHE_DIR.exists():
-        for model_dir in sorted(CACHE_DIR.iterdir()):
-            if model_dir.is_dir() and (model_dir / "manifest.json").exists():
-                available.append(f"  - {model_dir.name}")
+    from neurobrix.nbx.names import accepted_names
+    available = [f"  - {name}" for name in accepted_names(CACHE_DIR)]     # the names --model accepts, never folders
 
     error_msg = f"Model '{model_name}' not found.\n"
     if available:

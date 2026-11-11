@@ -82,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A chat model's output layer is no longer counted several times over in the memory plan** on the PyTorch engine
   (six times its real size for a 151 936-token vocabulary): the plan reserved copies of the vocabulary projection's
   weight that the engine never makes there.
+- **A model has one name everywhere, and every message says it.** After `neurobrix import`, `run --model` with
+  another name that leads to the installed model — its folder name, or the name typed at `import` when the hub
+  records the model under another one (`Efficient-Large-Model/Sana_1600M_1024px_MultiLing` is
+  `Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers`) — answers with one message naming the name to use;
+  it answered "not found" followed by a list of folder names that `run` then refused, three tries for a new user.
+  The "installed models" list now prints the names `--model` accepts, and `import` says when the hub's name is not
+  the one typed.
 - **`--reference-audio` and `--reference-image` are refused by name instead of being ignored.** `neurobrix run`
   accepted both and no model read them: a request to clone a voice from a recording ran and spoke with the model's
   own voice, as if the flag were absent. Cloning a voice from a reference and conditioning on a style image are not

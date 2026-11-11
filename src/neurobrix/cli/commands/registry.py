@@ -582,7 +582,7 @@ def _import_body(args):
     else:
         log.debug(f"   Store: {store_path} (kept — use --no-keep to save {format_size(actual_size)})")
     log.debug(f"Installed in the cache entry {_declared}, named {hub_name} (recorded beside its manifest)")
-    print(f"Installed {hub_name} · run: {_suggest_run_command(hub_name, cache_path)}")
+    print(_installed_line(hub_name, f"{org}/{name}", cache_path))
     log.debug(f"Remove with: neurobrix remove {_declared}")
     _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path),
         store=None if args.no_keep else str(store_path))
@@ -636,6 +636,13 @@ def _strip_build_stamp(stem: str) -> str:
     Anything comparing the two must normalise first.
     """
     return re.sub(r"\.\d{8}T\d{6}$", "", stem)
+
+
+def _installed_line(hub_name: str, asked: str, cache_path) -> str:
+    """What `import` says last: the model's one name and the command that runs it — and, first, that the hub names the
+    model otherwise than it was asked, when it does (the name typed is then not one `run` accepts)."""
+    other = "" if hub_name.lower() == asked.lower() else f"The hub names this model {hub_name} (asked: {asked}).\n"
+    return f"{other}Installed {hub_name} · run: {_suggest_run_command(hub_name, cache_path)}"
 
 
 def _hub_names_of_unrecorded(entries) -> dict:
@@ -872,8 +879,8 @@ def _remove_body(args, record):
         # Show what's available
         available = []
         if CACHE_DIR.exists():
-            available += [f"{d.name} (cache)" for d in CACHE_DIR.iterdir()
-                         if is_installed_model_dir(d)]
+            from neurobrix.nbx.names import accepted_names
+            available += [f"{n} (cache)" for n in accepted_names(CACHE_DIR)]
         for nbx_file in (STORE_DIR.glob("*.nbx") if STORE_DIR.exists() else []):
             available.append(f"{nbx_file.stem} (store)")
         log.error(f"Error: model '{model_name}' not found."

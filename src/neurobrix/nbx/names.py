@@ -99,20 +99,28 @@ def name_of(cache: Path, entry_name: str) -> str:
     return rec if rec is not None else entry_name
 
 
+def accepted_names(cache: Path) -> list:
+    """The name `--model` accepts for each installed entry, sorted: what a "not found" answer lists."""
+    return sorted(name_of(cache, entry.name) for entry in _entries(Path(cache)))
+
+
 def resolve(cache: Path, asked: str) -> Tuple[str, Optional[str]]:
     """The cache entry a user's model name designates, and the migration note to say (None when the name is
-    recorded). A recorded entry asked by its directory name is refused (`NameRefused`) naming its hub name. A name
-    no entry carries is returned as asked, for the caller's own "not found" answer."""
+    recorded). A recorded entry asked by another name that leads to it — its directory name, or that name behind an
+    organisation (`import` takes names the hub answers under another one: `<org>/Sana_1600M_1024px_MultiLing` is
+    recorded as `<org>/Sana_1600M_1024px_MultiLing_diffusers`) — is refused (`NameRefused`) naming its hub name: one
+    message, whatever was typed. A name no entry carries is returned as asked, for the caller's "not found" answer."""
     cache = Path(cache)
     for entry in _entries(cache):
         if recorded_name(entry) == asked:
             return entry.name, None
-    entry = cache / asked
-    if "/" not in asked and entry.is_dir() and (entry / "manifest.json").exists():
+    entry = cache / asked.rsplit("/", 1)[-1]
+    if entry.is_dir() and (entry / "manifest.json").exists():
         rec = recorded_name(entry)
         if rec is not None:
             raise NameRefused(asked, rec)
-        return asked, migration_note(asked)
+        if "/" not in asked:
+            return asked, migration_note(asked)
     return asked, None
 
 
