@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the second request on, every token copied those weights from host memory again. A replayed step now puts
   them back first. Later requests run at 0.16 s a token there.
 
+- **An answer no longer ends with a tool-call marker.** Through the OpenAI-compatible server, a model that wrote
+  its dialect's opening marker (`<tool_call>`) after its last sentence and then ended the turn had that bare marker
+  returned as the end of its answer. An opening marker with nothing after it is no longer part of the content; a
+  block with a body that does not read as a call is still returned whole, as before.
+
 ## [0.6.7] - 2026-11-11
 
 A corrective version: it follows nbxtensor 0.1.2, which closes a defect of the Apple backend by which a result could

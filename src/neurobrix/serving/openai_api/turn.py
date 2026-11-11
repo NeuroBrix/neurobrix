@@ -11,7 +11,8 @@ The decode loop hands token ids; this reader turns them into the three channels 
 Text is only released once it is STABLE: the decode of the ids so far and the decode one id earlier agree on it, and
 it ends on a complete character. So the only text held back is what the last token may still change (a byte-level
 piece, a merged space) plus any suffix that could be the start of a marker — a few tokens, never the turn. A block
-that opened like a tool call but does not parse is released as content, never dropped.
+that opened like a tool call but does not parse is released as content, never dropped (an opening marker the turn
+ended on, with no body, is not text and is not released).
 
 Which markers: read from the chat template's text, never from a model name (the parser's own `start_marker` /
 `end_marker`; the thinking pairs in `REASONING_MARKERS`).
@@ -202,9 +203,10 @@ class TurnReader:
                 out.append(Delta("tool_call", call=call))
             self._after_block = True
             return
-        # Opened like a tool call and did not parse: the model's text, kept as the answer.
+        # Opened like a tool call and did not parse: the model's text, kept as the answer — unless the turn ended on
+        # the opening marker alone: a marker with no body is protocol, not text (recorded, not released).
         self.turn.malformed.append(block)
-        self._emit(out, "content", block)
+        self._emit(out, "content", "" if block.strip() in self._parser.openings() else block)
 
 
 def typed_arguments(arguments: Dict[str, Any], name: str, tools: Optional[list]) -> Dict[str, Any]:
