@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `backend.capabilities.backend_kernels_read_data_ptr()`: whether a tensor's `data_ptr()` is the address a kernel
+  dereferences, stated per backend (CUDA and HIP yes; Metal no — a kernel there reads a pinned wrap's address,
+  handed by the launcher; Level Zero no — its kernels load no address from memory). What a launch over a table of
+  `data_ptr()` values stands on; a backend without a row is refused by name.
+
 ### Fixed
 - **Apple: an address read through a pinned table is answered from a wrap that covers it.** The Metal driver kept
   its pinned whole-allocation wraps under their base address alone, and a pool segment begins where its first block

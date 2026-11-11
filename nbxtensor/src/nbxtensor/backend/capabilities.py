@@ -52,6 +52,15 @@ _BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "xpu": False, "met
 # backend is adding a row.
 # xpu: not measured on a card — False (the band refuses by name) until a launch reads through a loaded address.
 _BACKEND_LOADS_POINTERS_FROM_MEMORY = {"cuda": True, "hip": True, "xpu": False, "metal": False}
+# Whether a tensor's `data_ptr()` is the address a KERNEL dereferences — what a launch over a table of `data_ptr()`
+# values (the expert store's residency on the card, `ops/moe_device_residency`) stands on.
+#   cuda, hip: yes — one address space for the host's handle and the kernel (the residency's device test, V100).
+#   metal:     no  — `data_ptr()` is the CPU mapping; a kernel reads a pinned wrap's GPU address, handed by the
+#              launcher (`triton_ext_driver.pinned_gpu_address`), and a raw launch refuses a tensor it did not wrap.
+#   xpu:       no  — its kernels load no address from memory at all (the row above), so no table of them is read.
+# A different question from the row above: Metal loads an address from memory (declared by its launcher) and still
+# answers no here. Adding a backend is adding a row.
+_BACKEND_KERNELS_READ_DATA_PTR = {"cuda": True, "hip": True, "xpu": False, "metal": False}
 # Whether the backend's kernels can read and write a float64 (or complex128) element. Metal
 # has no double: its lowering NARROWS f64 to float in silence (`triton/metal_backend.py`,
 # `TRITON_METAL_FP64_UNAVAILABLE`), so a kernel over a float64 buffer reads eight-byte
@@ -207,3 +216,10 @@ def backend_traps_on_device_assert() -> bool:
     return _backend_capability(
         _BACKEND_TRAPS_ON_DEVICE_ASSERT, "_BACKEND_TRAPS_ON_DEVICE_ASSERT",
         "whether it honours a device-side assert")
+
+
+def backend_kernels_read_data_ptr() -> bool:
+    """True where a tensor's `data_ptr()` is the address a kernel dereferences (a table of them can be launched on)."""
+    return _backend_capability(
+        _BACKEND_KERNELS_READ_DATA_PTR, "_BACKEND_KERNELS_READ_DATA_PTR",
+        "whether a kernel reads a tensor's data_ptr() as its address")

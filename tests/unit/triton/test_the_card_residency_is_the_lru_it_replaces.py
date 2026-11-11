@@ -15,7 +15,15 @@ def _has_gpu():
         return False
 
 
+def _kernels_read_data_ptr():
+    from nbxtensor.backend.capabilities import backend_kernels_read_data_ptr
+    return backend_kernels_read_data_ptr()
+
+
 @pytest.mark.skipif(not _has_gpu(), reason="needs a device")
+@pytest.mark.skipif(_has_gpu() and not _kernels_read_data_ptr(),
+                    reason="the card residency launches over tables of data_ptr(): not this backend's kernels' "
+                           "addresses (backend_kernels_read_data_ptr)")
 def test_slots_follow_the_lru_and_hold_the_routed_experts():
     import ctypes
     import triton

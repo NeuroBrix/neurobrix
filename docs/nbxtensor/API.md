@@ -3034,6 +3034,7 @@ def proof_records_regime(proof: Optional[Dict[str, Any]]) -> bool
 
 ```python
 def backend_has_fp64() -> bool   # Whether the backend's kernels handle float64 elements, as declared by
+def backend_kernels_read_data_ptr() -> bool   # True where a tensor's `data_ptr()` is the address a kernel dereferences (a table of them can be launched on).
 def backend_loads_pointers_from_memory() -> bool   # True where a kernel may dereference an address it LOADED from a tensor.
 def backend_traps_on_device_assert() -> bool   # True where `tl.device_assert` actually stops the kernel.
 def reduced_extent_max(num_warps: int) -> Optional[int]   # The largest reduced extent a program of `num_warps` stages on this backend, or None when its lowering bounds

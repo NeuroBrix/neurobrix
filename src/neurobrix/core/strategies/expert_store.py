@@ -51,6 +51,19 @@ def holds_expert_files(allocations: Dict[str, Any], component_name: str) -> bool
             and bool(alloc.get('expert_files')))
 
 
+def card_residency_applies(is_triton: bool, store: Any, like) -> bool:
+    """Whether a decode token's residency is kept ON THE CARD (`NBXExpertStore.enable_device_decode`): the Triton
+    engine, half-precision experts COPIED into slots (not bound in place), the routing's reuse curve already recorded
+    (the trace reads the routing back) — and a backend whose kernels read a tensor's `data_ptr()` as their address,
+    which the residency's launches stand on (`nbxtensor.backend.capabilities.backend_kernels_read_data_ptr`; armed
+    on "Triton, not in place" alone until 2026-11-11, whatever the backend). It decides; it builds nothing."""
+    from nbxtensor.backend.capabilities import backend_kernels_read_data_ptr
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as _D
+    return bool(is_triton and not store.in_place and store.trace is None
+                and getattr(like[0], "_dtype", None) in (_D.float16, _D.bfloat16)
+                and backend_kernels_read_data_ptr())
+
+
 def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: Any, is_triton: bool,
                              blocks: Dict[int, Dict[str, Any]], dev_idx: int, transfer_stream: int,
                              transfer_stream_torch: Any) -> Dict[str, Any]:
@@ -128,9 +141,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     holders = _hold_experts_on_cards(z3, component_name, executor, seq, is_triton, layers)
     # A decode token's residency on the card (`NBXExpertStore.enable_device_decode`): half-precision experts copied
     # into slots (not bound in place), once the routing's reuse curve is recorded (the trace reads the routing back).
-    from nbxtensor.dtype.nbx_dtype import NBXDtype as _D
-    if (is_triton and not store.in_place and store.trace is None
-            and getattr(like[0], "_dtype", None) in (_D.float16, _D.bfloat16)):
+    if card_residency_applies(is_triton, store, like):
         store.enable_device_decode({k: i for i, k in enumerate(layers)}, widest)
 
     state: Dict[str, Any] = {

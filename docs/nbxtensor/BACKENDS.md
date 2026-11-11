@@ -98,6 +98,7 @@ device name; each row is read by a function the kernels call:
 |---|---|---|---|---|
 | a kernel stops on `tl.device_assert` | yes | yes | no | `backend_traps_on_device_assert()` |
 | a kernel may dereference an address it loaded from a tensor | yes | yes | no (yes when the selected launcher declares it: triton_ext, through its pinned scope) | `backend_loads_pointers_from_memory()` |
+| a tensor's `data_ptr()` is the address a kernel dereferences (a table of them can be launched on) | yes | yes | no (a kernel reads a pinned wrap's address, handed by the launcher) | `backend_kernels_read_data_ptr()` |
 | the flash attention's smallest tile | 16 | 16 | 32 | `fa_min_tile()` |
 | the largest reduced extent one program stages | 1 << 20 | 1 << 20 | 1024 | `reduce_tile_max()`, `reduced_extent_max(num_warps)` |
 | reductions run per thread | no | no | yes | `reduced_extent_max(num_warps)` |

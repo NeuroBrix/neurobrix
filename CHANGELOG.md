@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The expert store keeps its residency on the card only where the backend's kernels can read it.** That decode
+  path launches over tables of device addresses taken from the host, which holds on CUDA and HIP; it was armed for
+  any Triton store that copies half-precision experts, whatever the backend. No Apple run reached it (an Apple
+  store binds its experts in place), and one that had would have stopped at its first decode token with an error,
+  not a wrong value. The backend now answers the question by name, and the strategy asks it.
 - **The Triton expert store places its five device tables on the card it names.** They were uploaded to the current
   device and then "moved" by a call that moves nothing; they landed on the right card only because the line before
   had selected it. They now name their device at the upload (`NBXTensor.from_numpy(..., device=)`), and the test that
