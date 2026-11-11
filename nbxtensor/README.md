@@ -5,8 +5,8 @@
 Run AI models without PyTorch, on any GPU Triton supports: tensors, Triton kernels, planned memory and certified tuning.
 
 Validated on NVIDIA and Apple Silicon GPUs, on Linux, Windows and macOS; AMD and Intel GPUs, through the same Triton
-kernels, are targets not yet validated on a card. Inference first; training is not in this
-release. Found a bug on your hardware? [Open an issue](https://github.com/NeuroBrix/nbxtensor/issues) — we fix fast.
+kernels, are targets not yet validated on a card. Inference first: training and fine-tuning will come to
+this library, on the same certified kernels; they are not in this release. Found a bug on your hardware? [Open an issue](https://github.com/NeuroBrix/nbxtensor/issues) — we fix fast.
 
 [![PyPI](https://img.shields.io/pypi/v/nbxtensor)](https://pypi.org/project/nbxtensor/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/NeuroBrix/nbxtensor/blob/main/LICENSE)
@@ -480,8 +480,9 @@ with the tensor class (API.md §4).
 
 ## Versions
 
-The first publication was **0.0.1**; this is **0.0.5**. Each fix published after it increments the number (0.0.6,
-…), with no alpha or beta label. The rewrite of the core in Rust will be **2.0.0**. `nbxtensor.__version__` is the
+Published versions are consecutive, with no alpha or beta label: a publication increments the number, and the fixes
+landed between two publications are grouped under the next one ([`CHANGELOG.md`](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md)
+says what each version changed). The rewrite of the core in Rust will be **2.0.0**. `nbxtensor.__version__` is the
 installed version.
 
 ## License

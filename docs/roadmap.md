@@ -1,179 +1,82 @@
 # NeuroBrix Roadmap
 
-**Official roadmap — 2026-09-09. Replaces every earlier version.**
+**Roadmap and vision — 2026-11-11. Replaces every earlier version.**
 
-NeuroBrix is a universal deep-learning inference engine: one runtime,
-any model, any hardware, zero model-specific code. The goal of this
-project is neither fundraising nor a sale. The goal is to **finish the
-engine** — performant, model-agnostic, hardware-agnostic.
+NeuroBrix is not a product. It is an **ecosystem** that gives every GPU a life and uses artificial
+intelligence in all its forms: one engine, one tensor library, one grammar engine, one container
+format, a catalogue of models, and the tools around them.
 
-Where we stand (updated 2026-10-12): the released version is 0.5.4
-(NVIDIA GPUs and CPU). The hub lists 45 public models across 10
-categories: image, video, LLM, code, VLM, omni multimodal, TTS, STT,
-speech understanding, upscalers. Each release's notes say which models
-and modes are known not to work. Apple Silicon (Phase 3) is being
-integrated on `main` for 0.5.5.
+## The vision
 
-Five phases, in order.
+1. **No hardware is obsolete.** Software walks away from a machine long before its silicon stops
+   working. NeuroBrix gives the hardware you already own a new life.
+2. **AI is not an API, and not only a language model.** It is a neural network: text, image, audio,
+   video, measurement, prediction. One engine runs them all.
+3. **The real world needs a function, not a giant.** One model that does one job, on the hardware
+   already there.
+4. **Small and large alike.** One engine, one library, one set of tools and a catalogue of
+   specialised models, for a laptop as for a rack.
+5. **Everything is ours, and open.** Our own engine, tensor library, grammar engine, kernels and
+   certification, under Apache 2.0. We study other projects and learn from the best of each.
+6. **From inference to training.** The ecosystem will reach fine-tuning and training. A model has
+   an envelope it was trained for; taking it beyond that envelope calls for a fine-tune, and
+   NeuroBrix will do it itself.
 
----
+The design principles that follow from it: universal (no code that knows a model, a family or a
+card), data-driven (every value is carried by the container or by a hardware profile), no hidden
+fallback. The engine is designed to refuse only what is truly impossible on a machine: what is
+merely slow is meant to run, and the user to be told. The code is built in bricks: each one has a
+single responsibility and a written contract.
 
-## Phase 1 — v0.5: the complete omni family (generative outputs)
+## Where we stand
 
-v0.4 delivered omni **understanding** — text, image, audio and video
-inputs. v0.5 completes the family with **generative outputs**:
+Published: **neurobrix 0.6.7**, **nbxtensor 0.1.2**, **nbxgrammar 0.1.1**. The hub lists **49
+models** in seven families (language and code, vision-language and omni, speech recognition and
+audio understanding, speech synthesis, image generation, video generation, upscaling). Each one
+runs through the same command line. There are two engines: the Triton engine, built on nbxtensor
+without PyTorch, and an optional PyTorch engine. A release is validated model by model through the
+real entry point, with the output looked at; a model that does not yet confirm on one engine or
+platform is listed as such. Validated on NVIDIA and Apple GPUs, on Linux, Windows and macOS. `neurobrix serve --http` speaks the OpenAI API, with tools and constrained decoding.
 
-- **Speech out** — the talker branch: the model answers with voice.
-- **Image out** — the image-generation branch of the omni lineage.
-- **Two to three fully validated generative omni models** — never a
-  single representative: these are the models that draw users, and
-  depth beats tokenism.
+What changed in each version is in [CHANGELOG.md](../CHANGELOG.md). A version number is published
+when a batch of work is consistent and stable; small fixes are grouped, and a fix for a broken
+model or a wrong value ships without waiting.
 
-House standard unchanged: four execution modes, cross-engine numerical
-gates, inspectable artifacts for every closure.
+## What comes next, in order
 
-## Phase 2 — AMD: ready-to-light ROCm/CDNA paths
+Nothing below carries a date. Each step is published when it is proven on real hardware, model by
+model, with the output looked at.
 
-Integrate the ROCm/CDNA code paths cleanly — gated, documented, and
-data-driven from vendor/architecture profiles — **without test
-execution**, since no AMD GPU is available to the project yet. The code
-arrives ready to light the day the hardware does. No support claim
-before first light.
+1. **Adding a model becomes a declaration.** The tools that build containers are being reorganised
+   so that a new model is described by an entry — its identity and the envelope it was made for —
+   rather than by new code. This is what lets the catalogue grow quickly without breaking what
+   already runs.
+2. **New models.** Coding models first, because the agent below needs them; then more
+   vision-language, speech-synthesis and image-generation models.
+3. **NBX Code** (alias **Nibux**, command `nibux`). A local coding agent written in Rust,
+   independent of the model: it will run against `neurobrix serve` on your own machine, with its
+   tools confined to a sandbox.
+4. **The experimental Intel backend, carried further.** It is in nbxtensor today, written without
+   Intel hardware in our lab and labelled as such: experimental, not validated by us, open to
+   reports from people who own the cards. AMD GPUs remain a target through the same Triton kernels.
+5. **nbxtensor 2.0 in Rust.** The tensor library rewritten in Rust; later, the engine itself. The grammar engine, nbxgrammar, was the first Rust brick.
+6. **Training and fine-tuning.** nbxtensor will grow from inference into training, on the same
+   certified kernels.
 
-## Phase 3 — Metal: Triton on Apple GPUs — IN PROGRESS
+## Work that runs through every step
 
-A primary goal. The Triton execution mode must run on Apple Metal
-GPUs — even if that means building our own Triton-to-Metal path. This
-is a large workstream, undertaken with open eyes: it begins with a
-sourced state-of-the-art review (Triton upstream, existing Metal
-efforts, MLIR backends) and an honest scoping before any line of code.
+- **Speed.** Kernel fusion, graph-level simplification (operations that cancel out are never
+  computed) and per-model tuning, each one measured against a reproducible benchmark and gated on
+  the model's output staying correct.
+- **Small machines.** The goal: a model larger than the memory of a machine will be read from disk
+  in pieces rather than refused, and the plan will say what it costs in time.
+- **Community-certified hardware.** The goal: every GPU class is certified once by its owners,
+  shared through a pull request, and served to everyone who has that card.
+- **Serving.** The OpenAI-compatible server, long conversations beyond the memory of the card, and
+  what a coding agent needs from it.
 
-**Where it stands.** First light has passed on the public branch
-`metal-first-light`: a complete language model executed end to end on an
-Apple GPU, with the engine's own Metal allocator, a vendor-agnostic
-launcher behind the same contract the CUDA driver satisfies, and no torch
-dependency anywhere in the Triton path. Integration into `main` is under
-way, one proven piece at a time, each with its own gate on both kinds of
-hardware. Nothing here is claimed as shipped until it is on `main`.
+## Outside this roadmap
 
-### Two capabilities the Apple census named, queued behind the current chantier
-
-Both come from the 2026-09-22 Apple census (`docs/reference/apple-own-queue-2026-09-24.md`).
-Neither is a bug: each is a capability the house family does not have yet, and the doctrine's
-answer to a missing capability is to EXTEND NBXTensor and the kernel family, never to reach
-back for torch. They wait until the current chantier closes; they are named here so they are
-scheduled rather than remembered.
-
-**C1 — `aten::index_put` with value broadcasting.** Today:
-
-    NotImplementedError: aten::index_put values numel 401408 != idx*tail 2048
-    and not scalar — value broadcasting unwired
-
-The kernel handles a scalar value and a value whose element count matches `idx * tail`; it
-does not handle a value that must BROADCAST across the indexed positions. *Unlocks:*
-`Qwen3-VL-30B-A3B-Thinking` in the Triton modes, and with it the deepstack VLM family, whose
-vision-token scatter is exactly this pattern. It is also the last op standing between that
-model and a census on both machines.
-
-**C2 — the KV-cache path for decode branches.** Today:
-
-    ZERO FALLBACK: decode branches need the KV cache path (no KV wrapper on this session)
-
-A flow whose generation splits into branches reaches decode without a KV wrapper bound to the
-session, and refuses rather than degrade. *Unlocks:* `VibeVoice-1.5B`, and more generally any
-flow whose decode is entered from more than one branch — the refusal is correct today and the
-capability is what removes it. Related to the `triton/flow` stage work that still imports from
-`core/flow/stages/` for VibeVoice's DDPM, a documented temporary violation of R33 that this
-chantier is the natural moment to close.
-
-**C3 — Flash attention on Metal for every head dim, certified.** Today the Triton branch takes the flash route on Apple only for power-of-two head dims, with the hand-written `sdpa_thresholds` tiles, never certified; a non-power-of-two head dim (Allegro, 96) routes on the 2 GiB scores bound to the chunked math attention, which writes the scores — Allegro's transformer, 28 min of its 3 738 s at 720p. The native branch is PyTorch's MPS SDPA, which has no flash kernel (pytorch/pytorch#179294) and stays the vendor reference. The work: (1) every head dim takes the flash, zero-padded to the kernel's head-dim block, chosen by measurement, rather than routed to math; (2) the flash's tiles certified per key on Metal by autotune certify (workstream 1's mechanism), the Apple `sdpa_thresholds` table retired; (3) the emitted MSL checked to run both products on the matrix unit (triton-ext's AppleGPU DotPlan emits `simdgroup_multiply_accumulate`). Design and speed references, not dependencies: Metal FlashAttention (philipturner/metal-flash-attention, MIT; ccv's C++ port used by Draw Things) and MLX's `mx.fast.scaled_dot_product_attention`. *Unlocks:* Allegro and every long-sequence DiT/video model on Apple at flash speed, and the scores' bytes gone from Prism's price.
-
-## Phase 4 — Optimization: benchmarks first, then the kill
-
-**Method before work.** A reproducible benchmark harness on well-known
-models — three columns: established runtimes (vLLM, and above all
-Ollama) / our PyTorch mode / our Triton mode — with documented
-methodology and profiling that says where every millisecond lives. We
-optimize **only** what the profile designates, in measured-gain order.
-
-Then the program, in layers — each carrying its own truth gate:
-
-1. **Graph algebra.** A value-flow analysis over the sequential ATen
-   trace eliminates what the GPU never needs to compute: constant
-   folding, common-subexpression elimination, dead code, identities
-   (×1, +0, transpose-of-transpose, full slices), and cancelling
-   patterns within a subsequence (+x…−x, ×v…÷v, values known ahead of
-   time). Exact identities — integer and shape algebra — are removed
-   byte-preservingly. Floating-point cancellations are a real win but
-   go through a dedicated drift-gate policy, never claimed byte-equal.
-2. **Kernel fusion.** A data-driven pass pattern-matches the simplified
-   graph — vertical chains (matmul + element-wise epilogues: bias,
-   activation, norm + residual, gated MLPs) and horizontal groups
-   (same-shape parallel ops) — and emits fused Triton kernels from
-   templates, cached per model. Never a hand-written per-model fusion:
-   always the pass that reads the graph.
-3. **Execution replay.** The deterministic allocator and symbolic
-   shapes let the resolved execution plan be frozen per shape bucket
-   and replayed without per-op dispatch — killing the launch tax that
-   dominates autoregressive decoding. On the PyTorch side, native CUDA
-   Graph capture per bucket is evaluated as well.
-4. **The megakernel horizon.** The 2026 research frontier compiles an
-   entire block into one persistent kernel with specialized
-   producer-consumer warps, reporting 10–50 % latency gains over
-   mainstream runtimes. Those systems require a fine-grained model DAG,
-   hand-written in their case. **Our sequential trace already IS that
-   DAG — for every model** — which turns megakernel synthesis into a
-   model-agnostic build pass. Honest, sourced scoping before any line.
-5. **Speculative decoding as a mode.** Draft + verify: under greedy
-   decoding, verification guarantees token-identical output — the only
-   1.3–3× class of speedup that is byte-identical by construction.
-   Shipped as an optional mode: faster AND provably identical.
-
-In support: a paged KV cache on the serving daemon, asynchronous weight
-prefetch, and compute/transfer overlap on multi-GPU placements.
-
-**Optimization never negotiates truth.** Byte-identity gates the exact
-transforms; drift-gates the floating-point ones; the full-zoo
-regression battery gates the infrastructure. We have the detailed
-graph, our own kernels, and the models' anatomy — every ingredient
-needed to be the best, and it will be proven at the benchmark, not in
-prose.
-
----
-
-## Release decisions
-
-Items that shape a specific release — an upgrade path, a placement rule, a directory the
-release must carry — are recorded in `docs/reference/release-decisions.md`, one dated entry
-each with the measurement that raised it, and move to the CHANGELOG when closed.
-
-## Phase 5 — A graphical interface
-
-The engine is driven from a terminal today, and that is a floor on who can
-use it. The last phase puts a graphical interface over it: running a model,
-seeing what is installed and what the hub carries, following a run while it
-happens.
-
-One rule decides its architecture. The CLI and the serving daemon stay the
-engine's only entry points; the interface drives them and never opens a
-second path into the runtime. A window that reached into the engine directly
-would be a second surface to keep correct, and the two would drift.
-
-### The engine-side queue for the interface (2026-10-11)
-
-The interface is a separate client that never works around a gap in the engine; it reports the gap and
-waits. Four of the eight requests in `docs/reference/studio-engine-requests.md` are done (2, 5, 6, 8).
-The remaining four, plus two items they imply, are queued in this order:
-
-1. **A daemon that answers while it generates** (request 4): one thread per connection under one
-   inference lock, so `status` and control requests are served during a generation.
-2. **Acknowledged cancellation** (request 3): an operation id per job and an explicit `cancel`,
-   acknowledged only once the native work has stopped at both engines' per-token seam, after the
-   device sync. A dropped connection or a timeout is never reported as a confirmed cancellation.
-3. **A protocol range** (request 7): a client outside the daemon's supported range is refused at
-   connection with a message naming both ranges.
-4. **Discovery without torch** (request 1): `neurobrix info` reads the hardware through the existing
-   detection, with no framework import; a change in its record's shape is versioned and documented.
-5. **The wire protocol, specified**: framing, envelopes, version and range, methods, errors, endpoints
-   per OS and hard limits, written for a reader without access to the code.
-6. **A readiness signal in the foreground**, so a client that starts the daemon itself does not poll.
+[NeuroBrix Studio](https://github.com/NeuroBrix/neurobrix-studio), the desktop application, is
+developed in its own repository. It is a client of the engine and never a second way to run models:
+the command line and the serving daemon stay the engine's only entry points.
