@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-11
+
 ### Added
 - `NBXTensor.is_same_memory(other)` and `memory_layout()`: whether two tensor objects read the very same elements in
   the same order (one address, device, dtype, shape and strides) — two views of one layout. The engine's replay asks
@@ -401,7 +403,8 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.9...v0.1.0

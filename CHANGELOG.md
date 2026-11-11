@@ -7,11 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.6.8] - 2026-11-11
 
-- **The engine's messages speak of building containers.** A refusal or an error that named how a container was made
-  says "build" where it used another word — "its build-time value", "a container built for --mode image", "rebuild its
-  container": 77 messages reworded. No behaviour changes; a script that matched the old text of a message must follow.
+A corrective version, with nbxtensor 0.1.3: wrong answers and stops on the paths a mixture-of-experts coding model
+takes — served, and spread over two cards — and on a model streamed layer by layer on a small card.
 
 ### Fixed
 
@@ -23,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the second request on, every token copied those weights from host memory again. A replayed step now puts
   them back first; and a request's later tokens no longer bind every weight again (after a request's first step,
   each replayed step moved the arena's bind marker, so every token re-bound all the weights, and each weight bound
-  as a view was copied onto itself). Measured on Qwen3-Coder-30B-A3B, one 32 GB card: see the release's serve cell.
+  as a view was copied onto itself). Measured on Qwen3-Coder-30B-A3B, one 32 GB card, three successive requests to
+  one server: 0.067, then 0.057 s a token.
 
 - **An answer no longer ends with a tool-call marker.** Through the OpenAI-compatible server, a model that wrote
   its dialect's opening marker (`<tool_call>`) after its last sentence and then ended the turn had that bare marker
@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streamed piece, replayed from its recorded launches, did not count the attention call it made, so every later
   layer's keys and values were written into the previous layer's place. A replayed run now mirrors exactly what its
   recorded run moved — the positions and the attention calls. In 0.6.7 too.
+
+### Changed
+
+- **The engine's messages speak of building containers.** A refusal or an error that named how a container was made
+  says "build" where it used another word — "its build-time value", "a container built for --mode image", "rebuild its
+  container": 77 messages reworded. No behaviour changes; a script that matched the old text of a message must follow.
 
 ## [0.6.7] - 2026-11-11
 
@@ -6669,7 +6675,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.7...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.8...main
+[0.6.8]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.4...v0.6.5
