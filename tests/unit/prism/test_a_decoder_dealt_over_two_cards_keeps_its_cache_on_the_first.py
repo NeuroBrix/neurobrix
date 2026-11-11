@@ -6,8 +6,12 @@ decoder's files sit on: Qwen3-Coder-30B-A3B on two V100-32GB (Triton engine, 202
 3 084 MB cache beside 29 016 MB of weights on the first card, and the run ran out of memory at layer 43 of its first
 prefill (31 854 MB live on that card), 2 800 MB of cache above its weights.
 
-What this test would do if the code were wrong: the cache planned with the first card's files exceeds that card's
-capacity — RED (seen: 3 084 MB + 29 016 MB against 31 284 MB)."""
+The files were accepted against the USABLE part of the card; the cache beside them is granted from that same part
+(granted from the whole rung it took the margin: the PyTorch engine ran out of memory at 31.7 GB on that plan).
+
+What this test would do if the code were wrong: the cache planned with the first card's files exceeds what one
+component may hold there — RED (seen twice: 3 084 MB + 28 999 MB summed over both cards; then 2 366 MB + 28 999 MB
+against the whole rung)."""
 from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.core.prism.loader import load_profile
 from neurobrix.nbx import NBXContainer
@@ -29,7 +33,7 @@ def test_the_cache_fits_the_card_that_holds_it(monkeypatch):
     first = sorted(set(model.shard_map.values()))[0]
     files = c.get_shard_sizes()["model"]
     held_mb = sum(b for f, b in files.items() if model.shard_map[f] == first) / 2**20
-    capacity_mb = 31284          # the pinned card's rung as the plan reads it (`_effective_capacity_mb`: 32 501 MB less its context and the engine's share)
-    assert held_mb + p.kv_cache_plan.memory_mb <= capacity_mb, (
+    usable_mb = 29377            # the part of the pinned card one component may hold (`_usable_mb`): its rung less the margin
+    assert held_mb + p.kv_cache_plan.memory_mb <= usable_mb, (
         f"{first} holds {held_mb:,.0f} MB of the decoder's files and is given a {p.kv_cache_plan.memory_mb:,.0f} MB "
-        f"cache: over its {capacity_mb:,.0f} MB")
+        f"cache: over the {usable_mb:,.0f} MB one component may hold there")

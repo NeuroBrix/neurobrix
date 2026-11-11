@@ -3036,7 +3036,15 @@ class PrismSolver:
                     _z3_devs = {(a[0] if isinstance(a, tuple) else a).split(":", 1)[1] for a in strat_allocs.values()
                                 if isinstance((a[0] if isinstance(a, tuple) else a), str)
                                 and (a[0] if isinstance(a, tuple) else a).startswith("zero3:")}
-                    _bounded = (_store_devs | _z3_devs) & {d.device_string for d in _cards}
+                    # ... and for a decoder whose weight files are dealt over several cards: its files were accepted
+                    # against the USABLE part of each card, and the cache lives beside them on the first (`_kv_devices`).
+                    # Granted from the whole rung, the cache took the margin: Qwen3-Coder-30B-A3B on two V100-32GB,
+                    # PyTorch engine — 29 016 MB of files + 3 084 MB of cache planned on a card of 32 195 MB, out of
+                    # memory at 31.7 GB in its first prefill (2026-11-11).
+                    _dealt = {d for d in (_kv_cards or ()) if any(
+                        isinstance((a[0] if isinstance(a, tuple) else a), str)
+                        and (a[0] if isinstance(a, tuple) else a).startswith("tp:") for a in strat_allocs.values())}
+                    _bounded = (_store_devs | _z3_devs | _dealt) & {d.device_string for d in _cards}
                     if _bounded:
                         total_capacity = min(total_capacity, sum(
                             int(self._usable_mb(d) * 1024 * 1024) if d.device_string in _bounded
@@ -6986,14 +6994,8 @@ class PrismSolver:
         full_act = mem.activation_bytes
         # The rung sizes the tile (`rung_mb`, `budget_bytes`, derived above); the LIVE reading
         # keeps the feasibility check at the call site — the rung sizes, the truth validates.
-        import os as _os_diag
-        if _os_diag.environ.get("NBX_PRISM_TILE_DIAG") == "1":
-            _log.debug(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB "
-                       f"rung={rung_mb}MB "
-                       f"budget={budget_bytes/1024**3:.2f}GB "
-                       f"ic(h={getattr(ic,'height',None)},w={getattr(ic,'width',None)},"
-                       f"nf={getattr(ic,'num_frames',None)},bs={getattr(ic,'batch_size',None)}) "
-                       f"-> {'TILE' if full_act > budget_bytes else 'native'}")
+        _log.debug(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB rung={rung_mb}MB "
+                   f"budget={budget_bytes/1024**3:.2f}GB -> {'TILE' if full_act > budget_bytes else 'native'}")
         if full_act <= budget_bytes or full_act <= 0:
             return None  # fits untiled — no tiling needed
         inexact = self._tile_only_if_exact(comp_name, graph, profile_j, full_act, rung_mb)

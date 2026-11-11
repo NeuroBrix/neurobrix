@@ -36,7 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   served a wrong text. Two causes: the layer's share on each card read other experts' weights, or past its own
   table, and wrote past its outputs (each card now reads its own experts at their place — with nbxtensor's
   pointer-table fix — and the shares are added per token); and the decode cache was planned against the room of both
-  cards while it lives on the first (it is now sized against that card and what it already holds).
+  cards while it lives on the first (it is now sized against the part of that card a component may hold, beside
+  what the card already holds — the PyTorch engine ran out of memory on the same plan).
 
 - **A dense model split over two cards runs.** With a plan that puts a model's blocks on two cards
   (GLM-4.1V-9B-Thinking on two 16 GB cards), the Triton engine stopped at the first hand-off between the cards with
