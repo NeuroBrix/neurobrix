@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[3]
 PUBLISHED = {
     # 0.1.0, 2026-11-10: manylinux2014 x86_64 + aarch64, macosx_11_0_arm64, macosx_10_12_x86_64, win_amd64
     "0.1.0": {("linux", "x86_64"), ("linux", "aarch64"), ("darwin", "arm64"), ("darwin", "x86_64"), ("win32", "AMD64")},
+    # 0.1.1, 2026-11-11: the same five wheels
+    "0.1.1": {("linux", "x86_64"), ("linux", "aarch64"), ("darwin", "arm64"), ("darwin", "x86_64"), ("win32", "AMD64")},
 }
 
 

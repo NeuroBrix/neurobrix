@@ -7,27 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.1] - unreleased
+## [0.1.1] - 2026-11-11
+
 ### Added
+- **`NBXTensor.from_numpy(arr, dtype=None, device=None)`**: with `device` (an index or `"cuda:N"`) the device is
+  selected, then the array placed; a device that names no index (`"cuda"`, `"cpu"`, a negative number) is refused by
+  name, never read as device 0.
+- **Device files for Intel Gen12 graphics (`xe_lp`) and Wildcat Lake (`wcl`)**, experimental, not yet validated on
+  hardware by the NeuroBrix lab — reports welcome: the Level Zero driver tries these chips; their extension facts are
+  read from the chip's OpenCL ICD, never assumed. Intel's Triton compiler emits the same SPIR-V whatever architecture
+  name it is handed (measured off-card with triton-xpu 3.8.0, torch never imported), so a chip it names no
+  architecture for can be compiled for; the chip's own driver accepts or refuses.
 - **A measure of the `.to(<device>)` calls that move nothing** (`memory/to_device_census.py`, off by default):
   `NBXTensor.to("cuda:N")` answers "already on device" whatever N. With `NBX_TO_DEVICE_CENSUS=<file>` a process
   appends one JSON line at exit — every device-naming call it saw and, by caller, those naming another device than
   the tensor's. No behaviour changes; the count decides whether that contract can refuse or move.
 
 ### Changed
-- `NBXTensor.to` reads its positional argument in a named function (`_positional_target`); the method is 40 code
-  lines (49), same answers.
-### Added
-- **`NBXTensor.from_numpy(arr, dtype=None, device=None)`**: with `device` (an index or `"cuda:N"`) the device is
-  selected, then the array placed; a device that names no index (`"cuda"`, `"cpu"`, a negative number) is refused by
-  name, never read as device 0.
-
-### Changed
-- The uploads written `NBXTensor.from_numpy(x).to(device=...)` name their device in the call instead (the spilled
-  prefill chunk — its private helper is gone —, the paged decode's host partial, the MoE residency
-  probe). `from_numpy` lands on the CURRENT device and `.to("cuda:N")` moves nothing, so that idiom was right only
-  when the call before it had left the wanted device current. No wrong placement was observed.
-### Changed
+- **A prefill chunk reads the positions spilled to host memory through the card**: `memory/paged_kv`'s spilled chunk
+  attention hands the spilled K / V back to the card in blocks (`HostSpill.blocks`, at most the card part's own key
+  count each, so a block's scores never exceed the chunk's) and runs the same attention with its log-sum-exp on each,
+  merged in a fixed order. The host partial (`HostSpill.partial`) stays the decode step's one row: for a chunk's
+  32 x 128 query rows over 14 336 positions it cost 85-122 ms a layer on a Xeon Gold 6230 (40 threads), about half of
+  each spilled chunk of a 79 931-token turn (2026-11-10).
+- **A Level Zero failure is a typed refusal**: `backend.level_zero.IntelDeviceError` (a RuntimeError) carries the
+  call, the `ze_result_t` by name and the module's build log, raised by the runtime, the launch driver and a SPIR-V
+  module that does not build. The Intel backend is experimental — not yet validated on hardware by the NeuroBrix lab —
+  and an application decides on this type what a refusal means.
 - **The Intel launch driver goes through its runtime's contract** (no behaviour change; the backend stays
   experimental, not yet validated on hardware): `backend/level_zero.py` is the only module that knows a Level Zero
   struct, constant or entry point of a module's life — `LevelZeroRuntime.build_module` (answers `ModuleBuilt`: the
@@ -38,50 +44,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constants beside it). `backend/launcher.py` names publicly what a driver in another file uses: `ModuleDriver`,
   `ctypes_slot`. Proven without a card: the exact ze calls of ten load and launch paths, recorded before the move,
   reproduced by it.
-### Removed
-- **`DeviceAllocator.peer_copy`**, added the same day and never published. It was written for the compiled
-  engine's card-to-card hand-offs, on the assumption that the library could copy PyTorch's device memory by its raw
-  pointers. Measured on the rack: with PyTorch's expandable segments — which the engine turns on — that memory is
-  mapped for its own card and the driver refuses the copy (`cudaMemcpy`, device to device: error 1); only PyTorch's
-  allocator can grant it to a peer. The engine hands off through the host instead; the call had no caller left, and
-  the library keeps no function nothing calls. The library's own card-to-card transfer (`transfer_tensor`: the pair
-  only, measured) is unchanged.
-### Added
-- (withdrawn the same day) **`DeviceAllocator.peer_copy(dst_ptr, dst_dev, src_ptr, src_dev, nbytes)`**: a device-to-device copy on raw
-  pointers that touches its two devices only — the source synchronised, the pair's peer access granted once, the copy
-  issued under the destination and the destination synchronised before it returns; the destination stays selected
-  (the device found current is never restored). For a caller whose tensors are not the library's: PyTorch >= 2.10
-  creates a context on every visible card at its first GPU-to-GPU copy (306 MiB on cards a plan does not name,
-  measured 2026-11-10 on four V100), where this library's own transfer stays on the pair (measured the same day).
-  Returns whether direct peer access is in force.
-
-### Fixed
-- **A spilled prefill chunk's uploads select their device**: `memory/paged_kv` placed the blocks handed back to the
-  card, their masks and the merged result with `NBXTensor.from_numpy(x).to(device=...)`. `from_numpy` lands on the
-  CURRENT device and `.to("cuda:N")` moves nothing, so they were on the query's device only because an earlier call
-  had left it current. They now select it (`_upload`). No wrong placement was observed; on a cache whose layers live
-  on two cards it was one reordering away.
-### Changed
-- **A prefill chunk reads the positions spilled to host memory through the card**: `memory/paged_kv`'s spilled chunk
-  attention hands the spilled K / V back to the card in blocks (`HostSpill.blocks`, at most the card part's own key
-  count each, so a block's scores never exceed the chunk's) and runs the same attention with its log-sum-exp on each,
-  merged in a fixed order. The host partial (`HostSpill.partial`) stays the decode step's one row: for a chunk's
-  32 x 128 query rows over 14 336 positions it cost 85-122 ms a layer on a Xeon Gold 6230 (40 threads), about half of
-  each spilled chunk of a 79 931-token turn (2026-11-10).
-### Changed
-- **A Level Zero failure is a typed refusal**: `backend.level_zero.IntelDeviceError` (a RuntimeError) carries the call, the `ze_result_t` by name and the module's build log, raised by the runtime, the launch driver and a SPIR-V module that does not build. The Intel backend is experimental — not yet validated on hardware by the NeuroBrix lab — and an application decides on this type what a refusal means.
+- **The library's uploads name their device in the call** (the spilled prefill chunk's blocks, masks and merged
+  result, the paged decode's host partial, the MoE residency probe): they were written
+  `NBXTensor.from_numpy(x).to(device=...)`; `from_numpy` lands on the CURRENT device and `.to("cuda:N")` moves
+  nothing, so that idiom was right only when the call before it had left the wanted device current. No wrong placement
+  was observed; on a cache whose layers live on two cards it was one reordering away.
+- `NBXTensor.to` reads its positional argument in a named function (`_positional_target`); the method is 40 code
+  lines (49), same answers.
 
 ### Fixed
 - **Reading a device's memory leaves no context on another device**: `DeviceAllocator.free_memory_mb`,
   `mem_get_info`, `device_total_bytes` and the other probes "restored the previous device" after reading; in a process
   that had selected none, that selected device 0 and made the runtime create a context there. A previous device is
   restored only when the process had selected it (`DeviceAllocator.restore_device`).
-
-### Added
-- **Device files for Intel Gen12 graphics (`xe_lp`) and Wildcat Lake (`wcl`)**, experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome: the Level Zero driver tries
-  these chips; their extension facts are read from the chip's OpenCL ICD, never assumed. Intel's Triton compiler emits
-  the same SPIR-V whatever architecture name it is handed (measured off-card with triton-xpu 3.8.0, torch never
-  imported), so a chip it names no architecture for can be compiled for; the chip's own driver accepts or refuses.
 
 ## [0.1.0] - 2026-11-10
 ### Changed
@@ -379,7 +354,8 @@ memory; the fix is in test).
 - **`flash_decode_split_kernel` and its route**: armed only by an environment switch (`NBX_FLASH_DECODE`, with `NBX_FD_BLOCK_N` and `NBX_FD_SEG`) and measured slower than the vector decode kernels; `flash_decode.py` keeps the fixed-order reduce they share.
 - **`conv1d_forward_kernel`**: launched by no route (a 1-D convolution runs through `conv2d`).
 
-[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/NeuroBrix/nbxtensor/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.9...v0.1.0
 [0.0.8]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.5...v0.0.8
 [0.0.5]: https://github.com/NeuroBrix/nbxtensor/compare/v0.0.4...v0.0.5

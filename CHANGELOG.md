@@ -7,128 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.6] - unreleased
+## [0.6.6] - 2026-11-11
+
+### Changed
+- **A long prompt sent to `neurobrix serve` is read several times faster on the PyTorch engine.** The daemon read a
+  prompt in slices of 128 tokens, each one a full pass of the model; it now takes the largest slice its memory plan
+  holds without giving up anything it keeps on the GPU. The working memory a slice needs — it grows with the slice
+  and with everything already cached — is one reserve the plan states and the engine keeps to, and the plan chooses
+  the slice with it. Measured on two V100-32GB with Qwen3-Coder-30B-A3B: a 19 931-token prompt answered in 42 s
+  instead of 322 s, a 79 931-token one in 9 min instead of 39 min, same answers. (While this was being built, a state
+  that did not yet count that working memory read the 19 931 tokens in 44 s and the 79 931 in 7 min 43 s, and failed
+  once the plan filled the GPU: the reserve is what the difference pays for.) Starting the daemon takes up to six more
+  planning passes — about four minutes for that model.
+- **A prompt longer than the GPU's cache is read faster**: the part of a long prompt that no longer fits the card's
+  cache was attended on the CPU for every chunk of the prompt; it now passes back through the GPU block by block (same
+  result), within the reserve above instead of an unplanned amount. On the 79 931-token turn measured on two V100-32GB
+  that CPU work was about half of each chunk past the card's 65 664 positions.
+- **Reading a long prompt takes less GPU memory on the PyTorch engine**: each slice of the prompt copied the cached
+  keys and values once per attention head; it now reads the cache as stored.
+- **Intel Gen12 graphics and Wildcat Lake are tried instead of refused** (experimental, not yet validated on hardware
+  by the NeuroBrix lab — reports welcome): Tiger Lake, Rocket Lake, Alder Lake, Raptor Lake, DG1 and Wildcat Lake
+  chips are described as devices when their Level Zero runtime is installed, where detection used to refuse them for
+  lack of a compile target (the target's name does not change the compiled kernel: measured). Without the runtime
+  they are named with what to install, and the model runs on the CPU. Gen9 to Gen11 graphics stay refused, under
+  their own reason: Intel's current compute runtime does not drive them.
+- **An Intel GPU that refuses at run time is said by name, and the model runs without it** (the Intel backend is
+  experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): when the Level Zero driver says
+  the chip cannot do what was asked (a kernel it does not build, an unsupported feature or version), `neurobrix run`
+  prints which call failed and why (with the driver's build log), remembers that chip model (its PCI id) as refused
+  under that driver and nbxtensor version, and starts the request again once, planned without it (on the CPU when it
+  was the only device), saying so in its first line and in the plan; `neurobrix serve` loads the model again once the
+  same way (a request that met the refusal is answered with it and can be sent again). With `neurobrix run`, a profile
+  given with `--hardware` is never replaced: the refusal says what to do (`serve` started with one answers the request
+  with the refusal). Any other error (a lost device, memory) stays the run's own, named. Another driver or nbxtensor
+  version tries the chip again. `neurobrix doctor` shows the label and what was refused; the new "Intel GPU report"
+  issue template collects what happened on your card.
+- **The grammar engine's source lives in its own repository only**,
+  [NeuroBrix/nbxgrammar](https://github.com/NeuroBrix/nbxgrammar): the copy under `rust/` is gone from this one, and a
+  source checkout uses the `nbxgrammar` wheel `pip install` brings, as an installed neurobrix does. The version
+  installed with neurobrix is nbxgrammar 0.1.1 (pinned exactly, on the same five platforms): the same masks and the
+  same speed as 0.1.0, see its [changelog](https://github.com/NeuroBrix/nbxgrammar/blob/main/CHANGELOG.md).
+- Follows nbxtensor 0.1.1. Internal, no change of result: the rules that decide what constrains a chat request's
+  answer (a JSON schema, a forced tool call) are grouped in one place, every request answered exactly as before (400
+  combinations compared); the Triton engine's long-prompt path and its table of host expert addresses name the GPU
+  they place data on in the call that places it.
 
 ### Fixed
-- **Without `--hardware`, a run no longer takes memory on every GPU of the machine.** To name the hardware profile
-  it generates, NeuroBrix looks at the GPUs it sees at every launch; that look asked the runtime about each of them,
-  which initialises it — about 300 MB taken on every visible GPU for the length of the run, whatever GPU the model
-  used. The look now touches none; what the runtime sees and takes on each GPU is read once, in a separate short
-  process, when the generated profile is written or completed. Measured on V100s with two GPUs visible: a model
-  planned on one held both, now one. (An earlier fix covered a profile named with `--hardware`; without one it
-  remained.)
-- **An older automatically generated hardware profile no longer refuses every run.** A profile written before two of
-  its measured figures existed (the GPU memory the runtime sees, and what the runtime itself takes on the card) was
-  refused with the advice to delete the file. Those figures are now measured and added to the generated profile at
-  the next launch. A profile you wrote yourself is never modified.
-
-### Changed
-- Follows nbxtensor (an internal measure, off by default; nothing a user sees).
-
-### Changed
-- Follows nbxtensor; the Triton engine's expert tables name the GPU they are placed on in the call that places
-  them (no change of result).
-
-### Fixed
-- **`--reference-audio` and `--reference-image` are refused by name instead of being ignored.** `neurobrix run`
-  accepted both and no model read them: a request to clone a voice from a recording ran and spoke with the model's
-  own voice, as if the flag were absent. Cloning a voice from a reference and conditioning on a style image are not
-  wired in this version; the command now says so and stops before loading anything.
-
-### Changed
-- Internal: the rules that decide what constrains a chat request's answer (a JSON schema, a forced tool call) are
-  grouped in one place; every request is answered exactly as before (400 combinations compared).
-
-### Changed
-- Follows nbxtensor (the experimental Intel backend's internals regrouped; nothing a user sees).
-
-### Changed
-- Follows nbxtensor (an internal call added the same day and never used is removed; nothing a user sees).
-
-### Fixed
-- **NeuroBrix on the PyTorch engine no longer takes memory on GPUs it does not use.** On a machine with several GPUs
-  a model planned on two of them left about 300 MB taken on every other GPU, and a model planned on one GPU of a
-  two-GPU profile left the same on the second one — memory another program then could not use. Three causes: since
-  PyTorch 2.10, the first copy of a tensor from one GPU to another initialises every visible GPU (NeuroBrix now
-  passes what crosses GPUs — a model's intermediate
-  states — through host memory); the memory
-  planner asked each GPU of the profile through the runtime, which initialises it to answer (it now reads the
-  driver's own tool); and the weight loader prepared its uploads on the default GPU instead of the one written.
-  Measured on four V100: a model across GPUs 2 and 3 held all four, now those two; a model on GPU 2 of a two-GPU
-  profile held two, now one. Results unchanged; a long prompt on a model split across two GPUs reads about 8 % slower
-  (45.6 s against 42.3 s for 19 931 tokens), decoding is unchanged.
-
-### Changed
-- Follows nbxtensor (an internal placement made explicit in the Triton engine's long-prompt path; no change of
-  result).
-
-### Fixed
+- **NeuroBrix no longer takes memory on GPUs it does not use.** On a machine with several GPUs, a run planned on one
+  card also opened a context on card 0 with the PyTorch engine (306 MB on a V100), and on every visible card with the
+  Triton engine; a model planned on two GPUs left about 300 MB taken on every other GPU, and a model planned on one
+  GPU of a two-GPU profile left the same on the second one — memory another program then could not use. The causes,
+  each closed: synchronisations that named no device landed on card 0 (they now name the plan's devices); the
+  runtime's growth was read on every visible card (now on the profile's); since PyTorch 2.10, the first copy of a
+  tensor from one GPU to another initialises every visible GPU (NeuroBrix now passes what crosses GPUs — a model's
+  intermediate states — through host memory); the memory planner asked each GPU of the profile through the runtime,
+  which initialises it to answer (it now reads the driver's own tool); the weight loader prepared its uploads on the
+  default GPU instead of the one written; and, without `--hardware`, the look NeuroBrix takes at the machine's GPUs at
+  every launch to name the profile it generates asked the runtime about each of them (the look now touches none; what
+  the runtime sees and takes on each GPU is read once, in a separate short process, when the generated profile is
+  written or completed). Measured on four V100: a model across GPUs 2 and 3 held all four, now those two; a model on
+  GPU 2 of a two-GPU profile held two, now one; without `--hardware` and two GPUs visible, a model planned on one held
+  both, now one. Results unchanged; a long prompt on a model split across two GPUs reads about 8 % slower (45.6 s
+  against 42.3 s for 19 931 tokens), decoding is unchanged.
 - **`neurobrix serve` plans memory for the request it will get, not for a fixed pair.** The daemon planned every model
   as a batch of two in float16 — values written into it on its first day — whatever the model: a chat model was
   priced for two prompts at once, an upscaler for two images, and a model whose container declares another dtype was
   sized in the wrong one. It now follows the same rule as `neurobrix run`: one item per request, doubled only where
   the model's guidance is in force, in the dtype the container declares.
-- **A chat model's output layer is no longer counted several times over in the memory plan** on the PyTorch engine
-  (six times its real size for a 151 936-token vocabulary): the plan reserved copies of the vocabulary projection's
-  weight that the engine never makes there.
-- **Reading a long prompt takes less GPU memory on the PyTorch engine**: each slice of the prompt copied the cached
-  keys and values once per attention head; it now reads the cache as stored. Past the GPU's cache, the part of the
-  prompt kept in host memory is read within a memory reserve the plan states, instead of an unplanned amount.
-- **A very long prompt could run a full GPU out of memory in `neurobrix serve`.** Reading a prompt slice against
-  everything already cached needs working memory that grows with the slice and with the cache; the plan did not count
-  it, and it fitted only where other memory had been over-counted. It is now one reserve the plan states and the
-  engine keeps to, and the plan chooses the slice with it. Measured on two V100-32GB with Qwen3-Coder-30B-A3B: a
-  19 931-token prompt in 42 s (44 s before), a 79 931-token one in 9 min — longer than the 7 min 43 s first stated
-  here, which was obtained on memory the plan had not counted and failed once the plan filled the GPU; same answers.
-
-### Changed
-- **A long prompt sent to `neurobrix serve` is read several times faster on the PyTorch engine.** The daemon read a
-  prompt in slices of 128 tokens, each one a full pass of the model; it now takes the largest slice its memory plan
-  holds without giving up anything it keeps on the GPU. Measured on two V100-32GB with Qwen3-Coder-30B-A3B: a
-  19 931-token prompt answered in 44 s instead of 322 s, a 79 931-token one in 7 min 43 s instead of 39 min (with the
-  change below), same answers. Starting the daemon takes up to six more planning passes — about four
-  minutes for that model.
-
-### Fixed
 - **The memory plan no longer reserves room for answers the model never computes.** The plan counted the final
   projection onto the vocabulary for every token of the prompt, while both engines compute it for the last token only:
   1.2 MB per prompt token for a 151 936-token vocabulary. A long prompt given to `serve` no longer pushes model weights
-  off the GPU for it, and one given to `run` no longer can. (A scoring request, `--set global.score_mode=1`, does compute every position and is still
-  planned so.)
-
-### Changed
-- **A prompt longer than the GPU's cache is read faster**: the part of a long prompt that no longer fits the card's
-  cache was attended on the CPU for every chunk of the prompt; it now passes back through the GPU block by block (same
-  result). On the 79 931-token turn measured on two V100-32GB that CPU work was about half of each chunk past the
-  card's 65 664 positions.
-
-### Changed
-- **An Intel GPU that refuses at run time is said by name, and the model runs without it** (the Intel backend is
-  experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): when the Level Zero driver says
-  the chip cannot do what was asked (a kernel it does not build, an unsupported feature or version), `neurobrix run`
-  prints which call failed and why (with the driver's build log), remembers THAT chip as refused under that driver and
-  nbxtensor version, and starts the request again once, planned without it (on the CPU when it was the only device),
-  saying so in its first line and in the plan; `neurobrix serve` loads the model again once the same way (a request that
-  met the refusal is answered with it and can be sent again). A profile given with `--hardware` is never replaced: the
-  refusal says what to do. Any other error (a lost device, memory) stays the run's own, named. Another driver or
-  nbxtensor version tries the chip again. `neurobrix doctor` shows the label and what was refused; the new "Intel GPU
-  report" issue template collects what happened on your card.
-
-### Fixed
-- **A run touches only the cards its plan names**: on a machine with several GPUs, a run planned on one card also
-  opened a context on card 0 (306 MB on a V100) with the PyTorch engine, and on every visible card with the Triton
-  engine — memory taken from cards other jobs were using. Synchronizations now name the plan's devices, and the
-  runtime's growth is read on the profile's cards only.
-
-### Changed
-- **Intel Gen12 graphics and Wildcat Lake are tried instead of refused** (experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome): Tiger Lake, Rocket Lake, Alder Lake,
-  Raptor Lake, DG1 and Wildcat Lake chips are described as devices when their Level Zero runtime is installed, where
-  detection used to refuse them for lack of a compile target (the target's name does not change the compiled kernel:
-  measured). Without the runtime they are named with what to install, and the model runs on the CPU. Gen9 to Gen11
-  graphics stay refused, under their own reason: Intel's current compute runtime does not drive them.
-
-### Changed
-- **The grammar engine's source lives in its own repository only**, [NeuroBrix/nbxgrammar](https://github.com/NeuroBrix/nbxgrammar): the copy under `rust/` is gone from this one, and a source checkout uses the `nbxgrammar` wheel `pip install` brings, as an installed neurobrix does.
+  off the GPU for it, and one given to `run` no longer can. (A scoring request, `--set global.score_mode=1`, does
+  compute every position and is still planned so.)
+- **A chat model's output layer is no longer counted several times over in the memory plan** on the PyTorch engine
+  (six times its real size for a 151 936-token vocabulary): the plan reserved copies of the vocabulary projection's
+  weight that the engine never makes there.
+- **`--reference-audio` and `--reference-image` are refused by name instead of being ignored.** `neurobrix run`
+  accepted both and no model read them: a request to clone a voice from a recording ran and spoke with the model's
+  own voice, as if the flag were absent. Cloning a voice from a reference and conditioning on a style image are not
+  wired in this version; the command now says so and stops before loading anything.
+- **An older automatically generated hardware profile no longer refuses every run.** A profile written before two of
+  its measured figures existed (the GPU memory the runtime sees, and what the runtime itself takes on the card) was
+  refused with the advice to delete the file. Those figures are now measured and added to the generated profile at
+  the next launch. A profile you wrote yourself is never modified.
 
 ## [0.6.5] - 2026-11-10
 ### Added
@@ -6623,7 +6584,10 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.4...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.6...main
+[0.6.6]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.5...v0.6.6
+[0.6.5]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.4...v0.6.5
+[0.6.4]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.0...v0.6.1

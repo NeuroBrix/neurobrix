@@ -194,6 +194,8 @@ def test_shader_compiler_probe_reads_the_return_code(monkeypatch):
 def test_backend_probe_accepts_the_plugin_env_var(monkeypatch):
     """Triton 3.7 loads out-of-tree backends via TRITON_PLUGIN_PATHS, so a
     backend can be present without an importable package name we know."""
+    pytest.importorskip("triton.backends")   # BEFORE the variable: Triton loads the paths it names at its first import
+    #                                          and aborts the process on a missing file (this file run alone died here)
     monkeypatch.setenv("TRITON_PLUGIN_PATHS", "/opt/somewhere/libtriton_apple.so")
     assert metal_backend.triton_metal_available() is True
 
@@ -212,8 +214,8 @@ def _no_metal_backend_present(monkeypatch):
 
 
 def test_backend_probe_is_negative_on_an_unrelated_plugin(monkeypatch):
+    _no_metal_backend_present(monkeypatch)      # first: it imports triton, which loads TRITON_PLUGIN_PATHS when imported
     monkeypatch.setenv("TRITON_PLUGIN_PATHS", "/opt/somewhere/libutlx.so")
-    _no_metal_backend_present(monkeypatch)
     assert metal_backend.triton_metal_available() is False
 
 

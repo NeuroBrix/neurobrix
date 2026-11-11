@@ -68,6 +68,7 @@ from neurobrix.core.workspace import (
 PINNED_IN_FLIGHT = _pinned_in_flight()
 
 # Centralized dtype conversion — single source of truth
+from neurobrix.core.device_utils import device_sync
 from neurobrix.core.dtype.converter import safe_dtype_convert
 # The absent-weight rule and the safetensors header reader: the container layer's, torch-free —
 # one rule and one message for both engines and the validator (R30).
@@ -746,8 +747,7 @@ class WeightLoader:
         # Batch sync: ensure all GPU transfers complete before returning
         devices_used = set(d for _, d in shard_items)
         if any(d.startswith("cuda") or d.startswith("hip") for d in devices_used):
-            for _d in sorted(d for d in devices_used if d.startswith("cuda") or d.startswith("hip")):
-                torch.cuda.synchronize(torch.device(_d))      # each device loaded, never the runtime's current one
+            [device_sync(_d) for _d in sorted(devices_used)]   # each device loaded, never the runtime's current one
             # Every upload is done: the pinned blocks back in PyTorch's host cache go back to the OS, so a
             # streamed plan's next load starts from none (that cache never frees on its own).
             torch.accelerator.empty_host_cache()
