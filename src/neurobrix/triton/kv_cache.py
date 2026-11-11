@@ -395,11 +395,18 @@ class TritonAttentionInterceptor:
         the caller asks the shadow first; here the counters simply move."""
         self.cache.skip_positions(n)
 
-    def replay_advance(self):
-        """The replayed launches appended one position per layer and
-        advanced every device counter; mirror on the host authority
-        (position_ids and the bucket signature read current_len)."""
-        self.cache.replay_advance()
+    def replay_advance(self, before, after):
+        """Mirror on the host what the recorded run moved between its marks (`replay_host_mark`): the cache's positions
+        (one when the run held the last layer's decode, none for a piece before it) and the attention calls counted
+        for the layer numbers (a piece's own)."""
+        for _ in range(after[0] - before[0]):
+            self.cache.replay_advance()
+        self._call_count += after[1] - before[1]
+
+    def replay_host_mark(self):
+        """The host state a replayed run must mirror (`replay._advance_what_the_recording_moved`): the cache's host
+        length and the attention calls counted this step (they number the layers)."""
+        return (self.cache.replay_host_mark(), self._call_count)
 
     def replay_restore(self):
         """Rewind the device counters to the host authority so the

@@ -602,7 +602,7 @@ def _install_seams() -> None:
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
                  "launches", "actions", "output_slots", "scan_limit",
-                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses", "scan_slots")
+                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses", "scan_slots", "advances")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
@@ -612,6 +612,9 @@ class FrozenPlan:
                  extra_scan: Tuple[int, ...] = (),
                  scan_slots: Optional[Tuple[int, ...]] = None) -> None:
         self.records = records
+        # {owner index in the sequence's `_replay_state_owners`: (its host mark before, after) the recorded run}: a
+        # replay mirrors exactly that move (`_advance_what_the_recording_moved`)
+        self.advances: Dict[int, tuple] = {}
         # the weight/input slots a SEGMENT's ops read (a decode step replayed in segments): its scan visits only those —
         # nine segments scanning every weight slot cost more a token than they saved (2026-10-28). None: the whole
         # bound region, as a whole-run plan always did.
@@ -927,12 +930,10 @@ def signature(seq) -> Optional[tuple]:
         for func in list(seq._op_interceptors.values()) + \
                 list(seq._op_uid_interceptors.values()):
             owner = getattr(func, "__self__", None)
-            if owner is None or not (
-                    hasattr(owner, "replay_signature")
-                    and hasattr(owner, "replay_advance")
-                    and hasattr(owner, "replay_restore")):
+            if owner is None or not all(hasattr(owner, m) for m in ("replay_signature", "replay_advance",
+                                                                  "replay_restore", "replay_host_mark")):
                 return _decline(seq, f"interceptor {getattr(func, '__qualname__', func)!r} keeps a state it does not "
-                                     f"register with the replay (replay_signature/advance/restore)")
+                                     f"register with the replay (replay_signature/advance/restore/host_mark)")
             by_owner.setdefault(id(owner), (owner, []))[1].append(func)
         for owner, funcs in by_owner.values():
             s = owner.replay_signature(funcs)
@@ -1096,6 +1097,21 @@ def _mem_diag(tag: str) -> None:
     _log.debug(f"[Replay][MEM] {tag}: live_tracked={total/1e6:.0f}MB")
 
 
+def _advance_what_the_recording_moved(plan, owners) -> None:
+    """After a replayed run: mirror onto each state owner's host state what the recorded NORMAL run moved there, and
+    nothing else (`replay_advance(before, after)`, the owner's marks around the recorded run). A replay that mirrored a
+    fixed "one step" was right only for a sequence holding the whole step. A layer-streamed model replays the one piece
+    that frees no input its caller hands over — its first piece, with the first layer's attention in it: its replay
+    advanced the cache's length although no last layer ran, and did NOT count the attention call it made, so every
+    later piece's attention took the layer number of the one before it (keys and values written into the wrong layer)
+    and the last layer's never came (TinyLlama, Triton, a 1 600 MB card: "The capital of Francephстутяш86488ш",
+    2026-11-11; at 2 000 MB no piece replays and the text is right)."""
+    for i, o in enumerate(owners):
+        moved = plan.advances.get(i)
+        if moved is not None:
+            o.replay_advance(*moved)
+
+
 def would_replay(seq, pre_op_callback) -> bool:
     """Side-effect-free: would `maybe_run` take the frozen-plan path?
 
@@ -1248,9 +1264,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                                    f"normal={nor[:8].tolist()}")
             return True
         state.replay(seq._arena)
-        if getattr(seq, "_replay_advances", True):     # a head segment's launches advanced its own layers only
-            for o in owners:
-                o.replay_advance()
+        _advance_what_the_recording_moved(state, owners if getattr(seq, "_replay_advances", True) else ())   # a head segment: none
         n_r = seq.__dict__.setdefault("_replay_count", {})
         n_r[sig] = n_r.get(sig, 0) + 1
         if n_r[sig] % 50 == 1:
@@ -1402,6 +1416,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         slab.retire()
         plans[sig] = "UNREPLAYABLE"
         return False
+    _marks = [o.replay_host_mark() for o in owners]
     STATE.recording = True
     _arm_launch_recorder(True)
     STATE.records = []
@@ -1461,6 +1476,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                       extra_scan=tuple(getattr(seq, "_replay_extra_scan", ()) or ()),
                       scan_slots=_read)
     plan.other_slabs = others
+    plan.advances = {i: (_marks[i], o.replay_host_mark()) for i, o in enumerate(owners)}
     plan.output_slots = tuple(
         s for s in (seq._tid_to_slot.get(tid)
                     for tid in seq.dag.get("output_tensor_ids") or [])

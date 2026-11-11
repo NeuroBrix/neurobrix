@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `NBXTensor.is_same_memory(other)` and `memory_layout()`: whether two tensor objects read the very same elements in
   the same order (one address, device, dtype, shape and strides) — two views of one layout. The engine's replay asks
   it before copying a re-bound weight onto its recorded buffer.
+- `PagedTritonKVCache.replay_host_mark()`: the cache's host length, for a replay that mirrors what its recorded run
+  moved (the engine's replayed layer-streamed pieces).
 
 ### Fixed
 - **A tensor of a card's expandable pool can be handed to another card.** The pool grows by mapping chunks into one

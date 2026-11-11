@@ -408,6 +408,10 @@ class PagedTritonKVCache:
             return None
         return ("kv_decode_paged", paged_decode_splits(nxt), self.batch, self._uid, self.generation)
 
+    def replay_host_mark(self) -> int:
+        """The host length: what a replay must know moved during its recorded run (the last layer's decode moves it)."""
+        return self.length
+
     def replay_advance(self) -> None:
         """The replayed launches appended one position per layer and advanced every device length: mirror it."""
         self.length += 1

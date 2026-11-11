@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cudaMemcpy failed rc=1 (kind=3)` — in 0.6.7 too. The cause is in the tensor library (a tensor of the expandable
   pool could not be copied card to card); nbxtensor's fix is in this version.
 
+- **A model streamed layer by layer on a small card answers right.** On a card too small to hold the model (TinyLlama
+  on a 1 600 MB card, Triton engine), the answer turned to garbage after a few tokens, with no error: the first
+  streamed piece, replayed from its recorded launches, did not count the attention call it made, so every later
+  layer's keys and values were written into the previous layer's place. A replayed run now mirrors exactly what its
+  recorded run moved — the positions and the attention calls. In 0.6.7 too.
+
 ## [0.6.7] - 2026-11-11
 
 A corrective version: it follows nbxtensor 0.1.2, which closes a defect of the Apple backend by which a result could
