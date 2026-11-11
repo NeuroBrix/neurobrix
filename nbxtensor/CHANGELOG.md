@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `NBXTensor.is_same_memory(other)` and `memory_layout()`: whether two tensor objects read the very same elements in
+  the same order (one address, device, dtype, shape and strides) — two views of one layout. The engine's replay asks
+  it before copying a re-bound weight onto its recorded buffer.
+
 ### Fixed
 - **A routed layer whose experts sit on two cards is read at the right experts.** `memory.pointer_tables.build_ptr_tables`
   gave each card a table of its own experts alone, packed, while the grouped GEMM reads a table at the expert's number

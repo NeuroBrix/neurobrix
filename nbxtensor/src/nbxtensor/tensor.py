@@ -1520,6 +1520,15 @@ class NBXTensor:
         # Non-zero fill via the pure-Triton fill_kernel.
         return _fill_constant(self, value)
 
+    def is_same_memory(self, other: 'NBXTensor') -> bool:
+        """Whether `other` reads the very elements `self` does, in the same order: one address, one device, one dtype,
+        one shape and one stride per axis — two views of one layout. Not an overlap test: any difference is False."""
+        return self.memory_layout() == other.memory_layout()
+
+    def memory_layout(self) -> tuple:
+        """(address of the first element, device kind, device index, dtype, shape, strides): what a kernel reads."""
+        return (self.data_ptr(), self._device, self._device_idx, self._dtype, tuple(self._shape), tuple(self._strides))
+
     def copy_(self, src, non_blocking: bool = False) -> 'NBXTensor':
         if isinstance(src, NBXTensor):
             # PyTorch Tensor.copy_ converts src to self's dtype. A raw byte

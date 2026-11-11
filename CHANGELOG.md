@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the right text. At each request the model's dense weights were bound back to host memory; the copies on the
   card were put back only when an operation ran, and a decode step replayed from its recorded plan runs none — so
   from the second request on, every token copied those weights from host memory again. A replayed step now puts
-  them back first. Later requests run at 0.16 s a token there.
+  them back first; and a request's later tokens no longer bind every weight again (after a request's first step,
+  each replayed step moved the arena's bind marker, so every token re-bound all the weights, and each weight bound
+  as a view was copied onto itself). Measured on Qwen3-Coder-30B-A3B, one 32 GB card: see the release's serve cell.
 
 - **An answer no longer ends with a tool-call marker.** Through the OpenAI-compatible server, a model that wrote
   its dialect's opening marker (`<tool_call>`) after its last sentence and then ended the turn had that bare marker

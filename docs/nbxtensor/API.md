@@ -2623,6 +2623,8 @@ Read-only metadata, all of it plain data:
 t.shape: tuple[int, ...]     t.strides: tuple[int, ...]    t.offset: int        # elements
 t.dtype: DType               t.device: Device              t.itemsize: int
 t.numel: int                 t.nbytes: int                 t.is_contiguous: bool
+t.memory_layout() -> (address, device kind, device index, dtype, shape, strides)   # what a kernel reads
+t.is_same_memory(other) -> bool   # the very same elements in the same order (two view objects of one layout); not an overlap test
 t.data_ptr() -> int          t.__cuda_array_interface__    # kept (nbx_tensor.py:3514)
 t.__dlpack__(stream=None)    t.__dlpack_device__()         # new: the only exchange protocol (rule 6)
 ```

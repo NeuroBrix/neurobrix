@@ -1727,8 +1727,6 @@ class TritonSequence(SequenceSteps):
         pos = {uid: i for i, uid in enumerate(execution_order)}
         insert_before: Dict[str, List[str]] = defaultdict(list)
         new_ops_by_uid: Dict[str, Dict[str, Any]] = {}
-        import os as _os_rs
-        _RS_DIAG = _os_rs.environ.get("NBX_ROPE_SCHED_DIAG")
 
         for (cos_tid, sin_tid), group in pair_map.items():
             if len(group) != 2:
@@ -1814,9 +1812,7 @@ class TritonSequence(SequenceSteps):
             if _max_in >= _min_con or _min_con >= len(execution_order):
                 # A consumer precedes an input, or no in-order consumer exists —
                 # unfusable as one op; leave the chain unfused (correct, slower).
-                if _RS_DIAG:
-                    _log.debug(f"[ROPE_SCHED] UNFUSABLE cos={cos_tid[:24]} "
-                               f"max_in={_max_in} min_con={_min_con} — left unfused")
+                _log.debug(f"[ROPE_SCHED] UNFUSABLE cos={cos_tid[:24]} max_in={_max_in} min_con={_min_con} — left unfused")
                 continue
             anchor = execution_order[_min_con]  # insert fused op just before it
             fuse_idx += 1
@@ -2994,6 +2990,17 @@ class TritonSequence(SequenceSteps):
             if runtime_val <= original.shape[axis]:
                 arena[slot] = original.narrow(axis, 0, runtime_val)
 
+    def _the_replayed_weights_are_the_bound_ones(self) -> None:
+        """A replayed stretch leaves in the arena the weights its recording bound — the scan copied into them any slot
+        a later bind had replaced — so they ARE this bind's weights. The restore moves the arena's epoch when the
+        slots it replaced were a fresh bind's objects (a request's first step, after the served cleanup emptied the
+        arena); unstamped, the next step bound every weight again, and the next restore replaced those again: a full
+        bind and ~100 strided copies at every token from a served model's second request on (Qwen3-Coder-30B-A3B on a
+        V100-32GB: 0.20 s a token against 0.08 on the first request, 2026-11-11)."""
+        sig = getattr(self, "_bound_sig", None)
+        if sig is not None:
+            self._bound_sig = (sig[0], self._arena.epoch) + sig[2:]
+
     def bind_weights(self, weights: Dict[str, NBXTensor]):
         """Bind weight tensors to arena slots, then compute per-op devices."""
         # The same weights as the last bind (the same dict, the same tensor objects): every slot already holds them
@@ -3197,6 +3204,7 @@ class TritonSequence(SequenceSteps):
                     pre_op_callback(a, self._ops[a])
                 if not _replay.maybe_run(self, skip_kills, None):
                     self._run_multi_device(skip_kills, pre_op_callback)
+                self._the_replayed_weights_are_the_bound_ones()
         finally:
             self._run_skip = None
             self._tail_replay = False
@@ -3344,7 +3352,7 @@ class TritonSequence(SequenceSteps):
             elif _replay.ENABLED and (not self._is_multi_device
                                       or _replay.MULTIDEV_PROOF):
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):
-                    return
+                    return self._the_replayed_weights_are_the_bound_ones()
             elif _replay.ENABLED:
                 _replay._decline(self, "its ops run on several devices (host-held weights or several cards) and a "
                                        "multi-device replay is proven only for an expert store's card-held tail")
@@ -3354,10 +3362,7 @@ class TritonSequence(SequenceSteps):
                 # between the check and the run). Bind NOW, before any op
                 # executes — the skip must never be observable on the
                 # op-by-op path.
-                import os as _os_lb2
-                if _os_lb2.environ.get("NBX_LAZY_BIND_DIAG") == "1":
-                    _log.debug("[LazyBind] late-bind fired (replay declined "
-                               "after would_replay said yes)")
+                _log.debug("[LazyBind] late-bind fired (replay declined after would_replay said yes)")
                 self.bind_weights(_parked)
             # The invariant state (state engine step 4): bit-identical invariant inputs skip their ops; any other run
             # evaluates them and keeps the frontier. A calibration observes every op, so it evaluates.

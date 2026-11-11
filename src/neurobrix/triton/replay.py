@@ -1147,6 +1147,8 @@ def _heap_copy(t: NBXTensor) -> NBXTensor:
 def _copy_into(frozen: NBXTensor, new: NBXTensor) -> None:
     """`new`'s values into the recorded `frozen` buffer, whatever either's layout (a view on either side is copied
     element by element, the recorded layout kept)."""
+    if new.is_same_memory(frozen):
+        return        # another view object of the recorded elements (a weight's view rebuilt after a request's bind)
     if new.is_contiguous() and frozen.is_contiguous():
         DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(), frozen._nbytes, 3)
     else:
