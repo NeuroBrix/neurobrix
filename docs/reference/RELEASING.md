@@ -15,6 +15,13 @@ Both changelogs follow [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.
 
 ## While developing — every landing
 
+0. **Published numbers are consecutive, and main carries exactly one number per product: the next one to publish**
+   (the last published + 1 — the owner, 2026-11-11). A publication increments the version; a fix does not: fixes and
+   patches are grouped on main under that one number, in the product's single open changelog entry (`[Unreleased]`),
+   organised by what a user gains. A lot touches neither a version field nor a pin, and no text or commit message names
+   a number that was never published. A version goes out when the batch is consistent, the engine stable and the known
+   defects fixed; the supervisor arbitrates when.
+
 1. A lot that changes what a user of a product sees (a behaviour, a speed, a result, a refusal, a public name) adds
    its line under `[Unreleased]` of THAT product's changelog, in the same commit: a bold title, the cause and the
    effect, in Added / Changed / Deprecated / Removed / Fixed / Security. — whoever lands it.
@@ -27,9 +34,10 @@ Both changelogs follow [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.
 2. The tree to publish is the one the final gate ran on, frozen; its proofs are cited in the release decision
    (`docs/reference/release-decisions.md`). — the Dell.
 3. In the product's changelog, `[Unreleased]` becomes `[X.Y.Z] - YYYY-MM-DD` and a new empty `[Unreleased]` opens above
-   it; the comparison links at the bottom gain the new version. The product's version field is set to X.Y.Z; for the
-   library, the engine's dependency (`nbxtensor==X.Y.Z` in `pyproject.toml`) follows it in the same commit. One commit,
-   landed like any other. — the Dell.
+   it; the comparison links at the bottom gain the new version. X.Y.Z is the number main already carries (rule 0): the
+   version field and the engine's dependency on the library (`nbxtensor==X.Y.Z` in `pyproject.toml`) are checked, not
+   changed. One commit, landed like any other. Right after the publication, one commit sets each published product's
+   field (and the pin) to its next number. — the Dell.
 4. **Before the tag, the new user's path, on the BUILT wheels (never on PyPI), all green — or nothing is tagged:**
    (L) a clean Linux container on a free card: `pip install` of the built engine and library wheels, `neurobrix doctor`,
    `neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license` onto the container's own disk (no mount),

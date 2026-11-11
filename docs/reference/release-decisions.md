@@ -324,3 +324,39 @@ never "driven"). Published, each read back: PyPI `nbxgrammar` 0.1.0 (six files),
 (publish.yml); tags `v0.6.5`, `nbxtensor-v0.1.0`, nbxgrammar `v0.1.0`; GitHub and GitLab releases; the organisation
 page. PyPI trials L (Linux, both legs) and M (Mac, CPython 3.11, nothing local) green: constrained decoding installed by
 `pip install neurobrix` and answering a valid JSON.
+
+## 2026-11-11 05:16 — NEUROBRIX 0.6.6, NBXTENSOR 0.1.1 AND NBXGRAMMAR 0.1.1 ARE PUBLISHED; PUBLISHED NUMBERS ARE CONSECUTIVE (the owner, 02:25 and 02:31)
+
+A grouped publication of the work landed since 0.6.5 (the supervisor's order, 02:25): a long prompt read several times
+faster by the serving daemon inside a memory plan that counts what the engine uses, no memory taken on GPUs a model
+does not use, the output layer counted once, reference flags refused by name, the experimental Intel backend's Gen12
+chips and its run-time refusal, the grammar engine from its own repository.
+
+**The owner's rule of that night.** Main had taken a number at every landed lot (0.6.6 to 0.6.21, nbxtensor 0.1.1 to
+0.1.9) while PyPI stood at 0.6.5 / 0.1.0. The owner refused the jump: a version number exists only when it is
+published, published numbers are consecutive, main carries one number per product — the next to publish — and a
+publication increments it, a fix does not (`docs/reference/RELEASING.md`, rule 0). The release therefore went out as
+0.6.6 / 0.1.1 / 0.1.1: the sixteen and nine changelog entries merged into one each, organised by what a user gains;
+and, by the owner's one-time word, the public history after the last published tags was re-created commit for commit
+(same authors and dates, the lots kept one commit each) so that no commit message and no committed file names a number
+that was never published. Engine main: `2cbf08d56` → `96fa039f1` (the tip's tree byte-identical to the renumbered
+tree); the exported nbxtensor repository re-derived from it; nbxgrammar needed nothing. Published tags and every
+commit at or before them kept their sha.
+
+**Proofs.** Plans: 0 of 196 moved against the last gated listing; against 0.6.5, 27 cells of seven mixture-of-experts
+models (expert cache size, session reach) — the 14 compiled ones replayed green when they moved, the 13 Triton ones
+replayed on the rewritten freeze, green, every output read, none slower than 1.5x its last gate time. The five shas
+identical in the torch-free environment, 0 torch import attempts. The whole suite once: two reds, both fixed at the
+source (a single vendor's device prefix in the weight loader; a test file that ended the interpreter when run alone),
+then the device suite, 0 failed. Two defects of the new user's path reported on 0.6.5 during the night and fixed
+before the tag: a model's name (one message whatever was typed, the lists print the names `run` accepts, and 33
+documentation commands corrected to them) and the "First launch ... once" line said at later launches. The freeze
+`b8350802b`. Every public sentence reread by the agent who did not write it; the two pure packages rebuilt
+byte-identical on the second machine. Trials L (Linux, both legs) and M (Mac, Metal) on the built wheels, then from
+PyPI: green, with the reporter's own sequence (three launches in one home, the four name cases).
+
+**Published, each read back:** PyPI `nbxgrammar` 0.1.1 (six files), `nbxtensor` 0.1.1, `neurobrix` 0.6.6
+(publish.yml, pinning both exactly); tags `v0.6.6` and `nbxtensor-v0.1.1` on `b8350802b`, nbxgrammar `v0.1.1`; GitHub
+and GitLab releases; the organisation page. Seen at the PyPI trials, nothing of ours: for the first minutes after an
+upload the index `pip` reads does not list the new files yet, and an install then fails with "No matching
+distribution" (both machines' first attempts; the second, minutes later, installed).
