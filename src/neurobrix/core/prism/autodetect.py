@@ -2552,7 +2552,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
                     break
     replay = P.vmm_first_replay(0) if "vmm_chunk_bytes" not in first else None    # made ahead: it prices the rest
     if not first or probes or "vmm_chunk_bytes" not in first:
-        launch_lines.say("measure" if not first or "vmm_chunk_bytes" not in first else "again", _work_said(probes, replay,
+        launch_lines.say("measure" if not first or "vmm_chunk_bytes" not in first else "reload", _work_said(probes, replay,
                                                 q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
     if not first:
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]

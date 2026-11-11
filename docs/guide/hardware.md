@@ -7,7 +7,7 @@ NeuroBrix uses hardware profiles to automatically determine execution strategies
 When you run NeuroBrix without `--hardware`, it automatically detects your system:
 
 ```bash
-neurobrix serve --model 1600m-1024
+neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
 # Detects all GPUs, CPU, RAM, interconnects → creates default.yml
 ```
 
@@ -26,7 +26,7 @@ The `--hardware` flag lets you target a **specific subset** of your hardware ins
 
 ```bash
 # Use only a single V100 32GB (even if you have 4)
-neurobrix serve --model 1600m-1024 --hardware v100-32g
+neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers --hardware v100-32g
 
 # Use a multi-GPU profile for large models
 neurobrix serve --model deepseek-ai/deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink

@@ -368,12 +368,12 @@ For more information: https://neurobrix.org"""
         description='Remove a model from cache, store, or both.',
         epilog="""
 Examples:
-  neurobrix remove 1600m-1024             # Cache only (default)
-  neurobrix remove 1600m-1024 --store     # Store only (.nbx archive)
-  neurobrix remove 1600m-1024 --all       # Both cache and store
+  neurobrix remove Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers             # Cache only (default)
+  neurobrix remove Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers --store     # Store only (.nbx archive)
+  neurobrix remove Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers --all       # Both cache and store
         """
     )
-    remove_parser.add_argument('model_name', help='Model name to remove (e.g., 1600m-1024)')
+    remove_parser.add_argument('model_name', help='Model name to remove (e.g., Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers)')
     remove_parser.add_argument('--store', action='store_true',
                                help='Remove from store only (keep cache)')
     remove_parser.add_argument('--all', action='store_true',

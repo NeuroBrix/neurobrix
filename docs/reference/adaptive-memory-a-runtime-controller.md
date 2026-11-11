@@ -5,7 +5,7 @@
 ## The case that motivates it, with a 15-second reproducer
 
 ```
-neurobrix run --model real-esrgan-x8 --input-image apple_1024.png --triton
+neurobrix run --model ai-forever/Real-ESRGAN-RealESRGAN_x8 --input-image apple_1024.png --triton
   RuntimeError: Failed at aten.convolution::349 (aten::convolution):
   GPU malloc failed (error 2) for 8589934592 bytes
   [device cuda:0 live_tracked=8242MB pool_cached=0MB driver_free=7598MB]

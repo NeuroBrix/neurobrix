@@ -19,16 +19,16 @@ Output is a PNG at `input × scale`.
 
 | Model | Scale | Class | Best for | Modes |
 |-------|-------|-------|----------|-------|
-| `swin2SR-classical-sr-x2-64` | 2× | Swin2SR transformer | clean images | all 4 |
-| `swin2SR-classical-sr-x4-64` | 4× | Swin2SR transformer | clean images | all 4 |
-| `swin2SR-realworld-sr-x4-64-bsrgan-psnr` | 4× | Swin2SR transformer | degraded / real-world photos | all 4 |
-| `real-esrgan-x2` | 2× | RRDBNet CNN (GAN) | photos, detail synthesis | all 4 |
-| `Real-ESRGAN-x4` | 4× | RRDBNet CNN (GAN) | photos, detail synthesis | all 4 |
-| `real-esrgan-x8` | 8× | RRDBNet CNN (GAN) | large upscales | all 4 |
-| `swinir-classical-x2` | 2× | SwinIR transformer | high-fidelity clean images | all 4 |
-| `swinir-classical-x4` | 4× | SwinIR transformer | high-fidelity clean images | all 4 |
-| `hat-s-x4` | 4× | HAT (hybrid attention) | sharp detail, compact | compiled / sequential |
-| `hat-l-x4` | 4× | HAT (hybrid attention) | maximum quality | compiled / sequential |
+| `caidas/swin2SR-classical-sr-x2-64` | 2× | Swin2SR transformer | clean images | all 4 |
+| `caidas/swin2SR-classical-sr-x4-64` | 4× | Swin2SR transformer | clean images | all 4 |
+| `caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr` | 4× | Swin2SR transformer | degraded / real-world photos | all 4 |
+| `ai-forever/Real-ESRGAN-RealESRGAN_x2` | 2× | RRDBNet CNN (GAN) | photos, detail synthesis | all 4 |
+| `xinntao/Real-ESRGAN-RealESRGAN_x4plus` | 4× | RRDBNet CNN (GAN) | photos, detail synthesis | all 4 |
+| `ai-forever/Real-ESRGAN-RealESRGAN_x8` | 8× | RRDBNet CNN (GAN) | large upscales | all 4 |
+| `JingyunLiang/SwinIR-001_classicalSR_DF2K_s64w8_SwinIR-M_x2` | 2× | SwinIR transformer | high-fidelity clean images | all 4 |
+| `JingyunLiang/SwinIR-001_classicalSR_DIV2K_s48w8_SwinIR-M_x4` | 4× | SwinIR transformer | high-fidelity clean images | all 4 |
+| `XPixelGroup/HAT-HAT-S_SRx4` | 4× | HAT (hybrid attention) | sharp detail, compact | compiled / sequential |
+| `XPixelGroup/HAT-HAT-L_SRx4_ImageNet-pretrain` | 4× | HAT (hybrid attention) | maximum quality | compiled / sequential |
 
 ## Choosing a model
 
@@ -51,8 +51,8 @@ Output is a PNG at `input × scale`.
 
 ## Distribution
 
-The four x4 classical variants — `hat-l-x4`, `Real-ESRGAN-x4`,
-`swinir-classical-x4`, `swin2SR-classical-x4` — are published on
+The four x4 classical variants — `XPixelGroup/HAT-HAT-L_SRx4_ImageNet-pretrain`, `xinntao/Real-ESRGAN-RealESRGAN_x4plus`,
+`JingyunLiang/SwinIR-001_classicalSR_DIV2K_s48w8_SwinIR-M_x4`, `caidas/swin2SR-classical-sr-x4-64` — are published on
 the NeuroBrix hub (neurobrix.org) and downloadable now. The other
 variants in the catalogue are validated by the engine and are
 being published to the hub progressively. None are distributed

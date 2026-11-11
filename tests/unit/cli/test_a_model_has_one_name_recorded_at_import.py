@@ -169,3 +169,6 @@ def test_a_name_that_leads_to_a_recorded_entry_gets_the_one_message_and_not_foun
     for accepted in names.accepted_names(cache):                    # every listed name is one `--model` takes
         names.resolve(cache, accepted)
     assert names.resolve(cache, "Someone/Unknown") == ("Someone/Unknown", None)
+    # another organisation's model of the same last name is ANOTHER model, not installed: "not found", never "is named"
+    other = "somebody-else/TinyLlama-1.1B-Chat-v1.0"
+    assert names.resolve(cache, other) == (other, None)

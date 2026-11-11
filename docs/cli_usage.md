@@ -82,7 +82,7 @@ Output: `.txt` (or `.json` if `--output result.json`).
 Reference: Qwen3-VL (Alibaba), LLaVA, InternVL.
 
 ```bash
-neurobrix run --model Qwen3-VL-7B \
+neurobrix run --model Qwen/Qwen3-VL-30B-A3B-Thinking \
     --input-image cat.jpg \
     --prompt "What animal is in this image?" \
     --max-tokens 100

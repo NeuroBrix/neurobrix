@@ -7,7 +7,7 @@ Hardware profiles tell NeuroBrix what your machine looks like — GPUs, CPU, mem
 Most users don't. When you run NeuroBrix without `--hardware`, auto-detection creates a profile for your entire machine:
 
 ```bash
-neurobrix serve --model 1600m-1024
+neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
 # Auto-detects all GPUs, CPU, interconnects
 ```
 
@@ -33,7 +33,7 @@ src/neurobrix/config/hardware/
 Use the profile name (without `.yml`) as the `--hardware` argument:
 
 ```bash
-neurobrix serve --model 1600m-1024 --hardware v100-32g
+neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers --hardware v100-32g
 ```
 
 ## Full Profile Reference

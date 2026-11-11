@@ -45,7 +45,7 @@ baseline, all ruled in via systematic bisect:
   original DRIFT cause, isolated by Step 3e bisect).
 
 The empirical signature is the same in every case: 3 successive runs of
-the same `python -m neurobrix run --model TinyLlama --temperature 0
+the same `python -m neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --temperature 0
 --prompt Hello --max-tokens 5 --triton` produce 3 different 5-token
 outputs, while the equivalent test on the pre-Layer-6 baseline (or on a
 strictly-minimal inline cascade-if) produces 3 identical "Certainly! Here".

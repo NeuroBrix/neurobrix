@@ -180,7 +180,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
     assert probed == ["asked"], "the rate is still owed: measured again"
     said = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
-    assert len(said) == 1 and said[0].startswith("Measuring this machine's weight reload rate again"), said
+    assert len(said) == 1 and said[0].startswith("Measuring this machine's weight reload rate: none is kept yet"), said
     assert "First launch" not in said[0] and " once" not in said[0], said[0]
     # and a launch that owes nothing says nothing
     data = yaml.safe_load((hw / "default-t.yml").read_text())

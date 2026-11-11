@@ -88,7 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers`) — answers with one message naming the name to use;
   it answered "not found" followed by a list of folder names that `run` then refused, three tries for a new user.
   The "installed models" list now prints the names `--model` accepts, and `import` says when the hub's name is not
-  the one typed.
+  the one typed. Every model name in the documentation's commands is now the name `run` accepts (the benchmark's
+  commands, the guides' serving and removal examples, the upscaler table, and `neurobrix remove --help` used folder or
+  short names).
 - **`--reference-audio` and `--reference-image` are refused by name instead of being ignored.** `neurobrix run`
   accepted both and no model read them: a request to clone a voice from a recording ran and spoke with the model's
   own voice, as if the flag were absent. Cloning a voice from a reference and conditioning on a style image are not
@@ -96,8 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The "First launch on this machine: measuring it once" line is said at the first launch only.** A weight reload
   rate is kept only from three reloads in a row that agree within 5 %; on a machine that was not quiet the first
   launch kept none, the next launches measured it again — and said so with the first launch's line, "once", each time
-  (seen at launches 2 and 3 on a Mac with a virtual machine running). Such a launch now says what it does: it measures
-  the reload rate again because the last launch's reloads were not steady enough to keep.
+  (seen at launches 2 and 3 on a Mac with a virtual machine running). The same line was said at the first launch of
+  a model whose stored weights are of a kind the machine had not reloaded yet. Such a launch now says what it does: it
+  measures the weight reload rate, none being kept yet for that model's stored weights.
 - **An older automatically generated hardware profile no longer refuses every run.** A profile written before two of
   its measured figures existed (the GPU memory the runtime sees, and what the runtime itself takes on the card) was
   refused with the advice to delete the file. Those figures are now measured and added to the generated profile at

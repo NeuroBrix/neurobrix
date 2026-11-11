@@ -61,7 +61,7 @@ This unloads weights and frees GPU memory.
 Use `--set` to override model defaults at serve time:
 
 ```bash
-neurobrix serve --model 1600m-1024 \
+neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers \
   --set global.num_inference_steps=30 \
   --set global.guidance_scale=5.0
 ```
@@ -72,7 +72,7 @@ By default, serve uses your full machine. To use a specific GPU profile:
 
 ```bash
 # Single GPU only (reserve others for training)
-neurobrix serve --model 1600m-1024 --hardware v100-32g
+neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers --hardware v100-32g
 
 # Multi-GPU profile for large models
 neurobrix serve --model deepseek-ai/deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink

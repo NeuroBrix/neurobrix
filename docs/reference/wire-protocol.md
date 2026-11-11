@@ -171,7 +171,7 @@ connections. It says so once, as one **ready record** (a JSON object), so a
 launcher waits for it instead of retrying connections:
 
 ```json
-{"state": "ready", "pid": 4242, "model": "Qwen/Qwen3-0.6B", "family": "llm", "serving": "warm",
+{"state": "ready", "pid": 4242, "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "family": "llm", "serving": "warm",
  "engine": "0.x.y", "protocol": 1, "protocol_range": [1, 1],
  "endpoint": {"kind": "unix", "path": "/Users/me/.neurobrix/daemon.sock"}, "operations": [...]}
 {"state": "failed", "pid": 4242, "model": "...", "engine": "0.x.y", "protocol": 1, "protocol_range": [1, 1],

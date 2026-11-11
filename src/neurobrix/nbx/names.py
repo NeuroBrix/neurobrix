@@ -106,20 +106,20 @@ def accepted_names(cache: Path) -> list:
 
 def resolve(cache: Path, asked: str) -> Tuple[str, Optional[str]]:
     """The cache entry a user's model name designates, and the migration note to say (None when the name is
-    recorded). A recorded entry asked by another name that leads to it — its directory name, or that name behind an
-    organisation (`import` takes names the hub answers under another one: `<org>/Sana_1600M_1024px_MultiLing` is
+    recorded). A recorded entry asked by another name that leads to it — its directory name, bare or behind the recorded
+    name's own organisation (`import` takes names the hub answers under another one: `<org>/Sana_1600M_1024px_MultiLing` is
     recorded as `<org>/Sana_1600M_1024px_MultiLing_diffusers`) — is refused (`NameRefused`) naming its hub name: one
     message, whatever was typed. A name no entry carries is returned as asked, for the caller's "not found" answer."""
     cache = Path(cache)
     for entry in _entries(cache):
         if recorded_name(entry) == asked:
             return entry.name, None
-    entry = cache / asked.rsplit("/", 1)[-1]
+    org, entry = asked.rpartition("/")[0], cache / asked.rpartition("/")[2]
     if entry.is_dir() and (entry / "manifest.json").exists():
         rec = recorded_name(entry)
-        if rec is not None:
+        if rec is not None and org in ("", rec.rpartition("/")[0]):     # another organisation's model is another model
             raise NameRefused(asked, rec)
-        if "/" not in asked:
+        if rec is None and not org:
             return asked, migration_note(asked)
     return asked, None
 

@@ -148,7 +148,7 @@ The model is downloaded and extracted to `~/.neurobrix/cache/<name>`; `--model` 
 neurobrix list
 
 # Remove a model
-neurobrix remove TinyLlama-1.1B-Chat-v1.0
+neurobrix remove TinyLlama/TinyLlama-1.1B-Chat-v1.0
 
 # Clean all
 neurobrix clean --all -y

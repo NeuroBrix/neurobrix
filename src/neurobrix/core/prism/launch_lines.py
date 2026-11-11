@@ -18,8 +18,10 @@ _log = logging.getLogger(__name__)
 
 LINES = {"detect": "First launch on this machine: detecting its hardware once...",
          "measure": "First launch on this machine: measuring it once for its hardware profile{what}...",
-         "again": "Measuring this machine's weight reload rate again: the last launch's reloads were not steady "
-                  "enough to keep{what}..."}
+         # a later launch that owes a reload rate: a stored dtype this machine never reloaded (another model), or one
+         # whose reloads were not steady enough to keep last time — the line claims neither, it says what is done
+         "reload": "Measuring this machine's weight reload rate: none is kept yet for this model's stored "
+                   "weights{what}..."}
 SAID: set = set()
 
 

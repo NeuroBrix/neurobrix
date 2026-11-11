@@ -196,7 +196,7 @@ neurobrix remove [options] model_name
 
 | argument | default | description |
 |---|---|---|
-| `model_name` | required | Model name to remove (e.g., 1600m-1024) |
+| `model_name` | required | Model name to remove (e.g., Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers) |
 | `--store` | off | Remove from store only (keep cache) |
 | `--all` | off | Remove from both cache and store |
 | `--json` | off | One JSON record of what was removed on stdout; human lines on stderr |
@@ -204,9 +204,9 @@ neurobrix remove [options] model_name
 
 ```text
 Examples:
-  neurobrix remove 1600m-1024             # Cache only (default)
-  neurobrix remove 1600m-1024 --store     # Store only (.nbx archive)
-  neurobrix remove 1600m-1024 --all       # Both cache and store
+  neurobrix remove Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers             # Cache only (default)
+  neurobrix remove Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers --store     # Store only (.nbx archive)
+  neurobrix remove Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers --all       # Both cache and store
 ```
 
 ## clean
