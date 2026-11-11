@@ -984,6 +984,12 @@ class PrismSolver:
                 devs.update(str(v) for v in p.values() if isinstance(v, str) and not v.startswith("cpu"))
         return devs
 
+    @staticmethod
+    def _dealt_cache_cards(strat_allocs: Dict, kv_cards) -> set:
+        """The cache's cards when a component's weight files are dealt over several cards (a `tp:` allocation), else none."""
+        dealt = any(str(a[0] if isinstance(a, tuple) else a).startswith("tp:") for a in strat_allocs.values())
+        return set(kv_cards or ()) if dealt else set()
+
     def _kv_stripped(self, component_memory: Dict, kv_bytes: int) -> Dict:
         """`component_memory` with the decoder's KV estimate taken out of ITS activation and total bytes (the estimate
         sits in the decoder's activations, `_compute_memory`): the cache this check sizes is not held twice, and a MAX
@@ -3041,10 +3047,7 @@ class PrismSolver:
                     # Granted from the whole rung, the cache took the margin: Qwen3-Coder-30B-A3B on two V100-32GB,
                     # PyTorch engine — 29 016 MB of files + 3 084 MB of cache planned on a card of 32 195 MB, out of
                     # memory at 31.7 GB in its first prefill (2026-11-11).
-                    _dealt = {d for d in (_kv_cards or ()) if any(
-                        isinstance((a[0] if isinstance(a, tuple) else a), str)
-                        and (a[0] if isinstance(a, tuple) else a).startswith("tp:") for a in strat_allocs.values())}
-                    _bounded = (_store_devs | _z3_devs | _dealt) & {d.device_string for d in _cards}
+                    _bounded = (_store_devs | _z3_devs | self._dealt_cache_cards(strat_allocs, _kv_cards)) & {d.device_string for d in _cards}
                     if _bounded:
                         total_capacity = min(total_capacity, sum(
                             int(self._usable_mb(d) * 1024 * 1024) if d.device_string in _bounded
