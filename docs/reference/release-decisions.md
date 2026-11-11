@@ -391,3 +391,36 @@ bytes — the workflow builds without the commit's date. The same was true of 0.
 PyPI trials L (Linux, both legs; the Sana image byte-identical to the one judged for 0.6.6) and M (Mac, Metal) green,
 each on its second run: for the first minutes after an upload the index `pip` reads does not serve the new files,
 while a request of our own to the index already lists them — the check must be pip's own (`pip download --no-deps`).
+
+## 2026-11-11 23:44 — NEUROBRIX 0.6.8 AND NBXTENSOR 0.1.3 ARE PUBLISHED: A CORRECTIVE VERSION (the supervisor 19:15, the owner 21:47 / 22:03)
+
+Found while a mixture-of-experts coding model (Qwen3-Coder-30B-A3B) served NBX Code's first runs, and by the gate's two
+new kinds of cell: wrong answers or stops on the paths that model takes, and on a small card. The owner's order:
+wrong values at a user ship at once, and every defect met on the two-card path is fixed before the version goes out.
+Seven user-facing fixes, each found by a measure and fixed at its source with a test seen red:
+a served MoE model slowed after its first request (three causes: a replayed step left the dense weights on the host;
+every later token re-bound all the weights; each weight bound as a view was copied onto itself); an answer could end
+with a bare tool-call marker; a MoE model spread over two cards read the wrong experts and wrote past its outputs
+(nbxtensor's per-card tables now keep the layer's length) and its decode cache was sized against both cards then the
+whole rung (out of memory, both engines); a dense model split over two cards failed at its first hand-off (nbxtensor:
+a chunk of a card's expandable pool was granted to its card alone); a model streamed layer by layer on a small card
+answered garbage (a replayed piece did not count its attention call, every later layer's keys went one layer off) —
+the last two in 0.6.7 too. One wording change: 77 engine messages speak of building containers.
+
+**New cells of the gate, seen failing first.** The SERVE cell (`tools/gate_serve_cell.py`: one daemon, three requests,
+the third at the first's speed within the gate's 1.5x): RED on ef8f0edee (2.33x), GREEN on the freeze (0.98x). The
+MULTI-CARD cells (the cell runner on two cards, certified-only, both engines): a dense model (GLM-4.1V-9B-Thinking,
+2 x 16 GB) and the MoE model (2 x 32 GB) — red before their fixes, green on the freeze, the same answer on both engines.
+
+**Proofs on the freeze a45f4e6a0.** Torch-free proof PASS (0 torch imports; the library's 399 tests; the five shas
+equal to their references); every lot's touched directories on cards (tests/unit/triton 225-281 passed, the prism
+directory in 14 shards, the boundary, the library); trials L (Linux containers, both legs) and M (Mac, Metal) on the
+wheels, then from PyPI, all green, 0 Traceback; the Sana image looked at, byte-identical between the wheels and PyPI.
+Every public sentence reread by the Mac (one maker name struck from the release notes).
+
+**Published, each read back:** tags `v0.6.8` and `nbxtensor-v0.1.3` on `a45f4e6a0` (origin and GitLab); PyPI
+`nbxtensor` 0.1.3 (both files by sha256) and `neurobrix` 0.6.8 (publish.yml 43114215983; the archives have the freeze's
+content, every member's sha256 equal: 548 of 548 in the wheel, 549 of 549 in the sdist); GitHub and GitLab releases;
+`nbxgrammar` stays 0.1.1. Said in the release notes and not as a claim: for a MoE model that does not fit one card, two
+cards are not faster than one today (the two-card plan runs op by op: the reading, with the measures, is in the
+register), and how to run it on one card.
