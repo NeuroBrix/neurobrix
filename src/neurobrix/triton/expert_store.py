@@ -104,14 +104,14 @@ class NBXExpertStore:
         import numpy as np
         L, E, S = len(layer_index), int(n_experts), int(self.residency.n_slots)
         DA.set_device(self.device_idx)
-        dev = f"cuda:{self.device_idx}"
+        dev = self.device_idx
         self.layer_index, self.n_experts = dict(layer_index), E
-        self._slot_of = NBXTensor.from_numpy(np.full(L * E, -1, dtype=np.int32)).to(dev)
-        self._owner = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int32)).to(dev)
-        self._stamp = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int64)).to(dev)
-        self._clock = NBXTensor.from_numpy(np.zeros(1, dtype=np.int64)).to(dev)
+        self._slot_of = NBXTensor.from_numpy(np.full(L * E, -1, dtype=np.int32), device=dev)
+        self._owner = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int32), device=dev)
+        self._stamp = NBXTensor.from_numpy(np.full(S, -1, dtype=np.int64), device=dev)
+        self._clock = NBXTensor.from_numpy(np.zeros(1, dtype=np.int64), device=dev)
         self._slot_tabs = tuple(NBXTensor.from_numpy(np.array([self.slots[k][i].data_ptr() for k in range(S)],
-                                                              dtype=np.int64)).to(dev) for i in range(3))
+                                                              dtype=np.int64), device=dev) for i in range(3))
         self._host_np = np.zeros((3, L * E), dtype=np.int64)
         self._host_tabs = None
         self._host_layers = set()

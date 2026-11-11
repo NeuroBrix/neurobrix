@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The Triton expert store places its five device tables on the card it names.** They were uploaded to the current
+  device and then "moved" by a call that moves nothing; they landed on the right card only because the line before
+  had selected it. They now name their device at the upload (`NBXTensor.from_numpy(..., device=)`), and the test that
+  forbids the old form reads the code's syntax tree, so a device held in a variable no longer escapes it. No result
+  changes.
+
 ## [0.6.6] - 2026-11-11
 
 ### Changed
