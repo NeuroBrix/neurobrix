@@ -93,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accepted both and no model read them: a request to clone a voice from a recording ran and spoke with the model's
   own voice, as if the flag were absent. Cloning a voice from a reference and conditioning on a style image are not
   wired in this version; the command now says so and stops before loading anything.
+- **The "First launch on this machine: measuring it once" line is said at the first launch only.** A weight reload
+  rate is kept only from three reloads in a row that agree within 5 %; on a machine that was not quiet the first
+  launch kept none, the next launches measured it again — and said so with the first launch's line, "once", each time
+  (seen at launches 2 and 3 on a Mac with a virtual machine running). Such a launch now says what it does: it measures
+  the reload rate again because the last launch's reloads were not steady enough to keep.
 - **An older automatically generated hardware profile no longer refuses every run.** A profile written before two of
   its measured figures existed (the GPU memory the runtime sees, and what the runtime itself takes on the card) was
   refused with the advice to delete the file. Those figures are now measured and added to the generated profile at

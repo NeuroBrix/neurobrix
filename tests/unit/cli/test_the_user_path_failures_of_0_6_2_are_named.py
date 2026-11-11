@@ -159,7 +159,8 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     probed = []
     monkeypatch.setattr(arena_probe, "child", lambda d, c, h, e: probed.append(Path(d).name) or
                         {"container": Path(d).name, "component": c, "draws": [(1, 1.0)]})
-    A._FIRST_LAUNCH_SAID.clear()
+    from neurobrix.core.prism import launch_lines
+    launch_lines.SAID.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
     assert probed == ["asked"], f"probed {probed}: the reload rate of models nobody asked for"
@@ -168,6 +169,29 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     # priced from what was measured: the 23 other replays at 2.0 s each (46 s) and the reload probe — at least 48 s
     m = re.search(r"up to about (\d+) (s|min)", said[0])
     assert m and (int(m.group(1)) * (60 if m.group(2) == "min" else 1)) >= 48, said[0]
+    # A LATER launch: the profile is measured (the chunk included) and only the reload rate is still owed — the child's
+    # reloads of the launch before were not steady, so nothing was written. It is said as what it is: not "First
+    # launch", not "once" (seen 2026-11-11 on a Mac that was not quiet: the first launch's line at launches 2 and 3).
+    assert "vmm_chunk_bytes" in yaml.safe_load((hw / "default-t.yml").read_text())["devices"][0]["measured"]
+    launch_lines.SAID.clear()                               # another process
+    caplog.clear()
+    probed.clear()
+    with caplog.at_level(logging.INFO, logger="neurobrix"):
+        A.ensure_measured_facts("default-t", "triton", container_dir=asked)
+    assert probed == ["asked"], "the rate is still owed: measured again"
+    said = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert len(said) == 1 and said[0].startswith("Measuring this machine's weight reload rate again"), said
+    assert "First launch" not in said[0] and " once" not in said[0], said[0]
+    # and a launch that owes nothing says nothing
+    data = yaml.safe_load((hw / "default-t.yml").read_text())
+    data["host_measured"]["weight_reload_gbps"] = {"triton": {"BF16": 2.0}}
+    (hw / "default-t.yml").write_text(yaml.safe_dump(data))
+    launch_lines.SAID.clear()
+    caplog.clear()
+    probed.clear()
+    with caplog.at_level(logging.INFO, logger="neurobrix"):
+        A.ensure_measured_facts("default-t", "triton", container_dir=asked)
+    assert probed == [] and not [r for r in caplog.records if r.levelno == logging.INFO]
     assert handed == [1.0], "the replay made ahead is one of the probe's own, never made twice"
 
 

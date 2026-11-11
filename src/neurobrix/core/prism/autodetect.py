@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ============================================================================
 
 from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
+from neurobrix.core.prism import launch_lines
 import logging
 _log = logging.getLogger(__name__)
 DEFAULT_PROFILE_PATH = HARDWARE_DIR / "default.yml"
@@ -308,17 +309,6 @@ def _complete_measured_fields(path: Path) -> None:
     _log.debug(f"   [Auto-detect] Completed {path.name}: {added}")
 
 
-_FIRST_LAUNCH_SAID: set = set()
-
-
-def _say_first_launch(phase: str, what: str = "") -> None:
-    """Once a phase, the line a first launch says while it measures this machine (0.6.2: 570 s of silence)."""
-    if phase not in _FIRST_LAUNCH_SAID:
-        _FIRST_LAUNCH_SAID.add(phase)
-        _log.info("First launch on this machine: " + ("detecting its hardware once..." if phase == "detect" else
-                  f"measuring it once for its hardware profile{what}..."))
-
-
 def _work_said(probes, replay, replays: int) -> str:
     """The time this launch expects, from what this machine measured: `replays` more chunk-probe children at what the
     first cost (`replay`: replay s, child s), each reload probe at that cost plus its five loads at this storage's rate."""
@@ -350,7 +340,7 @@ def get_or_create_default_profile() -> str:
         if DEFAULT_PROFILE_PATH.exists():
             _complete_measured_fields(DEFAULT_PROFILE_PATH)
             return "default"
-        _say_first_launch("detect")
+        launch_lines.say("detect")
         profile_data = detect_hardware()
         _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
         _log.debug(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
@@ -365,7 +355,7 @@ def get_or_create_default_profile() -> str:
         _complete_measured_fields(path)
         return hardware_id
 
-    _say_first_launch("detect")
+    launch_lines.say("detect")
     _log.debug("   [Auto-detect] No --hardware specified, detecting system hardware...")
     profile_data = detect_hardware()
     _write_profile_atomically(path, profile_data)
@@ -2562,7 +2552,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
                     break
     replay = P.vmm_first_replay(0) if "vmm_chunk_bytes" not in first else None    # made ahead: it prices the rest
     if not first or probes or "vmm_chunk_bytes" not in first:
-        _say_first_launch("measure", _work_said(probes, replay,
+        launch_lines.say("measure" if not first or "vmm_chunk_bytes" not in first else "again", _work_said(probes, replay,
                                                 q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
     if not first:
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
