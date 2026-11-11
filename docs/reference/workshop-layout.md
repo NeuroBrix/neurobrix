@@ -28,7 +28,7 @@ virtualenv, nor a mount, it belongs under `nbx/`.
 | directory | holds | removal condition |
 |---|---|---|
 | `nbx/worktrees/` | measurement worktrees, one per arm | when its commit is reachable from a remote branch — proven, then `git worktree remove` |
-| `nbx/builds/` | `.nbx` containers produced locally | when the container is published to the hub, or superseded by a retrace |
+| `nbx/builds/` | `.nbx` containers produced locally | when the container is published to the hub, or superseded by a rebuild |
 | `nbx/stage/` | staging for builds and uploads | at the end of the operation that created it — never survives its campaign |
 | `nbx/logs/` | logs not attached to a campaign | after 30 days, or once the finding they support is committed |
 | `nbx/stats/` | measurement tables, timings, counters | when the table is committed to the repository or archived to the NAS |

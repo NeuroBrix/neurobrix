@@ -2,9 +2,9 @@
 
 ## The question, and why it had to be answered before anything was said outside
 
-A causal video VAE processes frames in chunks. If the tracer UNROLLS that loop,
+A causal video VAE processes frames in chunks. If the container builder UNROLLS that loop,
 the graph holds one copy of the chunk body per chunk and the chunk count is fixed
-at the trace stimulus. Such a component is not symbolic in time however many
+at the build stimulus. Such a component is not symbolic in time however many
 symbols its table declares: a graph unrolled for five chunks cannot process
 eighty-one frames, and the symbolic machinery then folds the temporal factor into
 a neighbouring slot rather than failing honestly. That is how three Wan
@@ -28,8 +28,8 @@ The signature read on two fitted points is far sharper and needs both of them.
 Between k=5 and k=7 the twelve module groups of the measured case move as
 `27k-40`, `19k-26`, `16k-17`, `13k`, `13k-12`, `7k`, `4k`, `3k-1`, `2k`, `2k-2`,
 `k`, and one constant — **eleven of twelve affine in k**. So the instrument
-traces the same component at two stimuli with the SAME tracer (a fit across two
-tracer versions is not a fit) and reads the slope:
+builds the same component's graph at two stimuli with the SAME builder (a fit across two
+builder versions is not a fit) and reads the slope:
 
 ```
 ops(k) = a*k + b        a >= 2 and a*k/ops >= 0.20  ->  UNROLLED
@@ -62,14 +62,14 @@ real for the Wan VAE and is NOT a property of video components in general.
 ## Measured since — `Wan2.2-I2V-A14B/vae_encoder`, 2026-09-13 04:44
 
 Its snapshot came back on 2026-09-12 and the two-point measurement ran on card 0
-with the same tracer as the anchor: **1237 ops at T=9 (k=3), 3305 ops at T=25
+with the same builder as the anchor: **1237 ops at T=9 (k=3), 3305 ops at T=25
 (k=7) — 517 ops per chunk, UNROLLED.** The inference below held for it; the line
 now reads MEASURED, and only `Wan2.1-I2V-14B-480P` remains inferred.
 
 ## Inferred — 1 component left, and what the inference rests on
 
 `Wan2.1-I2V-14B-480P-Diffusers` has no local snapshot (purged under R38), so no
-second trace point exists for it. `Wan2.2-I2V-A14B` was in this table until its
+second build point exists for it. `Wan2.2-I2V-A14B` was in this table until its
 measurement above confirmed the inference exactly. Their
 cached encoder graphs carry the measured anchor's chunk-loop module groups
 **identically**, on both the repetition counts and the number of modules at each:
@@ -87,7 +87,7 @@ these are VAEs of different sizes carrying the same chunk loop. Six groups
 agreeing exactly on two numbers each is what the inference rests on.
 
 Converting either to a measured line costs one snapshot re-download and two
-traces of about fifteen seconds. Until then the line reads INFERRED, and an
+graph builds of about fifteen seconds. Until then the line reads INFERRED, and an
 inferred line and a measured line do not read the same.
 
 ## Not measurable, with the reason
@@ -95,9 +95,9 @@ inferred line and a measured line do not read the same.
 | component | why |
 |---|---|
 | `Allegro/vae_encoder`, `CogVideoX-2b/vae_encoder`, `Wan2.1-T2V/vae_encoder` | the model has no such component |
-| `SANA-Video_2B_720p/vae` | at T=25 the synthesised latent carries 64 channels where the weights want 128 (`expected input[1, 64, 27, 16, 24] to have 128 channels`). The latent WIDTH depends on the temporal stimulus, which is its own question and not this one. Reproducible; T=9 traces fine. |
+| `SANA-Video_2B_720p/vae` | at T=25 the synthesised latent carries 64 channels where the weights want 128 (`expected input[1, 64, 27, 16, 24] to have 128 channels`). The latent WIDTH depends on the temporal stimulus, which is its own question and not this one. Reproducible; T=9 builds fine. |
 | `mochi-1-preview` | snapshot purged; no second point available |
-| `Open-Sora-v2/vae` | **measured 2026-09-13 13:11, card 0: 237 ops at T=9 and at T=25 — flat, not unrolled** (the June container's VAE graph carried 11 017 ops: an unrolled trace, replaced by the fifth re-trace of 2026-09-13) |
+| `Open-Sora-v2/vae` | **measured 2026-09-13 13:11, card 0: 237 ops at T=9 and at T=25 — flat, not unrolled** (the June container's VAE graph carried 11 017 ops: an unrolled graph, replaced by the fifth rebuild of 2026-09-13) |
 
 ## What it means
 
@@ -105,7 +105,7 @@ Three models carry the limit; two are measured (VACE, Wan2.2) and one is inferre
 debt is `D-TEMPORAL-UNROLL` in `DETTE.md`; the two remedies are there and neither
 is a number. What this census changes is the scope sentence: **it is not the
 video family**, and it is not a property of encoders in general — it is the Wan
-VAE encoder, whose chunk loop the tracer unrolls.
+VAE encoder, whose chunk loop the container builder unrolls.
 
 Instruments: `tools/temporal_unroll_census.py` (static survey, and it refuses to
 give a verdict from one point), `nbx/campaigns/prepared/unroll_measure.py` (the
@@ -117,11 +117,11 @@ measurement file, so a number cannot be retyped wrong).
 ## Companion: the weight-extent collisions, 2026-09-12
 
 The same catalogue carries a second blindness of the same shape. 33 axes are
-traced at a value that is ALSO a parameter extent of their own component, where a
-dim bound to the wrong quantity reproduces the trace exactly — the collision at 1
+built at a value that is ALSO a parameter extent of their own component, where a
+dim bound to the wrong quantity reproduces the build-time graph exactly — the collision at 1
 with a different coincidence.
 
-**The instrument is a second trace at a value the weights do not carry**, and the
+**The instrument is a second build at a value the weights do not carry**, and the
 first version of it compared a tree with itself and printed a verdict. Asked for
 `Flex.1-alpha/text_encoder` at 71 instead of 77, it got a graph still recording
 `trace_value=77`, compared 466 identical dims with themselves, and concluded *"the
@@ -137,18 +137,18 @@ than a blind spot. Nothing to act on, and nothing claimed about a binding.
 | component | axis | at | asked | result |
 |---|---|---:|---:|---|
 | `Flex.1-alpha/text_encoder` | `seq_len` | 77 | 71 | **fixed by the model** — value did not move |
-| `Flex.1-alpha/transformer` | `seq_len` | 4096 | 4091 | **UNADJUDICATED** — the value did not move on 2026-09-12 and again on 2026-09-13 16:05 because the override has no seam on a transformer traced inside a pipeline (it has one on an image VAE/DiT traced alone); the earlier reading "fixed by the model" took the instrument's silence for a fact. Instrument defect, owed |
-| `Ming-Lite-Omni-1.5/image_vae` | `seq_len` | 3 | 7 | not measured — a single-component trace does not reach this component on a multimodal container |
+| `Flex.1-alpha/transformer` | `seq_len` | 4096 | 4091 | **UNADJUDICATED** — the value did not move on 2026-09-12 and again on 2026-09-13 16:05 because the override has no seam on a transformer built inside a pipeline (it has one on an image VAE/DiT built alone); the earlier reading "fixed by the model" took the instrument's silence for a fact. Instrument defect, owed |
+| `Ming-Lite-Omni-1.5/image_vae` | `seq_len` | 3 | 7 | not measured — a single-component build does not reach this component on a multimodal container |
 | `MiniCPM-o-4_5/flow_dit` | `seq_len` | 3 | 7 | not measured — same |
-| `openaudio-s1-mini/codec.decoder` | `seq_len` | 1 | 7 | not measured — nested component (`codec.decoder`), unreachable by a single-component trace (2026-09-13, card 0: Phase B targeted 0 components) |
+| `openaudio-s1-mini/codec.decoder` | `seq_len` | 1 | 7 | not measured — nested component (`codec.decoder`), unreachable by a single-component build (2026-09-13, card 0: Phase B targeted 0 components) |
 | `Qwen3-Omni-30B-A3B-Instruct/talker.code_predictor.model.codec_embedding` | `seq_len` | 1 | 7 | not measured — same, nested |
-| `PixArt-XL-2-1024-MS/transformer` | `seq_len` | 120 | 113 | not measured — the single-component trace of this transformer fails at BOTH stimuli (default and 113) with a device mismatch inside `adaln_single`'s resolution embedder (`mat1` on cpu against cuda:0), on card 0 on 2026-09-13; the June trace of the same container ran the whole pipeline. Instrument defect, filed in the build toolchain's missing-capabilities register; the axis stays flagged, not adjudicated |
-| `PixArt-XL-2-1024-MS/vae` | `height` (spatial) | 14,22 → 32 recorded | 31,47 | **bound to the symbol** — 2026-09-13 06:00, card 0, `--trace-spatial` reaching the fed inputs: 0 dims followed the parameter extent; the equality at 32 was a coincidence |
+| `PixArt-XL-2-1024-MS/transformer` | `seq_len` | 120 | 113 | not measured — the single-component build of this transformer fails at BOTH stimuli (default and 113) with a device mismatch inside `adaln_single`'s resolution embedder (`mat1` on cpu against cuda:0), on card 0 on 2026-09-13; the June build of the same container ran the whole pipeline. Instrument defect, filed in the build toolchain's missing-capabilities register; the axis stays flagged, not adjudicated |
+| `PixArt-XL-2-1024-MS/vae` | `height` (spatial) | 14,22 → 32 recorded | 31,47 | **bound to the symbol** — 2026-09-13 06:00, card 0, the spatial stimulus override reaching the fed inputs: 0 dims followed the parameter extent; the equality at 32 was a coincidence |
 | `PixArt-Sigma-XL-2-1024-MS/vae` | `height` (spatial) | 14,22 → 64 recorded | 31,47 | **bound to the symbol** — same run, 0 dims followed the extent at 64 |
-| `Flex.1-alpha/vae` | `height` (spatial) | 14,22 | 31,47 | not measured — the single-component trace of this VAE dies on `CUDA error: an illegal memory access` on card 0 (16 GB), both stimuli; filed in the build toolchain's register |
+| `Flex.1-alpha/vae` | `height` (spatial) | 14,22 | 31,47 | not measured — the single-component build of this VAE dies on `CUDA error: an illegal memory access` on card 0 (16 GB), both stimuli; filed in the build toolchain's register |
 
 The instrument (`nbx/campaigns/prepared/weight_extent_differential.py`) and the
-stimulus override it needed (`forge trace --trace-seq-len`) are the deliverable
+stimulus override it needed (the container builder's sequence-length stimulus override) are the deliverable
 here as much as the rows: before today there was no way to move a sequence axis
 off a colliding value at all, so none of these 33 could be adjudicated by
 anything.
@@ -165,7 +165,7 @@ count. Each was paid for by a frozen graph, and one value would have deleted
 three pieces of reasoning.
 
 What was missing was not consolidation but an OVERRIDE reaching all three:
-`forge trace --trace-spatial H,W`, the same shape as `--trace-time` and
-`--trace-seq-len`. It refuses equal extents, because equal dims give `s_h == s_w`
-at trace and the runtime freezes both axes when two symbols share a value — which
+the container builder's spatial stimulus override (H,W), the same shape as its time and
+sequence-length overrides. It refuses equal extents, because equal dims give `s_h == s_w`
+at build time and the runtime freezes both axes when two symbols share a value — which
 is why no square stimulus appears in any of the three sites either.

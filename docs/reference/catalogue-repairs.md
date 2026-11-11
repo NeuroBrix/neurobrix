@@ -1,14 +1,14 @@
 # Catalogue repairs — containers fixed at the source and delivered
 
 A repair is not a patch and not a diagnosis. It is one motion, and every step of
-it is recorded here because a re-trace without a re-upload is a forbidden state
+it is recorded here because a rebuild without a re-upload is a forbidden state
 (CLAUDE.md, hub freshness) and a container that only exists locally has not been
 delivered.
 
 **The five steps, and a repair is closed only when all five carry a date:**
 
-1. **Cause** named at the source — Forge, never a runtime compensation.
-2. **Re-trace** producing a new graph, with its op count.
+1. **Cause** named at the source — the container builder, never a runtime compensation.
+2. **Graph rebuild** producing a new graph, with its op count.
 3. **Rebuild**, with the container size beside the previous one.
 4. **Re-upload**, reusing the exact slug so the record, its counters and its
    creation date survive.
@@ -28,10 +28,10 @@ A repair missing step 5 is listed as **delivered, unproven**, never as closed.
 | step | evidence |
 |---|---|
 | cause | `RuntimeExecutor._container_output_size` refused every container whose flow was not `iterative_process`, and never consulted the VAE when the backbone's latent was flattened. Allegro-TI2V died on `Key 'latent_height' not found in runtime/defaults.json`. Fixed at the resolution engine, not in the model: a decoder's input extents ARE latent extents and the container states them. |
-| re-trace | not required — the defect was in the runtime's reading of the container, not in the graph |
+| graph rebuild | not required — the defect was in the runtime's reading of the container, not in the graph |
 | rebuild | 2026-09-12 14:06, 26.1 GB written |
-| re-upload | 2026-09-12 15:13:48, `forge replace` onto the existing slug; hub shows 24.3 GB, record preserved |
-| install | 2026-09-12 15:14:41, `forge local --overwrite` |
+| re-upload | 2026-09-12 15:13:48, the container builder's replace command onto the existing slug; hub shows 24.3 GB, record preserved |
+| install | 2026-09-12 15:14:41, the container builder's local install, overwriting |
 | verification | `_container_output_size` reads **(144, 208)** from the shipped container — measured inside the installed form, not inferred from the diff |
 | proof by run | **2026-09-12 16:00 — PASSED.** 8 frames at 144x208 from the installed container with the local archive deleted: `rc=0`, 30,493 bytes, and the video inspected rather than trusted — 8 frames, full 0-255 range, mean absolute inter-frame difference 17.3, first and last frames differ. It is a video, not a file of the right size. |
 
@@ -40,8 +40,8 @@ recorded because a repair that closes one error and hides the next is not closed
 
 1. **The request's image must match the resolution the container resolves.** A
    448x448 input against the resolved 144x208 fails with *"Expected size 18 but
-   got size 56"* — the traced latent against the image's. The cascade derives the
-   output size from the TRACE; when a request supplies an image, which of the two
+   got size 56"* — the latent of the build-time size against the image's. The cascade derives the
+   output size from the BUILD-TIME VALUE; when a request supplies an image, which of the two
    should win is a contract question the resolution engine does not currently
    answer. Before this repair the same request died earlier, on
    `Key 'latent_height' not found`, so this wall is newly reachable, not newly
@@ -90,11 +90,11 @@ the upload lands or it is written from memory.
 
 | step | evidence |
 |---|---|
-| cause | The I2V encoder's causal temporal pad recorded `2187·s − 2184` against a truth of `s + 2`, exact at the traced `s = 1` where every rule coincides. Seven resnet blocks compounded it; Prism asked 944 GB of activations for a component whose weights are 822 MB. Fixed at the source: a genuinely constant axis carries no symbol (an I2V encoder conditions on one image), Forge `96fc046`. |
-| re-trace | 2026-09-12 15:22 and again 15:52 after an inert tracer edit — **same sha `7216b9fb1478`, bit for bit** (R27/R28). 389 → 265 ops, symbols `batch/height/width`, no temporal symbol. Profiled at 49 frames: 210.26 GB before, 0.02 GB after. |
+| cause | The I2V encoder's causal temporal pad recorded `2187·s − 2184` against a truth of `s + 2`, exact at the build-time `s = 1` where every rule coincides. Seven resnet blocks compounded it; Prism asked 944 GB of activations for a component whose weights are 822 MB. Fixed at the source: a genuinely constant axis carries no symbol (an I2V encoder conditions on one image), container builder `96fc046`. |
+| graph rebuild | 2026-09-12 15:22 and again 15:52 after an inert builder edit — **same sha `7216b9fb1478`, bit for bit** (R27/R28). 389 → 265 ops, symbols `batch/height/width`, no temporal symbol. Profiled at 49 frames: 210.26 GB before, 0.02 GB after. |
 | rebuild | 16:00, 21.5 GB (23 126 413 914 bytes). Two earlier builds were refused before publication: one without its backbone (5.45 GB, snapshot purged), one with half a text encoder (17.32 GB, one shard of two) — both now refused at entry by the index-aware build door. |
-| re-upload | **22:09:39 UTC**, `forge replace` through the internal entry point `http://192.0.2.39:3000` (the public name was court-blocked), 2498 s at the 10 MB/s cap with zero `SlowDownWrite` after the host reboot. Hub record: `fileSize 23126413914`, `updatedAt 2026-09-12T22:09:39.879Z`. Three earlier uploads failed: 0 % (backbone-less), 5 min (half an encoder), 81 % (504 with no backoff), then a fourth stalled on a store whose drive MinIO had marked hung. |
-| install | 22:10:26 UTC, `forge local --overwrite` — staged, verified against the archive, then repointed. The installed `vae_encoder/graph.json` holds 265 ops and no temporal symbol. |
+| re-upload | **22:09:39 UTC**, the container builder's replace command through the internal entry point `http://192.0.2.39:3000` (the public name was court-blocked), 2498 s at the 10 MB/s cap with zero `SlowDownWrite` after the host reboot. Hub record: `fileSize 23126413914`, `updatedAt 2026-09-12T22:09:39.879Z`. Three earlier uploads failed: 0 % (backbone-less), 5 min (half an encoder), 81 % (504 with no backoff), then a fourth stalled on a store whose drive MinIO had marked hung. |
+| install | 22:10:26 UTC, the container builder's local install, overwriting — staged, verified against the archive, then repointed. The installed `vae_encoder/graph.json` holds 265 ops and no temporal symbol. |
 | regression gate | passed component by component before the upload: text_encoder 1.000×, transformer 1.000×, vae 1.000×, vae_encoder 0.982× (the corrected graph). |
 | proof by run | **2026-09-12 22:45 — PASSED.** 9 frames at 448×448 from the container installed at 22:10:26 (refused any earlier install): `rc=0`, range 9–253, mean absolute inter-frame difference 3.34 — a video, not a file. Run unpinned on the rack while the Wan2.2 upload continued at 30–37 MB/s with zero `SlowDownWrite`. |
 
@@ -112,7 +112,7 @@ in two passes, the second resuming 99.56 GB).
 | step | evidence |
 |---|---|
 | cause | shipped topology without component shapes; container predates the builder that writes them |
-| re-trace | not required for this line — the graphs in `.cache/graphs` carry the shapes; the build reads them |
+| graph rebuild | not required for this line — the graphs in `.cache/graphs` carry the shapes; the build reads them |
 | rebuild | **22:11:30 → 22:22:46**, 676 s, **118.07 GB**, written directly on the pool as the only writer at ~400 MB/s (119 GB cannot stage on a 53 GB root filesystem — said before the build, not discovered at 90 %) |
 | regression gate | **1.000×** on every component: text_encoder 10.59 GB, transformer 53.25, transformer_2 53.25, vae 0.47, vae_encoder 0.48 |
 | re-upload | **22:22:46 → rc=0 after 5144 s** through the internal entry point (`replace`, same slug `Wan-AI/Wan2.2-I2V-A14B`): 126.77 GB, ≈24.6 MB/s mean under adaptive pacing from 40 MB/s (30–37 MB/s in the first hour, 26 in the last), **zero `SlowDownWrite`** in the per-minute samples. The hub record reads `updatedAt 2026-09-12T23:48:30Z`, `PUBLIC` |
@@ -130,17 +130,17 @@ we found and hiding the one underneath.
 
 ---
 
-## 4 — `hpcai-tech/Open-Sora-v2` · 2026-09-12 — RE-TRACED, REBUILT, PUBLISHED, PROVEN BY RUN (2026-09-13)
+## 4 — `hpcai-tech/Open-Sora-v2` · 2026-09-12 — GRAPHS REBUILT, CONTAINER REBUILT, PUBLISHED, PROVEN BY RUN (2026-09-13)
 
 | step | evidence |
 |---|---|
 | cause | shipped `topology.json` (container dated 2026-06-30) carries `shapes=NONE` for `transformer` and `vae` while `.cache/graphs` holds them (`vae: z [1,16,9,14,22]`); the output resolution cannot be read from the container whatever the runtime does |
 | snapshot | purged under R38; re-downloaded **16:38**, 64.43 GB in 862 s, build door satisfied |
 | rebuild | **refused at entry, 22:10:27, in 5 s**: *"component 'scheduler' has no cached graph.json — topology/graph-cache desync"*. Its graph cache dates from 2026-06-30 like the container; the custom (non-diffusers) pipeline's synthetic topology lists a `scheduler` the cache never held. Nothing was written. |
-| re-trace | **attempted 22:56:31, refused in Phase A**: *"custom pipeline requires model_index.json at …/Open-Sora-v2"*. The hub repo ships the vendor's own layout (four weight files at the root, `google/t5-v1_1-xxl`, `openai/clip-vit-large-patch14`) and no `model_index.json`; the June trace ran against a hand-made diffusers-shaped arrangement that the R38 re-download of 16:38 replaced with the vendor layout. **Rebuilt 23:06 from declarations, not memory** — class names from the registry entry, weight file names from the worker's loaders, `transformer/config.json` from the `MMDiTConfig` the worker constructs (`cond_embed` true, `in_channels` 64 — the container's own `extracted_values` recorded 64), `vae/config.json` from its `AutoEncoder3DConfig`, text encoders and tokenizers as symlinks to the vendor's subdirectories; the reasoning is written beside the weights in `NEUROBRIX_LAYOUT.md`. The trace needs a 32 GB card to itself (a 31.6 GB VMM pool; a bench beside it is a perturbed bench), so `opensora_chain.sh` waits for the first of cards 2/3 whose bench queue ends, then traces, converts (`--rebuild --stage-root`), gates and uploads |
-| re-trace (2) | **five attempts on 2026-09-13, each refused for a cause the previous one had not reached**: (1) 22:56 — no `model_index.json` (arrangement rebuilt); (2) 11:28 — `_diffusers_version: 0.0.0` made every component fail at vendor setup, and the tokenizer directories were enumerated as components (set to 0.33.1, tokenizers left out of the list); (3) 12:41 — `MMDiTModel`/`AutoencoderKLCausal3D` declared under an `opensora` library were looked up in transformers (declared under `diffusers` so the worker falls through to its custom loaders); and, pinned to one card, MMDiT died on an illegal memory access at `.to(dtype)` — 11B parameters constructed in fp32 in a single 31 GB VMM slab (traces are never GPU-masked: unpinned since); (4) 12:44 — the T5 shards are `.bin` and the vendored transformers refuses `torch.load` below torch 2.6: safetensors shards written beside them (19.6 GB, contiguous tensors); (5) **12:50 → 4/4 graphs**: transformer 5089 ops (= June's), text_encoder 1594 (June 1597), text_encoder_2 490, **vae 237 (June: 11 017)**. Every step is written beside the weights in `NEUROBRIX_LAYOUT.md`. |
+| graph rebuild | **attempted 22:56:31, refused in Phase A**: *"custom pipeline requires model_index.json at …/Open-Sora-v2"*. The hub repo ships the vendor's own layout (four weight files at the root, `google/t5-v1_1-xxl`, `openai/clip-vit-large-patch14`) and no `model_index.json`; the June build ran against a hand-made diffusers-shaped arrangement that the R38 re-download of 16:38 replaced with the vendor layout. **Rebuilt 23:06 from declarations, not memory** — class names from the registry entry, weight file names from the worker's loaders, `transformer/config.json` from the `MMDiTConfig` the worker constructs (`cond_embed` true, `in_channels` 64 — the container's own `extracted_values` recorded 64), `vae/config.json` from its `AutoEncoder3DConfig`, text encoders and tokenizers as symlinks to the vendor's subdirectories; the reasoning is written beside the weights in `NEUROBRIX_LAYOUT.md`. The graph build needs a 32 GB card to itself (a 31.6 GB VMM pool; a bench beside it is a perturbed bench), so `opensora_chain.sh` waits for the first of cards 2/3 whose bench queue ends, then builds the graphs, converts (`--rebuild --stage-root`), gates and uploads |
+| graph rebuild (2) | **five attempts on 2026-09-13, each refused for a cause the previous one had not reached**: (1) 22:56 — no `model_index.json` (arrangement rebuilt); (2) 11:28 — `_diffusers_version: 0.0.0` made every component fail at vendor setup, and the tokenizer directories were enumerated as components (set to 0.33.1, tokenizers left out of the list); (3) 12:41 — `MMDiTModel`/`AutoencoderKLCausal3D` declared under an `opensora` library were looked up in transformers (declared under `diffusers` so the worker falls through to its custom loaders); and, pinned to one card, MMDiT died on an illegal memory access at `.to(dtype)` — 11B parameters constructed in fp32 in a single 31 GB VMM slab (graph builds are never GPU-masked: unpinned since); (4) 12:44 — the T5 shards are `.bin` and the vendored transformers refuses `torch.load` below torch 2.6: safetensors shards written beside them (19.6 GB, contiguous tensors); (5) **12:50 → 4/4 graphs**: transformer 5089 ops (= June's), text_encoder 1594 (June 1597), text_encoder_2 490, **vae 237 (June: 11 017)**. Every step is written beside the weights in `NEUROBRIX_LAYOUT.md`. |
 | rebuild (2) | **12:55:51 → rc=0 after 682 s**, built on the export (the root filesystem's 54 GB could not hold the ~85 GB peak; a superseded, published 14 GB staged build was removed under `nbx/builds/README.md`'s rule); graphs 4/4 from the fresh cache |
-| regression gate (2) | text_encoder 1.000×, text_encoder_2 1.000×, transformer 1.000×, **vae 0.959× — refused, then opened with `--allow-shrink` on a measurement**: the VAE's weights index is identical (248 tensors, same bytes each, bfloat16 both); what shrank is the graph, 11 017 → 237 ops (19.5 → 6.5 MB of JSON). Whether the short graph decodes is the proof by run's question, not the gate's. **Measured 13:11 on card 0 (`unroll_measure.py`, two stimuli): 237 ops at T=9 and 237 at T=25 — the new VAE graph is flat in the chunk count, i.e. symbolic in T, where the June graph (11 017 ops) was an unrolled trace. The shrink is the repair.** |
+| regression gate (2) | text_encoder 1.000×, text_encoder_2 1.000×, transformer 1.000×, **vae 0.959× — refused, then opened with `--allow-shrink` on a measurement**: the VAE's weights index is identical (248 tensors, same bytes each, bfloat16 both); what shrank is the graph, 11 017 → 237 ops (19.5 → 6.5 MB of JSON). Whether the short graph decodes is the proof by run's question, not the gate's. **Measured 13:11 on card 0 (`unroll_measure.py`, two stimuli): 237 ops at T=9 and 237 at T=25 — the new VAE graph is flat in the chunk count, i.e. symbolic in T, where the June graph (11 017 ops) was an unrolled graph. The shrink is the repair.** |
 | re-upload (2) | **13:08:54 → rc=0 after 1922 s** through the internal entry point (`replace`, same slug `hpcai-tech/Open-Sora-v2`, adaptive pacing from 40 MB/s, ≈22 MB/s mean); hub record `updatedAt 2026-09-13T13:40:55.693Z PUBLIC` |
 | install (2) | **13:40:56 → rc=0 after 123 s**: 53 files, 42.47 GB, four components |
 | proof by run (2) | **2026-09-13 15:33 — PASSED, triton.** 9 frames at 112×176 from the container installed at 13:42:58 (the chain refused any earlier install): `rc=0` after 648 s, range 0–202, mean absolute inter-frame difference 18.6, `--seed 42 --steps 4`, unpinned on the rig (VMM pool across the visible cards). The container's own default is 51 frames at 100 steps; the proof is the bounded request every other repair used |

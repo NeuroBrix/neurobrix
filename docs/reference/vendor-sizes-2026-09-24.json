@@ -80,7 +80,7 @@
         "where": "L22-24"
       }
     ],
-    "notes": "Vendor documents a single size (88x720x1280) for this checkpoint; 368x640/40f come from separately released sibling checkpoints of the same architecture, so they are shape tests, not vendor-supported quality points. Container trace (observed): transformer latent 14x92x162, VAE decode 9x14x22 latent -> 36x112x176 px. One GitHub issue (rhymes-ai/Allegro#37) asks for 640x360/854x480/960x540 but gives no size that was run; no third-party larger size found.",
+    "notes": "Vendor documents a single size (88x720x1280) for this checkpoint; 368x640/40f come from separately released sibling checkpoints of the same architecture, so they are shape tests, not vendor-supported quality points. Container graph (observed): transformer latent 14x92x162, VAE decode 9x14x22 latent -> 36x112x176 px. One GitHub issue (rhymes-ai/Allegro#37) asks for 640x360/854x480/960x540 but gives no size that was run; no third-party larger size found.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==0"
@@ -157,7 +157,7 @@
         "where": "L24, L62, L66"
       }
     ],
-    "notes": "No diffusers pipeline for TI2V (diffusers/pipelines/allegro has only pipeline_allegro.py); vendor code is the rhymes-ai/Allegro GitHub repo. Container trace (observed): transformer latent 7x18x26. Any non-default size is outside vendor support.",
+    "notes": "No diffusers pipeline for TI2V (diffusers/pipelines/allegro has only pipeline_allegro.py); vendor code is the rhymes-ai/Allegro GitHub repo. Container graph (observed): transformer latent 7x18x26. Any non-default size is outside vendor support.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==0"
@@ -229,7 +229,7 @@
         "where": "L41-48, L80, L112-116"
       }
     ],
-    "notes": "Vendor explicitly supports only 480x720x49. Proposed small/frames are engine shape tests, not vendor quality points. Container trace (observed): transformer latent [6 frames,16ch,62x92]. No vendor-repo issue reporting a larger working size was found.",
+    "notes": "Vendor explicitly supports only 480x720x49. Proposed small/frames are engine shape tests, not vendor quality points. Container graph (observed): transformer latent [6 frames,16ch,62x92]. No vendor-repo issue reporting a larger working size was found.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==1"
@@ -303,7 +303,7 @@
         "where": "L41-48, L80, L112-116"
       }
     ],
-    "notes": "Only the frame axis can be varied. Container trace (observed): transformer latent [13,32,60,90] = 49 frames at 480x720, i.e. the default.",
+    "notes": "Only the frame axis can be varied. Container graph (observed): transformer latent [13,32,60,90] = 49 frames at 480x720, i.e. the default.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==1"
@@ -373,7 +373,7 @@
         "where": "L105-106, L129-130"
       }
     ],
-    "notes": "Container defaults.json records no size; container VAE trace decodes 128x128 latent -> 1024x1024 and transformer trace has 4096 packed tokens (=1024x1024). The Flex card gives no resolution; the only vendor numbers are the ai-toolkit config (512/768/1024 train, 1024 sample). FLUX.1 parent CLI default 1360x768 (~1.04 MP, not larger than 1024^2) is cited for reference only.",
+    "notes": "Container defaults.json records no size; container VAE graph decodes 128x128 latent -> 1024x1024 and transformer graph has 4096 packed tokens (=1024x1024). The Flex card gives no resolution; the only vendor numbers are the ai-toolkit config (512/768/1024 train, 1024 sample). FLUX.1 parent CLI default 1360x768 (~1.04 MP, not larger than 1024^2) is cited for reference only.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": null
@@ -408,7 +408,7 @@
       "basis": {
         "small": "vendor 256px 1:1 bucket",
         "large": "vendor 768px 16:9 bucket (largest documented)",
-        "frames_small": "vendor rule 4k+1 (README L100); 33 avoided because the container VAE was traced at 33",
+        "frames_small": "vendor rule 4k+1 (README L100); 33 avoided because the container VAE was built at 33",
         "frames_large": "largest value satisfying the README rule '4k+1 and less than 129'; the vendor default config itself uses 129 (=4k+1), which contradicts the README wording"
       }
     },
@@ -444,7 +444,7 @@
         "where": "L4-14, L22-56, L133-139"
       }
     ],
-    "notes": "Not a diffusers repo (model_index.json 404). CONTAINER DEFAULT 51 FRAMES VIOLATES THE VENDOR 4k+1 RULE ((51-1)%4=2); the container VAE trace decodes 9 latent frames -> 33 frames at 112x176. 768px 1:1 (768x768) has the same pixel count as 576x1024. Vendor recommends multi-GPU sequence parallel for 768px.",
+    "notes": "Not a diffusers repo (model_index.json 404). CONTAINER DEFAULT 51 FRAMES VIOLATES THE VENDOR 4k+1 RULE ((51-1)%4=2); the container VAE graph decodes 9 latent frames -> 33 frames at 112x176. 768px 1:1 (768x768) has the same pixel count as 576x1024. Vendor recommends multi-GPU sequence parallel for 768px.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==1"
@@ -526,7 +526,7 @@
         "where": "L62, L745-748"
       }
     ],
-    "notes": "Container is a copy of PixArt-alpha/PixArt-Sigma-XL-2-1024-MS (manifest model_name = PixArt-Sigma-XL-2-1024-MS). No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "notes": "Container is a copy of PixArt-alpha/PixArt-Sigma-XL-2-1024-MS (manifest model_name = PixArt-Sigma-XL-2-1024-MS). No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container graph (observed): VAE 128x128 latent -> 1024x1024.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": null
@@ -608,7 +608,7 @@
         "where": "L62, L745-748"
       }
     ],
-    "notes": "No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "notes": "No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container graph (observed): VAE 128x128 latent -> 1024x1024.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": null
@@ -685,7 +685,7 @@
         "where": "L210-214"
       }
     ],
-    "notes": "Container is a copy of PixArt-alpha/PixArt-XL-2-1024-MS (manifest model_name = PixArt-XL-2-1024-MS). No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "notes": "Container is a copy of PixArt-alpha/PixArt-XL-2-1024-MS (manifest model_name = PixArt-XL-2-1024-MS). No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container graph (observed): VAE 128x128 latent -> 1024x1024.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": null
@@ -762,7 +762,7 @@
         "where": "L210-214"
       }
     ],
-    "notes": "No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "notes": "No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container graph (observed): VAE 128x128 latent -> 1024x1024.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": null
@@ -856,7 +856,7 @@
         "where": "L723-724, L850-857"
       }
     ],
-    "notes": "Container trace (observed): transformer latent [128ch, 3 frames, 24x41]; VAE decode 9x14x22 latent -> 65 frames x 448x704. Container defaults.json 704x1280x81 matches the vendor usage.",
+    "notes": "Container graph (observed): transformer latent [128ch, 3 frames, 24x41]; VAE decode 9x14x22 latent -> 65 frames x 448x704. Container defaults.json 704x1280x81 matches the vendor usage.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 32,
       "frame_rule": "n%8==1"
@@ -938,7 +938,7 @@
         "where": "L10, L12"
       }
     ],
-    "notes": "Container manifest model_name = Sana_1600M_1024px_MultiLing (alias container). The local snapshot on the NAS is the _diffusers layout (model_index.json present), so the container was built from the _diffusers repo. The family statement 'up to 4096 x 4096' refers to the separate 4K checkpoint. Container trace: VAE 32x32 latent -> 1024x1024.",
+    "notes": "Container manifest model_name = Sana_1600M_1024px_MultiLing (alias container). The local snapshot on the NAS is the _diffusers layout (model_index.json present), so the container was built from the _diffusers repo. The family statement 'up to 4096 x 4096' refers to the separate 4K checkpoint. Container graph: VAE 32x32 latent -> 1024x1024.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 32,
       "frame_rule": null
@@ -1020,7 +1020,7 @@
         "where": "L10, L12"
       }
     ],
-    "notes": "The local snapshot on the NAS is the _diffusers layout (model_index.json present), so the container was built from the _diffusers repo. The family statement 'up to 4096 x 4096' refers to the separate 4K checkpoint. Container trace: VAE 32x32 latent -> 1024x1024.",
+    "notes": "The local snapshot on the NAS is the _diffusers layout (model_index.json present), so the container was built from the _diffusers repo. The family statement 'up to 4096 x 4096' refers to the separate 4K checkpoint. Container graph: VAE 32x32 latent -> 1024x1024.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 32,
       "frame_rule": null
@@ -1102,7 +1102,7 @@
         "where": "L440-441"
       }
     ],
-    "notes": "Container trace: VAE 128x128 latent -> 4096x4096 (the default). Which of the two repos fed the importer is not recorded; the NAS snapshot directory holds the .pth repo.",
+    "notes": "Container graph: VAE 128x128 latent -> 4096x4096 (the default). Which of the two repos fed the importer is not recorded; the NAS snapshot directory holds the .pth repo.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 32,
       "frame_rule": null
@@ -1182,7 +1182,7 @@
         "where": "issue body (pftq, 2025-02-26)"
       }
     ],
-    "notes": "Container trace (observed): transformer latent 12 frames x 60x104 (=45 frames at 480x832). Frame counts other than 81 are only third-party reported for the vendor CLI; the diffusers pipeline accepts any 4n+1.",
+    "notes": "Container graph (observed): transformer latent 12 frames x 60x104 (=45 frames at 480x832). Frame counts other than 81 are only third-party reported for the vendor CLI; the diffusers pipeline accepts any 4n+1.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==1"
@@ -1267,7 +1267,7 @@
         "where": "issue body (pftq, 2025-02-26)"
       }
     ],
-    "notes": "Container trace (observed): transformer latent 10 frames x 60x104 (=37 frames at 480x832); VAE trace 9x14x22 latent. 720x1280 is vendor-mentioned with a quality caveat.",
+    "notes": "Container graph (observed): transformer latent 10 frames x 60x104 (=37 frames at 480x832); VAE graph 9x14x22 latent. 720x1280 is vendor-mentioned with a quality caveat.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==1"
@@ -1362,7 +1362,7 @@
         "where": "issue body (pftq, 2025-02-26)"
       }
     ],
-    "notes": "Container trace (observed): transformer latent 10 x 60x104 (+96-ch control). 512x512 is the only vendor-documented non-480P size.",
+    "notes": "Container graph (observed): transformer latent 10 x 60x104 (+96-ch control). 512x512 is the only vendor-documented non-480P size.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==1"
@@ -1442,7 +1442,7 @@
         "where": "L359-360, L517-519, L637-641"
       }
     ],
-    "notes": "Container trace (observed): transformer latent 5 frames x 10x12 (tiny trace = 17 frames at 80x96). Vendor CLI uses 720P in its examples; the diffusers card example uses 480P area.",
+    "notes": "Container graph (observed): transformer latent 5 frames x 10x12 (tiny build-time size = 17 frames at 80x96). Vendor CLI uses 720P in its examples; the diffusers card example uses 480P area.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%4==1"
@@ -1529,7 +1529,7 @@
         "where": "L442-445"
       }
     ],
-    "notes": "CONTAINER DEFAULT 84 FRAMES VIOLATES THE VENDOR 6k+1 RULE; diffusers floors it to 14 latent frames (79 decoded frames). Container trace (observed): transformer latent 10 x 30x54 (= 240x432 px, 55 frames) - avoid 240x432 as a 'new' size. No vendor-repo issue reporting another resolution was found.",
+    "notes": "CONTAINER DEFAULT 84 FRAMES VIOLATES THE VENDOR 6k+1 RULE; diffusers floors it to 14 latent frames (79 decoded frames). Container graph (observed): transformer latent 10 x 30x54 (= 240x432 px, 55 frames) - avoid 240x432 as a 'new' size. No vendor-repo issue reporting another resolution was found.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": "n%6==1"
@@ -1596,7 +1596,7 @@
         "where": "L4, L33"
       }
     ],
-    "notes": "Despite the capitalised name, this container holds xinntao RealESRGAN_x4plus weights, NOT ai-forever RealESRGAN_x4.pth (the two files have equal byte size but different content; conv_first and all 702 tensors match x4plus). Container trace: input 1x3x112x80 -> 448x320.",
+    "notes": "Despite the capitalised name, this container holds xinntao RealESRGAN_x4plus weights, NOT ai-forever RealESRGAN_x4.pth (the two files have equal byte size but different content; conv_first and all 702 tensors match x4plus). Container graph: input 1x3x112x80 -> 448x320.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 1,
       "frame_rule": null
@@ -1658,7 +1658,7 @@
         "where": "whole file"
       }
     ],
-    "notes": "Container trace: input 1x3x112x144 -> 224x288. The model itself is fully convolutional; sizes above 240 are outside the vendor pipeline, not forbidden.",
+    "notes": "Container graph: input 1x3x112x144 -> 224x288. The model itself is fully convolutional; sizes above 240 are outside the vendor pipeline, not forbidden.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 2,
       "frame_rule": null
@@ -1725,7 +1725,7 @@
         "where": "L4, L33"
       }
     ],
-    "notes": "Weights verified equal to xinntao RealESRGAN_x4plus.pth (702/702 tensors). Container trace: input 1x3x112x80 -> 448x320.",
+    "notes": "Weights verified equal to xinntao RealESRGAN_x4plus.pth (702/702 tensors). Container graph: input 1x3x112x80 -> 448x320.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 1,
       "frame_rule": null
@@ -1787,7 +1787,7 @@
         "where": "whole file"
       }
     ],
-    "notes": "Container trace: input 1x3x112x80 -> 896x640. A 240x240 input yields a 1920x1920 output.",
+    "notes": "Container graph: input 1x3x112x80 -> 896x640. A 240x240 input yields a 1920x1920 output.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 1,
       "frame_rule": null
@@ -1857,7 +1857,7 @@
         "where": "L18"
       }
     ],
-    "notes": "NAS file hat_l_x4.pth is a symlink to HAT-L_SRx4_ImageNet-pretrain.pth. Container trace: 1x3x112x80 (112 = 7*16, 80 = 5*16) -> 448x320.",
+    "notes": "NAS file hat_l_x4.pth is a symlink to HAT-L_SRx4_ImageNet-pretrain.pth. Container graph: 1x3x112x80 (112 = 7*16, 80 = 5*16) -> 448x320.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": null
@@ -1922,7 +1922,7 @@
         "where": "L100"
       }
     ],
-    "notes": "NAS file hat_s_x4.pth (params/params_ema, 864 tensors) - matching to HAT-S_SRx4.pth assumed from name, not hash-verified. Container trace: 1x3x112x80 -> 448x320.",
+    "notes": "NAS file hat_s_x4.pth (params/params_ema, 864 tensors) - matching to HAT-S_SRx4.pth assumed from name, not hash-verified. Container graph: 1x3x112x80 -> 448x320.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 16,
       "frame_rule": null
@@ -1997,7 +1997,7 @@
         "where": "L69-74, L279"
       }
     ],
-    "notes": "No tile size or maximum input is documented for Swin2SR. Container trace: 1x3x112x80.",
+    "notes": "No tile size or maximum input is documented for Swin2SR. Container graph: 1x3x112x80.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 8,
       "frame_rule": null
@@ -2072,7 +2072,7 @@
         "where": "L69-74, L279"
       }
     ],
-    "notes": "No tile size or maximum input is documented for Swin2SR. Container trace: 1x3x112x80.",
+    "notes": "No tile size or maximum input is documented for Swin2SR. Container graph: 1x3x112x80.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 8,
       "frame_rule": null
@@ -2147,7 +2147,7 @@
         "where": "L69-74, L279"
       }
     ],
-    "notes": "No tile size or maximum input is documented for Swin2SR. Container trace: 1x3x112x80.",
+    "notes": "No tile size or maximum input is documented for Swin2SR. Container graph: 1x3x112x80.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 8,
       "frame_rule": null
@@ -2217,7 +2217,7 @@
         "where": "L126"
       }
     ],
-    "notes": "The NAS file swinir_x2.pth differs from 001_classicalSR_DIV2K_s48w8_SwinIR-M_x2.pth (attn_mask 64 windows vs 36), i.e. it is the DF2K s64w8 checkpoint. Container trace: 1x3x112x80 -> 224x160.",
+    "notes": "The NAS file swinir_x2.pth differs from 001_classicalSR_DIV2K_s48w8_SwinIR-M_x2.pth (attn_mask 64 windows vs 36), i.e. it is the DF2K s64w8 checkpoint. Container graph: 1x3x112x80 -> 224x160.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 8,
       "frame_rule": null
@@ -2287,7 +2287,7 @@
         "where": "L126"
       }
     ],
-    "notes": "Container trace: 1x3x112x80 -> 448x320.",
+    "notes": "Container graph: 1x3x112x80 -> 448x320.",
     "divisibility_used_for_check": {
       "hw_multiple_of": 8,
       "frame_rule": null

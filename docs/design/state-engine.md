@@ -54,7 +54,7 @@ Paths are under `src/neurobrix/`; line numbers are at main 333bc9a7c.
 Shared, engine-neutral readers:
 - `core/runtime/lm_facts.py`: `lm_config_of` `:15-39`, `decode_lm_component` `:54-83`, `decode_sequences` `:98-115`,
   `decoder_cache_facts` and `encoder_decoder_cache_from_plan` `:118-154`;
-- `core/flow/decoder_kv.py:44-91`: self-attention told from cross-attention by dataflow, head geometry from the traced q;
+- `core/flow/decoder_kv.py:44-91`: self-attention told from cross-attention by dataflow, head geometry from the graph's q;
 - `serving/engine.py:480-488`: the history budget. Each turn re-prefills the whole conversation (`:424-425`).
 
 The families' `kv_cache:` blocks (`enabled`, `strategy`, `injection_op`) are read by no code; only
@@ -280,7 +280,7 @@ engine's own figure, read once by Prism. Nothing is added beside them: the two a
 
 ### 4.1 Declared state, sized by arithmetic
 
-Forge writes a `state` section into `topology.json`, one entry per state the model keeps, derived from the graph and the
+The container builder writes a `state` section into `topology.json`, one entry per state the model keeps, derived from the graph and the
 embedded config. No entry is ever keyed by a model name.
 
 | kind | declared by | size per unit |
@@ -293,7 +293,7 @@ embedded config. No entry is ever keyed by a model name.
 | `step_cache` | a policy, not a declaration: the denoiser's output or residual kept to skip a step | one prediction's bytes |
 
 `cross_kv` and `invariant` come from one generic analysis: a loop component's ops whose inputs are all loop-invariant (the
-same at every step) are invariant. Forge marks them; the runtime evaluates them once and keeps their outputs as state. Its
+same at every step) are invariant. The container builder marks them; the runtime evaluates them once and keeps their outputs as state. Its
 exactness is in the definition, and in the cross-attention case it is sourced (arXiv 2404.13766). It does not apply to joint
 attention, where the text tokens attend to the image: those ops read a step-variant input, so the analysis never marks them.
 
@@ -409,7 +409,7 @@ The state engine is a replacement, not an addition. These go:
 
 ### 4.8 Order of work and proofs
 
-1. **Declarations and price.** Forge declares `state`, and `state_engine.price` replaces Prism's KV functions with no runtime
+1. **Declarations and price.** The container builder declares `state`, and `state_engine.price` replaces Prism's KV functions with no runtime
    change.
    - Proof: plans identical where the figure is unchanged, and named where it moves.
    - Proof: the open defects closed by cells seen red.
@@ -432,7 +432,7 @@ The state engine is a replacement, not an addition. These go:
 
 ### 4.9 Questions for the owner
 
-1. Is `invariant` (Forge marking loop-invariant subgraphs) acceptable as a build-time annotation? It adds a section to
+1. Is `invariant` (the container builder marking loop-invariant subgraphs) acceptable as a build-time annotation? It adds a section to
    `topology.json`, not a field patched to work around a bug (R18).
 2. Is the page size one vendor value per architecture (`memory.state_page_bytes`), or derived from the rung alone?
 3. Quantized KV and windows change outputs. Are they allowed in the stable release as stated, scored policies, or held

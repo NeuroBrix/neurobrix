@@ -101,7 +101,7 @@ Each of these was written as a local fix. They are one rule:
 | doubt | the door |
 |---|---|
 | is the campaign measuring the live tree under an editable install? | it refuses to start without `--src`, or with a `--src` inside the live repository |
-| is this worktree missing the ignored pointers that change Prism's decisions? | it refuses to start without `.nbx_registry` and `forge` |
+| is this worktree missing the ignored pointers that change Prism's decisions? | it refuses to start without `.nbx_registry` and the pointer to the container builder |
 | will this cell burn hours on a verdict already known impossible? | a cell whose known cost exceeds the budget is refused at the door |
 | did a killed job fire the next waiter? | the DONE marker is written only on success, and carries a version so it cannot pre-exist |
 | is a kernel reading past its tensor? | an out-of-range gather index traps, rather than being audited afterwards |
@@ -148,7 +148,7 @@ to a distinct storage key, verifies the checksum, and repoints the record only
 after; a mismatch rolls the upload back and leaves the previous artifact serving.
 The upload was stopped at 0% of 6.73 GB and there was nothing to undo.
 
-The same command's LOCAL half had the opposite shape. `forge local --overwrite`
+The same command's LOCAL half had the opposite shape. The container builder's `local --overwrite`
 removed the installed container and then extracted into the same path, so the
 complete local container was gone before anything could object — and an
 extraction that stops midway (a truncated archive, an NFS stall, a mains cut on a
@@ -167,7 +167,7 @@ the write stops halfway; and what compares the new thing against the OLD thing's
 declaration rather than against itself. A tree compared with itself agrees with
 itself.
 
-Shipped as `forge.verify_extraction` plus a staging tree and an atomic rename.
+Shipped as the container builder's `verify_extraction` plus a staging tree and an atomic rename.
 Seen both ways before it was trusted: a clean install repointed and left no
 staging tree, and an archive whose manifest declared a component the archive did
 not contain was refused with the live installation unchanged — same mtime, same

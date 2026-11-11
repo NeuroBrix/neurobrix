@@ -17,20 +17,20 @@ aten._unsafe_view::1  attributes.args[1] =
                               "right":3,"trace":27}, ...]}
 ```
 
-The literals are real. They are in `output_shapes`, **which records what the shapes WERE at trace
+The literals are real. They are in `output_shapes`, **which records what the shapes WERE at build
 time** — that is the field's entire job. The argument the runtime evaluates is `s1*3`, and it is
 symbolic. The **07-07 container carries the same expression**, so the op was never frozen, in either
 container.
 
-The cost: mochi was re-traced on that premise — 2.7 h of two 32 GB cards plus hours of NFS reads —
-and the re-trace could not have changed anything, because there was nothing at that op to change.
+The cost: mochi was rebuilt on that premise — 2.7 h of two 32 GB cards plus hours of NFS reads —
+and the rebuild could not have changed anything, because there was nothing at that op to change.
 A thirty-second look at `attributes` would have refused the premise. The engine rule that forces
-that check (*establish the smallest remedy before re-tracing a validated container*) was followed,
+that check (*establish the smallest remedy before rebuilding a validated container*) was followed,
 and it was run **on the wrong field**, which is why the rule now names the field.
 
 ## How to read it
 
-`output_shapes` and `input_shapes` are a RECORD of the trace. Literals there are expected and carry
+`output_shapes` and `input_shapes` are a RECORD of the build. Literals there are expected and carry
 no claim about symbolic coverage.
 
 `attributes.args` is the EXPRESSION. A dimension is frozen when the argument that produces it is a

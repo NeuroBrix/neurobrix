@@ -27,6 +27,12 @@ Both changelogs follow [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.
    effect, in Added / Changed / Deprecated / Removed / Fixed / Security. — whoever lands it.
 2. The landing script refuses a lot that touches a product's code without touching its changelog, unless the lot is
    declared to change no behaviour, with its reason, which the landing journal records. — the landing script.
+3. **A public page never says how a container is made.** Every tracked Markdown page speaks of "building containers"
+   and "the container builder": it never names the private build tool and never uses its verb. A lot that touches a
+   page runs `python tools/public_vocabulary.py` (red on those words, file and line); the only occurrences it accepts
+   are the real names and quoted messages listed with their reason in `tools/public_vocabulary.allow.tsv`, a list that
+   only shrinks. The unit test `tests/unit/tools/test_public_pages_never_say_how_a_container_is_made.py` holds it.
+   — whoever lands it.
 
 ## Publishing a version — after the owner's GO
 

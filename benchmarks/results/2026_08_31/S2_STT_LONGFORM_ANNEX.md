@@ -12,7 +12,7 @@ Transcript byte sizes prove the stacks do DIFFERENT WORK on a 600 s input:
 | Arm | transcript bytes (turbo / parakeet rows) | Interpretation |
 |---|---|---|
 | nbx whisper (c/t) | 105 | single 30 s mel window — **truncates**, no chunking loop |
-| nbx parakeet (c/t) | 372 | **also truncates** — the rnnt path is bounded by its trace input window |
+| nbx parakeet (c/t) | 372 | **also truncates** — the rnnt path is bounded by its build-time input window |
 | transformers (large row) | 16 | near-empty output at this config — invalid cell |
 | faster-whisper | 8971 | **full 600 s transcribed** (built-in VAD/chunk loop) |
 | nemo (parakeet) | 9046 | **full 600 s transcribed** (streaming loop) |
@@ -28,7 +28,7 @@ throughput cells from this campaign:
 | parakeet 600 s | nemo | 68.52 [66.37–69.57] |
 
 **NeuroBrix has ZERO valid long-form cells today** — both the whisper
-(encoder_decoder) and parakeet (rnnt) flows transcribe only their trace
+(encoder_decoder) and parakeet (rnnt) flows transcribe only their build-time
 window on a 600 s input. This is stated plainly; no nbx long-form number
 is published.
 

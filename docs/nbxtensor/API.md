@@ -116,10 +116,10 @@ def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str   #
 ```python
 COMPLEX_DTYPE_NAMES = frozenset({"complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble"})
 def traced_output_dtype_name(record: dict) -> Optional[str]   # output_dtypes[0] at the record's top level, plain name
-def traced_output_is_complex(record: dict) -> bool            # any traced output complex (never the op's name or inputs)
+def traced_output_is_complex(record: dict) -> bool            # any recorded output dtype complex (never the op's name or inputs)
 def amp_fp32_output_dtype(compute_dtype, graph_dtype, safe, narrowed, traced=None) -> str
     # the output of an op computed float32 inside a half forward: bfloat16 follows the graph dtype,
-    # float16 narrows only under `safe` / `narrowed`; a traced float32 island only under `narrowed`
+    # float16 narrows only under `safe` / `narrowed`; a float32 island recorded in the graph only under `narrowed`
 ```
 
 `nbxtensor.dtype.convert.saturate_scalar(value, dtype)`: a Python number clamped to a half float's finite range (the table's `max`); anything else unchanged.
@@ -340,11 +340,11 @@ def range_reclaimable(pool: SegmentPool, dev: int) -> List[Tuple[Range, int]]
 
 ```python
 TRACES_DIR
-    # The allocation traces the library carries (traces/*.tsv: one real run's allocations and frees, by id and bytes, its card size)
+    # The allocation records the library carries (traces/*.tsv: one real run's allocations and frees, by id and bytes, its card size)
 def traces() -> List[Path]
-    # The carried traces, by name.
+    # The carried allocation records, by name.
 def load_trace(path) -> Tuple[Dict[str, str], List[Tuple[str, int, int]]]
-    # (the trace's header facts, its events (kind M/A/F, id, nbytes)); a trace without card_mb or events is refused.
+    # (the record's header facts, its events (kind M/A/F, id, nbytes)); a record without card_mb or events is refused.
 def replay_trace(events, device: int, chunk: int, limit_bytes: int) -> Dict[str, float]
     # Replay the events through this process's allocator under limit_bytes, the large class in an expandable range of chunk bytes (0: the driver segments): seconds, map_seconds, reclaims, peak_bytes
 def chunk_by_replay(device: int, granularity: int, ks: Sequence[int], reps: int, trace: Optional[str]=None, off_first: Optional[float]=None) -> Tuple[Optional[int], Dict[int, List[float]]]
@@ -2799,7 +2799,7 @@ Each service now takes one of two fates:
   the user's standard cache location, a memory limit the user MAY impose). A setting is plain data set through the
   public API (rule 11), never a callback into the application.
 - **(b) BACK IN THE ENGINE**, when it is NeuroBrix's own (NeuroBrix profiles and vendor files, rungs, the
-  certification census, the classification of traced graphs). The engine applies it by calling the public API; the
+  certification census, the classification of container graphs). The engine applies it by calling the public API; the
   library no longer knows it.
 
 **Exit criterion.** `nbxtensor.host` disappears, or keeps only documented optional hooks; the README examples pass in
@@ -2815,13 +2815,13 @@ shrinking only.
 | `profile_triton_has_fp64` | the device computes float64 | (a) fact | `backend.device_facts.kernels_carry_fp64()` — the backend's answer, no profile argument | **landed** (fact: Mac; the last reader, `ops.wrappers.set_hardware_profile`: Dell) — the service is gone; an application that states the capability otherwise declares it with `backend.capabilities.set_backend_has_fp64` (NeuroBrix: `triton.dtype.declare_hardware_profile`, from its vendor files) |
 | `certified_dir` | where proven kernel settings live | (a) setting, default measured | default: the user's cache (`$XDG_CACHE_HOME`/`~/.cache` `/nbxtensor/certified/`), filled by the autotune; `nbxtensor.ops.autotune.set_store(path)` for another | default **landed** (Mac); the setter replaces the service (Mac) |
 | `tiling_policy` | the split sizes the tiling rules read | (a) setting, default | the library's table (`ops/tiling.yml`); `nbxtensor.ops.set_tiling(dict)` to replace values | table **landed** (Mac); the setter replaces the service (Mac) |
-| `vendor_config`, `vendor_param`, `vendors_dir` | the kernel-relevant device description (tiles, shared memory, registers, warp size, matrix unit, dispatch limits, identification) | (a) fact, per device | `nbxtensor.backend.device_files`: the library's device files `backend/devices/<vendor>/<name>.yml` hold every key the census lists (`docs/nbxtensor/device_keys.txt`: static ast, string literals, a traced run); a device is found and described with no application. An application's own half of a device (`vendors_dir`, now OPTIONAL) is merged, a key in both refused by name; `tools/split_vendor_files.py` splits a vendor's files and proves each half merges back to the original | **landed**: apple split (Mac, 21 files); `vendor_config` / `vendor_param` are no services — the library reads `device_files.describe` / `param` (both halves; NVIDIA and AMD read the application's half alone until their split, Dell); `vendors_dir` stays an OPTIONAL hook |
+| `vendor_config`, `vendor_param`, `vendors_dir` | the kernel-relevant device description (tiles, shared memory, registers, warp size, matrix unit, dispatch limits, identification) | (a) fact, per device | `nbxtensor.backend.device_files`: the library's device files `backend/devices/<vendor>/<name>.yml` hold every key the census lists (`docs/nbxtensor/device_keys.txt`: static ast, string literals, a recorded run); a device is found and described with no application. An application's own half of a device (`vendors_dir`, now OPTIONAL) is merged, a key in both refused by name; `tools/split_vendor_files.py` splits a vendor's files and proves each half merges back to the original | **landed**: apple split (Mac, 21 files); `vendor_config` / `vendor_param` are no services — the library reads `device_files.describe` / `param` (both halves; NVIDIA and AMD read the application's half alone until their split, Dell); `vendors_dir` stays an OPTIONAL hook |
 | `device_arch_string` | the key a device file is found by | (a) fact | `backend.device_names.arch_string` | **landed** (Mac, M2) |
 | `imposed_rung_mb` | a memory ceiling imposed on the allocator | (a) setting, optional | `nbxtensor.memory.set_limit(bytes)` — a limit the user MAY impose (default: none, the device's own budget); the engine sets its rung through it (`core.prism.memory_budget.apply_imposed_rung`, at start when `NBX_PRISM_BUDGET_MB` is set) | **landed** (Dell, 0fb617eb); the service goes, the library reads no NeuroBrix variable |
 | `deferred_drain_policy_of` | when deferred frees go back | (b) engine | the deferred dead-tensor queue is the engine's Triton hot loop (`triton.sequence`), not the library's: no library code read the policy but its own reader, which only the engine called — no setter is needed; the engine reads its vendor file itself (`core.prism.memory_budget.deferred_drain_policy`, refused by name with no profile declared, where the library's reader returned 2 GB in silence) | **landed** (Dell); the service and `ops.elementwise_wrappers.deferred_drain_policy` go |
 | `attention_operand_dtypes`, `attention_operand_alignment` | the dtypes and alignment an attention's operands run at | (a) default + explicit arguments | default: the operands' common dtype by `dtype.promotion.binary_result`, the device's own alignment; the engine's DtypeEngine passes its decision as the op's arguments | Mac (dtype zone) with the Dell (attention wrappers) |
 | `matrix_unit_representation`, `matrix_unit_flash_representation`, `matrix_unit_split_scale` | how the matrix unit carries a GEMM's or an attention's operands | (a) default + explicit arguments | default from the device file's matrix-unit section and the dtype table; the DtypeEngine's choice passed as arguments | Mac (dtype) with the Dell (linalg, attention wrappers) |
-| `canonical_aten` | an op name's canonical ATen spelling | (b) engine | the library's ops have their own names; the traced graph's spelling is the engine's dispatch (`neurobrix.kernels.classification.kernel_for`; `ops.dispatch.dispatch` maps the library's own names only) | **landed** (Dell, 504de8d5); the service goes |
+| `canonical_aten` | an op name's canonical ATen spelling | (b) engine | the library's ops have their own names; the container graph's spelling is the engine's dispatch (`neurobrix.kernels.classification.kernel_for`; `ops.dispatch.dispatch` maps the library's own names only) | **landed** (Dell, 504de8d5); the service goes |
 | `memory_class_gb`, `memory_class_from_profile_id` | the memory a certified entry is served for | (a) fact + (b) engine | the library's certified store keys entries by its OWN device's memory: `backend.device_facts.memory_gb(mb)` (the one rounding), `device_memory_gb(idx)` (declared, else the driver's total, read once), `declare_device_memory(idx, bytes)` for an application (a census shadow, a plan's profile — NeuroBrix: `triton.dtype.declare_hardware_profile`); store functions renamed `proof_memory_gb`, `entry_for_memory_gb`, `executing_memory_gb`, `covered_memory_gbs`, keyword `memory_gb=`; the profile-NAME parse stays in the engine (no committed proof needs it: 76 133 of 76 133 carry their device record) | **landed** (Dell); both services go |
 | `census`, `census_table` | the certification census | (b) engine, through two documented optional hooks | `ops.launch_observer.set_launch_observer(obs)` — a dry run: while `obs.active()`, an autotuned kernel launches nothing, hands its key to `obs.record(tuned, key)` and calls `obs.shadow_run`, and a count read back from the device is taken from the op's contract; `ops.autotune_settings.set_miss_explainer(fn)` — an application's account of a key a confirmation run misses, appended to `KeyNotCertified`. NeuroBrix installs its census as both (`kernels/census.py`, `kernels/census_table.census_row`, moved out of the library) | **landed** (Dell); both services go |
 | `installation_refusals` | NeuroBrix's workshop rule on where a backend build may live | (b) engine | none | Mac (its one reader is the Metal backend selection) |

@@ -24,7 +24,7 @@ what the engine reads, and the one exception the engine owns.
 4. **No GPU on a known bug.** Before any new compute, the containers whose declared or state dtype
    differs from their stored dtypes are listed by reading their files (`runtime/defaults.json`,
    `topology.json`, the safetensors headers — zero execution); every one of them, validated or not, is
-   corrected in its metadata (key/value, no retrace when the graph is right), its dated proof replayed
+   corrected in its metadata (key/value, no rebuild when the graph is right), its dated proof replayed
    at the CLI, and the hub receives the corrected container.
 
 ## What the engine reads
@@ -38,4 +38,4 @@ what the engine reads, and the one exception the engine owns.
 The three agree by construction under the rule. A container where they do not has not been
 corrected yet; the audit of 2026-10-13 over the shared cache (49 containers, files only) found 23
 such containers, among them Wan2.1-I2V-14B-480P, whose state dtype had moved float16 → float32 with
-its retrace of 2026-10-12 and whose native video moved with it.
+its rebuild of 2026-10-12 and whose native video moved with it.

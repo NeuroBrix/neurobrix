@@ -9,7 +9,7 @@ derives from its report.json. RTFx = clip_s / transcribe_s, HIGHER
 is better. One transcript sha per arm per cell = full determinism.
 
 Arms: nbxt = NeuroBrix triton; nbxc = NeuroBrix compiled;
-tf = vendor transformers fp16 greedy (the traced-from stack);
+tf = vendor transformers fp16 greedy (the stack the container was built from);
 fw = faster-whisper 1.2.1 / CT2 4.8.1 fp16 (R16-retained);
 nemo = NeMo 2.7.3 on torch 2.5.1+cu121 (PIN DEVIATION, annotated:
 the R16 pin said torch 2.7+cu126; driver 535 = CUDA 12.2 refuses

@@ -99,14 +99,14 @@ Output: `.txt`.
 ## multimodal — Unified Models (text OR image output)
 
 Reference: DeepSeek Janus-Pro (`multimodal_understanding` ↔ `generate`).
-**`--mode` is mandatory** because the .nbx is traced for one head.
+**`--mode` is mandatory** because the .nbx is built for one head.
 
 ```bash
-# Image generation (requires Janus build traced for image AR)
+# Image generation (requires a Janus container built for image AR)
 neurobrix run --model deepseek-ai/Janus-Pro-7B \
     --mode image --prompt "a red cat sitting on a couch"
 
-# Text understanding (requires Janus build traced for text AR)
+# Text understanding (requires a Janus container built for text AR)
 neurobrix run --model deepseek-ai/Janus-Pro-7B \
     --mode text --input-image cat.jpg --prompt "describe this image"
 
@@ -118,7 +118,7 @@ neurobrix run --model Qwen/Qwen3-Omni-30B-A3B-Instruct \
     --mode text --audio clip.wav --prompt "What is said in this audio?"
 ```
 
-A `.nbx` traced for one mode rejects the other with a clear error:
+A `.nbx` built for one mode rejects the other with a clear error:
 
 ```
 ERROR: This 'Janus-Pro-7B' build supports only --mode image
@@ -360,7 +360,7 @@ unless something is wrong.
 |----------|--------|
 | `NBX_DEBUG=1` | Expensive per-op statistics (forces GPU sync, ~2x slower), shown with `-v` / `NBX_LOG=debug` |
 | `NBX_TRACE_ZEROS=1` | Find first op producing all-zeros from non-zero input |
-| `NBX_TRACE_NAN=1` | Trace NaN/Inf in first few ops |
+| `NBX_TRACE_NAN=1` | Find NaN/Inf in first few ops |
 | `NBX_NAN_GUARD=1` | Replace NaN with 0 in every op (expensive) |
 
 ## Adding a new family

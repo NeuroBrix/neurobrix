@@ -58,7 +58,7 @@ We recommend always running the latest version of NeuroBrix.
 
 The `.nbx` container format executes computation graphs. While NeuroBrix validates container integrity, users should:
 
-- Only load `.nbx` files from trusted sources (NeuroBrix Hub or self-traced models)
+- Only load `.nbx` files from trusted sources (NeuroBrix Hub or containers you built yourself)
 - Use `neurobrix validate --level deep --strict` before running untrusted containers
 - Be aware that containers can contain arbitrary computation graphs
 

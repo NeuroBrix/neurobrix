@@ -61,7 +61,7 @@ positions for a short prompt) enter cross-attention unmasked, and the video is n
 (tokenizer extracted values), so the engine reads it from the `.nbx`; the runtime registry
 read remains the developer's override. The four hub containers that declare the flag
 (Wan2.1-T2V-1.3B, Wan2.1-I2V-14B-480P, Wan2.1-VACE-1.3B, Wan2.2-I2V-A14B) must be rebuilt and
-re-uploaded — no re-trace, the graphs are unchanged.
+re-uploaded — no graph rebuild, the graphs are unchanged.
 
 **The class, closed in the engine and the build the same day (5eb49103).** Five other readers
 took a flag only from the registry — `i2v_latent_conditioning`, `vace_control_conditioning`
@@ -77,21 +77,21 @@ toolchain has is a build-side value, written at build.
 one of the six flags and all thirteen are on the hub (listing of 2026-09-20, 47 models): the four
 Wan containers above, Allegro-TI2V, CogVideoX-5b-I2V, SANA-Video-2B-720p, PixArt-XL-1024 and
 PixArt-Sigma-XL-1024 (`fp16_conv_cascade_safe`), HAT-L-x4, HAT-S-x4, SwinIR-Classical-x2 and -x4
-(`requires_fp32_compute`). Each is a rebuild (no re-trace) and a re-upload under the same slug.
+(`requires_fp32_compute`). Each is a rebuild (no graph rebuild) and a re-upload under the same slug.
 Until then every one of them runs at its author's settings only in the author's checkout.
 
 ### Sana-1600M-MultiLing does not reproduce the vendor at 1024² (2026-09-21)
 
-**Measured.** The retrace gate's vendor arm (the vendor pipeline rendered at the exact prompt,
+**Measured.** The rebuild gate's vendor arm (the vendor pipeline rendered at the exact prompt,
 seed, steps and guidance) against both containers at 1024×1024, sequential oracle: the hub's
-container (traced 2026-06-05) at **17.66 dB** (SSIM 0.800), today's retrace at **17.25 dB**
+container (built 2026-06-05) at **17.66 dB** (SSIM 0.800), today's rebuild at **17.25 dB**
 (SSIM 0.783). Neither reproduces the vendor; the two containers agree with each other no better
 (23.7 dB, 75 % of pixels off by more than 8). PixArt-Sigma under the same arm the same morning:
-old 13.09 dB, retrace 30.03 dB — so the arm, the seed protocol and the request are sound; the
-divergence is Sana's, predates the retrace and survives it.
+old 13.09 dB, rebuild 30.03 dB — so the arm, the seed protocol and the request are sound; the
+divergence is Sana's, predates the rebuild and survives it.
 
 **What it means.** The public container renders a different picture from the vendor's for a
-user's prompt, with no warning. The gate refused the retrace's upload (an artefact that fails the
+user's prompt, with no warning. The gate refused the rebuild's upload (an artefact that fails the
 gate is a workstream, not an upload); the hub keeps the June object until a judged replacement
 exists. The 09-09 vendor-correctness cell read "image agrees" from Sana at another request — the
 disagreement is at this one (1024², the family protocol's prompt, seed 42), so the next step is
@@ -149,8 +149,8 @@ witness and none is left uncertified without its retry.
 ## 2026-09-29 13:45 — the owner's method restated (the supervisor's inbox entry 69)
 
 ZERO hacks, ZERO hardcode, data-driven. Universality is ONE code that runs every model with the values carried by
-the data: the `.nbx` configs, the hardware profiles, the family profiles. Forge embeds them from the registries;
-the model registry (`forge/config/model_registry.yml`) may be extended with any value a model needs to execute,
+the data: the `.nbx` configs, the hardware profiles, the family profiles. The container builder embeds them from the registries;
+the builder's model registry may be extended with any value a model needs to execute,
 each with its source. No compute wasted, no errors, problems treated at the source. The tools that census,
 compute certificates and run the anti-regression are named as the origin of many problems: the Dell writes their
 contracts and tests, one implementation for both machines; the Mac reviews what arrives on the peer channel
@@ -168,20 +168,20 @@ Four sub-agents ran on the Dell all night, never collected; their work was found
 4. Every sub-agent and chain of the last 48 h has its deliverable on disk and in the report, or is recovered from the campaign and the session logs under RECOVERED.
 5. A job that ran unreported is a fault of method, not an incident.
 
-## 2026-10-12 15:30 — FORGE guidelines (the owner, via the supervisor)
+## 2026-10-12 15:30 — CONTAINER BUILDER guidelines (the owner, via the supervisor)
 
-Forge is the proprietary tool that traces our models.
+The container builder is the proprietary tool that builds our models' containers.
 
-- It is used explicitly through its entry point and documented commands (its repository README and the CLAUDE.md at its root). It has its own git branch, and Forge main is the only line.
-- A model is never traced with a custom script.
-- Forge stays portable and traces every model we own: a lost container is retraced by Forge into an exact copy.
+- It is used explicitly through its entry point and documented commands (its repository README and the CLAUDE.md at its root). It has its own git branch, and the builder's main is the only line.
+- A model's container is never built with a custom script.
+- The container builder stays portable and builds every model we own: a lost container is rebuilt by it into an exact copy.
 - Every specification stays in force:
   - NeuroTax 5.0;
   - symbolic shapes are mandatory, with no frozen dimension;
   - one algebraic-function tool for symbolic shapes, extended and fixed as needed;
-  - unified VMM for every trace.
-- A fix never breaks another model's trace. The trace suite of the whole catalogue is the proof before a Forge fix lands.
-- Hard code is allowed in Forge, a private tool, but is not desirable.
+  - unified VMM for every build.
+- A fix never breaks another model's build. The build suite of the whole catalogue is the proof before a container-builder fix lands.
+- Hard code is allowed in the container builder, a private tool, but is not desirable.
 
 ## 2026-10-12 18:20 — CONFIDENTIALITY and ECONOMY (the owner, via the supervisor)
 
@@ -214,14 +214,14 @@ is rewritten on disk, not repeated in the conversation; anything not visible in 
 
 ## 2026-10-13 02:15 — THE DTYPE IS PER COMPONENT (the owner, via the supervisor)
 
-1. Each component of a model runs in the dtype its safetensors headers give, and Forge declares it as is, per component,
+1. Each component of a model runs in the dtype its safetensors headers give, and the container builder declares it as is, per component,
    in the container. There is no "dominant dtype" voted across components: a vote, a tie or a walk order never decides a
    dtype. The state dtype in `runtime/defaults.json` is derived per component, never global.
 2. The only exception: a value beyond the hardware's precision margin (fp16 overflow on V100) forces fp32. That decision
    belongs to the DtypeEngine at run time, from the hardware profile and the tensor itself, never by model name, and it
    is never written into the container: the container stays portable (Apple and Hopper do not share a margin).
 3. No GPU on a known defect: every container whose state dtype differs from its components' header dtypes is found by
-   reading the manifests and headers (zero execution), corrected by Forge (metadata rewrite, no retrace when the graph is
+   reading the manifests and headers (zero execution), corrected by the container builder (metadata rewrite, no graph rebuild when the graph is
    right), then its dated proof is replayed at the CLI. The Mac's reading of 2026-10-13 flagged 20 of 49 containers.
 
 ## 2026-11-05 22:55 — NBXTENSOR 0.0.1 IS PUBLISHED (the owner's GO 22:55, confirmed 23:51, via the supervisor)
@@ -258,7 +258,7 @@ Proofs on the version commit `587325db3` (the engine's tag `nbxtensor-v0.0.2`): 
 suite 0 failed, the torch-free proof (the library's tests, five Triton models at their gate request, their shas equal to
 the recorded ones, no torch import attempted) PASS; the Mac's Apple suites green (2 112 passed, the one red a test that
 read a data key of the Metal table as an entry point, fixed: 64/64). Published: PyPI `nbxtensor` 0.0.2 (sdist + wheel,
-twine check passed, read: no machine path, no personal name, no Forge); GitHub `NeuroBrix/nbxtensor` and GitLab
+twine check passed, read: no machine path, no personal name, no private tool's name); GitHub `NeuroBrix/nbxtensor` and GitLab
 `neurobrix/nbxtensor`, the export `081204ef`, tag `v0.0.2`, release with both files; the engine repository's GitLab
 release `nbxtensor-v0.0.2`. Checked on a clean `python:3.10-slim` container: `pip install nbxtensor==0.0.2` from PyPI
 (numpy, triton 3.8.0, no torch), `python -m nbxtensor doctor` ready on the card, the README's GPU example correct.

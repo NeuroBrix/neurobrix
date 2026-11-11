@@ -392,7 +392,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | fact | src/neurobrix/core/runtime/graph/compiled_sequence.py | _parse_dtype | returns a torch.dtype with the sequence's Prism remap (compute_dtype); nbxtensor's parse_dtype returns an NBXDtype — two types |
 | fact | src/neurobrix/core/runtime/precision_contract.py | kind | a different function under the same name: the precision class of an op (precision / casting / passthrough), not a dtype's kind |
 | wrapper | src/neurobrix/core/runtime/graph/device_attention.py | _plain | the plain-SDPA entry of the attention dispatch table, called positionally like its other entries |
-| wrapper | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | intercept_attention(enable_gqa) | the graph's own SDPA kwarg, handed in by the op dispatch from the traced op's kwargs (chatterbox t3) — the scan sees no Python caller |
+| wrapper | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | intercept_attention(enable_gqa) | the graph's own SDPA kwarg, handed in by the op dispatch from the graph op's kwargs (chatterbox t3) — the scan sees no Python caller |
 | wrapper | src/neurobrix/core/runtime/graph/moe_fusion.py | detect_and_fuse_moe(refusals) | the tests read the refusals it collects (tests/unit/runtime/test_a_stacked_expert_block_routed_softmax_first_is_fused) |
 | wrapper | src/neurobrix/core/runtime/graph_executor.py | _resolve_fp16_activation_policy | the executor's door to its precision contract, called at two compile points and by tests/unit/dtype/test_precision_contract |
 | wrapper | src/neurobrix/core/runtime/graph_executor.py | execute | the executor interface's name (serving, strategies); run() takes a pre-op callback second, so it is not an alias of run |

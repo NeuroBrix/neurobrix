@@ -178,7 +178,7 @@ being too strict; with it, they are four real defects.
   returning silently. When the vote was about to seat a config the oracle
   refuses, that is printed as a FINDING — a majority wrong in the same way is
   the evidence that a target needs looking at, and correcting it quietly would
-  destroy the only trace of it.
+  destroy the only record of it.
 * **No provider is installed by default**, so the shipped behaviour is unchanged
   and the hot path pays one `is None`. Producing an oracle costs an fp64
   reference per key, which costs a card; the certification runner is its first

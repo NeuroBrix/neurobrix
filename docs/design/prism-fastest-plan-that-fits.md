@@ -73,14 +73,14 @@ plan with the measured margin.
 ## 3. One precision contract (the owner, 15:26)
 
 On hardware that computes in bf16 (fp16 on V100) the model's tensors are half, weights and activations; fp32 only
-where (a) the vendor traced the op fp32 inside a half graph (`core/dtype/traced_island`, 06:30), (b) the calibration
+where (a) the container's graph records the op fp32 inside a half graph, as the vendor computes it (`core/dtype/traced_island`, 06:30), (b) the calibration
 measured an overflow (`fp32_op_uids`), (c) a kernel accumulates in fp32 internally without storing it. The Triton
 branch today keeps fp32 downstream of an island because its self-managed GEMMs and convolutions (`mm`, `bmm`,
 `addmm`, `conv2d`, `_convolution` in `_SELF_MANAGED_OPS`) take their operands as they come and store wide: 2 017
 policy sites on Sana's transformer (the Mac, 06:40), the compiled branch narrowing at the next AMP_FP16 op. The
 rule: self-management covers the LAUNCH (in-kernel promotion, `launch_keys.mm_dtypes` and its kin), not the STORE —
 under a half compute dtype `wrap_op` casts a self-managed op's non-island float operands to the compute dtype as it
-does for every AMP_FP16 op, and the wrapper stores at the compute dtype; an island (traced or calibrated) keeps
+does for every AMP_FP16 op, and the wrapper stores at the compute dtype; an island (recorded in the graph or calibrated) keeps
 fp32 as today. The width model (`runtime_widths._self_managed`, `_aligned`) and the key derivation follow the same
 rule, the census is re-derived (the keys move from fp32 to half operands), the new keys certified. Proof: per-op
 dtype of native and triton read from the plan dumps equal on V100 and on Metal, the Triton branch's peak lower,

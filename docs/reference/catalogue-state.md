@@ -22,8 +22,8 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `NVlabs/Sana-1600M-4Kpx-BF16` | image | 12.1 | met in 460 s | 2 | 0 | 2082 s, 5.52x, 59/59 keys, base 460 s, bytes same; 2 certified choice(s) contradicted by the runtime sweep (22 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 2/2 · 32 GB 2/2 · proven under triton 3.6.0 | PROVEN 3 modes at 3072x4096 (2026-09-28 13:12-13:58, the Dell's `b4ba02e2` estimator tree): native rc 0 through 22 572 MiB of swap, triton 12 950 MiB inside the working set, the first 3072x4096 renders on Metal; its bf16 latent decoded by the vendor's DC-AE on the rack (19:24: engine vs vendor bf16 51.1 dB, indistinguishable by eye); native over-runs its plan (22 572 vs 18 916 MiB) — Prism's estimator, the Dell | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | `D-PRISM-SANA4K-COMPILED-16GB` | measured |
 | `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | 325 s, 6.95x, 58/58 keys, base 55 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (26 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 8/8 · 32 GB 8/8 · proven under triton 3.6.0 | not measured here | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | none named | measured |
 | `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | 2471 s, 20.90x, 36/36 keys, base 124 s, bytes same | 16 GB 8/8 · 32 GB 8/8 · proven under triton 3.6.0 | not measured here | vae `height`@128 (weight-extent) → bound — spatial differential 2026-09-13 on PixArt-Sigma-XL-2-1024-MS, whose vae graph.json is byte-identical to this container's; vae `width`@128 (weight-extent) → bound — same run, same identical graph | none named | measured |
-| `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (16 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 4/4 · 32 GB 4/4 · proven under triton 3.6.0 | PROVEN 3 modes at 2048x1024 (2026-09-28 14:30-14:52, estimator tree): native 170 s, triton 10 238 MiB, plan `single_gpu_lifecycle`; four symbol-chain breaks unadjudicated (Forge) | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | none named | **proven** — [bench.png](nbx/campaigns/2026_09_16_vitrine/pixart_xl_1024/bench.png), judged by looked at, beside the degeneracy facts: the request's own scene — a red wooden bench under a blossoming cherry tree, petals drifted on the path, park behind, afternoon light; not flat, not banded (image_facts.json) ([verdict](nbx/campaigns/2026_09_16_vitrine/pixart_xl_1024/VERDICT.md)) |
-| `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | 16 GB 15/15 · 32 GB 15/15 · proven under triton 3.6.0 | not yet run on this stack (queued in the release matrix) | text_encoder `seq_len`@77 (weight-extent) → bound — differential 2026-09-12 (77 vs 71: 0 dims moved); transformer `seq_len`@4096 (weight-extent) → UNADJUDICATED — the differential's override has no seam on a transformer traced inside a pipeline: both arms recorded trace_value=4096 again on 2026-09-13 16:05 (instrument defect named in the census; 'fixed by the model' on 2026-09-12 read the same silence as a fact) (+2) | none named | measured |
+| `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (16 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 4/4 · 32 GB 4/4 · proven under triton 3.6.0 | PROVEN 3 modes at 2048x1024 (2026-09-28 14:30-14:52, estimator tree): native 170 s, triton 10 238 MiB, plan `single_gpu_lifecycle`; four symbol-chain breaks unadjudicated (the container builder) | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | none named | **proven** — [bench.png](nbx/campaigns/2026_09_16_vitrine/pixart_xl_1024/bench.png), judged by looked at, beside the degeneracy facts: the request's own scene — a red wooden bench under a blossoming cherry tree, petals drifted on the path, park behind, afternoon light; not flat, not banded (image_facts.json) ([verdict](nbx/campaigns/2026_09_16_vitrine/pixart_xl_1024/VERDICT.md)) |
+| `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | 16 GB 15/15 · 32 GB 15/15 · proven under triton 3.6.0 | not yet run on this stack (queued in the release matrix) | text_encoder `seq_len`@77 (weight-extent) → bound — differential 2026-09-12 (77 vs 71: 0 dims moved); transformer `seq_len`@4096 (weight-extent) → UNADJUDICATED — the differential's override has no seam on a transformer built inside a pipeline: both arms recorded trace_value=4096 again on 2026-09-13 16:05 (instrument defect named in the census; 'fixed by the model' on 2026-09-12 read the same silence as a fact) (+2) | none named | measured |
 | `Qwen/Qwen3-30B-A3B-Thinking` | llm | 57.1 | met in 154 s | 0 | 0 | 56 s, 0.51x, 7/8 keys, bytes passed | 0 shapes met | not measured here | none found at the input | none named | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | llm | 57.1 | met in 173 s | 1 | 0 | 54 s, 0.47x, 7/8 keys, bytes passed | 16 GB 1/1 · 32 GB 1/1 · proven under triton 3.6.0 | not measured here | none found at the input | none named | **proven** — [answer.txt](nbx/campaigns/2026_09_16_vitrine/qwen3_coder/answer.txt), judged by the function it wrote was extracted and EXECUTED against eight cases it never saw: 8 of 8 — overlapping, touching, contained, empty, single, unsorted, disjoint and degenerate inputs all return exactly what they must (execution.json); 3591 s for 160 tokens, the model streaming per token on one 32 GB card ([verdict](nbx/campaigns/2026_09_16_vitrine/qwen3_coder/VERDICT.md)) |
 | `TinyLlama/TinyLlama-1.1B-Chat` | llm | 2.1 | met in 25 s | 3 | 0 | 33 s, 4.18x, 6/6 keys, base 10 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (3 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 3/3 · 32 GB 3/3 · proven under triton 3.6.0 | not measured here | none found at the input | none named | measured |
@@ -58,7 +58,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `Wan-AI/Wan2.1-VACE-1.3B` | video | 18.2 | **NAMED DEBT — not corrected, and no stimulus corrects it** | 0† | 0† | 127 s, 4.32x, 34/37 keys, bytes **not run** | 0 shapes met | not measured here | none found at the input | `D-TEMPORAL-UNROLL`, `D-WAN-VACE-BROADCAST-AT-DIV`, `D-NEGATIVE-ALLOCATION-SIZE-WAN-VACE`, `D-WAN-VACE-FRAME-TOKENS-FROZEN` | measured |
 | `Wan-AI/Wan2.2-I2V-A14B` | video | 118.1 | **RUNS — compiled ran to completion at the default guidance (MEASURED, R29 hardened 2026-09-16); triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line** | 0† | 0† | not measured | 0 shapes met | not measured here | none found at the input | `D-TEMPORAL-UNROLL`, `D-PRISM-WAN22-TRITON-ONE-CARD` | measured (topology) / inferred (unroll) |
 | `genmo/Mochi-1-preview` | video | 38.2 | **RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, a defect of EVERY kernel for ANY model whose tensor exceeds two billion elements (the next family to meet it will not be called Mochi), fixed for the class at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)** | 0† | 0† | not measured | 0 shapes met | not measured here | transformer `seq_len`@256 (weight-extent); transformer `seq_len`@256 (weight-extent) | `D-MOCHI-CUDA-700-AT-MM` | measured |
-| `hpcai-tech/Open-Sora-v2` | video | 42.5 | **RE-TRACED, REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)** | 0† | 0† | not measured | 0 shapes met | not measured here | text_encoder_2 `seq_len`@77 (weight-extent) | none named | measured |
+| `hpcai-tech/Open-Sora-v2` | video | 42.5 | **GRAPH REBUILT, CONTAINER REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)** | 0† | 0† | not measured | 0 shapes met | not measured here | text_encoder_2 `seq_len`@77 (weight-extent) | none named | measured |
 | `rhymes-ai/Allegro` | video | 23.6 | FAILED rc=-9 — killed at 2701 s | 12† | 0† | not measured | 16 GB 12/12 · 32 GB 12/12 · proven under triton 3.6.0 | not measured here | none found at the input | `D-ALLEGRO-TRITON-31H-PER-ARM`, `D-VIDEO-CAMPAIGN-STIMULUS` | measured |
 | `rhymes-ai/Allegro-TI2V` | video | 24.3 | **RUNS — repaired and delivered** | 27† | 0† | not measured | 16 GB 27/27 · 32 GB 27/27 · proven under triton 3.6.0 | not measured here | none found at the input | `D2 (88 frames: declared limit until cuDNN >= 9.3)`, `D-ALLEGRO-TI2V-FRAME-TOKENS-FROZEN` | measured |
 | `zai-org/GLM-4.1V-9B-Thinking` | vlm | 19.2 | met in 913 s | 259 | 0 | 2367 s, 21.14x, 523/523 keys, base 117 s, bytes same; 56 certified choice(s) contradicted by the runtime sweep (423 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 259/259 · 32 GB 259/259 · proven under triton 3.6.0 | not measured here | none found at the input | `D-PRISM-2x16-PIPELINE-OVERFILL` | measured |
@@ -73,15 +73,15 @@ Two defects, both fixed at the source: the output size was never read from the c
 
 ### `CogVideoX-5b-I2V` — RUNS — corrected at the source, published, installed; run to completion (MEASURED: no artefact judged outside the engine, R29 hardened 2026-09-16)
 
-Its causal temporal pad recorded 2187*s - 2184 against a truth of s + 2, exact at the traced s=1. Profiled at 49 frames the peak was 210.26 GB against 0.09 GB at the trace, a factor of 2237 which is the compound's own coefficient. Re-traced, the temporal axis carries no symbol at all (an I2V encoder conditions on one image) and the same request costs 0.02 GB. 389 -> 265 ops.
+Its causal temporal pad recorded 2187*s - 2184 against a truth of s + 2, exact at the build-time s=1. Profiled at 49 frames the peak was 210.26 GB against 0.09 GB at build time, a factor of 2237 which is the compound's own coefficient. Rebuilt, the temporal axis carries no symbol at all (an I2V encoder conditions on one image) and the same request costs 0.02 GB. 389 -> 265 ops.
 
 *Evidence:* hub record THUDM/CogVideoX-5b-I2V fileSize 23126413914, updatedAt 2026-09-12T22:09:39Z (replace through the internal entry point, 2498 s); installed manifest 22:10:26 UTC; the installed vae_encoder/graph.json holds 265 ops with symbols batch/height/width and NO temporal symbol; regression gate passed component by component (vae_encoder 0.82 -> 0.80 GB, every other component 1.000x); proof by run 22:45 UTC: 9 frames at 448x448, range 9-253, inter-frame diff 3.34 (validation_outputs/proof_by_run_CogVideoX-5b-I2V_20260912_2242/VERDICT.json)  ·  *line:* measured
 
-### `Open-Sora-v2` — RE-TRACED, REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)
+### `Open-Sora-v2` — GRAPH REBUILT, CONTAINER REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)
 
-The snapshot's arrangement (model_index.json, component dirs, safetensors T5 shards beside the vendor's .bin) is rebuilt from declarations and documented beside the weights. The June container's 11 017-op VAE was an unrolled trace; the new one is flat in T.
+The snapshot's arrangement (model_index.json, component dirs, safetensors T5 shards beside the vendor's .bin) is rebuilt from declarations and documented beside the weights. The June container's 11 017-op VAE was an unrolled graph; the new one is flat in T.
 
-*Evidence:* re-trace on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, vae 237 (June: 11 017 — an unrolled trace; the new graph is FLAT in T, 237 ops at T=9 and T=25, measured on card 0), text encoders 1594/490; rebuild 682 s on the export; regression gate 1.000x on three components, vae 0.959x opened with --allow-shrink on a measurement (248 tensors identical, the graph shrank); upload 13:08:54 -> rc=0 after 1922 s, hub updatedAt 13:40:55Z; install 13:40:56 -> rc=0 after 123 s, 53 files, 42.47 GB; proof by run 15:33: 9 frames at 112x176, range 0-202, inter-frame difference 18.6, rc=0 after 648 s, unpinned; docs/reference/catalogue-repairs.md entry 4  ·  *line:* measured
+*Evidence:* graph rebuild on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, vae 237 (June: 11 017 — an unrolled graph; the new graph is FLAT in T, 237 ops at T=9 and T=25, measured on card 0), text encoders 1594/490; container rebuild 682 s on the export; regression gate 1.000x on three components, vae 0.959x opened with --allow-shrink on a measurement (248 tensors identical, the graph shrank); upload 13:08:54 -> rc=0 after 1922 s, hub updatedAt 13:40:55Z; install 13:40:56 -> rc=0 after 123 s, 53 files, 42.47 GB; proof by run 15:33: 9 frames at 112x176, range 0-202, inter-frame difference 18.6, rc=0 after 648 s, unpinned; docs/reference/catalogue-repairs.md entry 4  ·  *line:* measured
 
 ### `SANA-Video_2B_720p_diffusers` — met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost
 
@@ -91,7 +91,7 @@ A sweep of video conv keys at 720p costs minutes a key; the 90-minute run timeou
 
 ### `Wan2.1-I2V-14B-480P` — INFERRED same debt as Wan2.1-VACE
 
-No local snapshot, so no second trace point and no fitted slope. The claim rests on six module groups agreeing exactly on two numbers each, while the groups ABOVE the loop differ — different VAE sizes carrying the same loop. One snapshot and two 15-second traces convert it.
+No local snapshot, so no second build-time point and no fitted slope. The claim rests on six module groups agreeing exactly on two numbers each, while the groups ABOVE the loop differ — different VAE sizes carrying the same loop. One snapshot and two 15-second builds convert it.
 
 *Evidence:* its cached encoder carries the measured anchor's chunk-loop groups identically: {2:1, 3:9, 6:12, 8:22, 12:1, 21:22}  ·  *line:* inferred
 
@@ -117,7 +117,7 @@ The 9-frame run does not cross 2^31 elements itself (114 480 x 2048 rows); the w
 
 **line** — the last column is the verdict on the line itself, and since
 2026-09-16 it distinguishes two things that were being written as one.
-*proven* means an ARTEFACT of a real request — not a trace stimulus — was
+*proven* means an ARTEFACT of a real request — not a build stimulus — was
 judged by an instrument OUTSIDE this engine, and the cell links the file and
 the written verdict: a transcription against a text known in advance and a
 third-party ASR, a synthesised voice read back by that ASR, code that was
@@ -215,16 +215,16 @@ against the fp64 oracle) — so a 122 s run of the latter pays
 class and the shape, not a constant; the law (shapes met per second of
 served run) holds with that coefficient per cell, not a single one.
 
-**where a defect would be invisible** — axes traced at a value where two
-distinct rules give the same number, so the trace-point check cannot tell
+**where a defect would be invisible** — axes built at a value where two
+distinct rules give the same number, so the check at the build-time point cannot tell
 them apart. This is NOT a defect list. An axis here needs its rule asserted
-structurally or a re-trace outside the collision; a test at the flagged
+structurally or a rebuild outside the collision; a test at the flagged
 value is green for the reason that blinds it.
 
 ## Verdicts that cut across the lines
 
-* **A white image was a trace stimulus, not a model limit** (real-esrgan, 2026-09-16). `real-esrgan-x2` answered a 448x448 request with a WHITE 128x128 square. Cause measured, not inferred: it was traced at 64x64, where the image height, the image width and the first convolution's 64 channels are ONE NUMBER, so no rule could attribute a 64 to an axis and the pixel-unshuffle view recorded `[1, 3, 32, 2, 32, 2]` instead of `[s0, 3, s1//2, 2, s2//2, 2]`. `real-esrgan-x8` carries the identical loss at its first `upsample_nearest2d` and renders correctly anyway, because that operator records `scales_h`/`scales_w` BESIDE the frozen size and both engines recompute from the scale (`sequential_dispatcher.py:356`, `compiled_ops.py:748`) — a run-time repair of a build-time loss, which is why the same defect is invisible in one and fatal in the other. Repair: a RE-TRACE at the collision-free upscaler stimulus (112x80), which the tracer has shipped since 2026-08-29 and the four other upscalers carry; the tracer gained nothing, its window-split branch was correct the whole time. Proven by artefact at three sizes that are not the trace size, two of them non-square — x2: 96x96 -> 192x192, 160x112 -> 320x224, 208x144 -> 416x288, correlations 0.997/0.998/0.999 against the bicubic and looked at; x8 the same three at eight times. The weights were verified first, 702/702 and 704/704 tensors bit-identical to the snapshot the containers were built from. The net returns under the repair: a graph that DECLARES a spatial dimension no operation references is refused at the disk boundary, seen red on the real pre-repair container and refusing 0 of the 181 cached ones. `nbx/campaigns/2026_09_16_root_pngs/THREE_SIZES_VERDICT.md`, `nbx/campaigns/2026_09_16_symbol_chains/REPORT.md`.
-* **The strategy change moves no byte** (budget-unified gate, 2026-09-13 15:35-16:03, after-arm rebuilt on the trunk at run time): five pinned pairs whose Prism strategy changes between the arms — PixArt-XL-1024, PixArt-XL-2-1024-MS, PixArt-Sigma-XL-1024, PixArt-Sigma-XL-2-1024-MS on a 16 GB card, Flex.1-alpha on a 32 GB card — rendered byte-identical images on both arms, three cold repetitions each, triton. The byte matrix over the whole catalogue ran 2026-09-14 09:11-15:12 (register 52's re-arm): 30 cells identical, 0 adjudicated differences, 2 unadjudicated on the two models whose own nondeterminism is on record — orpheus-3b-0.1-ft (its sampler draws off the executor's RNG stream, D-ORPHEUS-SEED-NOT-PINNED) and CogVideoX-2b (differs run to run on both engines with no RNG op in its graph; cause not yet named, D-COGVIDEOX-2B-NONDETERMINISTIC-PER-RUN) — and 16 cells unmeasurable on this pair because its before tree (caf4ccf) cannot load today's containers. **Re-posed on 2026-09-16** (before 10cb515, the loader fix; after the merged trunk c61151b; two 16 GB cards, triton, cold pairs): GLM-4.1V-9B-Thinking, Janus-Pro-7B and MiniCPM-o-4_5 IDENTICAL (833eb058f3ae, 9a30d277cf21, 35d48303f4e7; each faster on the trunk, 143→127 s, 93→87 s, 59→49 s). Still unmeasurable, said by name: Qwen3-VL-30B-A3B-Thinking and Qwen3-Omni-30B-A3B-Instruct (both arms refuse at the deepstack zero-length bind until their retrace), Ming-Lite-Omni-1.5 triton (the before arm refuses at a freed arena — the defect the trunk fixed today, so the pair has no before). Determinism per mode is a public claim: the two nondeterministic models are its named exceptions until their causes are. `nbx/campaigns/prepared/budget_unified_gate_20260913_1535/RUN.md`, `nbx/campaigns/2026_09_16_converge/matrix_repose/`.
+* **A white image was a build stimulus, not a model limit** (real-esrgan, 2026-09-16). `real-esrgan-x2` answered a 448x448 request with a WHITE 128x128 square. Cause measured, not inferred: it was built at 64x64, where the image height, the image width and the first convolution's 64 channels are ONE NUMBER, so no rule could attribute a 64 to an axis and the pixel-unshuffle view recorded `[1, 3, 32, 2, 32, 2]` instead of `[s0, 3, s1//2, 2, s2//2, 2]`. `real-esrgan-x8` carries the identical loss at its first `upsample_nearest2d` and renders correctly anyway, because that operator records `scales_h`/`scales_w` BESIDE the frozen size and both engines recompute from the scale (`sequential_dispatcher.py:356`, `compiled_ops.py:748`) — a run-time repair of a build-time loss, which is why the same defect is invisible in one and fatal in the other. Repair: a REBUILD at the collision-free upscaler stimulus (112x80), which the container builder has shipped since 2026-08-29 and the four other upscalers carry; the container builder gained nothing, its window-split branch was correct the whole time. Proven by artefact at three sizes that are not the build-time size, two of them non-square — x2: 96x96 -> 192x192, 160x112 -> 320x224, 208x144 -> 416x288, correlations 0.997/0.998/0.999 against the bicubic and looked at; x8 the same three at eight times. The weights were verified first, 702/702 and 704/704 tensors bit-identical to the snapshot the containers were built from. The net returns under the repair: a graph that DECLARES a spatial dimension no operation references is refused at the disk boundary, seen red on the real pre-repair container and refusing 0 of the 181 cached ones. `nbx/campaigns/2026_09_16_root_pngs/THREE_SIZES_VERDICT.md`, `nbx/campaigns/2026_09_16_symbol_chains/REPORT.md`.
+* **The strategy change moves no byte** (budget-unified gate, 2026-09-13 15:35-16:03, after-arm rebuilt on the trunk at run time): five pinned pairs whose Prism strategy changes between the arms — PixArt-XL-1024, PixArt-XL-2-1024-MS, PixArt-Sigma-XL-1024, PixArt-Sigma-XL-2-1024-MS on a 16 GB card, Flex.1-alpha on a 32 GB card — rendered byte-identical images on both arms, three cold repetitions each, triton. The byte matrix over the whole catalogue ran 2026-09-14 09:11-15:12 (register 52's re-arm): 30 cells identical, 0 adjudicated differences, 2 unadjudicated on the two models whose own nondeterminism is on record — orpheus-3b-0.1-ft (its sampler draws off the executor's RNG stream, D-ORPHEUS-SEED-NOT-PINNED) and CogVideoX-2b (differs run to run on both engines with no RNG op in its graph; cause not yet named, D-COGVIDEOX-2B-NONDETERMINISTIC-PER-RUN) — and 16 cells unmeasurable on this pair because its before tree (caf4ccf) cannot load today's containers. **Re-posed on 2026-09-16** (before 10cb515, the loader fix; after the merged trunk c61151b; two 16 GB cards, triton, cold pairs): GLM-4.1V-9B-Thinking, Janus-Pro-7B and MiniCPM-o-4_5 IDENTICAL (833eb058f3ae, 9a30d277cf21, 35d48303f4e7; each faster on the trunk, 143→127 s, 93→87 s, 59→49 s). Still unmeasurable, said by name: Qwen3-VL-30B-A3B-Thinking and Qwen3-Omni-30B-A3B-Instruct (both arms refuse at the deepstack zero-length bind until their rebuild), Ming-Lite-Omni-1.5 triton (the before arm refuses at a freed arena — the defect the trunk fixed today, so the pair has no before). Determinism per mode is a public claim: the two nondeterministic models are its named exceptions until their causes are. `nbx/campaigns/prepared/budget_unified_gate_20260913_1535/RUN.md`, `nbx/campaigns/2026_09_16_converge/matrix_repose/`.
 * **The engine suite on the trunk** (`pytest tests/unit tests/regression`, 2026-09-13 13:28-15:20, 1 h 52): 2100 passed, 21 failed. Ten of the 21 were one defect in the triton weight loader's consumed-weight filter (register 50, fixed the same afternoon, measured by run on three cells), one a GPU-less host planned on a GPU (register 51, fixed), eight out-of-memory against a foreign process on the cards, two Qwen3-Omni triton cells to re-read after the fix. The 21 are re-run from a worktree frozen at `b9a6430` on a quiet rig; the verdict line is written here when it exists, not before. `nbx/logs/full_suite_night.log`, `nbx/logs/suite_rerun_21.log`.
 
 ## What this document does not say
@@ -237,7 +237,7 @@ value is green for the reason that blinds it.
   rows carry a measured or stated cost; the other 8 say *not
   measured* and that is the whole point of the cell.
 * **Whether the flagged axes are wrong.** They are places a defect could
-  not be seen. Converting one into a verdict costs a second trace at a
+  not be seen. Converting one into a verdict costs a second build at a
   value outside the collision, and the instrument that does it refuses when
   the stimulus does not actually move — a tree compared with itself agrees
   with itself.
@@ -263,12 +263,12 @@ addendum of that day is explicit that nothing may read as complete while they ar
 |---|---|
 | APPLE (memory / rung) | 9 |
 | DELL (layer_streaming) | 6 |
-| ENGINE (trace / op defect) | 6 → **1** (2026-09-24, see the section at the end) |
+| ENGINE (graph / op defect) | 6 → **1** (2026-09-24, see the section at the end) |
 | CENSUS HARNESS (input never supplied) | 3 → **0** (cause found and fixed, `e9333630`) |
-| FORGE (frozen symbol, re-trace owed) | 3 |
+| CONTAINER BUILDER (frozen symbol, rebuild owed) | 3 |
 | ENGINE (census shadow opened the device) | 2 |
 | ENGINE (missing capability) | 2 |
-| FORGE (symbolic coverage) | 1 |
+| CONTAINER BUILDER (symbolic coverage) | 1 |
 | METAL (driver / allocator) | 1 |
 
 ## What each class means for closing the chantier
@@ -278,7 +278,7 @@ addendum of that day is explicit that nothing may read as complete while they ar
   not by fixing.
 - **DELL (layer_streaming)** — the plan's segment boundaries are absent from the graph Prism
   read. Handed over in owed-proofs; re-censused here once their fix reaches main.
-- **ENGINE (trace / op defect)** — broadcast and shape mismatches in triton-sequential
+- **ENGINE (graph / op defect)** — broadcast and shape mismatches in triton-sequential
   (PixArt, Sana). Real defects, reproducible, and the census's own commands reproduce them.
 - **ENGINE (census shadow opened the device)** — Allegro and CogVideoX-2b trip
   `census shadow: the Metal device is deliberately unreachable (NBX_CENSUS=1)`. Key formation
@@ -286,8 +286,8 @@ addendum of that day is explicit that nothing may read as complete while they ar
   the most actionable item in this table.
 - **METAL (driver / allocator)** — granite-3.1: `the triton-ext driver cannot bind pointer
   ... the allocator does not record it`. Ours, and Apple-only.
-- **FORGE (frozen symbol / symbolic coverage)** — principle 1. The three retrace-queue models
-  are NOT failures: they ran clean and contributed keys, and are queued because the trace
+- **CONTAINER BUILDER (frozen symbol / symbolic coverage)** — principle 1. The three rebuild-queue models
+  are NOT failures: they ran clean and contributed keys, and are queued because the build
   froze a symbol that must stay symbolic.
 - **CENSUS HARNESS (input never supplied)** — the I2V models were censused without the image
   their flow requires (`None of the sources resolved: ['global.image']`). Not an engine
@@ -328,11 +328,11 @@ Corrected counts, from the failing logs only:
 |---|---|
 | APPLE (memory / rung) | **11** |
 | DELL (layer_streaming) | 6 |
-| ENGINE (trace / op defect) | 6 |
+| ENGINE (graph / op defect) | 6 |
 | CENSUS HARNESS (input never supplied) | 3 |
-| FORGE (frozen symbol, re-trace owed) | 3 |
+| CONTAINER BUILDER (frozen symbol, rebuild owed) | 3 |
 | ENGINE (missing capability) | 2 |
-| FORGE (symbolic coverage) | 1 |
+| CONTAINER BUILDER (symbolic coverage) | 1 |
 | METAL (driver / allocator) | 1 |
 
 **Eleven of the 33 are only PARTIALLY open** — they failed at some rungs and succeeded at
@@ -346,7 +346,7 @@ is a gap in coverage, not the reason any model is open.
 
 ## 2026-09-24 — the shape class closes: four PixArt containers censused and certified
 
-The `ENGINE (trace / op defect)` row above was **6**. It is now **1**, and the arithmetic is
+The `ENGINE (graph / op defect)` row above was **6**. It is now **1**, and the arithmetic is
 named rather than asserted:
 
 | model | 2026-09-22 | now |
@@ -374,9 +374,9 @@ dimension bound to `height` by coincidence. Re-censused over 6 rungs and both mo
 
 **Sana_1600M_1024px_MultiLing is named, not closed, and it is not ours to close.** Three of
 its defects were fixed here and each chained to the next; the fourth stands. The rack's
-`2f925673` names eleven containers awaiting retraces and **this one is first, with 174
+`2f925673` names eleven containers awaiting rebuilds and **this one is first, with 174
 parameter dims bound to symbols**. Running their own detector here: all four PixArt
-containers 0, Sana 174. It closes when they retrace it. The three Sana corrections are kept
+containers 0, Sana 174. It closes when they rebuild it. The three Sana corrections are kept
 — they are correct, tested, and change 0 entries in every non-Sana container — but **the
 model is not closed by them**, and a reader of the commit log should not infer otherwise.
 
@@ -388,7 +388,7 @@ Verified as pre-existing and not a regression: the same refusal appears in `logs
 a run made **before any of these fixes**.
 
 **Cross-backend verdict.** Not Apple-only. The defect fires at plain 2048 px on shared code;
-the rack's PixArt green is unexercised above the traced 1024 px, not evidence of absence. A
+the rack's PixArt green is unexercised above the build-time 1024 px, not evidence of absence. A
 CUDA proof at 2048 px is owed and recorded in `owed-proofs.md`. What IS Apple-only is the
 rung ladder that exposed it.
 

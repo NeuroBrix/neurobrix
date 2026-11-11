@@ -4,7 +4,7 @@
 
 Every cell is READ from an artefact and says how; a cell with no artefact says `not measured` / `no certified-only
 cell` / `not judged` — never a number:
-    container     the cache entry's manifest (nbx version, trace date, NeuroTax version, the manifest's sha256[:12])
+    container     the cache entry's manifest (nbx version, build date, NeuroTax version, the manifest's sha256[:12])
     census        rows of the committed census table per class (`derived`: the census is a derivation)
     keys served   census keys whose certified entry covers the class (`entry_for_memory_gb`), over the census rows
     native/triton the LATEST certified-only gate row per (model, mode, class): PASS = rc 0 and zero miss, else ERROR
@@ -152,7 +152,7 @@ def main(argv=None) -> int:
         if entry is None or not (a.cache / entry / "manifest.json").exists():
             raise SystemExit(f"ERROR: {name}: no cache entry in the catalogue's full table or no manifest at {a.cache}/{entry}")
         mpath = a.cache / entry / "manifest.json"; m = json.loads(mpath.read_text())
-        cont = (f"nbx {m.get('nbx_version', '?')}, traced {str(m.get('created_at', ''))[:10]}, NeuroTax {m.get('neurotax_version', '?')}, "
+        cont = (f"nbx {m.get('nbx_version', '?')}, built {str(m.get('created_at', ''))[:10]}, NeuroTax {m.get('neurotax_version', '?')}, "
                 f"manifest {hashlib.sha256(mpath.read_bytes()).hexdigest()[:12]}")
         cen = "derived: " + " / ".join(str(len(census[c][entry])) for c in names)
         keys = "; ".join("%d / %d" % served_keys(census[c][entry], files, int(classes[c]), C) for c in names)

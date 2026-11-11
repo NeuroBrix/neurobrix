@@ -175,7 +175,7 @@ The `cpu.features` list tells NeuroBrix what accelerated operations are availabl
 | CPU (generic) | `float32` | No half-precision acceleration |
 
 !!! warning "Always set `preferred_dtype`"
-    Without it, Prism may assign fp32 to models traced in fp32, wasting VRAM and halving throughput. A V100 running Sana in fp32 takes 2.74s/step — in fp16 it takes 1.23s/step (2.2x faster).
+    Without it, Prism may assign fp32 to models whose containers were built in fp32, wasting VRAM and halving throughput. A V100 running Sana in fp32 takes 2.74s/step — in fp16 it takes 1.23s/step (2.2x faster).
 
 ## CPU-Only Profiles
 

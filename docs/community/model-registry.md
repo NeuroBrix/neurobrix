@@ -38,9 +38,9 @@ We invite AI model developers, research labs, and organizations to publish their
 
 ### The NBX Container
 
-NeuroBrix uses a proprietary tracing technology to convert your model into a `.nbx` container. This process:
+NeuroBrix uses a proprietary container-building technology to convert your model into a `.nbx` container. This process:
 
-1. **Traces the computation graph** at a low level, capturing exact execution semantics
+1. **Records the computation graph** at a low level, capturing exact execution semantics
 2. **Serializes weights** in safetensors format for fast loading
 3. **Records topology** — execution flow (iterative, autoregressive, forward)
 4. **Packages everything** into a single self-describing archive
@@ -49,12 +49,12 @@ The resulting `.nbx` file is completely self-contained. The NeuroBrix runtime re
 
 ### What We Need From You
 
-To trace and publish your model, we need:
+To build your model's container and publish it, we need:
 
 | Requirement | Description |
 |-------------|-------------|
 | **Model weights** | Hosted publicly (Hugging Face, your servers, etc.) or shared privately |
-| **Inference code** | A working inference script or pipeline we can trace |
+| **Inference code** | A working inference script or pipeline we can build the container from |
 | **Example inputs** | Sample prompts, images, or other inputs for validation |
 | **License confirmation** | Your model's license must permit redistribution in `.nbx` format |
 | **Model card** | Description, capabilities, limitations, intended use |
@@ -68,7 +68,7 @@ To trace and publish your model, we need:
 **For:** Open-source models with permissive licenses
 
 - Submit a Model Request at [models@neurobrix.org](mailto:models@neurobrix.org) or via the issue tracker ([GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues))
-- Our team evaluates and traces the model
+- Our team evaluates the model and builds its container
 - Published on the Hub with full attribution
 - Community priority queue
 
@@ -76,7 +76,7 @@ To trace and publish your model, we need:
 
 **For:** Organizations that want priority publishing and co-branding
 
-- Direct engineering collaboration for tracing and optimization
+- Direct engineering collaboration for container building and optimization
 - Priority queue — faster turnaround
 - Co-branded listing on the Hub
 - Joint announcements and case studies
@@ -176,9 +176,9 @@ Browse the full catalog: [neurobrix.org/models](https://neurobrix.org/models)
    - License type
    - Target family (image, LLM, audio, video)
 
-2. **Technical review** — We assess compatibility with the NeuroBrix tracing pipeline.
+2. **Technical review** — We assess compatibility with the NeuroBrix container-building pipeline.
 
-3. **Tracing and validation** — We trace the model, validate outputs against reference, and optimize execution.
+3. **Container build and validation** — We build the model's container, validate outputs against reference, and optimize execution.
 
 4. **Hub publication** — Model is listed on [neurobrix.org/models](https://neurobrix.org/models) with documentation and quick-start instructions.
 

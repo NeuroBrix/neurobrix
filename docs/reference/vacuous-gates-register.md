@@ -267,21 +267,21 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 ### 26 — an invariant that holds, and is wrong
 
 * **date** 2026-09-12 · **machine** Dell · **site** `src/neurobrix/core/prism/profiler.py:_resolve_shape`, the TRUST GATE
-* **the form, which is new to this register** the four gates above it are gates that check NOTHING. This one checks something, the check passes, and the thing it certifies is false. It is the more dangerous shape, for the same reason the clock field was: **a vacuous gate leaves no trace, and this one leaves a reassuring one.**
-* **what it certifies** a tensor's symbolic dimension may be evaluated at runtime only if its own expression tree reproduces the concrete dim witnessed at trace. The gate was written against a real defect — image graphs carrying mis-associated product expressions, one Sana `_unsafe_view` dim whose expression traced at 8.4e14 against a concrete dim of 1 — and against corrupted integer annotations (98 component graphs of the zoo carrying another tensor's extent in an output slot; Kokoro's decoder conv put its input length, 15361, in the batch slot and was sized at 19.2 GB).
-* **what it cannot see, by construction** the gate compares the expression against a **recorded number**, not against what the expression MEANS. An expression whose every node's `trace` reproduces its children's reproduces the traced dim exactly — and passes — while naming a symbol that has nothing to do with the axis it describes. **The corruption is in the identity of the symbol, and arithmetic self-consistency is blind to identity.** The class it was built for is the one where the annotation DISAGREES with the trace; the class where it AGREES and is still wrong was invisible to it from the first line.
-* **the instance** `CogVideoX-5b-I2V/vae_encoder`, tensor `aten.slice::36::out_0`, traced `[1, 128, 3, 112, 176]`. Its temporal dim, traced **3**, is a chain of additions over `s1` — the SPATIAL latent-height symbol — and resolves to **129 036**. Its H, traced 112, resolves to **90**, which is `latent_w`: the name of another dimension. Its W, traced 176, resolves to **5 400**, which is `latent_h × latent_w`: a product. Every one of those expressions is self-consistent at trace, so every one passes the gate.
+* **the form, which is new to this register** the four gates above it are gates that check NOTHING. This one checks something, the check passes, and the thing it certifies is false. It is the more dangerous shape, for the same reason the clock field was: **a vacuous gate leaves no mark, and this one leaves a reassuring one.**
+* **what it certifies** a tensor's symbolic dimension may be evaluated at runtime only if its own expression tree reproduces the concrete dim witnessed at build time. The gate was written against a real defect — image graphs carrying mis-associated product expressions, one Sana `_unsafe_view` dim whose expression evaluated to 8.4e14 at build time against a concrete dim of 1 — and against corrupted integer annotations (98 component graphs of the zoo carrying another tensor's extent in an output slot; Kokoro's decoder conv put its input length, 15361, in the batch slot and was sized at 19.2 GB).
+* **what it cannot see, by construction** the gate compares the expression against a **recorded number**, not against what the expression MEANS. An expression whose every node's `trace` reproduces its children's reproduces the build-time dim exactly — and passes — while naming a symbol that has nothing to do with the axis it describes. **The corruption is in the identity of the symbol, and arithmetic self-consistency is blind to identity.** The class it was built for is the one where the annotation DISAGREES with the build-time value; the class where it AGREES and is still wrong was invisible to it from the first line.
+* **the instance** `CogVideoX-5b-I2V/vae_encoder`, tensor `aten.slice::36::out_0`, built at `[1, 128, 3, 112, 176]`. Its temporal dim, **3** at build time, is a chain of additions over `s1` — the SPATIAL latent-height symbol — and resolves to **129 036**. Its H, 112 at build time, resolves to **90**, which is `latent_w`: the name of another dimension. Its W, 176 at build time, resolves to **5 400**, which is `latent_h × latent_w`: a product. Every one of those expressions is self-consistent at build time, so every one passes the gate.
 * **what it cost** Prism evaluated them faithfully and asked for **898 238 MB of activations for a component whose weights are 822 MB** — 944 GB for one component against a 93 GB rack — and refused the model before it ran, advising the operator to obtain more host RAM. The estimator was not wrong. It was reading a corrupted annotation that had been certified as sound.
-* **why it was read as an estimator defect for a day** because the number is absurd and the estimator is where absurd numbers come out. The discriminator was to profile the graph at its OWN trace binding, where the peak is 40–55 MB: the estimator reproduces the trace exactly, so the fault is upstream of it. **An instrument that reproduces its calibration is not the thing that is broken.**
+* **why it was read as an estimator defect for a day** because the number is absurd and the estimator is where absurd numbers come out. The discriminator was to profile the graph at its OWN build-time binding, where the peak is 40–55 MB: the estimator reproduces the build-time shapes exactly, so the fault is upstream of it. **An instrument that reproduces its calibration is not the thing that is broken.**
 * **the discriminator that must replace consistency** plausibility, not self-consistency — a dim resolving to 129 036 for an ordinary request, an H resolving to the value of another axis, a W resolving to a product. None of these is detectable by asking an expression to agree with itself.
 * **the census — RETRACTED, then redone: an accident, not a family.** The first census resolved shapes with `InputConfig.to_symbol_map()` and reported 22 components across 12 containers — every video container in the zoo. **That census was wrong, and wrong because of the instrument.** `to_symbol_map()` is a POSITIONAL map: it binds `s0`→batch, `s1`→latent_h, `s2`→latent_w by position. These containers DECLARE their symbols (`s1: time`, `s2: height`, `s3: width`, in `symbolic_context`), and the profiler's real entry point, `build_symbol_map()`, applies those names over the positional base. Prism uses the named one. I used the positional one, bound `time` to a spatial extent, and read the consequences as corruption.
-* **what the correct map says** redone with `build_symbol_map` across the same 182 graphs at the same three bindings: **3 components, 2 containers.** And two of those three are a false positive of my own threshold — `Wan2.2-I2V/transformer` and `transformer_2` carry `dim1 = mul[time, height, width]`, trace 150 = 5×10×12, which is **exactly right**: a DiT flattens the latent volume into a sequence. They cross a >100×-of-trace threshold only because the trace is FRUGAL (latent 10×12) against a 512² request — the very trap named two entries below, unapplied to my own census. Their peak estimate is 2 104 MB, entirely sane.
-* **what actually remains: one container, one component, one dimension.** `CogVideoX-5b-I2V/vae_encoder`, `aten.cat::6`, `dim2 = add[s1]` with `s1` declared `time` at trace 1: it traces to **3** and resolves to **8 751** when `time` binds to 5. No causal padding does that. Everything else in the zoo resolves as its trace does — `Wan2.1-VACE/vae_encoder` resolves `[1, 192, 1, 56, 88]` to itself, exactly.
-* **and the H/W half of this entry was also my artefact** "H resolves to the value of W, W resolves to their product" was the positional map binding spatial symbols to the wrong axes. Under the declared map, H resolves to 112 and W to 176 — their traced values. **What survives is the temporal dimension alone.** The 944 GB refusal stands: Prism computed it with the CORRECT map, which is why its number was right while mine were noise.
+* **what the correct map says** redone with `build_symbol_map` across the same 182 graphs at the same three bindings: **3 components, 2 containers.** And two of those three are a false positive of my own threshold — `Wan2.2-I2V/transformer` and `transformer_2` carry `dim1 = mul[time, height, width]`, 150 at build time = 5×10×12, which is **exactly right**: a DiT flattens the latent volume into a sequence. They cross a >100×-of-build-time-value threshold only because the build stimulus is FRUGAL (latent 10×12) against a 512² request — the very trap named two entries below, unapplied to my own census. Their peak estimate is 2 104 MB, entirely sane.
+* **what actually remains: one container, one component, one dimension.** `CogVideoX-5b-I2V/vae_encoder`, `aten.cat::6`, `dim2 = add[s1]` with `s1` declared `time` at build-time value 1: it is **3** at build time and resolves to **8 751** when `time` binds to 5. No causal padding does that. Everything else in the zoo resolves as it did at build time — `Wan2.1-VACE/vae_encoder` resolves `[1, 192, 1, 56, 88]` to itself, exactly.
+* **and the H/W half of this entry was also my artefact** "H resolves to the value of W, W resolves to their product" was the positional map binding spatial symbols to the wrong axes. Under the declared map, H resolves to 112 and W to 176 — their build-time values. **What survives is the temporal dimension alone.** The 944 GB refusal stands: Prism computed it with the CORRECT map, which is why its number was right while mine were noise.
 * **the lesson, and it is the day's own** the one measurement made from the start with the right instrument — a peak estimate exceeding the whole rack, 1 component of 182 — was right all along and never moved. Four further instruments built on top of `to_symbol_map()` produced four confident, wrong answers. **A map named `to_symbol_map` on a class named `InputConfig` looks like the symbol map; it is the positional base the real one is built from.** Two functions, one obvious name, and the obvious one is the wrong one for this question.
-* **is the missing `latent_height` the SAME fault? No, and the data says so** the two looked like one tracer defect on one family — one losing an annotation, the other corrupting it. They are different recording steps. The containers that fail on `latent_height` have an **empty topology summary** (`components.<n>.shapes: EMPTY` on Allegro-TI2V, Open-Sora-v2, Wan2.2-I2V) while their GRAPHS carry the latent input perfectly well (Allegro-TI2V declares `[1, 12, 5, 14, 22]`, Wan2.2 `[1, 36, 5, 10, 12]`). And the corruption counts do not track the loss: the three that lose the summary score 2175, 912 and 369, the eight that keep it score 121 to 1543. **B is an unpopulated summary; C is a mis-named symbol.** Two fixes, not one.
-* **what the runtime can and cannot do about C** four structural invariants were tested against the corrupted annotations and ALL FOUR are satisfied by them: each expression reproduces its own traced dim; each symbol carries exactly one trace value per graph (182 of 182); every shape-preserving op resolves exactly as its input does (0 violations in 182 graphs); a convolution's output channel against `weight.shape[0]` is defeated by gated convolutions, whose weight legitimately carries twice the output channels. The runtime has **no independent source for what axis a dimension describes** — the graph's only statement about that IS the annotation under test — so the identity check cannot be built here. It belongs where the tracer holds the module and the real tensor.
-* **and the capability that blocks the runtime's fallback** the one check the runtime COULD make is on its own conclusion: a peak that grows far more than the request's own input does. That needs the container's **trace binding** as an anchor, and there is no way to ask for one: `estimate_peak_memory(input_config=None)` does NOT profile at the trace — it silently falls back to `InputConfig()`'s defaults, a 1024x1024 batch-2 request. Every threshold measured against that anchor is measured against a second request. **Named as the missing capability — a trace-binding profile — rather than worked around**; a gate whose threshold was calibrated on a false anchor was built, measured, and reverted rather than shipped.
+* **is the missing `latent_height` the SAME fault? No, and the data says so** the two looked like one container-builder defect on one family — one losing an annotation, the other corrupting it. They are different recording steps. The containers that fail on `latent_height` have an **empty topology summary** (`components.<n>.shapes: EMPTY` on Allegro-TI2V, Open-Sora-v2, Wan2.2-I2V) while their GRAPHS carry the latent input perfectly well (Allegro-TI2V declares `[1, 12, 5, 14, 22]`, Wan2.2 `[1, 36, 5, 10, 12]`). And the corruption counts do not track the loss: the three that lose the summary score 2175, 912 and 369, the eight that keep it score 121 to 1543. **B is an unpopulated summary; C is a mis-named symbol.** Two fixes, not one.
+* **what the runtime can and cannot do about C** four structural invariants were tested against the corrupted annotations and ALL FOUR are satisfied by them: each expression reproduces its own build-time dim; each symbol carries exactly one build-time value per graph (182 of 182); every shape-preserving op resolves exactly as its input does (0 violations in 182 graphs); a convolution's output channel against `weight.shape[0]` is defeated by gated convolutions, whose weight legitimately carries twice the output channels. The runtime has **no independent source for what axis a dimension describes** — the graph's only statement about that IS the annotation under test — so the identity check cannot be built here. It belongs where the container builder holds the module and the real tensor.
+* **and the capability that blocks the runtime's fallback** the one check the runtime COULD make is on its own conclusion: a peak that grows far more than the request's own input does. That needs the container's **build-time binding** as an anchor, and there is no way to ask for one: `estimate_peak_memory(input_config=None)` does NOT profile at the build-time binding — it silently falls back to `InputConfig()`'s defaults, a 1024x1024 batch-2 request. Every threshold measured against that anchor is measured against a second request. **Named as the missing capability — a build-time-binding profile — rather than worked around**; a gate whose threshold was calibrated on a false anchor was built, measured, and reverted rather than shipped.
 * **where the fix is born** at build time, not here. A channel count is a weight property and must never carry a symbol; a temporal axis must not be expressed over a spatial one. Compensating in the estimator would make the runtime paper over a build-side limit, which this engine does not do.
 
 ---
@@ -301,41 +301,41 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 ### 28 — a refutation made with a broken instrument is not a refutation
 
 * **date** 2026-09-12 · **machine** Dell · **site** `InputConfig.to_symbol_map`, and four instruments built on it in one day
-* **what happened** the owner prescribed an identity check on symbolic dimensions — verify that the symbol a dimension names belongs to the axis it claims to describe. I answered that it **cannot be built in the runtime**, and I answered it with a measurement: four exact structural invariants, all four satisfied by the corrupted annotations, and the conclusion that *the runtime has no independent source for what axis a dimension describes — the graph's only statement about that IS the annotation under test.* The owner accepted it. **It was false.** Every graph carries `symbolic_context.symbols` with `{name, trace_value, source}` per symbol — `s1: {"name": "time", "source": "input::args::dim_2"}` — and the tracer has written it from the beginning. The independent source exists and is complete.
+* **what happened** the owner prescribed an identity check on symbolic dimensions — verify that the symbol a dimension names belongs to the axis it claims to describe. I answered that it **cannot be built in the runtime**, and I answered it with a measurement: four exact structural invariants, all four satisfied by the corrupted annotations, and the conclusion that *the runtime has no independent source for what axis a dimension describes — the graph's only statement about that IS the annotation under test.* The owner accepted it. **It was false.** Every graph carries `symbolic_context.symbols` with `{name, trace_value, source}` per symbol — `s1: {"name": "time", "source": "input::args::dim_2"}` — and the container builder has written it from the beginning. The independent source exists and is complete.
 * **why the measurement did not show it** because it was taken through `InputConfig.to_symbol_map()`, the POSITIONAL base (`s0` batch, `s1` latent height, `s2` latent width). Bound that way, a video container's `time` axis takes a spatial extent, the resolved shapes explode, and the explosion reads as corruption. The same instrument produced a census of "22 components across 12 containers, every video container in the zoo"; redone through `build_symbol_map`, which lays the declared names over that base, the true count is **one container, one component, one dimension**.
 * **why this is worse than an ordinary wrong answer, and is its own entry** a false ASSERTION invites checking. A false REFUTATION closes the question: it says *there is nothing here*, and nobody looks again. This one closed a line of work that was correct, and it closed it with the authority of a measurement — four invariants, exact, reproducible, and all of them measured through the same broken lens. **The cost of a refutation is the enquiry it ends, and that cost is paid silently.**
 * **the signal that was there and was not read** one number never moved. Prism's own estimate — 944 GB for the offending component — was computed with the CORRECT map from the first minute and stayed put across every instrument I built, while all of mine moved. **A measurement that holds still while yours move is not agreement; it is the control.** Neither of us read it as one.
-* **and the knowledge was already in the file** `build_symbol_map`'s docstring documents the 2026-08-10 root case in full: Qwen3-Omni's mel-frame axis, named `seq_len`, bound to the global text config instead of its 441-frame trace, the estimate collapsing, `block_scatter` packing a 16 GB card to 15.77 GiB with no headroom. It is written at the exact place it needed to be read — **inside the function that was not called.** A note cannot reach the caller who calls the other one, and this same note had already failed once.
+* **and the knowledge was already in the file** `build_symbol_map`'s docstring documents the 2026-08-10 root case in full: Qwen3-Omni's mel-frame axis, named `seq_len`, bound to the global text config instead of the 441 frames seen at build time, the estimate collapsing, `block_scatter` packing a 16 GB card to 15.77 GiB with no headroom. It is written at the exact place it needed to be read — **inside the function that was not called.** A note cannot reach the caller who calls the other one, and this same note had already failed once.
 * **closed by a refusal, not a note** `to_symbol_map` now RAISES, naming what it used to return and both ways forward; the positional base survives as `positional_symbol_map`, whose name carries its own hypothesis; `build_symbol_map` is the single caller. Measured first: the whole repository contained **exactly one** call site, `build_symbol_map` itself — every other caller was a throwaway script of mine, which is precisely the population a rename would not have reached and a refusal does.
 * **seen failing** restoring the old behaviour (`to_symbol_map` returning the base again) turns the refusal test red; the declared-vs-positional test shows the two maps a factor of 12 apart on the same axis of the same graph.
 * **the rule** a census is not a result until its instrument has been confronted with a measurement taken another way. And a refutation is an assertion with a longer shadow: it deserves MORE corroboration than the claim it kills, not less.
 
 ---
 
-### 29 — a rule checked only at the trace point is blind to every error that cancels there
+### 29 — a rule checked only at the build-time point is blind to every error that cancels there
 
-* **date** 2026-09-12 · **machine** Dell · **site** `forge/tracer/symbolic/rules.py`, the `cat` and convolution rules; visible in `CogVideoX-5b-I2V/vae_encoder`
-* **the general form, and it is why none of our gates could catch it** a symbolic rule is validated by ONE comparison: does the expression it produces reproduce the extent witnessed at trace? That comparison is made at a single point of the symbol's domain — the trace value. **Any error that happens to vanish at that point is invisible to it, permanently, by construction.** Not because the check is weak, but because a check at one point cannot separate two functions that agree at that point.
-* **the instance** the causal temporal pad concatenates three slices of the SAME tensor to turn 1 frame into 3. The rule sums its inputs' symbolic dims — correct in general — and records `3·s1`. **The truth is `s1 + 2`**: two of the three inputs are fixed-size padding, not independent extents. At trace `s1 = 1`, and `3·1 = 1+2 = 3`. The two functions agree at exactly one point of the domain, and that is the only point anyone looks at.
+* **date** 2026-09-12 · **machine** Dell · **site** the container builder's symbolic rules, the `cat` and convolution rules; visible in `CogVideoX-5b-I2V/vae_encoder`
+* **the general form, and it is why none of our gates could catch it** a symbolic rule is validated by ONE comparison: does the expression it produces reproduce the extent witnessed at build time? That comparison is made at a single point of the symbol's domain — the build-time value. **Any error that happens to vanish at that point is invisible to it, permanently, by construction.** Not because the check is weak, but because a check at one point cannot separate two functions that agree at that point.
+* **the instance** the causal temporal pad concatenates three slices of the SAME tensor to turn 1 frame into 3. The rule sums its inputs' symbolic dims — correct in general — and records `3·s1`. **The truth is `s1 + 2`**: two of the three inputs are fixed-size padding, not independent extents. At build time `s1 = 1`, and `3·1 = 1+2 = 3`. The two functions agree at exactly one point of the domain, and that is the only point anyone looks at.
 * **what turned an error into a catastrophe** the causal convolution that follows brings the concrete extent back to 1 while KEEPING the 3-reference expression — its temporal reduction is never applied, so the error does not settle. Each of the seven resnet blocks triples it again: `3 → 9 → 27 → 81 → 243 → 729 → 2 187`. The recorded function is `f(t) = 2187·t − 2184`, and `f(1) = 3` still. **A factor-3 error compounds to a factor-2187 one while remaining exactly correct at the point of validation.**
 * **what it cost** Prism evaluates it faithfully and asks for **944 GB of activations for a component whose weights are 822 MB**, refuses the model, and advises the operator to obtain more host RAM. Every downstream instrument inherited the absurdity and none could contradict it, because the annotation passes the only test there is.
-* **why no gate of ours could have caught it** the shape resolver's TRUST GATE (register 26) asks precisely this question and nothing else: does the expression reproduce its traced dim? It does. The symbol-consistency check passes (one trace value per symbol, 182 graphs of 182). The shape-preserving-op check passes (0 violations in 182 graphs). **Four independent structural invariants, all satisfied, all evaluated at the same single point.**
-* **the remedy, in form** a rule must be checked at a point where the error CANNOT cancel — which for a symbolic rule means **at least one binding other than the trace**. A test whose stimulus has `s = 1` will be green for the very reason that blinded the gate. Where a second binding is not available, the rule's structure must be asserted directly (a causal pad is `s + k` and the `k` is a literal), not inferred from an agreement of values.
-* **and the corollary for tests** this generalises the shape rule already in `what-a-green-test-proves.md` — *a test proves nothing at a shape that makes all its branches equivalent*. Here it is sharper: **`1` is the value at which multiplication and addition stop being distinguishable**, and a frugal trace tends to produce exactly that value on the axis being symbolized. The most economical stimulus is the one that hides the most rules.
-* **the census — a population, and a small one** the question the instance raises is not *is this container broken* but *where else could a defect of this class not be seen*. `tools/symbol_collision_census.py` asks it of every declared symbol in the catalogue: 182 component graphs, every axis, its trace value, and whether that value is one at which distinct rules agree. **25 components of 182, in 20 containers of 56.**
-  * **5 arithmetic collisions**, all at trace 1 — the worst value, where `k*s`, `s+(k-1)`, `s**n` and `s` are one rule. **One of the five is the defect above.** The other four are `Allegro-TI2V/transformer` (`seq_len` from an attention mask), `Janus-Pro-7B/gen_embed`, `Qwen3-Omni/talker.code_predictor…codec_embedding` and `openaudio-s1-mini/codec.decoder`, all `seq_len`. None is known to be defective; none can be CLEARED by the trace-point check either.
-  * **34 weight-extent collisions** — an axis whose trace value equals a parameter extent of its own component, so a dim bound to the wrong quantity reproduces the trace anyway (`real-esrgan` height and width at 64; `parakeet/joint` seq_len at 1024).
-  * **the batch axis is excluded and counted, never dropped.** It is 58 of the 293 raw flags and nearly all of the 57 at trace 2, and it is a DELIBERATE requirement at those values — a batch symbol is never a literal 1, and 2 is the CFG batch. Listing it buries the rest; `--all` shows it for anyone re-examining the decision rather than its consequences.
-* **filed** `D-CAUSAL-PAD-SYMBOL-COMPOUNDS` in `DETTE.md`, with the blast radius measured (2 187 references for the offender, 5 for the next across every 5-D component of 56 containers) and the remedy named as a tracer workstream requiring a re-trace of one container.
+* **why no gate of ours could have caught it** the shape resolver's TRUST GATE (register 26) asks precisely this question and nothing else: does the expression reproduce its build-time dim? It does. The symbol-consistency check passes (one build-time value per symbol, 182 graphs of 182). The shape-preserving-op check passes (0 violations in 182 graphs). **Four independent structural invariants, all satisfied, all evaluated at the same single point.**
+* **the remedy, in form** a rule must be checked at a point where the error CANNOT cancel — which for a symbolic rule means **at least one binding other than the build-time one**. A test whose stimulus has `s = 1` will be green for the very reason that blinded the gate. Where a second binding is not available, the rule's structure must be asserted directly (a causal pad is `s + k` and the `k` is a literal), not inferred from an agreement of values.
+* **and the corollary for tests** this generalises the shape rule already in `what-a-green-test-proves.md` — *a test proves nothing at a shape that makes all its branches equivalent*. Here it is sharper: **`1` is the value at which multiplication and addition stop being distinguishable**, and a frugal build stimulus tends to produce exactly that value on the axis being symbolized. The most economical stimulus is the one that hides the most rules.
+* **the census — a population, and a small one** the question the instance raises is not *is this container broken* but *where else could a defect of this class not be seen*. `tools/symbol_collision_census.py` asks it of every declared symbol in the catalogue: 182 component graphs, every axis, its build-time value, and whether that value is one at which distinct rules agree. **25 components of 182, in 20 containers of 56.**
+  * **5 arithmetic collisions**, all at build-time value 1 — the worst value, where `k*s`, `s+(k-1)`, `s**n` and `s` are one rule. **One of the five is the defect above.** The other four are `Allegro-TI2V/transformer` (`seq_len` from an attention mask), `Janus-Pro-7B/gen_embed`, `Qwen3-Omni/talker.code_predictor…codec_embedding` and `openaudio-s1-mini/codec.decoder`, all `seq_len`. None is known to be defective; none can be CLEARED by the build-time-point check either.
+  * **34 weight-extent collisions** — an axis whose build-time value equals a parameter extent of its own component, so a dim bound to the wrong quantity reproduces the build-time value anyway (`real-esrgan` height and width at 64; `parakeet/joint` seq_len at 1024).
+  * **the batch axis is excluded and counted, never dropped.** It is 58 of the 293 raw flags and nearly all of the 57 at build-time value 2, and it is a DELIBERATE requirement at those values — a batch symbol is never a literal 1, and 2 is the CFG batch. Listing it buries the rest; `--all` shows it for anyone re-examining the decision rather than its consequences.
+* **filed** `D-CAUSAL-PAD-SYMBOL-COMPOUNDS` in `DETTE.md`, with the blast radius measured (2 187 references for the offender, 5 for the next across every 5-D component of 56 containers) and the remedy named as a container-builder workstream requiring a rebuild of one container.
 
 ---
 
 ### 30 — an artefact of the right size is not a success
 
 * **date** 2026-09-12 · **machine** Dell · **site** my own reading of the Allegro-TI2V rebuild chain
-* **what happened** the chain built the container, verified the corrected topology inside it, and then **`forge replace` was refused by argparse in under a second** for a missing positional argument. I looked at `models/video/Allegro-TI2V/model.nbx.building`, saw 26.1 GB — the right size, the right name, the right minute — concluded "it is at the rename", and reported the chain as in flight. It had already failed. **The flight recorder held the word `failed` the whole time and I never read it.**
+* **what happened** the chain built the container, verified the corrected topology inside it, and then **the container builder's `replace` command was refused by argparse in under a second** for a missing positional argument. I looked at `models/video/Allegro-TI2V/model.nbx.building`, saw 26.1 GB — the right size, the right name, the right minute — concluded "it is at the rename", and reported the chain as in flight. It had already failed. **The flight recorder held the word `failed` the whole time and I never read it.**
 * **the cost** two hours in which the queue was believed to be advancing and was not. The owner found it from OUTSIDE, by querying the hub and seeing a date of 6 September against a local artefact of 14:06 — which is a good catch and also the wrong place to have to catch it from.
-* **the form** a file of the expected size is evidence that a process WROTE, not that it SUCCEEDED. Size, name and timestamp are all downstream of the work; the exit code is the only witness that reports on the whole of it. **The witness that adjudicates is the exit code, never the trace left on disk.**
+* **the form** a file of the expected size is evidence that a process WROTE, not that it SUCCEEDED. Size, name and timestamp are all downstream of the work; the exit code is the only witness that reports on the whole of it. **The witness that adjudicates is the exit code, never what is left on disk.**
 * **its cousin, and the reason this is a form and not an anecdote** the other machine wrote the same shape from the other end: a 10 MB PNG whose file size, dimensions and name were all correct, and 99.7 % of whose pixels were 0 or 255. A plausible artefact is the most expensive kind of silence, because it satisfies every cheap check.
 * **why the instrument was already there** `tools/flightrec.py` exists precisely to make an interrupted job legible, writes `failed` into a record before anything else, and the session hook prints it. It was armed, it was correct, and it was not consulted. **Having the instrument and looking elsewhere is a distinct failure from not having it**, and the remedy is not another instrument.
 * **closed by** the rule, not a tool: a chained step reports on the STEP'S exit status, and a chain that ends anywhere but its last line is reported as failed until its exit code says otherwise. On this machine the exit code is one command away at every point — `flightrec status`, the `|| { echo FAILED; exit 1; }` the chain already carries, and the record itself.
@@ -367,11 +367,11 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ### 31 — two decisions, each correct alone, wrong together
 
-* **date** 2026-09-12 · **machine** Dell · **site** `forge/tracer/worker.py`, two branches ~800 lines apart
+* **date** 2026-09-12 · **machine** Dell · **site** the container builder's worker, two branches ~800 lines apart
 * **the form, and it is the hardest of this register to prevent** every other entry has something to correct: a check that checks nothing, a name that lies, a green over a run that did not happen. **Here both decisions are right.** There is no one to correct and no line to call wrong — only a COMBINATION to forbid, and nothing in the code says the two are related.
-* **decision one, and it is load-bearing** the single-frame I2V encoder is traced at `T=1`, deliberately, with its reason stated where it is done: *"the vendor causal frame-chunk loop unrolls per trace chunk (3 chunks at T=9 broke replay at T=1); T=1 trace == T=1 runtime, single chunk, exact."* Raising it breaks replay. The comment even ends *"H/W stay symbolic"* — its author did not expect T to be.
-* **decision two, and it is reasonable** a pixel-space video input `[B, 3, T, H, W]` gets an explicit per-dim role declaration, because *"the naming convention has no rule for the positional 'args' input, so T/H/W froze at the trace values."* Declaring the layout is exactly right; it was added to FIX a freezing defect.
-* **what they do together** a **constant axis receives a symbol, at the value where every rule agrees.** `k*s == s+(k-1) == s**n == s` at 1, so the causal pad's `s + 2` was recorded as `3*s`; seven resnet blocks compounded it to `2187*s - 2184`, still exactly 3 at the only point the trace check looks at; and the engine asked for **944 GB of activations for a component whose weights are 822 MB**.
+* **decision one, and it is load-bearing** the single-frame I2V encoder is built at `T=1`, deliberately, with its reason stated where it is done, in substance: the vendor's causal frame-chunk loop unrolls per build chunk (3 chunks at T=9 broke replay at T=1); built at T=1 it is the T=1 runtime, a single chunk, exact. Raising it breaks replay. The comment even ends *"H/W stay symbolic"* — its author did not expect T to be.
+* **decision two, and it is reasonable** a pixel-space video input `[B, 3, T, H, W]` gets an explicit per-dim role declaration, because, in substance, the naming convention has no rule for the positional 'args' input, so T/H/W froze at the build-time values. Declaring the layout is exactly right; it was added to FIX a freezing defect.
+* **what they do together** a **constant axis receives a symbol, at the value where every rule agrees.** `k*s == s+(k-1) == s**n == s` at 1, so the causal pad's `s + 2` was recorded as `3*s`; seven resnet blocks compounded it to `2187*s - 2184`, still exactly 3 at the only point the build-time check looks at; and the engine asked for **944 GB of activations for a component whose weights are 822 MB**.
 * **why no review catches it** the two branches are eight hundred lines apart, each carries a correct justification, and neither mentions the other. A reviewer reading either one agrees with it. There is no diff in which they appear together, and the defect exists only in their conjunction.
 * **closed by** naming the conjunction where one of the halves already stands: the role declaration now asks whether the axis is constant, and gives it a role OUTSIDE the symbolizing set when it is. Measured on the live container, `2187 -> 1` references and `aten.cat::6` returning to the `literal 3` it always was, with `batch`/`height`/`width` keeping their own names.
 * **and the near-miss that is worth as much** the first attempt used `dynamic_dims_spec`, which symbolizes the chosen dims — and, **by its own documented contract, renames every one of them `seq_len`** ("a variable SEQUENCE axis"). All three surviving symbols came back as `seq_len`, and since the engine's `build_symbol_map` binds BY NAME, a height would have bound to a sequence length at runtime. **A worse defect than the one being fixed, shipped as its fix.** It was caught by re-reading the differential's own numbers instead of its verdict line — the discipline that failed seven other times the same day and held here.
@@ -420,25 +420,25 @@ written down where the next person will look.
 
 ### 32 — a door placed at two of the three save sites, on a path the work does not take
 
-`forge trace --component vae_encoder` exited 0 and printed `Saved: ... (3305 ops)`
+The container builder's graph step on `--component vae_encoder` exited 0 and printed `Saved: ... (3305 ops)`
 on a graph the depth-collision door refuses when run against the same file by
 hand. The door had been wired at the two `graph.json` save sites found by
-grepping for the R19 prune call in `tracer/orchestrator.py`. The video trace
-takes neither of them: it runs in the `trace-worker` SUBPROCESS and saves at
-`tracer/worker.py`, the third site.
+grepping for the R19 prune call in the container builder's orchestrator. The video build
+takes neither of them: it runs in the worker SUBPROCESS and saves in
+the worker's own module, the third site.
 
-`tracer/patterns/dead_subgraph.py` says **"the three graph.json save sites"** in
+The container builder's dead-subgraph pass says **"the three graph.json save sites"** in
 its own docstring, as placement guidance for exactly this kind of pass. That
 docstring was read while placing the door, quoted in the commit that placed it,
 and two sites were wired.
 
-What makes it this class and not an ordinary miss: the trace **passed**. A gate
+What makes it this class and not an ordinary miss: the build **passed**. A gate
 at a call site the work does not take is green for the reason that blinds it, and
 its green was read as "25 clears the graph" for the twenty minutes before the
 file was checked by hand.
 
 Seen failing: with the third site wired, the same command refuses and names the
-symbol, its trace value and the candidate.
+symbol, its build-time value and the candidate.
 
 **The rule that generalises**: when a pass must run at every exit of a stage,
 count the exits from the code, not from the search that found the first ones —
@@ -447,10 +447,10 @@ nod at.
 
 ### 33 — a flag accepted upstream, dropped downstream by `parse_known_args`
 
-`--trace-time 33` was declared on `forge trace`, declared on `trace-worker`, and
+The time-stimulus flag, at 33, was declared on the container builder's graph command, declared on its worker, and
 propagated into the worker command line by the orchestrator. `run_worker()`
 re-parses `sys.argv` with its own parser and ends with `parse_known_args()`, so
-the option was discarded without a word and the worker traced at its seed of 25.
+the option was discarded without a word and the worker built at its seed of 25.
 
 The failure did not look like a dropped flag. The door then recommended 33 on
 every iteration, and the fixed-point driver reported eight steps of `25 -> 33 ->
@@ -480,7 +480,7 @@ contained the fix, in a comment written to prevent this exact reading.
 It also produced a false negative in the other direction: attributing to `time`
 every dim owned by another symbol turned a residue into a claimed "172-deep
 structural plateau, no stimulus escapes them", which was written into
-`forge/tracer/worker.py` as the justification for a stimulus value. With the
+the container builder's worker as the justification for a stimulus value. With the
 three-way split (this symbol / another symbol / no symbol at all) the structural
 count across all 182 local graphs is **zero**.
 
@@ -498,24 +498,24 @@ file.
 
 ### 35 — an instrument that answered with a number obtained by the extrapolation it exists to distrust
 
-The depth-collision door refuses a graph and names "re-trace with `time` at 25".
+The depth-collision door refuses a graph and names "rebuild with `time` at 25".
 That value is computed by evaluating the graph's recorded expressions at a point
 OTHER than the one that produced them — which is the exact operation the door
 exists because nobody can trust.
 
-Where it is simply invalid: when the traced program unrolls a loop whose trip
+Where it is simply invalid: when the model's program unrolls a loop whose trip
 count depends on the symbol. The Wan VAE encoder emits 1448 ops at T=9, 2271 at
 17, 3305 at 25, ~100-130 ops per frame, and every module group is exactly linear
 in the chunk count `(T-1)//4+1` — 3 chunks to 5 chunks moves the four groups
-8 -> 14, 21 -> 35, 6 -> 10, 3 -> 5, fitting `3k-1, 7k, 2k, k`. Each re-trace
+8 -> 14, 21 -> 35, 6 -> 10, 3 -> 5, fitting `3k-1, 7k, 2k, k`. Each rebuild
 re-unrolls, and the blind count stayed at **135 through T=17, 25, 33 and 41**
 while the recommendation walked 25 -> 33 -> 41.
 
 The refusal was right every time. The number beside it was an invitation to keep
-paying for traces.
+paying for builds.
 
 **The remedy shipped**: the value is now printed as a CANDIDATE that says what it
-is, the authority is the loop that re-traces
+is, the authority is the loop that rebuilds
 (`nbx/campaigns/prepared/stimulus_fixed_point.py`), and a blind count that does
 not FALL between two iterations is reported as a plateau — measured, not assumed.
 
@@ -564,13 +564,13 @@ happened to someone who was not.
 
 ```python
 from artefact_witness import witness, StaleArtefact
-w = witness(cached_graph, ("git", forge_repo, "tracer/symbolic/depth_gate.py"))
+w = witness(cached_graph, ("git", builder_repo, depth_gate_path))
 print(w.line)   # names path, size, sha12, write time, and the reference commit
 ```
 
 It prints the artefact's identity whether it passes or fails, and raises
 `StaleArtefact` when the file is older than the commit that made the change. Seen
-both ways before it was trusted: it passed the re-traced Wan encoder written at
+both ways before it was trusted: it passed the rebuilt Wan encoder written at
 15:05:51 against a commit at 14:48:40, refused the CogVideoX encoder written on
 2026-06-25 against the same commit, and then refused a stale cached graph on its
 first production run inside the class-E chain — which is the only reason that run
@@ -583,11 +583,11 @@ point is refused at the CLI: that is a timestamp, not a verification.
 **What its conservatism costs, measured the same day.** The rule dates a change by
 the last commit touching the referenced file, so an UNRELATED edit to that file
 makes every earlier artefact stale. It happened within the hour: a commit that
-only extended a CLI flag's reach touched `tracer/worker.py`, and the witness then
-refused a graph traced twenty-four minutes earlier. The graph was re-traced — and
+only extended a CLI flag's reach touched the container builder's worker, and the witness then
+refused a graph built twenty-four minutes earlier. The graph was rebuilt — and
 came back with the SAME sha, `7216b9fb1478`, bit for bit.
 
-That is the right trade and the reason is R27/R28: because traces are
+That is the right trade and the reason is R27/R28: because builds are
 bit-reproducible, a false alarm costs sixteen seconds and returns a proof that the
 change was inert. A rule that refused to refuse until it could tell relevant edits
 from irrelevant ones would need to model what every change touches, which is the
@@ -596,7 +596,7 @@ cheap to clear is better than a precise one that has to be right.**
 
 ### 37 — a build that packaged a video model without its backbone, and said COMPLETE
 
-`forge build` produced a 5.45 GB CogVideoX-5b-I2V container against a 21.6 GB
+The container builder's `build` command produced a 5.45 GB CogVideoX-5b-I2V container against a 21.6 GB
 hub artifact and exited 0. The snapshot's `transformer/` held `config.json` and a
 103 KB weights index and nothing else — its 11 GB had been purged on 2026-09-07
 under R38 — so the backbone was copied as a generic MODULE rather than a
@@ -645,7 +645,7 @@ Every one of them had `k = 2`. At `k = 2` the predicate reads
 and said nothing about those graphs.
 
 The tell was in the same table and was legible before the verdict: the ONE
-component with two trace points and a fitted slope — `Wan2.1-VACE/vae_encoder`,
+component with two build points and a fitted slope — `Wan2.1-VACE/vae_encoder`,
 517 ops per chunk, the case the whole question came from — scored **0.79 and fell
 below the threshold**. An instrument that ranks the proven case beneath seven it
 invented is not mis-tuned, it is measuring something else.
@@ -660,8 +660,8 @@ chunks" from "r copies because the architecture has r of them".
 **The rule**: state the null before the score. A predicate that accepts a known
 fraction of random inputs must be reported against that fraction, and one whose
 null reaches 1.0 at the values actually present in the data has no power there
-and must REFUSE rather than return a number. The replacement measures two trace
-points from the same tracer and fits the slope; its positive and negative
+and must REFUSE rather than return a number. The replacement measures two build
+points from the same container builder and fits the slope; its positive and negative
 controls sit on the same model — encoder 517 ops per chunk, decoder flat at 384.
 
 ### 39 — a heterogeneous rack, and a card chosen without reading its size
@@ -673,12 +673,12 @@ Twice within ten minutes, on a rig whose four cards are two 16 GB V100s and two
   `aten.convolution::0` asking 9 GB with 11.4 GB already live. Card 0 is a 16 GB
   card and the container is 19 GB.
 * The unroll measurement campaign was pinned to card 1 — the other 16 GB card —
-  and reported `no graph` on trace after trace. On card 3 the same command
+  and reported `no graph` on build after build. On card 3 the same command
   succeeded in fifteen seconds.
 
 Neither is a memory bug and neither says anything about the artefacts under test.
 Both were about to be written down as one: the first as "the re-uploaded Allegro
-container does not run", the second as "these components cannot be traced".
+container does not run", the second as "these components cannot be built".
 
 **And the pinning itself was the error, not just the choice of card.** Prism's
 job is placement across the rack; `CUDA_VISIBLE_DEVICES=0` removes the rack and
@@ -739,14 +739,14 @@ available to the code that wrote the container.
 
 ### 41 — `ast.parse` said "parse ok" on a file Python refuses to run
 
-A timeout was added to two hub requests in `forge/forge.py`. Both calls already
+A timeout was added to two hub requests in the container builder's entry script. Both calls already
 carried a `timeout=10` further down, past the end of the six-line window the edit
 had been read in, so the result was a duplicate keyword argument.
 
 The check run before landing it was:
 
 ```python
-python -c "import ast; ast.parse(open('forge.py').read()); print('parse ok')"
+python -c "import ast; ast.parse(open('<the entry script>').read()); print('parse ok')"
 ```
 
 It printed **parse ok**. Duplicate keyword arguments are rejected when the AST is
@@ -755,8 +755,8 @@ duplicate-name check lives in the symbol table pass that `compile()` runs after
 it. So the instrument answered a narrower question than the one it was asked, and
 its answer was true.
 
-`forge.py` was unrunnable for twelve minutes. The Open-Sora conversion chain
-started in that window, called `forge build`, and reported a `SyntaxError` in its
+The entry script was unrunnable for twelve minutes. The Open-Sora conversion chain
+started in that window, called the container builder's `build` command, and reported a `SyntaxError` in its
 own log — where it reads as a build failure of the model rather than as a broken
 tool.
 
@@ -944,7 +944,7 @@ longer be read as a verified one.
 
 `consumed_weight_names()` (2026-09-09) hands the triton loader the set of
 parameter names some op in the graph reads, so that a MoE build does not load
-the experts its trace never routed to — a 38 % saving, measured. It speaks the
+the experts its container's graph never routed to — a 38 % saving, measured. It speaks the
 GRAPH's names. The loader filters the INDEX's keys by exact membership, and the
 two spaces are joined only after loading, by `_reconcile_weight_keys`'s unique
 suffix rule. Every key whose two names agree passed; the one whose names differ
@@ -1073,7 +1073,7 @@ The consumed-weight filter reads the FINAL graph, "after any fusion pass",
 and for the llm family that is true: the MoE fusion runs at graph load. For
 a MoE LM packaged under another family the fusion waits for the flow's
 declaration at execute time — after the weights were loaded from the
-un-fused graph, in which no op consumes the experts the trace never routed
+un-fused graph, in which no op consumes the experts the container's graph never routed
 to. The fused kernel then read them all, and Ming-Lite-Omni's first MoE
 block met `'NoneType' object has no attribute 'data_ptr'` under triton on a
 quiet rig, from a frozen tree, with the filter of entries 50 and 53 in
@@ -1243,7 +1243,7 @@ which is what the catalogue's "certified choices contradicted by the runtime
 sweep (near-ties)" column has been counting.
 
 
-### 58 — a trace at a small shape, and an index that wraps at a large one
+### 58 — a build at a small shape, and an index that wraps at a large one
 
 `mochi-1-preview` died on CUDA error 700 at `aten.mm::1` of its VAE at every
 attempt since 2026-09-10 (D-MOCHI-CUDA-700-AT-MM). Two `compute-sanitizer`
@@ -1254,13 +1254,13 @@ instrument, nothing measured. `--triton-sequential` with
 M=1 068 480 × N=2048, fp32 out — 2 188 247 040 elements, past 2^31. The
 kernel computed `stride_cm * offs_cm` with `offs_cm` an int32 arange; past
 row 1 048 576 the product wraps negative and the store leaves the
-allocation. The trace saw M=33 264. Upstream: triton-lang/triton#832
+allocation. The build saw M=33 264. Upstream: triton-lang/triton#832
 ("index computations are done in int32 even for large tensors" — intended
 C semantics, the maintainer's word), fixed the same week by three other
 projects (comfy-kitchen#172 on Triton 3.6.0, Triton-distributed#209,
 FlagGems#6083) with the same in-kernel `.to(tl.int64)`.
 
-**The shape**: a kernel proven correct at every shape a trace or a census
+**The shape**: a kernel proven correct at every shape a build or a census
 ever presented, and wrong at the first shape whose element count crosses a
 power of two no test had reached — the register's "shape it runs at"
 class, at the scale of an integer type. **The rule**: an index computation
@@ -1427,7 +1427,7 @@ held that shape under *the contaminated oracle*; what was missing was the
 positive rule that would have forced the look.
 
 The owner's form, and it is R29 hardened rather than a new rule: **a line is
-PROVEN only when an artefact of a REAL request — never a trace stimulus — has
+PROVEN only when an artefact of a REAL request — never a build stimulus — has
 been judged by an instrument OUTSIDE the engine, and the verdict is written
 beside the file.** Outside means: a text is read, and code it contains is
 EXECUTED; a transcription is compared with a text known in advance and with a
@@ -1507,12 +1507,12 @@ Both directions land with their injection.
 
 ### 65 — a door that copied its authority's list, and refused what the authority accepts
 
-The re-trace door asks "is there a COMPLETE snapshot here?" before it spends a
+The rebuild door asks "is there a COMPLETE snapshot here?" before it spends a
 card. Its format test listed four layouts: a diffusers pipeline, a transformers
 model, a NeMo archive, a NeMo directory. The build toolchain's own detector
-(`tracer/format_detector.py`) accepts a fifth — BARE_WEIGHTS, a `.pth`/`.pt`/
+accepts a fifth — BARE_WEIGHTS, a `.pth`/`.pt`/
 `.safetensors`/`.ckpt` with no config of any kind — which is how every upscaler
-in the catalogue ships. So on 2026-09-16 the re-trace of `real-esrgan-x2`
+in the catalogue ships. So on 2026-09-16 the rebuild of `real-esrgan-x2`
 stopped with **"no COMPLETE snapshot on the export or in the download
 directory"** while the checkpoint sat in the directory it had just been handed,
 and the same refusal had been waiting for every upscaler since the door was
@@ -1556,13 +1556,13 @@ Those models run at seq_len ≠ 23 every day. Opening ONE of the twenty against
 its graph took a minute and dissolved all twenty: the view's arguments record
 `{"type": "mul", "left": s0, "right": s1}` in full. The census was following
 `s3` — `seq_len` declared a SECOND time, on `position_ids` instead of
-`input_ids` — which no operation names, because the tracer bound the expression
+`input_ids` — which no operation names, because the container builder bound the expression
 to `s1`.
 
-**The rule**: what can be lost is a DIMENSION, not a declaration. A tracer
+**The rule**: what can be lost is a DIMENSION, not a declaration. A container builder
 declares one symbol per input that carries the dimension, so any instrument that
 iterates over declarations counts a model's `seq_len` once per input and reports
-the unreferenced copies as losses. Group by the dimension (name and trace value),
+the unreferenced copies as losses. Group by the dimension (name and build-time value),
 and a carrier of any member carries it. **102 of the 447 declarations are
 duplicates** — and every gate that reads the declaration has been counting them.
 
@@ -1578,21 +1578,21 @@ the ranking intact, which is exactly the shape that survives a sanity check.
 
 ### 67 — the gate that could not see the repair it exists to recognise
 
-The re-trace gate's whole vocabulary — `witnessed`, `symbolized`, `re-expressed`,
+The rebuild gate's whole vocabulary — `witnessed`, `symbolized`, `re-expressed`,
 `slice-end-symbolized` — reads one transition: a shape argument that was a
 literal is now an expression. It reads it by checking that **the expression's
-trace value equals the old literal**, which is exact and correct as long as both
-graphs were traced at the same stimulus.
+build-time value equals the old literal**, which is exact and correct as long as both
+graphs were built at the same stimulus.
 
 On 2026-09-16 the repair WAS the stimulus. `real-esrgan-x2`'s pixel-unshuffle
-went from the literal `32` (64//2 at a 64x64 trace) to `floordiv(s1, 2)` of trace
+went from the literal `32` (64//2 at a 64x64 build stimulus) to `floordiv(s1, 2)` of build-time value
 `56` (112//2 at 112x80). 32 ≠ 56, so the classifier scored the transition it is
 named for **zero symbolized**, counted every recorded shape in the graph as a
 change it could not classify — **2193 beyond annotation** — and the gate answered
 **FAIL** on a repair that is correct and proven by artefact at three sizes.
 
 The sibling case makes the shape of the blindness plain: `real-esrgan-x8`, the
-same re-trace, came back **byte-identical on both arms** — the strongest evidence
+same rebuild, came back **byte-identical on both arms** — the strongest evidence
 a gate can be handed — and was also refused, by the same count.
 
 **The rule**: an instrument that compares two artefacts states the invariant its
@@ -1649,7 +1649,7 @@ another must say so where it is defined, because no caller can see it.
 
 ### 68 — a guard whose constants were a written list, and the eleventh model it knew nothing about
 
-The trace stimulus for the upscaler family was moved to 112x80 on 2026-08-29 to clear the
+The build stimulus for the upscaler family was moved to 112x80 on 2026-08-29 to clear the
 collisions that had frozen `real-esrgan`'s spatial dims. The choice was correct and the reasoning
 was written out in full: window areas (49, 64, 144, 256, 576, 1024), relative-position table
 sizes (225, 529, 961), "the usual embed/feature widths (48, 60, 64, 96, 180)", and the scale
@@ -1668,12 +1668,12 @@ and that is the whole distinction this entry exists for.
 and buffers for what the graph's literals are made of; the configuration's own integers, and
 their squares, for what a view computes from a side and never stores (a window area). And it
 holds over the scale multiples, because the collision that cost HAT on 2026-08-27 was with the
-trace OUTPUT size, 64 x 4 = 256 — a number the old list had to be told and the new rule finds,
+build-time OUTPUT size, 64 x 4 = 256 — a number the old list had to be told and the new rule finds,
 because `hat-l-x4` carries 256 as a parameter extent.
 
 Landed in the build toolchain as `stimulus_collision.py` (`cad67f7`), where the stimulus is
 corrected at the source rather than left to a default's luck: clean models are returned unchanged
-so they re-trace byte-identically (R27), and `real-esrgan-x2` moves to 112x144. Seen RED on the
+so they rebuild byte-identically (R27), and `real-esrgan-x2` moves to 112x144. Seen RED on the
 real 64x64 case against that model's measured extents, with both of its reasons — the square and
 the 64 — and on three injections: the scale multiples ignored, the extents taken from a written
 list, the square rule dropped.
@@ -2336,12 +2336,12 @@ chasing why mochi-1-preview's judged run dies for lack of memory. Present since 
 written.
 
 **What it did.** `where_the_symbol_chain_breaks.py` classifies a break by how the literal
-relates to the symbol's trace value — `v`, `v*2`, `v*4`, `v//2`, … — and `frozen_dims`
+relates to the symbol's build-time value — `v`, `v*2`, `v*4`, `v//2`, … — and `frozen_dims`
 reported only `relation == "v"`. A dimension frozen downstream of an upsample or a reshape
-breaks on a MULTIPLE of the trace value, never on the value itself, so it produced no row at
+breaks on a MULTIPLE of the build-time value, never on the value itself, so it produced no row at
 all: the census printed `frozen: []`, `status: ok`, and harvested the model as if inspected.
 
-mochi's VAE breaks `height` and `width` at `aten._unsafe_view::1` on `v*2` — 28 from a trace
+mochi's VAE breaks `height` and `width` at `aten._unsafe_view::1` on `v*2` — 28 from a build-time value
 of 14, 44 from 22. 180 of its 353 five-dimensional activation tensors then carry CONCRETE
 spatial dims.
 
@@ -2360,7 +2360,7 @@ lifecycle defect and a tiling defect in turn; it was none of them.
 and the census prints `UNADJUDICATED: N derived-relation break(s)` beside the model. The
 tool's caution is kept — an architecture constant can coincide with an arithmetic of the
 symbol, and a graph alone cannot tell them apart — so it is a question, not a verdict: `?`
-rather than a plausible reconstruction. A retrace is still queued only by an adjudicated row,
+rather than a plausible reconstruction. A rebuild is still queued only by an adjudicated row,
 because 20 of 59 containers must not all stop at once on a question nobody has answered.
 
 **The lesson, in one line.** A classifier that reports one of its own classes and silently
@@ -2457,18 +2457,18 @@ library that computes the path, and test it by calling that function rather than
 command.
 
 
-### 91 — the stimulus-collision guard passed a trace it could not have failed
+### 91 — the stimulus-collision guard passed a build it could not have failed
 
-**Where.** `forge/tracer/worker.py`, `_decollide_video_dims.collides()` — the guard that is
-supposed to refuse a trace stimulus whose values collide with the model's own constants.
+**Where.** the container builder's worker, `_decollide_video_dims.collides()` — the guard that is
+supposed to refuse a build stimulus whose values collide with the model's own constants.
 
-**What it passed.** `--trace-spatial 30,54` on mochi-1-preview's transformer. It printed
-`De-collided 5D trace dims: [1, 30, 54] -> [10, 30, 54]` and reported nothing wrong. The
-trace then completed, the container built, and the RUN died:
+**What it passed.** A spatial stimulus of `30,54` on mochi-1-preview's transformer. It printed
+that the 5D stimulus dims were de-collided, `[1, 30, 54] -> [10, 30, 54]`, and reported nothing wrong. The
+graph step then completed, the container built, and the RUN died:
 
     Failed at aten.mul::18 (aten::mul): Cannot broadcast (2, 22260, 24, 64) and (11872, 24, 120)
 
-`aten.cos::1::out_0` had been given dims `[4050, 24, {add(s1=10, s3=54), trace 64}]`. The last
+`aten.cos::1::out_0` had been given dims `[4050, 24, {add(s1=10, s3=54), build-time 64}]`. The last
 axis is the **head_dim** — an architectural constant — symbolised as `time + width`, because
 10 + 54 = 64. At the request's real extents that expression becomes 28 + 106 and the rotary
 table stops matching Q/K.
@@ -2487,8 +2487,8 @@ split: a DERIVED constant that was never in the set. So adding sums without seed
 sum to collide with; and seeding derived constants without adding sums also passes, because
 the carrier is a sum. (Named by the Mac on reading the first write-up of this, and correct.)
 
-**A THIRD constraint the guard does not apply to an operator's extent.** `--trace-spatial
-26,27` cleared the collision rule and died at
+**A THIRD constraint the guard does not apply to an operator's extent.** A spatial stimulus of
+`26,27` cleared the collision rule and died at
 `shape '[2, -1, 10, 26, 27]' is invalid for input of size 162240`: W must be divisible by
 `patch_size`. The nudge search knows this — "nudge in PATCH-SIZE steps so patchified models
 keep divisibility" — and the operator-supplied path does not go through it.
@@ -2497,9 +2497,9 @@ keep divisibility" — and the operator-supplied path does not go through it.
 seeded with {v, b*v, v//2, v//4, v*2}, and the BATCH exempt from sums as it already is from
 products:
 
-    T=10 H=30 W=54   (what I traced)    -> SUM[64]   correctly refused
+    T=10 H=30 W=54   (what I built)     -> SUM[64]   correctly refused
     T=10 H=60 W=106  (vendor default)   -> clean     history agrees
-    T=10 H=26 W=30                      -> clean, and it traced (OK, 11337 ops)
+    T=10 H=26 W=30                      -> clean, and it built (OK, 11337 ops)
 
 Exempting the batch is not cosmetic: without it the vendor's own default is flagged on
 `b + T = 2 + 10 = 12 = in_channels`, rejecting an extent that has always worked.
@@ -2507,8 +2507,8 @@ Exempting the batch is not cosmetic: without it the vendor's own default is flag
 **NOT YET FIXED, and the entry is filed anyway** — which is the point of filing it. The
 change is three lines in `collides()`, but the blast radius needs `occupied` reconstructed
 per model from each `hf_snapshots/<model>/<component>/config.json`, because a rule that
-over-rejects makes models UNTRACEABLE rather than merely wrong. Filed now because the guard's
-green on that trace will otherwise read as coverage the next time someone looks.
+over-rejects makes models UNBUILDABLE rather than merely wrong. Filed now because the guard's
+green on that build will otherwise read as coverage the next time someone looks.
 
 **The lesson, in one line.** A guard that enumerates one family of arithmetic — products —
 while the thing it guards against is built from another — sums — is green by construction on
@@ -2929,12 +2929,12 @@ about to break, from somewhere that does not depend on the thing being tracked.
 
 ---
 
-### 98 — a gate pinned to one container went stale when that container was retraced, and its red meant nothing
+### 98 — a gate pinned to one container went stale when that container was rebuilt, and its red meant nothing
 
 `test_a_derived_relation_break_is_reported_not_swallowed.py` pinned `mochi-1-preview`, whose VAE
 broke `height` and `width` on `v*2` — the measurement that motivated splitting adjudicated from
 unadjudicated frozen dims in the first place. On **2026-09-22 at 17:44** that container was
-retraced and the spatial breaks went away. Good news, and it left the cell asserting something
+rebuilt and the spatial breaks went away. Good news, and it left the cell asserting something
 no longer true of the cache.
 
 It was RED from 17:44 until 2026-09-23, through several full suite runs, and nothing acted on
@@ -2947,14 +2947,14 @@ signal is discarded. A gate that cries wolf is disabled, and a gate that is disa
 that was not there when it mattered.
 
 **What made it fragile**: the subject was ONE container, and a container is DATA that another
-workstream retraces without knowing which cells depend on it. The defect class is alive — 9 of
+workstream rebuilds without knowing which cells depend on it. The defect class is alive — 9 of
 59 containers still report a derived spatial break (Flex.1-alpha `v//4`, Open-Sora-v2 `v+2`,
 four PixArt `v//8`, SANA-Video `v-1`, Sana-1600M `v*2`) — so nothing about the gate's purpose
 had expired. Only its example had.
 
 **Repair.** The subject is DISCOVERED: the fixture walks the cache for a container that
 currently reports a derived break, and skips loudly if none does, which would itself be news
-worth having. The relation check became arithmetic — `v*2` must give twice the trace value,
+worth having. The relation check became arithmetic — `v*2` must give twice the build-time value,
 whatever the container — instead of one model's remembered literals 28 and 44. The historical
 mochi measurement is kept as prose, where a number that can go stale belongs.
 
@@ -3492,7 +3492,7 @@ main in both engines.
 **The lesson, in one line.** A piece is a graph: check it the way the engine will read it —
 every id every op names, in every form an argument takes.
 
-### 109 — the retrace gate's arms ran on the live tree under a frozen worktree's name
+### 109 — the rebuild gate's arms ran on the live tree under a frozen worktree's name
 
 `tools/retrace_zoo.py --src <worktree>` put the worktree ROOT on `PYTHONPATH`; the package lives
 under `<worktree>/src`, so the import fell through to the editable install — the live tree — and
@@ -3691,9 +3691,9 @@ its two placement assertions (`placement["s1"] == 9` for a 5-latent-frame reques
 **What the gate said about the defect**: green. The floor was written for a GUESSED binding — an
 audio axis named `seq_len` taking the global text length (2026-08-10) — and the test pinned it on
 frames and width, which the request states. The defect it protected was measured on 2026-09-29:
-Wan2.1-VACE at 832x480 (the vendor's portrait size, traced at 480x832) priced its width at the
-trace's 104 latent columns, the transformer 18.04 GiB instead of 10.41 for the same token count,
-and the plan fell to cpu_streaming; Wan2.2-I2V's transformer, traced at batch 3, was priced at 3
+Wan2.1-VACE at 832x480 (the vendor's portrait size, built at 480x832) priced its width at the
+build's 104 latent columns, the transformer 18.04 GiB instead of 10.41 for the same token count,
+and the plan fell to cpu_streaming; Wan2.2-I2V's transformer, built at batch 3, was priced at 3
 for the flow's CFG batch of 2 (12.26 GiB for 8.19) and fell to cpu_streaming at its vendor default.
 
 **Repair.** The floor applies only to a binding that is not the request's or the flow's own

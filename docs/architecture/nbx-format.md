@@ -32,7 +32,7 @@ model.nbx (ZIP archive)
 │   ├── transformer/
 │   │   ├── graph.json             # TensorDAG (ATen ops with shapes/dtypes)
 │   │   ├── runtime.json           # Component attributes (channels, extents)
-│   │   ├── profile.json           # Component config (backbone type, trace values)
+│   │   ├── profile.json           # Component config (backbone type, build-time values)
 │   │   ├── config.json            # Original model config
 │   │   ├── weights_index.json     # Maps tensor names → shard files
 │   │   └── weights/
@@ -67,16 +67,16 @@ The computation graph as a TensorDAG — a directed acyclic graph of ATen operat
 - `output_tensor_ids`: References to output tensors
 - `input_shapes` / `output_shapes`: Tensor dimensions (may include symbolic expressions)
 - `input_dtypes` / `output_dtypes`: Data types per tensor
-- `device`: Target device at trace time
+- `device`: Target device at build time
 - `attributes`: Operation-specific parameters
 - `parent_module`: Original module path (for debugging)
 
 ### profile.json (per component)
 
-Component configuration and trace-time metadata:
+Component configuration and build-time metadata:
 - `backbone_type`: Architecture type (e.g., `unet`, `dit`, `decoder`)
 - `config`: Original model parameters
-- `globals`: Trace-time global values
+- `globals`: Build-time global values
 
 ### runtime.json (per component)
 
@@ -101,7 +101,7 @@ Variable resolution contracts. Each variable has a resolver that describes how t
 
 ## How NBX Files Are Created
 
-Models available on the [NeuroBrix Hub](https://neurobrix.org/models) are built using our proprietary tracing technology. We capture the computation graph at a low level using a custom `TorchDispatchMode` mechanism, preserving the exact execution semantics of the original model while making it framework-independent.
+Models available on the [NeuroBrix Hub](https://neurobrix.org/models) are built using our proprietary container-building technology. We capture the computation graph at a low level using a custom `TorchDispatchMode` mechanism, preserving the exact execution semantics of the original model while making it framework-independent.
 
 This process produces a self-describing container that any compatible runtime can execute without needing access to the original model code or its dependencies.
 

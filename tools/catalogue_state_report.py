@@ -80,13 +80,13 @@ ADJUDICATED_AXES = {
         "vae `width`@128 (weight-extent)": "bound — same run",
     },
     "PixArt-XL-1024": {
-        "vae `height`@128 (weight-extent)": "the current tracer binds this axis (differential 2026-09-13 on PixArt-XL-2-1024-MS); this container's graph (built 2026-08-26) is a different trace and stays flagged until re-traced",
+        "vae `height`@128 (weight-extent)": "the current container builder binds this axis (differential 2026-09-13 on PixArt-XL-2-1024-MS); this container's graph (built 2026-08-26) is a different build and stays flagged until rebuilt",
         "vae `width`@128 (weight-extent)": "same",
     },
     "Flex.1-alpha": {
         "text_encoder `seq_len`@77 (weight-extent)": "bound — differential 2026-09-12 (77 vs 71: 0 dims moved)",
         "transformer `seq_len`@4096 (weight-extent)": "UNADJUDICATED — the differential's override has no seam on a "
-            "transformer traced inside a pipeline: both arms recorded trace_value=4096 again on 2026-09-13 16:05 "
+            "transformer built inside a pipeline: both arms recorded trace_value=4096 again on 2026-09-13 16:05 "
             "(instrument defect named in the census; 'fixed by the model' on 2026-09-12 read the same silence as a fact)",
     },
 }
@@ -137,7 +137,7 @@ def vitrine_cell(container: str) -> str:
     An entry may name its own `dir` and `verdict`: a proof made in another
     campaign than the vitrine's is still a proof, and pointing at the campaign
     that produced it beats copying the artefact to where this function expects
-    it (real-esrgan-x2 and -x8, proven in the re-trace campaign, 2026-09-16)."""
+    it (real-esrgan-x2 and -x8, proven in the rebuild campaign, 2026-09-16)."""
     v = VITRINE.get(container)
     if not v:
         return ""
@@ -149,9 +149,9 @@ def vitrine_cell(container: str) -> str:
 
 
 CROSS_CUTTING = [
-    "**A white image was a trace stimulus, not a model limit** (real-esrgan, 2026-09-16). "
+    "**A white image was a build stimulus, not a model limit** (real-esrgan, 2026-09-16). "
     "`real-esrgan-x2` answered a 448x448 request with a WHITE 128x128 square. Cause measured, "
-    "not inferred: it was traced at 64x64, where the image height, the image width and the "
+    "not inferred: it was built at 64x64, where the image height, the image width and the "
     "first convolution's 64 channels are ONE NUMBER, so no rule could attribute a 64 to an "
     "axis and the pixel-unshuffle view recorded `[1, 3, 32, 2, 32, 2]` instead of "
     "`[s0, 3, s1//2, 2, s2//2, 2]`. `real-esrgan-x8` carries the identical loss at its first "
@@ -159,10 +159,10 @@ CROSS_CUTTING = [
     "`scales_h`/`scales_w` BESIDE the frozen size and both engines recompute from the scale "
     "(`sequential_dispatcher.py:356`, `compiled_ops.py:748`) — a run-time repair of a "
     "build-time loss, which is why the same defect is invisible in one and fatal in the "
-    "other. Repair: a RE-TRACE at the collision-free upscaler stimulus (112x80), which the "
-    "tracer has shipped since 2026-08-29 and the four other upscalers carry; the tracer "
+    "other. Repair: a REBUILD at the collision-free upscaler stimulus (112x80), which the "
+    "container builder has shipped since 2026-08-29 and the four other upscalers carry; the container builder "
     "gained nothing, its window-split branch was correct the whole time. Proven by artefact "
-    "at three sizes that are not the trace size, two of them non-square — x2: 96x96 -> "
+    "at three sizes that are not the build-time size, two of them non-square — x2: 96x96 -> "
     "192x192, 160x112 -> 320x224, 208x144 -> 416x288, correlations 0.997/0.998/0.999 against "
     "the bicubic and looked at; x8 the same three at eight times. The weights were verified "
     "first, 702/702 and 704/704 tensors bit-identical to the snapshot the containers were "
@@ -188,7 +188,7 @@ CROSS_CUTTING = [
     "IDENTICAL (833eb058f3ae, 9a30d277cf21, 35d48303f4e7; each faster on the trunk, 143→127 s, "
     "93→87 s, 59→49 s). Still unmeasurable, said by name: Qwen3-VL-30B-A3B-Thinking and "
     "Qwen3-Omni-30B-A3B-Instruct (both arms refuse at the deepstack zero-length bind until "
-    "their retrace), Ming-Lite-Omni-1.5 triton (the before arm refuses at a freed arena — the "
+    "their rebuild), Ming-Lite-Omni-1.5 triton (the before arm refuses at a freed arena — the "
     "defect the trunk fixed today, so the pair has no before). Determinism per mode is a "
     "public claim: the two nondeterministic models are its named exceptions until their "
     "causes are. `nbx/campaigns/prepared/budget_unified_gate_20260913_1535/RUN.md`, "
@@ -242,17 +242,17 @@ OVERLAY = {
                  "22:45 UTC: 9 frames at 448x448, range 9-253, inter-frame diff 3.34 "
                  "(validation_outputs/proof_by_run_CogVideoX-5b-I2V_20260912_2242/VERDICT.json)",
         note="Its causal temporal pad recorded 2187*s - 2184 against a truth of s + 2, "
-             "exact at the traced s=1. Profiled at 49 frames the peak was 210.26 GB "
-             "against 0.09 GB at the trace, a factor of 2237 which is the compound's "
-             "own coefficient. Re-traced, the temporal axis carries no symbol at all "
+             "exact at the build-time s=1. Profiled at 49 frames the peak was 210.26 GB "
+             "against 0.09 GB at build time, a factor of 2237 which is the compound's "
+             "own coefficient. Rebuilt, the temporal axis carries no symbol at all "
              "(an I2V encoder conditions on one image) and the same request costs "
              "0.02 GB. 389 -> 265 ops.",
         line="measured"),
     "Open-Sora-v2": dict(
-        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)",
-        evidence="re-trace on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, "
-                 "vae 237 (June: 11 017 — an unrolled trace; the new graph is FLAT in T, 237 ops "
-                 "at T=9 and T=25, measured on card 0), text encoders 1594/490; rebuild 682 s on the "
+        now="GRAPH REBUILT, CONTAINER REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)",
+        evidence="graph rebuild on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, "
+                 "vae 237 (June: 11 017 — an unrolled graph; the new graph is FLAT in T, 237 ops "
+                 "at T=9 and T=25, measured on card 0), text encoders 1594/490; container rebuild 682 s on the "
                  "export; regression gate 1.000x on three components, vae 0.959x opened with "
                  "--allow-shrink on a measurement (248 tensors identical, the graph shrank); "
                  "upload 13:08:54 -> rc=0 after 1922 s, hub updatedAt 13:40:55Z; install 13:40:56 "
@@ -261,7 +261,7 @@ OVERLAY = {
                  "docs/reference/catalogue-repairs.md entry 4",
         note="The snapshot's arrangement (model_index.json, component dirs, safetensors T5 "
              "shards beside the vendor's .bin) is rebuilt from declarations and documented beside "
-             "the weights. The June container's 11 017-op VAE was an unrolled trace; the new one is flat in T.",
+             "the weights. The June container's 11 017-op VAE was an unrolled graph; the new one is flat in T.",
         line="measured"),
     "mochi-1-preview": dict(
         now="RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, a defect of EVERY kernel for ANY model whose tensor exceeds two billion elements (the next family to meet it will not be called Mochi), fixed for the class at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)",
@@ -311,10 +311,10 @@ OVERLAY = {
         now="INFERRED same debt as Wan2.1-VACE",
         evidence="its cached encoder carries the measured anchor's chunk-loop groups "
                  "identically: {2:1, 3:9, 6:12, 8:22, 12:1, 21:22}",
-        note="No local snapshot, so no second trace point and no fitted slope. The "
+        note="No local snapshot, so no second build-time point and no fitted slope. The "
              "claim rests on six module groups agreeing exactly on two numbers each, "
              "while the groups ABOVE the loop differ — different VAE sizes carrying "
-             "the same loop. One snapshot and two 15-second traces convert it.",
+             "the same loop. One snapshot and two 15-second builds convert it.",
         line="inferred"),
 }
 
@@ -739,7 +739,7 @@ def main() -> int:
     print("## How to read the columns\n")
     print("**line** — the last column is the verdict on the line itself, and since")
     print("2026-09-16 it distinguishes two things that were being written as one.")
-    print("*proven* means an ARTEFACT of a real request — not a trace stimulus — was")
+    print("*proven* means an ARTEFACT of a real request — not a build stimulus — was")
     print("judged by an instrument OUTSIDE this engine, and the cell links the file and")
     print("the written verdict: a transcription against a text known in advance and a")
     print("third-party ASR, a synthesised voice read back by that ASR, code that was")
@@ -833,10 +833,10 @@ def main() -> int:
         print(f"{top['sweep']:.0f} s of sweep. The per-shape cost is a property of the kernel")
         print("class and the shape, not a constant; the law (shapes met per second of")
         print("served run) holds with that coefficient per cell, not a single one.\n")
-    print("**where a defect would be invisible** — axes traced at a value where two")
-    print("distinct rules give the same number, so the trace-point check cannot tell")
+    print("**where a defect would be invisible** — axes built at a value where two")
+    print("distinct rules give the same number, so the check at the build-time point cannot tell")
     print("them apart. This is NOT a defect list. An axis here needs its rule asserted")
-    print("structurally or a re-trace outside the collision; a test at the flagged")
+    print("structurally or a rebuild outside the collision; a test at the flagged")
     print("value is green for the reason that blinds it.\n")
 
     print("## Verdicts that cut across the lines\n")
@@ -852,7 +852,7 @@ def main() -> int:
     print(f"  rows carry a measured or stated cost; the other {n_rows - n_cost} say *not")
     print("  measured* and that is the whole point of the cell.")
     print("* **Whether the flagged axes are wrong.** They are places a defect could")
-    print("  not be seen. Converting one into a verdict costs a second trace at a")
+    print("  not be seen. Converting one into a verdict costs a second build at a")
     print("  value outside the collision, and the instrument that does it refuses when")
     print("  the stimulus does not actually move — a tree compared with itself agrees")
     print("  with itself.")
@@ -861,5 +861,43 @@ def main() -> int:
     return 0
 
 
+#: What an artefact wrote, in the page's vocabulary: a cell read from a campaign record carries its writer's words,
+#: and the page is a public one (tools/public_vocabulary.py). A word glued to an underscore, a dot, a slash or a
+#: backtick is a real name (`trace_value`, a tool's path) and is left as it is.
+_PUBLIC_WORDS = (
+    (re.compile(r"(?<![A-Za-z_`./-])re-?trac(?:e|ed|ing)(?![A-Za-z_])", re.IGNORECASE),
+     {"e": "rebuild", "ed": "rebuilt", "ing": "rebuilding"}),
+    (re.compile(r"(?<![A-Za-z_`./-])trac(?:es|ed|ing|er|e)(?![A-Za-z_])", re.IGNORECASE),
+     {"e": "build", "es": "builds", "ed": "built", "ing": "building", "er": "container builder"}),
+    (re.compile(r"(?<![A-Za-z_`./-])forge(?![A-Za-z_])", re.IGNORECASE), {"forge": "the container builder"}),
+)
+
+
+def public_wording(text: str) -> str:
+    """`text` with the private tool's name and verb written as the public pages write them, capitals kept."""
+    def swap(match, forms):
+        word = match.group(0)
+        key = "forge" if word.lower() == "forge" else re.sub(r"^(?:re-?)?trac", "", word.lower())
+        out = forms[key]
+        return out.upper() if word.isupper() else out
+    for pattern, forms in _PUBLIC_WORDS:
+        text = pattern.sub(lambda m, f=forms: swap(m, f), text)
+    return text
+
+
+class _PublicPage:
+    """The page as it is printed: every line through `public_wording`."""
+
+    def __init__(self, out):
+        self._out = out
+
+    def write(self, text: str) -> int:
+        return self._out.write(public_wording(text))
+
+    def flush(self) -> None:
+        self._out.flush()
+
+
 if __name__ == "__main__":
+    sys.stdout = _PublicPage(sys.stdout)
     raise SystemExit(main())

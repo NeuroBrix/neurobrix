@@ -45,7 +45,7 @@ vendor-default-steps convergence cell is optional follow-up work.
 (2026-09-01): D-ALLEGRO-TI2V-ADD5 (both engines),
 D-SANAVIDEO-COMPILED-ADD11 (triton renders), D-OPENSORA-TRITON-SDPA
 (compiled renders). Each returns to public with its validated fix.
-³ The VACE build is traced WITH image conditioning; the parity config
+³ The VACE container is built WITH image conditioning; the parity config
 (reference_images on the vendor arm) resolved the 08-30 FAILS-CONFIG
 and exposed the real defect: aten.div::62, (1,768,60,104) vs
 (1,384,60,104) on BOTH engines — D-VACE-IMGCOND-DIV62, artifact

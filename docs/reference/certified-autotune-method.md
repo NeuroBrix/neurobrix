@@ -11,7 +11,7 @@ The owner's method (2026-09-28). The slowness of a run is the autotune, and the 
 | the certified directory | `src/neurobrix/config/autotune/<vendor>/<profile>/` | one proven configuration per key and memory class, with its proof | the certifier, from the census table and nothing else |
 | the matrix | the confirmation runs' rows | one verdict per model × mode × dtype | a run in certified-only mode |
 
-A container that changes (a retrace, a naming pass) has its census rows **replaced**, never added
+A container that changes (a rebuild, a naming pass) has its census rows **replaced**, never added
 to; a kernel whose key definition changes has every row regenerated. A census is fast or it is
 broken: it enumerates shape classes, never a model's generation step by step.
 
@@ -31,6 +31,6 @@ sweeps, not certifications. A cell that is slow in this mode is a real engine co
 
 ## A model runs whole only to confirm
 
-After its trace is correct, its census taken and its keys certified — with the smallest request that
+After its container is built correctly, its census taken and its keys certified — with the smallest request that
 still judges it. Diagnosis uses op-level probes and the vendor's own pipeline as the oracle, never
 a full-model sweep.

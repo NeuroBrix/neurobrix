@@ -12,7 +12,7 @@ campaign window.
 * n=5 requests per cell after warmup, committed 448x448 asset,
   pinned config. Vendor stacks per rows.yml (pinned venvs).
 * Every container is TODAY's artifact: swin2sr-x4 corrected+republished
-  (2026-08-28), swinir x2/x4 + hat-l + realesrgan re-traced/replaced
+  (2026-08-28), swinir x2/x4 + hat-l + realesrgan rebuilt/replaced
   (2026-08-29) — no pre-fix cell patched into this table.
 
 ## Results (wall seconds, mean over n=5, stdev)
@@ -45,7 +45,7 @@ campaign window.
 
 ## Correctness backing this table
 
-Gate at four size classes (trace / 448 square / 240x320 rect /
+Gate at four size classes (build-time size / 448 square / 240x320 rect /
 200x300 unaligned): 58 passed, 0 failed, 5 xfail = the named
 swin2sr-x2 engine-divergence defect (unpublished, tracked strict).
 Warm serve: 17 passed, 0 failed, including the exact-size unaligned

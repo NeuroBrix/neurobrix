@@ -70,7 +70,7 @@ B. **Driver state perturbation by Python frame allocations** — the
    sub-microsecond Python work between arg parsing and kernel launch may
    alter the CUDA driver's internal state (stream creation, memory pool
    selection) enough to perturb kernel output. Hard to disprove without a
-   custom CUPTI trace.
+   custom CUPTI capture.
 
 C. **`@triton.heuristics` lambdas re-evaluated per call** — even with
    stable cache, the heuristic lambdas attached to the kernel decorator

@@ -8,7 +8,7 @@ Read by the supervisor on lot-2026-10-28 ced5ee7b (the branch point of
 ## The monolith
 
 `src/neurobrix/kernels/nbx_tensor.py`, 4 681 lines, mixes six concerns:
-malloc tracing (l. 85-170), the dtype enum and bf16 carriers (l. 174-306),
+malloc call-site recording (l. 85-170), the dtype enum and bf16 carriers (l. 174-306),
 the torch boundary (l. 326, 693-800), backend capability tables and device
 faults (l. 420-690), the allocator `DeviceAllocator` (l. 1040-2600, ~1 560
 lines), backend detection (l. 2603-2820), strided copy / broadcast / slicing
