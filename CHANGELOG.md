@@ -22,7 +22,7 @@ be wrong without an error.
   plans the mixture-of-experts model that fits a 24 GB Mac takes (resident, and streamed layer by layer), no pinned
   address out of two million was answered past its buffer. The expert-store plan itself was not run on Apple
   hardware (its models are 31 GB), so this says what was observed, not that no model could be affected. CUDA is not
-  concerned. The driver now refuses such an address by name.
+  concerned. The driver now answers from a buffer that covers the address, and refuses by name one that none covers.
 - **The expert store keeps its residency on the card only where the backend's kernels can read it.** That decode
   path launches over tables of device addresses taken from the host, which holds on CUDA and HIP; it was armed for
   any Triton store that copies half-precision experts, whatever the backend. No Apple run reached it (an Apple
