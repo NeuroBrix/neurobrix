@@ -354,7 +354,6 @@ def _nbx_same_bits(a: NBXTensor, b: NBXTensor) -> bool:
         return True
     if a._dtype != NBXDtype.bool_ and a.element_size() not in _BITS_OF_ITEMSIZE:
         return False                    # no integer of that width: never reused, always evaluated (exact)
-    from nbxtensor.ops import wrappers as _wr
     from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
     from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
     return bool(_nbx_reduction_wrappers.all_wrapper(_nbx_elementwise_wrappers.eq(_nbx_bits(a), _nbx_bits(b))).item())
@@ -3181,7 +3180,6 @@ class TritonSequence(SequenceSteps):
         machinery (measured, recorded, verified, then replayed). Only the tail mirrors the step's advance onto the
         host's state owners (`_replay_advances`): a head stretch's replayed launches advance its own layers' device
         counters exactly as its direct run does. A segment the replay declines runs directly."""
-        from nbxtensor.ops import wrappers as _w
         from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
         try:
             for idx, (kind, a, b, boundary, skip) in enumerate(self._expert_segments()):
@@ -3195,6 +3193,8 @@ class TritonSequence(SequenceSteps):
                 # run would be read by a recorded segment at another segment's address of the recorded step (stale
                 # at replay); emptied, the segment widens its own and the recording captures it
                 _nbx_elementwise_wrappers.begin_run()
+                if pre_op_callback is not None:    # a replayed stretch runs no op: the ratchet re-installs its blocks here
+                    pre_op_callback(a, self._ops[a])
                 if not _replay.maybe_run(self, skip_kills, None):
                     self._run_multi_device(skip_kills, pre_op_callback)
         finally:

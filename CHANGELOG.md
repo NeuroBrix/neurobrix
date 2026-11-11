@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A served mixture-of-experts model keeps its speed after its first request.** `neurobrix serve` on a model run
+  through the expert store (experts larger than the card) answered its first request at full speed and every later
+  one about two hundred times slower (Qwen3-Coder-30B-A3B on one 32 GB card: 0.08 s a token, then 17.7 s a token),
+  with the right text. At each request the model's dense weights were bound back to host memory; the copies on the
+  card were put back only when an operation ran, and a decode step replayed from its recorded plan runs none — so
+  from the second request on, every token copied those weights from host memory again. A replayed step now puts
+  them back first. Later requests run at 0.16 s a token there.
+
 ## [0.6.7] - 2026-11-11
 
 A corrective version: it follows nbxtensor 0.1.2, which closes a defect of the Apple backend by which a result could
