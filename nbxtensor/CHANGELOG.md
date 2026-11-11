@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Apple: an address read through a pinned table is answered from a wrap that covers it.** The Metal driver kept
+  its pinned whole-allocation wraps under their base address alone, and a pool segment begins where its first block
+  does. With that first block pinned, a view inside another block of the same segment — a slot of the Triton expert
+  store's arena — resolved to the first block's short wrap and was handed an address past that buffer's end: another
+  buffer's bytes, nothing raised. Seen as a mixture-of-experts result wrong on every row after nine earlier
+  mixture-of-experts runs in one process; no served model was seen affected. The wraps are now kept under their
+  extent (base and size), and `pinned_gpu_address` refuses by name an address beyond the wrap it resolved. CUDA and
+  Level Zero are not concerned: they have no such wraps.
+
 ## [0.1.1] - 2026-11-11
 
 ### Added

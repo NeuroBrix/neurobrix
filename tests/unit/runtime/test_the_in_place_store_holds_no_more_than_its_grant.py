@@ -63,7 +63,7 @@ def _held(spans):
     ours = lambda a: any(s // page * page <= a < e for s, e in spans)
     bound = {s: e[2] for s, e in rt._host_buffers.items() if isinstance(e[1], _MappedView) and ours(s)}
     pinned = {}
-    for b in [b for b in drv._RESIDENT_WRAPS if ours(b)]:
+    for b in [b for b, _ in drv._RESIDENT_WRAPS if ours(b)]:        # the wraps are keyed by (base, size)
         hit = DA.containing(b)
         pinned[b] = hit[1] if hit is not None else -1          # -1: a pin whose range nobody records any more
     return bound, pinned

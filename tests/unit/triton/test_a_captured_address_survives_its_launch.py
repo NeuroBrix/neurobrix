@@ -150,7 +150,7 @@ def test_the_pin_reads_its_address_from_the_served_build():
     drv = _metal_or_skip()
     src = NBXTensor.from_numpy(np.arange(1, N + 1, dtype=np.float32))
     with drv.pinned_addresses(src):
-        (base, (wrap, count, gpu_va)), = drv._RESIDENT_WRAPS.items()
+        ((base, _), (wrap, count, gpu_va)), = drv._RESIDENT_WRAPS.items()      # keyed by (base, size)
         assert count == 1 and gpu_va == wrap.gpu_address()
         assert drv.pinned_gpu_address(src.data_ptr()) == gpu_va + (src.data_ptr() - base)
     assert not drv._RESIDENT_WRAPS, "the scope exited and still holds a whole-allocation wrap"

@@ -447,29 +447,41 @@ _PINNED_WRAPS: dict = {}
 # (`reads_addresses`, carried by `_Trailing`). Measured 2026-09-21
 # (granite): per-expert kept wraps also worked but Metal declined the ~480th
 # GB-scale alias, so one wrap per allocation is the shape that scales.
-# base -> [wrap, refcount, gpu_va].
+# (base, size) -> [wrap, refcount, gpu_va]. Keyed by the EXTENT, never by the base alone: a pool segment and its
+# first block begin at the same address, and under one key a view inside another block of the segment found the
+# first block's short wrap and was handed an address past that buffer's end (the expert store's slots, 2026-11-11:
+# wrong bytes, nothing raised).
 _RESIDENT_WRAPS: dict = {}
 
 
-def _resident_acquire(addr: int) -> int:
-    """Pin one wrap of the whole allocation containing `addr` for the scope's
-    lifetime (`_RESIDENT_WRAPS` holds it); returns base."""
-    import numpy as np
+def _pinned_extent(addr: int):
+    """(base, size) of the allocation whose whole-allocation wrap answers for `addr` — the block registered at
+    `addr`, else the live range containing it — or None for a recorded shadow (memory that exists nowhere). The one
+    place both the pin and the address read it, so they cannot disagree."""
     from nbxtensor.memory.allocator import DeviceAllocator
-
     size = DeviceAllocator._cuda_ptr_size.get(addr)
-    base = addr
-    if size is None:
-        if _recorded_shadow(addr) is not None:
-            # A census shadow allocation, recorded as one: memory that exists nowhere, so
-            # nothing to wrap and nothing to hold. Recognised, not skipped: an address that
-            # nobody recorded still fails below, in a shadow as in a real run.
-            return None
-        base, size = _containing_allocation(addr)
-    ent = _RESIDENT_WRAPS.get(base)
+    if size is not None:
+        return addr, size
+    if _recorded_shadow(addr) is not None:
+        return None
+    return _containing_allocation(addr)
+
+
+def _resident_acquire(addr: int):
+    """Pin one wrap of the whole allocation containing `addr` for the scope's
+    lifetime (`_RESIDENT_WRAPS` holds it); returns its key, the extent (None: a
+    census shadow allocation, recorded as one — nothing to wrap, nothing to
+    hold; an address nobody recorded still fails in `_pinned_extent`)."""
+    import numpy as np
+
+    key = _pinned_extent(addr)
+    if key is None:
+        return None
+    ent = _RESIDENT_WRAPS.get(key)
     if ent is not None:
         ent[1] += 1
-        return base
+        return key
+    base, size = key
     raw = (ctypes.c_byte * size).from_address(base)
     view = np.frombuffer(memoryview(raw), dtype=np.uint8)
     # Inside a pool: `gpu_address()` records the buffer in triton-ext's weak table of exposed buffers, and an
@@ -481,8 +493,8 @@ def _resident_acquire(addr: int) -> int:
     with objc.autorelease_pool():
         buf = _native().wrap(view)
         gpu_va = int(buf.gpu_address())                # also records it as exposed, weakly
-    _RESIDENT_WRAPS[base] = [buf, 1, gpu_va]
-    return base
+    _RESIDENT_WRAPS[key] = [buf, 1, gpu_va]
+    return key
 
 
 def pinned_gpu_address(addr: int) -> int:
@@ -494,23 +506,26 @@ def pinned_gpu_address(addr: int) -> int:
     probe_read_through 2026-09-21). The pin's whole-allocation kept wrap
     is therefore the one address authority: its gpu_address plus the CPU
     offset inside the allocation, computable on the host with no launch.
+    Refuses by name an address its allocation's wrap is not held for, and one
+    that would lie beyond the wrap it resolved: past a buffer's end the read
+    is whatever Metal maps there.
     """
-    from nbxtensor.memory.allocator import DeviceAllocator
-    size = DeviceAllocator._cuda_ptr_size.get(addr)
-    base = addr
-    if size is None:
-        if _recorded_shadow(addr) is not None:
-            # A recorded shadow has no GPU address to give; the shadow's own address stands
-            # for it, exactly as every other address in a shadow addresses nothing.
-            return int(addr)
-        base, size = _containing_allocation(addr)
-    ent = _RESIDENT_WRAPS.get(base)
+    key = _pinned_extent(addr)
+    if key is None:
+        # A recorded shadow has no GPU address to give; the shadow's own address stands
+        # for it, exactly as every other address in a shadow addresses nothing.
+        return int(addr)
+    ent = _RESIDENT_WRAPS.get(key)
     if ent is None:
         raise RuntimeError(
             f"pinned_gpu_address(0x{addr:x}): its allocation is not under any "
             f"pinned_addresses scope — an address handed out without a pin "
             f"would go stale silently, which is the defect this refuses")
-    return ent[2] + (addr - base)
+    if not 0 <= addr - key[0] < ent[0].nbytes:
+        raise RuntimeError(
+            f"pinned_gpu_address(0x{addr:x}): {addr - key[0]} bytes from its allocation's base, beyond the wrap "
+            f"held for it ({ent[0].nbytes} bytes) — an address past a buffer's end reads another buffer's bytes")
+    return ent[2] + (addr - key[0])
 
 
 def _recorded_shadow(addr: int):
@@ -520,15 +535,15 @@ def _recorded_shadow(addr: int):
     return shadow_range(addr)
 
 
-def _resident_release(base) -> None:
-    if base is None:                                   # a recorded shadow held nothing
+def _resident_release(key) -> None:
+    if key is None:                                    # a recorded shadow held nothing
         return
-    ent = _RESIDENT_WRAPS.get(base)
+    ent = _RESIDENT_WRAPS.get(key)
     if ent is None:
         return
     ent[1] -= 1
     if ent[1] <= 0:
-        _RESIDENT_WRAPS.pop(base, None)                # the wrap dies here; the weak exposed table drops it
+        _RESIDENT_WRAPS.pop(key, None)                # the wrap dies here; the weak exposed table drops it
 #: How many open scopes pin each address. A wrap is dropped only when the last
 #: scope holding its address exits.
 _PIN_COUNTS: dict = {}

@@ -122,7 +122,7 @@ def test_unloading_the_weights_releases_the_cached_tables_that_pin_them(unload):
     import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
     weights, _ = _fused_call("resident", seed=43)
     spans = [(t.data_ptr(), DeviceAllocator._cuda_ptr_size[t.data_ptr()]) for t in weights.values()]
-    assert all(b in drv._RESIDENT_WRAPS for b, _ in spans), "a resident table that pins nothing is an accident"
+    assert all(span in drv._RESIDENT_WRAPS for span in spans), "a resident table that pins nothing is an accident"
     assert _live_tensors_in(spans) > 2, "the cached table's pins hold the expert views: the instrument sees them"
 
     unload(weights)                                    # what every strategy's unload goes through
