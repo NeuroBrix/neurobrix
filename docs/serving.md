@@ -320,6 +320,13 @@ turn served from the session gives the same bytes as the same turns prefilled to
 engines. `complete` keeps one cache record for the agent path the same way: a fixed system prompt and tools contract
 are prefilled once.
 
+What that reuse does not promise is the same bytes as a fresh read: a prompt whose beginning is served from the kept
+cache and the same prompt read whole reach the same logits by two different sequences of operations, which do not
+round alike. Where two tokens are nearly tied the answer can part at that token — the same request sent twice in a
+row to one daemon may give two fluent answers that differ from one word on, at `temperature: 0` too (measured
+2026-11-11 on a model streamed layer by layer). Within one daemon it is deterministic: the answer is a function of
+the request and of what the cache held when it arrived.
+
 Any other request on the same engine (a `generate`, a warmup) that reuses the cache empties it, and the next turn
 then prefills the whole conversation again. A failed turn leaves the session holding nothing.
 

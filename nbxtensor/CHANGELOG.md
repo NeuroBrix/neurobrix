@@ -18,10 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its pinned whole-allocation wraps under their base address alone, and a pool segment begins where its first block
   does. With that first block pinned, a view inside another block of the same segment — a slot of the Triton expert
   store's arena — resolved to the first block's short wrap and was handed an address past that buffer's end: another
-  buffer's bytes, nothing raised. Seen as a mixture-of-experts result wrong on every row after nine earlier
-  mixture-of-experts runs in one process; no served model was seen affected. The wraps are now kept under their
-  extent (base and size), and `pinned_gpu_address` refuses by name an address beyond the wrap it resolved. CUDA and
-  Level Zero are not concerned: they have no such wraps.
+  buffer's bytes, nothing raised. Found by a test that builds the copying expert store (the one with an arena)
+  directly and runs it after nine earlier mixture-of-experts runs in one process: every row of its result was wrong.
+  The engine does not build that store on Apple — a unified device's store binds its experts in place, where they
+  lie in the container's files — and the published 0.6.6 was not seen affected through `neurobrix serve`: on the
+  two plans the mixture-of-experts model that fits a 24 GB Mac takes (resident, and streamed layer by layer), no
+  pinned address out of two million was answered past its wrap and every expert's address resolved to an
+  allocation of its own. The expert-store plan itself was not run on Apple hardware (its models are 31 GB). The
+  wraps are now kept under their extent (base and size), and `pinned_gpu_address` refuses by name an address beyond
+  the wrap it resolved. CUDA and Level Zero are not concerned: they have no such wraps.
 
 ## [0.1.1] - 2026-11-11
 
