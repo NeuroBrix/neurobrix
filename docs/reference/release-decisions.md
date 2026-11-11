@@ -360,3 +360,34 @@ PyPI: green, with the reporter's own sequence (three launches in one home, the f
 and GitLab releases; the organisation page. Seen at the PyPI trials, nothing of ours: for the first minutes after an
 upload the index `pip` reads does not list the new files yet, and an install then fails with "No matching
 distribution" (both machines' first attempts; the second, minutes later, installed).
+
+## 2026-11-11 11:48 — NEUROBRIX 0.6.7 AND NBXTENSOR 0.1.2 ARE PUBLISHED: A CORRECTIVE VERSION (the owner, 10:13)
+
+Found the morning after 0.6.6 by a test order on Apple: nbxtensor's Metal driver kept its pinned buffers under their
+base address alone, and a pool segment begins where its first block does — an address inside another block of the
+segment could be answered from the first block's short buffer, past its end: wrong bytes, nothing raised. What it could
+reach: the expert store that copies experts into an arena, on Apple only, which the engine does not build there (a
+unified device's store binds its experts in place). The supervisor asked for one deciding test — can a real `serve`
+path on the published 0.6.6 reach it: NOT REACHED on the two plans the mixture-of-experts model that fits a 24 GB Mac
+takes (no pinned address out of two million past its buffer); the expert-store plan itself could not be run on Apple
+hardware. The owner's decision all the same: a defect by which a model can return wrong values is not a small bug and
+does not wait for a batch. The version carries main as it stood since v0.6.6 and nothing else (the fix, the card
+residency armed only where the backend's kernels read device addresses, the expert tables naming their card, two
+documentation corrections, one test pinning that the speech front ends never pad).
+
+**Proofs, proportionate (no full gate).** The touched directories on both machines (rack, on cards: 1 554 passed, 0
+failed; Mac, Metal: 1 510 passed); the five shas identical in the torch-free environment; deepseek-moe-16b-chat on a
+16 GB card through the entry point, both engines, byte-identical between the freeze and the tag v0.6.6; every public
+sentence reread by the agent who did not write it — the changelog says what was observed, not that no model could be
+affected; the pure packages rebuilt byte-identical on the second machine; trials L and M on the built wheels, then
+from PyPI.
+
+**Published, each read back:** PyPI `nbxtensor` 0.1.2 and `neurobrix` 0.6.7 (publish.yml; `nbxgrammar` stays 0.1.1,
+not republished); tags `v0.6.7` and `nbxtensor-v0.1.2` on `7772275ba`; GitHub and GitLab releases of both; the
+organisation page.
+Said as it is: the library's two files on PyPI are the frozen bytes; the engine's two archives, built by publish.yml,
+have the freeze's CONTENT (every member's sha256 equal, 548 of 548 in the wheel, 549 of 549 in the sdist) and not its
+bytes — the workflow builds without the commit's date. The same was true of 0.6.6. To correct in the next batch.
+PyPI trials L (Linux, both legs; the Sana image byte-identical to the one judged for 0.6.6) and M (Mac, Metal) green,
+each on its second run: for the first minutes after an upload the index `pip` reads does not serve the new files,
+while a request of our own to the index already lists them — the check must be pip's own (`pip download --no-deps`).
