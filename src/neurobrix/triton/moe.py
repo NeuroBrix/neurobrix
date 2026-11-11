@@ -25,7 +25,6 @@ import numpy as np
 
 from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
-from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
@@ -919,12 +918,7 @@ def _multi_device_fused_moe(
     5. Scatter results back using original token positions
     """
     dt = hidden_states._dtype
-    # (M + 1, K): row M is a discard SINK. The padding sentinel
-    # (sorted_tids == n_total) maps to token_id = n_total // top_k = M
-    # (since n_total = M * top_k), so the device-side index_add routes every
-    # padding row into the sink with no explicit mask. Narrowed back to
-    # (M, K) after the device loop. (D7 Stage B.)
-    output = NBXTensor.zeros((M + 1, K), dtype=dt, device=f"cuda:{act_dev}")
+    output = NBXTensor.zeros((M, K), dtype=dt, device=f"cuda:{act_dev}")
 
     n_total = flat_indices.numel()
 
@@ -952,10 +946,9 @@ def _multi_device_fused_moe(
         original_positions = np.where(mask)[0]
         n_local = len(original_positions)
 
-        # Build global expert IDs for moe_align_block_size (NOT remapped)
-        # The kernel needs global expert IDs to index the offset table
-        local_expert_ids = np.array([flat_ids_cpu[i] for i in original_positions],
-                                     dtype=np.int64)
+        # The expert's number in the LAYER: a card's pointer tables keep the layer's length (`build_ptr_tables`), so
+        # the kernel reads them at that number and the launch keeps the layer's key
+        local_expert_ids = flat_ids_cpu[original_positions].astype(np.int64)
 
         DeviceAllocator.set_device(dev)
         DeviceAllocator.ensure_triton_device(dev)
@@ -974,14 +967,9 @@ def _multi_device_fused_moe(
                                padded_n * 8, kind=2)
         stid_cpu = np.frombuffer(stid_buf, dtype=np.int64).copy()
 
-        # Remap: local index → global flat position
-        # Sentinel values (>= n_local) stay as sentinel (use n_total as new sentinel)
-        for i in range(padded_n):
-            if stid_cpu[i] < n_local:
-                stid_cpu[i] = original_positions[stid_cpu[i]]
-            else:
-                stid_cpu[i] = n_total  # sentinel for kernel (> num_valid_tokens)
-        sorted_tids = NBXTensor.from_numpy(stid_cpu)
+        # Remap: local index → global flat position; the padding becomes the kernel's sentinel (n_total, not a token)
+        stid_cpu = np.where(stid_cpu < n_local, original_positions[np.minimum(stid_cpu, n_local - 1)], n_total)
+        sorted_tids = NBXTensor.from_numpy(stid_cpu.astype(np.int64))
 
         # FIX #2: Build local scores matching the global flat positions
         # The kernel indexes flat_scores by sorted_token_ids (now global)
@@ -991,9 +979,9 @@ def _multi_device_fused_moe(
         # Transfer activations to this device
         h_local = _xfer(hidden_states, dev)
 
-        # Run 3 GEMM passes + activation
-        local_padded = sorted_tids.shape[0]
-        gate_out = NBXTensor.zeros((local_padded, N_gate), dtype=dt, device=f"cuda:{dev}")
+        # Run 3 GEMM passes + activation. The kernel writes a pair's row at its GLOBAL flat position (the sorted id
+        # it reads), so every pass's output holds the layer's n_total rows — this card's pairs filled, the others 0.
+        gate_out = NBXTensor.zeros((n_total, N_gate), dtype=dt, device=f"cuda:{dev}")
         _nbx_moe_wrappers.invoke_fused_moe(
             h_local,
             tables.gate_ptrs[dev],
@@ -1004,7 +992,7 @@ def _multi_device_fused_moe(
             top_k, mul_routed_weight=False,
         )
 
-        up_out = NBXTensor.zeros((local_padded, N_gate), dtype=dt, device=f"cuda:{dev}")
+        up_out = NBXTensor.zeros((n_total, N_gate), dtype=dt, device=f"cuda:{dev}")
         _nbx_moe_wrappers.invoke_fused_moe(
             h_local,
             tables.up_ptrs[dev],
@@ -1018,9 +1006,8 @@ def _multi_device_fused_moe(
         gate_silu = _nbx_elementwise_wrappers.silu(gate_out)
         activated = _nbx_elementwise_wrappers.mul(gate_silu, up_out)
 
-        # FIX #3: Down pass writes to [padded, K] with routing weights.
-        # Then scatter into output[M, K] using global token positions.
-        down_out = NBXTensor.zeros((local_padded, K), dtype=dt, device=f"cuda:{dev}")
+        # Down pass, weighted by the routing scores: row p is flat position p's term, 0 where another card holds it.
+        down_out = NBXTensor.zeros((n_total, K), dtype=dt, device=f"cuda:{dev}")
         _nbx_moe_wrappers.invoke_fused_moe(
             activated,
             tables.down_ptrs[dev],
@@ -1031,25 +1018,10 @@ def _multi_device_fused_moe(
             top_k, mul_routed_weight=True, topk_divide=False,
         )
 
-        # Transfer result back to act_dev
-        down_out = _xfer(down_out, act_dev)
+        # This card's share of every token: its rows summed over the token's top_k, added on the activation's card.
+        share = _xfer(_nbx_reduction_wrappers.sum_wrapper(down_out.reshape(M, top_k, K), dim=1), act_dev)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
+        output = _nbx_elementwise_wrappers.add(output, share)
 
-        # Combine (device-side, R33-pure). Each row of down_out is the
-        # top-k-weighted result for GLOBAL flat position sorted_tids[i] (the
-        # down pass already applied mul_routed_weight). Accumulate into
-        # output[token_id] where token_id = sorted_tids // top_k. The padding
-        # sentinel (sorted_tids == n_total) maps to token_id = M — the sink
-        # row of the (M+1, K) output — so no mask is needed. index_add_wrapper
-        # preserves down_out's dtype (graph dtype) and accumulates across
-        # devices (functional: output_next = output + scatter). No CPU
-        # round-trip, no Python token loop, no np.float16 literal — this
-        # replaced the pathological host-mediated scatter. (D7 Stage B.)
-        stid_dev = _xfer(sorted_tids, act_dev)
-        token_ids = _nbx_elementwise_wrappers.floor_divide_wrapper(stid_dev, top_k)
-        output = _nbx_index_wrappers.index_add_wrapper(output, 0, token_ids, down_out)
-
-    # Drop the padding sink row (M); real tokens are [0, M).
-    output = output.narrow(0, 0, M).contiguous()
     return output

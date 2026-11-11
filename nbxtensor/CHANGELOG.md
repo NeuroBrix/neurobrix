@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A routed layer whose experts sit on two cards is read at the right experts.** `memory.pointer_tables.build_ptr_tables`
+  gave each card a table of its own experts alone, packed, while the grouped GEMM reads a table at the expert's number
+  in the layer: on a card that does not hold experts 0..n-1 it read another expert's weights, or past the table's end.
+  A card's table now keeps the layer's length, each of its experts at its own number (0 where another card holds the
+  expert); the launch's key, which carries that length, is the layer's again. A layer held by one card is unchanged.
+
 ### Changed
 
 - **The library's messages speak of records and graphs.** Seven error texts reworded ("allocation record", "the

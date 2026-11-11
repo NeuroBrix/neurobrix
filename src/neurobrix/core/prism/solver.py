@@ -1005,6 +1005,13 @@ class PrismSolver:
         if lm is None or lm not in strat_allocs:
             return None
         devs = self._alloc_devices(strat_allocs[lm])
+        first = strat_allocs[lm][0] if isinstance(strat_allocs[lm], tuple) else strat_allocs[lm]
+        if isinstance(first, str) and first.startswith("tp:"):
+            # A decoder whose weight FILES are dealt over several cards runs its weightless ops — the cache's appends
+            # and reads — on its first card (`RuntimeFactory._extract_device`): the whole cache lives there. Sized
+            # against the sum of the cards' room, Qwen3-Coder-30B-A3B's 3 084 MB cache was accepted beside 29 016 MB
+            # of weights on a 32 GB card and the run died at layer 43 (31 854 MB live, 2026-11-11).
+            devs = {first[3:].split(",")[0]}
         if any(_device_is_unified(d, profile) for d in devs if not d.startswith("cpu")):
             devs = devs | {"cpu"}
         return devs or None
@@ -1085,6 +1092,12 @@ class PrismSolver:
                 # difference (DeepSeek-Coder-V2-Lite, triton, 51.6 MB) out of the store's floor.
                 cost = int(self._live_activation_mb(m) * 1024 * 1024 + m.overhead_bytes
                            + store_mb * 1024 * 1024)
+            elif isinstance(dev, str) and dev.startswith("tp:") and only_devices is not None and container is not None:
+                # dealt over several cards: what the cache's card holds of it — its files there, at the device's cost
+                files = container.get_shard_sizes().get(name, {})
+                held = sum(b for f, b in files.items() if alloc[1].get(f) in only_devices)
+                cost = int(held * self._cost_multiplier_on(next(iter(only_devices)), name, container, profile)
+                           + m.activation_bytes + m.overhead_bytes)
             else:
                 cost = int(m.total_bytes)
             # The KV estimate is inside the named LM's activations (`_compute_memory`); the check
@@ -6231,15 +6244,6 @@ class PrismSolver:
 
         largest_cap = devices[0].capacity_mb
         needs_tp = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > largest_cap]
-
-        import os as _os
-        if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
-            _log.debug(f"   [NBX-DIAG-PRISM] _try_weight_sharding largest_cap={largest_cap:.0f}MB "
-                       f"ndev={len(devices)} devs={[d.device_string for d in devices]}")
-            for _n, _m in sorted_comps:
-                _log.debug(f"   [NBX-DIAG-PRISM]   {_n}: weight={_m.weight_mb:.0f}MB "
-                           f"act={_m.activation_mb:.0f}MB sum={_m.weight_mb+_m.activation_mb:.0f}MB "
-                           f"needs_tp={_m.weight_mb+_m.activation_mb > largest_cap}")
 
         if not needs_tp:
             return None

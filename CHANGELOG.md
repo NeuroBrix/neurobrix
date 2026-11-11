@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returned as the end of its answer. An opening marker with nothing after it is no longer part of the content; a
   block with a body that does not read as a call is still returned whole, as before.
 
+- **A mixture-of-experts model whose plan spreads it over two cards runs, and computes the right answer.** When the
+  plan holds the whole model on two cards and one layer's experts end up on both (Qwen3-Coder-30B-A3B on two 32 GB
+  cards), the Triton engine stopped with `cudaMemcpy failed rc=700`, ran out of memory in its first prefill, or
+  served a wrong text. Two causes: the layer's share on each card read other experts' weights, or past its own
+  table, and wrote past its outputs (each card now reads its own experts at their place — with nbxtensor's
+  pointer-table fix — and the shares are added per token); and the decode cache was planned against the room of both
+  cards while it lives on the first (it is now sized against that card and what it already holds).
+
 ## [0.6.7] - 2026-11-11
 
 A corrective version: it follows nbxtensor 0.1.2, which closes a defect of the Apple backend by which a result could

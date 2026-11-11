@@ -189,6 +189,16 @@ def _addr_capture_kernel(src_ptr, table_ptr, idx):
     tl.store(table_ptr + idx, tl.cast(src_ptr, tl.int64, bitcast=True))
 
 
+def _at_layer_numbers(num_experts: int, expert_ids, addresses) -> np.ndarray:
+    """One card's pointer table at the LAYER's length: each of its experts' address at the expert's number, 0 where
+    another card holds the expert (never read: a card is only handed the pairs routed to its own experts). The kernel
+    reads a table at the expert's number, and the launch's key carries the table's length — a table of the card's
+    experts alone was read past its end, or at another expert's entry, and keyed every split layer apart."""
+    table = np.zeros(num_experts, dtype=np.int64)
+    table[np.asarray(expert_ids, dtype=np.int64)] = np.asarray(addresses, dtype=np.int64)
+    return table
+
+
 def build_ptr_tables(gate_weights, up_weights, down_weights):
     """Build per-projection absolute pointer tables.
 
@@ -268,10 +278,8 @@ def build_ptr_tables(gate_weights, up_weights, down_weights):
             from nbxtensor.backend.triton_ext_driver import pinned_gpu_address
 
             def _capture_proj(weights):
-                ptrs = np.array(
-                    [pinned_gpu_address(weights[eid].data_ptr())
-                     for eid in expert_ids],
-                    dtype=np.int64)
+                ptrs = _at_layer_numbers(num_experts, expert_ids,
+                                         [pinned_gpu_address(weights[eid].data_ptr()) for eid in expert_ids])
                 tab = NBXTensor.from_numpy(ptrs)
                 base = weights[expert_ids[0]]
                 return tab, base.stride(1), base.stride(0)
@@ -293,24 +301,16 @@ def build_ptr_tables(gate_weights, up_weights, down_weights):
         def _build_proj(weights):
             # Absolute pointers as int64
             if tables.quantized:
-                qw = np.array(
-                    [weights[eid].qweight.data_ptr() for eid in expert_ids],
-                    dtype=np.int64)
-                sc = np.array(
-                    [weights[eid].scales.data_ptr() for eid in expert_ids],
-                    dtype=np.int64)
-                mn = np.array(
-                    [weights[eid].qmins.data_ptr() for eid in expert_ids],
-                    dtype=np.int64)
+                qw = _at_layer_numbers(num_experts, expert_ids, [weights[eid].qweight.data_ptr() for eid in expert_ids])
+                sc = _at_layer_numbers(num_experts, expert_ids, [weights[eid].scales.data_ptr() for eid in expert_ids])
+                mn = _at_layer_numbers(num_experts, expert_ids, [weights[eid].qmins.data_ptr() for eid in expert_ids])
                 base = weights[expert_ids[0]]
                 return ((NBXTensor.from_numpy(qw),
                          NBXTensor.from_numpy(sc),
                          NBXTensor.from_numpy(mn)),
                         base.qweight.stride(0), base.qweight.stride(1),
                         base.scales.stride(0), base.scales.stride(1))
-            ptrs = np.array(
-                [weights[eid].data_ptr() for eid in expert_ids],
-                dtype=np.int64)
+            ptrs = _at_layer_numbers(num_experts, expert_ids, [weights[eid].data_ptr() for eid in expert_ids])
             ptr_table = NBXTensor.from_numpy(ptrs)
             base = weights[expert_ids[0]]
             return ptr_table, base.stride(1), base.stride(0)
