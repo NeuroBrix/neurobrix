@@ -456,7 +456,7 @@ def minicpm_adaptive_slice_np(image_path: str, preprocessing_cfg: dict) -> dict:
             "ZERO FALLBACK: minicpm_adaptive_slice v1 implements the "
             f"single-slice contract only (max_slice_nums == 1, got "
             f"{max_slice_nums}); multi-slice lands with a multi-slice vpm "
-            "trace (B > 1 slice batch).")
+            "container (B > 1 slice batch).")
     mean = np.asarray(cfg["image_mean"], dtype=np.float32)
     std = np.asarray(cfg["image_std"], dtype=np.float32)
 

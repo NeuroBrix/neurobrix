@@ -167,7 +167,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             raise RuntimeError(
                 f"ZERO FALLBACK: [MoE Fusion] {len(left)} router(s) of a declared MoE "
                 f"left unfused — {named}. Extend the matcher to this block rather "
-                "than letting the traced routing run.")
+                "than letting the graph's unfused routing run.")
 
     # Update DAG
     dag["ops"] = ops
@@ -481,7 +481,7 @@ def _fuse_one_moe_layer(
         raise RuntimeError(
             f"[MoE Fusion] Cannot place {fused_uid}: an input producer at "
             f"position {latest_producer} runs after the consumer of the MoE "
-            f"output at position {earliest_consumer}. The traced subgraph is "
+            f"output at position {earliest_consumer}. The container's subgraph is "
             "not a contiguous dependence window."
         )
 
@@ -831,7 +831,7 @@ def _detect_gate_blends(
                 f"(int={sorted(int_terms)}, float={sorted(float_terms)}). "
                 "The blend topology is unsupported — extend "
                 "_detect_gate_blends (workstream P-MOE-MULTIGATE) rather than "
-                "letting the trace-frozen routing run."
+                "letting the routing frozen at build time run."
             )
 
         blend = GateBlend(
@@ -2030,7 +2030,7 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
     if declared_norm is not None and bool(declared_norm) != renorm:
         raise RuntimeError(
             f"ZERO FALLBACK: [MoE Fusion] {topk_uid}: the registry declares "
-            f"norm_topk_prob={bool(declared_norm)} but the traced graph computes "
+            f"norm_topk_prob={bool(declared_norm)} but the container's graph computes "
             f"norm_topk_prob={renorm} (it {'divides' if renorm else 'does not divide'} "
             "the top-k scores by their sum) — fix the data at its source.")
 

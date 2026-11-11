@@ -108,7 +108,7 @@ class TritonSequentialDispatcher:
             if self.symbol_resolver is None:
                 raise RuntimeError(
                     f"ZERO FALLBACK: symbolic attribute of type {attr.get('type')!r} met with no "
-                    "symbol resolver; its trace value is a witnessed extent, not a value")
+                    "symbol resolver; its build-time value is a witnessed extent, not a value")
             return self.symbol_resolver.resolve_scalar(attr)
 
         atype = attr.get("type")

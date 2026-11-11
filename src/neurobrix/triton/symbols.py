@@ -194,7 +194,7 @@ class SymbolResolver:
         tv = (expr or {}).get("trace", (expr or {}).get("trace_value", info.get("trace_value")))
         raise UnboundSymbolError(
             f"ZERO FALLBACK: symbol '{sym_id}' ({info.get('name')}, binds from "
-            f"{info.get('source')}) is not bound at runtime; its trace value {tv} is a "
+            f"{info.get('source')}) is not bound at runtime; its build-time value {tv} is a "
             f"witnessed extent, not a value. Bound: {sorted(self._bindings)}.")
 
     @property

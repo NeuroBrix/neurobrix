@@ -4990,7 +4990,7 @@ class PrismSolver:
             if not isinstance(spec, dict):
                 raise MissingRuntimeValue(
                     f"the graph declares symbol {sym_id!r} as {type(spec).__name__}, "
-                    f"not a specification with a trace value; the estimate cannot "
+                    f"not a specification with a build-time value; the estimate cannot "
                     f"be scaled against a symbol it cannot read")
             trace = spec.get("trace_value")
             name = spec.get("name")
@@ -5005,7 +5005,7 @@ class PrismSolver:
                 # that silence is how the plan read the same 22 993 MB at 8 and
                 # 9 frames while one ran and the other died.
                 logging.getLogger(__name__).debug(
-                    "Prism: %s declares symbol %r (trace %s) that no request "
+                    "Prism: %s declares symbol %r (build-time value %s) that no request "
                     "field answers for — the estimate does not follow it",
                     getattr(comp, "name", "?"), name, trace)
                 continue
@@ -6628,7 +6628,7 @@ class PrismSolver:
             return None
         vc = decl.get("vendor_chunks")
         spec = {"schedule": list(sched), "frames": frames, "reference": "vendor" if vc else "clip",
-                "source": (vc or {}).get("source") or "derived from the clip graph (Forge temporal_stream)",
+                "source": (vc or {}).get("source") or "derived from the clip graph by the container builder",
                 "activation_bytes": cost(sched, parked), "states": len(decl["states"]), "park_states": parked}
         if room_bytes is not None and not fits_cost(spec["activation_bytes"]):
             declined[comp_name] = (f"its vendor's chunks {sched} need {spec['activation_bytes'] / 2**20:,.0f} MB, "
@@ -6851,7 +6851,7 @@ class PrismSolver:
             raise PlanNotComputable(
                 f"the component's graph or profile could not be read "
                 f"({gpath.name} / {ppath.name}: {type(exc).__name__}: {exc}), so "
-                f"its trace size is unknown and no tiling decision can be taken "
+                f"its build-time size is unknown and no tiling decision can be taken "
                 f"for it."
             ) from exc
 
@@ -6965,7 +6965,7 @@ class PrismSolver:
         if declared is not None and scale_factor is not None and int(declared) != int(scale_factor):
             raise ValueError(
                 f"ZERO FALLBACK: {comp_name} declares upscale {declared} and its graph measures "
-                f"{scale_factor} (trace {trace_size}x{in_spatial_w} -> {out_spatial}x{out_spatial_w}); "
+                f"{scale_factor} (build-time {trace_size}x{in_spatial_w} -> {out_spatial}x{out_spatial_w}); "
                 f"a tile plan cannot choose between a declaration and a measurement that disagree")
         if scale_factor is None:
             scale_factor = declared
@@ -7224,14 +7224,14 @@ class PrismSolver:
             sp_ratio = trace_size // out_spatial
         else:
             return self._tiling_decline(
-                comp_name, f"no block list in its profile, and its traced extents {trace_size} -> "
+                comp_name, f"no block list in its profile, and its build-time extents {trace_size} -> "
                            f"{out_spatial} do not divide")
         # Trace coherence: the graph's own in/out spatial traces must agree
         # with the config-derived ratio, else decline (never guess geometry).
         if sp_ratio <= 1 or trace_size % sp_ratio != 0 \
                 or trace_size // sp_ratio != out_spatial:
             return self._tiling_decline(
-                comp_name, f"its profile's spatial ratio {sp_ratio} disagrees with its traced extents "
+                comp_name, f"its profile's spatial ratio {sp_ratio} disagrees with its build-time extents "
                            f"{trace_size} -> {out_spatial}")
 
         height = getattr(ic, "height", None)

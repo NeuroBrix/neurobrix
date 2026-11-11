@@ -314,7 +314,7 @@ class GraphAnalyzer:
                         self.report.add_suspect(
                             op_uids=[uid],
                             detail=(
-                                f"slice end {end} == trace extent of a "
+                                f"slice end {end} == build-time extent of a "
                                 f"SYMBOLIC dim — frozen-bound signature "
                                 f"(slice-attrs class); fix at the source"
                             ),

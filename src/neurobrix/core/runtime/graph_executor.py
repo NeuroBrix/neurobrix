@@ -687,7 +687,7 @@ class GraphExecutor:
                         if bool(_a.get("norm_topk_prob")) != bool(norm_topk_prob):
                             raise RuntimeError(
                                 f"ZERO FALLBACK: {_uid}: the registry declares "
-                                f"norm_topk_prob={bool(norm_topk_prob)} but the traced graph "
+                                f"norm_topk_prob={bool(norm_topk_prob)} but the container's graph "
                                 f"computes norm_topk_prob={bool(_a.get('norm_topk_prob'))} — "
                                 "fix the data at its source.")
                         continue
@@ -1043,7 +1043,7 @@ class GraphExecutor:
         if traced_embed is None:
             raise RuntimeError(
                 f"ZERO FALLBACK: Cannot interpolate {weight_name} - "
-                f"no traced tensor found. Need traced_data in spec or loaded weight."
+                f"no build-time tensor found. Need traced_data in spec or loaded weight."
             )
 
         # Reshape to 2D grid: [1, seq, dim] -> [1, dim, h, w]
@@ -1637,13 +1637,13 @@ class GraphExecutor:
                 raise RuntimeError(
                     f"SDPA {uid}: cannot tell whether K is pre-transposed. "
                     f"The producer chain of {ins[1]!r} is not one this pass "
-                    f"understands and the traced shapes {q_shape} / {k_shape} "
+                    f"understands and the recorded shapes {q_shape} / {k_shape} "
                     f"do not settle it. Refusing to guess: guessing here is "
                     f"what silently transposed attention at seq_len == head_dim.")
             if walked is not None and witness is not None and walked != witness:
                 raise RuntimeError(
                     f"SDPA {uid}: the graph's transpose chain says K is "
-                    f"{'' if walked else 'not '}pre-transposed while the traced "
+                    f"{'' if walked else 'not '}pre-transposed while the recorded "
                     f"shapes {q_shape} / {k_shape} say the opposite. One of the "
                     f"two is wrong and neither may be preferred silently.")
             op.setdefault("attributes", {})["nbx_k_pre_transposed"] = bool(
@@ -1665,13 +1665,13 @@ class GraphExecutor:
                 if v_walked is None and v_witness is None:
                     raise RuntimeError(
                         f"SDPA {uid}: cannot tell whether V is pre-transposed "
-                        f"from {ins[2]!r} or from the traced shapes "
+                        f"from {ins[2]!r} or from the recorded shapes "
                         f"{q_shape} / {v_shape}. Refusing to guess.")
                 if (v_walked is not None and v_witness is not None
                         and v_walked != v_witness):
                     raise RuntimeError(
                         f"SDPA {uid}: the graph's transpose chain and the "
-                        f"traced shapes disagree about V's layout "
+                        f"recorded shapes disagree about V's layout "
                         f"({q_shape} / {v_shape}).")
                 op["attributes"]["nbx_v_pre_transposed"] = bool(
                     v_walked if v_walked is not None else v_witness)
@@ -2870,7 +2870,7 @@ class GraphExecutor:
                 raise RuntimeError(
                     f"ZERO FALLBACK: Constant tensor '{tid}' has no constant_data.\n"
                     f"weight_name: {tdata.get('weight_name')}\n"
-                    f"Graph may be corrupted or was traced with old format."
+                    f"Graph may be corrupted or was built with an old format."
                 )
 
             weight_name = tdata.get("weight_name")
@@ -4112,7 +4112,7 @@ class GraphExecutor:
                     return sym_resolver.resolve(arg)       # unbound: refuses by name inside
                 raise RuntimeError(
                     f"ZERO FALLBACK: symbolic argument {arg.get('id')} met with no symbol "
-                    f"resolver; its trace value {arg.get('trace_value', arg.get('trace'))} "
+                    f"resolver; its build-time value {arg.get('trace_value', arg.get('trace'))} "
                     "is a witnessed extent, not a value")
             if _symexpr.is_expression(arg):
                 if sym_resolver:                           # an unbound factor refuses inside
@@ -4121,7 +4121,7 @@ class GraphExecutor:
                     return sym_resolver.resolve(arg)
                 raise RuntimeError(
                     f"ZERO FALLBACK: symbolic expression of type {atype!r} met with no symbol "
-                    "resolver; its trace value is a witnessed extent, not a value")
+                    "resolver; its build-time value is a witnessed extent, not a value")
             if atype == "list":
                 items = arg.get("value", [])
                 return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher,

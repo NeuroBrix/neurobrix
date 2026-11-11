@@ -47,7 +47,7 @@ def curve(traces: Dict[str, List[List[int]]], top_k: int, n_experts: int) -> Dic
     """{slots per layer: mean hit rate over the traced layers} for every slot count of the ladder."""
     layers = [calls for calls in traces.values() if calls]
     if not layers:
-        raise ValueError("ZERO FALLBACK: no traced decode call — a routing reuse curve needs the decode's routed sets")
+        raise ValueError("ZERO FALLBACK: no recorded decode call — a routing reuse curve needs the decode's routed sets")
     return {s: round(sum(lru_hit_rate(c, s) for c in layers) / len(layers), 4) for s in slot_ladder(top_k, n_experts)}
 
 

@@ -237,7 +237,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
                     "ZERO FALLBACK: stt.yml long_form.rnnt_overlap_seconds missing.")
             if _dag_frames is None:
                 raise RuntimeError(
-                    "ZERO FALLBACK: long-form RNNT needs the encoder's traced frame "
+                    "ZERO FALLBACK: long-form RNNT needs the encoder's build-time frame "
                     "span from the DAG (no 3-D encoder input found).")
             if not _p.get("source"):
                 # The overlap is converted with the SAME hop/rate the mel

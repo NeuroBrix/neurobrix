@@ -127,7 +127,7 @@ class TritonDualAREngine(ComponentFlowHandler):
 
         fast_exec = self.ctx.executors.get("model.fast")
         if fast_exec is None:
-            raise RuntimeError("ZERO FALLBACK: DualAR requires 'model.fast' (re-trace with the fast split).")
+            raise RuntimeError("ZERO FALLBACK: DualAR requires 'model.fast' (rebuild its container with the fast split).")
         self._ensure_weights_loaded("model.fast")
 
         from neurobrix.core.flow.audio_utils import dual_ar_prompt_ids

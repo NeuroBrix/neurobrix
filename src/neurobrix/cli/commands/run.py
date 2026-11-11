@@ -721,8 +721,8 @@ def cmd_run(args):
             _supported_mode = "image" if _build_gen_type == "autoregressive_image" else "text"
             log.error(
                 f"Error: this '{args.model}' build supports only --mode "
-                f"{_supported_mode} (its trace generation_type is "
-                f"'{_build_gen_type}'). Re-import a build traced for "
+                f"{_supported_mode} (its build generation_type is "
+                f"'{_build_gen_type}'). Re-import a container built for "
                 f"--mode {mode} to use that mode."
             )
             sys.exit(1)

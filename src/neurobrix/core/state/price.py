@@ -33,7 +33,7 @@ def kv_declaration(topology: Mapping[str, Any], component_names) -> Optional[Tup
         raise StateUndeclared(
             f"ZERO FALLBACK: the flow decodes with '{decoder}' and the container declares no KV state for it "
             f"(topology.json `state`, written by the build) — its cache cannot be priced; the container's single "
-            f"write declares it (forge tools/repropagate_in_place.py --apply)")
+            f"write declares it (done by the container builder)")
     entry = entries[0]
     missing = [k for k in ("layers", "kv_heads", "k_dim", "v_dim") if not entry.get(k)]
     if missing:

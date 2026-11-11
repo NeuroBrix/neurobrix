@@ -454,7 +454,7 @@ class TensorResolver:
             # executor did not arm — refuse by name, never the trace value.
             raise RuntimeError(
                 f"ZERO FALLBACK: symbolic argument {symbol_id!r} met with symbolic shapes "
-                f"disabled or no shape resolver; its trace value {trace_value} is a witnessed "
+                f"disabled or no shape resolver; its build-time value {trace_value} is a witnessed "
                 "extent, not a value")
 
         elif _symexpr.is_expression(arg_info):
@@ -467,7 +467,7 @@ class TensorResolver:
                 return self._ctx.shape_resolver.resolve_scalar(arg_info)
             raise RuntimeError(
                 f"ZERO FALLBACK: symbolic expression argument {arg_type!r} met with symbolic "
-                "shapes disabled or no shape resolver; its trace value is a witnessed extent, "
+                "shapes disabled or no shape resolver; its build-time value is a witnessed extent, "
                 "not a value")
 
         elif arg_type == "list":

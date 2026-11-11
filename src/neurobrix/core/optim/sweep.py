@@ -186,7 +186,7 @@ def write_summary(rows: list[dict], out_dir: Path, date: str) -> None:
         "",
         "## Build-side suspects (NOT optimization sites)",
         "",
-        f"{n_susp} frozen-bound signatures surfaced (slice end == trace "
+        f"{n_susp} frozen-bound signatures surfaced (slice end == build-time "
         "extent of a symbolic dim — the slice-attrs class). These are "
         "coverage bugs to fix at the source; per-model op_uids in each "
         "model's JSON under `reports[].suspects`.",

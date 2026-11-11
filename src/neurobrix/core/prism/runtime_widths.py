@@ -266,7 +266,7 @@ def _name(dtype) -> str:
     """A dtype NAME from a graph/meta string ("torch.float32" -> "float32"). Refuses what
     it does not know: a width guessed for an unknown name is the defect this module ends."""
     if dtype is None:
-        raise ValueError("runtime_widths: a tensor with no traced dtype — its width is unknown")
+        raise ValueError("runtime_widths: a tensor with no dtype recorded in the graph — its width is unknown")
     s = str(dtype).rsplit(".", 1)[-1]
     if s == "bool_":
         s = "bool"

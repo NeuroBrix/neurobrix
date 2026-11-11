@@ -606,9 +606,9 @@ class InputSynthesizer:
                 if needs_slice and seq_dim_idx in self._symbolic_dims(comp_name, input_name):
                     continue
                 if needs_slice:
-                    _log.debug(f"[InputSynthesizer] {comp_name}.{input_name}: {actual_shape} cut to the traced "
+                    _log.debug(f"[InputSynthesizer] {comp_name}.{input_name}: {actual_shape} cut to the build-time "
                                f"{expected_shape} — the graph carries this extent as a literal (a frozen dimension, "
-                               f"a trace defect to fix at the source)")
+                               f"a container defect to fix at the source)")
                     # Check for Sana-style complex_human_instruction pattern
                     tokenizer_vals = self._topology.get("extracted_values", {}).get("tokenizer", {})
                     complex_human_instruction = tokenizer_vals.get("complex_human_instruction")

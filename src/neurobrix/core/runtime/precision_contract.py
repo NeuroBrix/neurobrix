@@ -202,7 +202,7 @@ def load_calibration(cache_path: Optional[str], component_name: str,
         # is the owner's call (doctrine review 2026-09-05).
         _log.warning(f"[DtypeEngine] REFUSED RECORD {component_name}: calibration "
                      f"{record.graph_signature} was measured on another graph than "
-                     f"{_cal.graph_signature(dag)} (re-traced artifact or engine "
+                     f"{_cal.graph_signature(dag)} (rebuilt container or engine "
                      f"rewrite). Not applied — conservative path. Re-measure: "
                      f"`neurobrix calibrate --model {model_name}`")
         return None

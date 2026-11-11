@@ -560,7 +560,7 @@ def _reshape(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
                 f"  Target shape: {graph_output_shape}\n"
                 f"  Graph input shape: {graph_input_shape}\n"
                 f"  Scale ratio {scale_ratio:.4f} rounds to 0.\n"
-                f"  This indicates a shape mismatch between trace and runtime."
+                f"  This indicates a shape mismatch between build time and runtime."
             )
 
     # Robustness: If scale is 1, maybe it's just a reshape of dynamic dims without scaling?
@@ -890,7 +890,7 @@ def _constant(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor
         raise RuntimeError(
             f"ZERO FALLBACK: aten::constant missing 'value' attribute.\n"
             f"attrs keys: {list(attrs.keys())}\n"
-            f"Tracer must provide a valid constant value."
+            f"The container builder must provide a valid constant value."
         )
 
     if isinstance(value, dict) and 'data' in value:

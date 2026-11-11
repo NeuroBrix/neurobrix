@@ -169,7 +169,7 @@ def _refuse_unbound(resolver, symbol_id, trace_value) -> None:
     bound = sorted(resolver.bindings) if resolver is not None else "no resolver"
     raise UnboundSymbolError(
         f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
-        f"{info.get('source')}) is not bound at runtime; its trace value {trace_value} is a "
+        f"{info.get('source')}) is not bound at runtime; its build-time value {trace_value} is a "
         f"witnessed extent, not a value. Bound: {bound}.")
 
 

@@ -363,7 +363,7 @@ class SymbolicShapeResolver:
                 info = self._symbols[value]
                 raise ShapeResolutionError(
                     f"ZERO FALLBACK: symbol '{value}' ({info.get('name')}, binds from "
-                    f"{info.get('source')}) is not bound at runtime; its trace value "
+                    f"{info.get('source')}) is not bound at runtime; its build-time value "
                     f"{info.get('trace_value')} is a witnessed extent, not a value. Bound: "
                     f"{sorted(self._runtime_values)}.")
             return value
@@ -379,7 +379,7 @@ class SymbolicShapeResolver:
         trace = (node or {}).get("trace", (node or {}).get("trace_value", info.get("trace_value")))
         raise ShapeResolutionError(
             f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
-            f"{info.get('source')}) is not bound at runtime; its trace value "
+            f"{info.get('source')}) is not bound at runtime; its build-time value "
             f"{trace} is a witnessed extent, not a value. Bound: {sorted(self._runtime_values)}.")
 
     def _resolve_symint_dict(self, data: Dict[str, Any], slot: str = _symexpr.SHAPE):

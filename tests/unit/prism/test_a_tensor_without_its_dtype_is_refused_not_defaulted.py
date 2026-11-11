@@ -17,9 +17,9 @@ def _sizer():
 
 
 def test_a_meta_without_dtype_is_refused():
-    with pytest.raises(ValueError, match="carries no traced dtype"):
+    with pytest.raises(ValueError, match="carries no dtype recorded in the graph"):
         _sizer()._compute_size([4, 8], {"shape": [4, 8]})
-    with pytest.raises(ValueError, match="carries no traced dtype"):
+    with pytest.raises(ValueError, match="carries no dtype recorded in the graph"):
         _sizer()._compute_size([1], {})
 
 

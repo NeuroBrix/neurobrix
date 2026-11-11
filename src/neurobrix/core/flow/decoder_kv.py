@@ -95,7 +95,7 @@ def decoder_self_attention_plan(dag: Dict[str, Any]) -> Optional[Dict[str, Any]]
     if not self_uids:
         return None
     if num_heads is None:
-        raise RuntimeError("ZERO FALLBACK: decoder self-attention has no traced q shape")
+        raise RuntimeError("ZERO FALLBACK: decoder self-attention has no q shape recorded in the graph")
     if kv_heads_at_op is None:
         kv_heads_at_op, v_head_dim = num_heads, head_dim
     positions_input = next((t for t in inputs if t == "input::position_ids"), None)

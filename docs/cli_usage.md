@@ -122,7 +122,7 @@ A `.nbx` built for one mode rejects the other with a clear error:
 
 ```
 ERROR: This 'Janus-Pro-7B' build supports only --mode image
-       (its trace generation_type is 'autoregressive_image').
+       (its build generation_type is 'autoregressive_image').
 ```
 
 | Flag | Required | Notes |

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The library's messages speak of records and graphs.** Seven error texts reworded ("allocation record", "the
+  container's graph"). No behaviour changes.
+
 ## [0.1.2] - 2026-11-11
 
 ### Added

@@ -125,7 +125,7 @@ class DualAREngine(ComponentFlowHandler):
         fast_exec = self.ctx.executors.get("model.fast")
         if fast_exec is None:
             raise RuntimeError("ZERO FALLBACK: DualAR requires the 'model.fast' component "
-                               "(re-trace the model with the fast-transformer split).")
+                               "(rebuild its container with the fast-transformer split).")
         self._ensure_weights_loaded("model.fast")
 
         # Slow model input shape [B, N+1, T]

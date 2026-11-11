@@ -102,7 +102,7 @@ def test_a_graph_with_no_trace_value_is_refused_not_guessed(tmp_path):
     graph = _graph(trace_time=9, coefficient=1)
     graph["symbolic_context"]["symbols"]["s1"].pop("trace_value")
     prof = _profiler(tmp_path, graph)
-    with pytest.raises(ValueError, match="no trace value"):
+    with pytest.raises(ValueError, match="no build-time value"):
         prof.estimate_peak_memory()
 
 

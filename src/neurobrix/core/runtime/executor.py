@@ -215,7 +215,7 @@ class RuntimeExecutor:
         raise RuntimeError(
             "ZERO FALLBACK: Cannot detect flow_type from topology.\n"
             "Expected: topology.flow.type\n"
-            "Model data may use old schema. Re-trace and re-build."
+            "Model data may use old schema. Rebuild the container."
         )
 
     def _index_connections(self) -> Dict[str, Dict[str, List[str]]]:
@@ -1857,7 +1857,7 @@ class RuntimeExecutor:
         vae_scale_factor = self._get_vae_scale_factor(comp_configs)
 
         if vae_scale_factor is None:
-            logger.warning("Cannot determine VAE scale factor, using trace-time latent dims")
+            logger.warning("Cannot determine VAE scale factor, using build-time latent dims")
             return merged_defaults
 
         latent_height = height // vae_scale_factor

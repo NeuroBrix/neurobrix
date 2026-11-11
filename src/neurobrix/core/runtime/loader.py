@@ -101,7 +101,7 @@ class NBXRuntimeLoader:
                 f"NEUROTAX VERSION: this container's tensor keys were written under NeuroTax "
                 f"{ntx!r}; this engine reads NeuroTax {NEUROTAX_VERSION!r}.\n"
                 f"  Container: {cache_path}\n"
-                f"  FIX: rename its keys in place (Forge `tools/neurotax_rename.py`, outputs "
+                f"  FIX: rename its keys in place with the container builder (outputs "
                 f"byte-identical) or install the container published for this engine.")
 
         # 1d. The parser's own law (the owner, 2026-10-04 02:05): every weight key is a fixed point of

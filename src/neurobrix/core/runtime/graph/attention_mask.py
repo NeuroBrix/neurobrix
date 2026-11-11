@@ -43,5 +43,5 @@ def require_causal_frozen_mask(mask, seq_q: int, seq_k: int, op_name: str,
         raise RuntimeError(
             f"{op_name}: the attention mask {tuple(mask.shape)} is shorter than the "
             f"sequence it must cover (query {seq_q}, key {seq_k}) — its extent froze at "
-            f"the trace length, a symbolic-coverage defect of the container — and "
-            f"{why}. Refusing to extend it: re-propagate the mask symbolically in Forge.")
+            f"the build-time length, a symbolic-coverage defect of the container — and "
+            f"{why}. Refusing to extend it: re-propagate the mask symbolically in the container builder.")

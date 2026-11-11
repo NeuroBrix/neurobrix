@@ -313,7 +313,7 @@ def _mm_quantized(a, qt, _epilogue: int = 0):
         raise NotImplementedError(
             "quantized mm without the graph-side transpose marker is "
             "outside the v1 contract (the packed layout is [K, N]; "
-            "the traced linear always transposes) — named follow-up.")
+            "the container's linear always transposes) — named follow-up.")
     a = _core._ensure_cuda(a)
     K, N = qt.shape
     M = a.shape[0] if a.ndim == 2 else 1

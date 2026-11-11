@@ -196,7 +196,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         if not has_visual and not text_only and not audio_name:
             raise RuntimeError(
                 "ZERO FALLBACK: this build declares no audio_component — "
-                "audio understanding needs a build traced with the audio "
+                "audio understanding needs a container built with the audio "
                 "tower.")
 
         # ── DeepStack detection (data-driven from the LM graph spec) ──
@@ -216,7 +216,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         if has_deepstack and not ds_input_names:
             raise RuntimeError(
                 "ZERO FALLBACK: LM graph declares visual_pos_masks but no "
-                "deepstack_visual_embeds.N inputs — inconsistent trace.")
+                "deepstack_visual_embeds.N inputs — inconsistent container graph.")
 
         deepstack_embeds: List[torch.Tensor] = []
         if text_only:
@@ -597,7 +597,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             if _tap is None:
                 raise RuntimeError(
                     "ZERO FALLBACK: the LM graph exposes no hidden_tap "
-                    "output — re-trace with the speech contract (R15 "
+                    "output — rebuild the container with the speech contract (R15 "
                     "registry-driven tap).")
             from .speech import SpeechLeg
             SpeechLeg(self).run({

@@ -260,7 +260,7 @@ class SpeechCFMLeg(FlowLeg):
         else:
             raise RuntimeError(
                 "ZERO FALLBACK: flow_encoder must return (h, spk) — "
-                "re-trace the flow_encoder component.")
+                "rebuild the container's flow_encoder component.")
         h = h.float()                                       # [1, Tmel, 512→80]
         mel_len1 = int(pmel.shape[0])
         mel_len2 = int(h.shape[1]) - mel_len1

@@ -54,7 +54,7 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
         if graph_dtype not in _GRAPH_FLOAT_NAMES:
             raise ValueError(
                 f"amp_fp32_output_dtype: under bfloat16 compute the output follows the graph dtype, and "
-                f"{graph_dtype!r} is none of {sorted(_GRAPH_FLOAT_NAMES)} — the traced graph must state it")
+                f"{graph_dtype!r} is none of {sorted(_GRAPH_FLOAT_NAMES)} — the container's graph must state it")
         return "bfloat16" if graph_dtype == "bfloat16" else "float32"
     if compute_dtype == "float16":
         if traced == "float32" and graph_dtype in _HALF_GRAPH_NAMES:

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The engine's messages speak of building containers.** A refusal or an error that named how a container was made
+  says "build" where it used another word — "its build-time value", "a container built for --mode image", "rebuild its
+  container": 77 messages reworded. No behaviour changes; a script that matched the old text of a message must follow.
+
 ### Fixed
 
 - **A served mixture-of-experts model keeps its speed after its first request.** `neurobrix serve` on a model run

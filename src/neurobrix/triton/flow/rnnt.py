@@ -170,7 +170,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
             _mp_params = nemo_mel_params(_mp)
             if _dag_frames is None:
                 raise RuntimeError(
-                    "ZERO FALLBACK: long-form RNNT needs the encoder's traced frame "
+                    "ZERO FALLBACK: long-form RNNT needs the encoder's build-time frame "
                     "span from the DAG (no 3-D encoder input found).")
             if not _mp_params.get("source"):
                 # Same hop/rate the mel was computed with (mirror of the

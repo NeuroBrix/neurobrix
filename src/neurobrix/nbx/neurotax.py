@@ -1180,6 +1180,6 @@ def refuse_non_canonical(names, container: str, component: str, what: str = "wei
         f"NEUROTAX KEYS: container '{container}', component '{component}': the {what} {name!r} is "
         f"not a NeuroTax {NEUROTAX_VERSION} name (the parser names it {should!r}) — the container was "
         f"written with an incomplete vocabulary.\n"
-        f"  FIX: rewrite it with the single-write pass (Forge `tools/neurotax_rename.py --apply`; "
+        f"  FIX: rewrite it with the container builder's single-write pass ("
         f"names move, weights never do), or install the container published for this engine.")
 

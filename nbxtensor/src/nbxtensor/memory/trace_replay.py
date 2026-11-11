@@ -48,7 +48,7 @@ def load_trace(path) -> Tuple[Dict[str, str], List[Tuple[str, int, int]]]:
         if len(parts) == 3 and parts[0] in ("M", "A", "F"):
             events.append((parts[0], int(parts[1]), int(parts[2])))
     if "card_mb" not in meta or not events:
-        raise RuntimeError(f"ZERO FALLBACK: the allocation trace {path} states no card_mb or holds no event")
+        raise RuntimeError(f"ZERO FALLBACK: the allocation record {path} states no card_mb or holds no event")
     return meta, events
 
 
@@ -88,7 +88,7 @@ def _child(trace: str, device: int, chunk: int) -> Dict[str, float]:
                        env=env)
     line = next((l for l in r.stdout.splitlines() if l.startswith(_MARK)), None)
     if r.returncode != 0 or line is None:
-        raise RuntimeError(f"the allocation-trace replay of {Path(trace).name} at chunk {chunk} failed: "
+        raise RuntimeError(f"the allocation-record replay of {Path(trace).name} at chunk {chunk} failed: "
                            f"{(r.stderr or r.stdout)[-400:]}")
     return json.loads(line[len(_MARK):])
 
@@ -97,7 +97,7 @@ def _the_trace(trace: Optional[str]) -> str:
     if trace is None:
         carried = traces()
         if len(carried) != 1:
-            raise RuntimeError(f"ZERO FALLBACK: the library carries {len(carried)} allocation traces "
+            raise RuntimeError(f"ZERO FALLBACK: the library carries {len(carried)} allocation records "
                                f"({', '.join(p.name for p in carried)}): the chunk probe names the one it replays")
         trace = str(carried[0])
     return trace

@@ -44,7 +44,7 @@ def load(cache_path: Path, comp: str) -> Optional[Dict[str, Any]]:
     if sha != decl.get("clip_graph_sha256"):
         raise StreamDeclarationError(
             f"{path}: derived from a graph of sha256 {decl.get('clip_graph_sha256')}, the component's graph.json is "
-            f"{sha} — a stale stream runs another function; re-derive it (Forge tools/derive_temporal_stream.py)")
+            f"{sha} — a stale stream runs another function; re-derive it with the container builder")
     decl["dags"] = {k: json.loads((d / name).read_text()) for k, name in decl["graphs"].items()}
     return decl
 
@@ -166,8 +166,8 @@ def load_vendor_tiling(cache_path: Path, comp: str) -> Optional[Dict[str, Any]]:
         # vendor's optional low-memory path, shipped off, is no reference — DC-AE's tiled decode drew a grid on Sana
         # 4K where the vendor's own 4K path is exact. The engine and the vendor files the Mac wrote never read one.
         raise StreamDeclarationError(f"{path}: carries 'when' ({decl['when']!r}); a vendor tiling declaration is the "
-                                     f"vendor's reference cut or does not exist — re-derive it (Forge "
-                                     f"tools/derive_temporal_stream.py)")
+                                     f"vendor's reference cut or does not exist — re-derive it with the "
+                                     f"container builder")
     return decl
 
 

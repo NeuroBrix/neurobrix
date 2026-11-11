@@ -169,8 +169,8 @@ def get_component_flag(
             f"{model_name}/{component_name}.{flag_name} = {declared!r} and the "
             f"container {where}. A shipped container carries every flag the "
             f"engine reads; this one runs differently on every machine without "
-            f"the registry. Write the flag into the container (Forge "
-            f"tools/neurotax_rename.py --apply) or rebuild it.")
+            f"the registry. Write the flag into the container with the "
+            f"container builder, or rebuild it.")
     return default if carried is _ABSENT else carried
 
 

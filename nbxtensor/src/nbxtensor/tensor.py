@@ -124,7 +124,7 @@ def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
     if ndim > MAX_NDIM:
         raise RuntimeError(
             f"NBXTensor._copy_nd: ndim={ndim} exceeds the PyTorch hard limit "
-            f"of {MAX_NDIM}. Please open an issue with the model name and trace site.")
+            f"of {MAX_NDIM}. Please open an issue with the model name and the place it was raised.")
     n = dst._numel
     if n == 0:
         return
@@ -310,7 +310,7 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
         raise RuntimeError(
             f"NBXTensor._strided_copy: ndim={ndim} exceeds the PyTorch "
             f"hard limit of {MAX_NDIM}. Please open an issue with the "
-            f"model name and trace site."
+            f"model name and the place it was raised."
         )
     n = src._numel
 

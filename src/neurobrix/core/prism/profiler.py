@@ -805,20 +805,20 @@ class ActivationProfiler:
                 if latent_t is None:
                     raise MissingRuntimeValue(
                         f"the plan's request names no frame count for symbol {sid} (time) of "
-                        f"this graph: the trace extent {trace} is a witnessed stimulus, not the request")
+                        f"this graph: the build-time extent {trace} is a witnessed stimulus, not the request")
                 symbol_map[sid] = latent_t
             elif name == "height":
                 if latent_h is None:
                     raise MissingRuntimeValue(
                         f"the plan's request names no height for symbol {sid} (height) of "
-                        f"this graph: the trace extent {trace} is a witnessed stimulus, not the "
+                        f"this graph: the build-time extent {trace} is a witnessed stimulus, not the "
                         "request (Wan T2V planned 1.74 GiB for a 35 GiB decode this way)")
                 symbol_map[sid] = latent_h
             elif name == "width":
                 if latent_w is None:
                     raise MissingRuntimeValue(
                         f"the plan's request names no width for symbol {sid} (width) of this "
-                        f"graph: the trace extent {trace} is a witnessed stimulus, not the request")
+                        f"graph: the build-time extent {trace} is a witnessed stimulus, not the request")
                 symbol_map[sid] = latent_w
             elif name in ("seq_len", "sequence_length"):
                 symbol_map[sid] = input_config.seq_len or (
@@ -879,7 +879,7 @@ class ActivationProfiler:
                 missing.append(f"{sid} '{info.get('name')}'")
         if missing:
             raise ValueError(
-                "REFUSED: this graph declares symbols with no trace value "
+                "REFUSED: this graph declares symbols with no build-time value "
                 f"({', '.join(missing)}). A partial symbol map is completed by a "
                 "positional guess downstream, and a guess is what this call "
                 "exists to avoid. Pass an explicit InputConfig.")
@@ -1698,7 +1698,7 @@ class ActivationProfiler:
         dtype = tensor_meta.get("dtype")
         if not dtype:
             raise ValueError(
-                f"Prism: a tensor of shape {list(shape)} carries no traced dtype (its meta: {sorted(tensor_meta)}); "
+                f"Prism: a tensor of shape {list(shape)} carries no dtype recorded in the graph (its meta: {sorted(tensor_meta)}); "
                 "every graph tensor is priced at its own width, never at a default")
         numel = 1
         for dim in shape:

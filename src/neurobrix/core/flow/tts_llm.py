@@ -673,8 +673,8 @@ class TTSLLMEngine(ComponentFlowHandler):
         cond_executor = self.ctx.executors.get(cond_name)
         if cond_executor is None:
             raise RuntimeError(
-                "ZERO FALLBACK: tts_llm conditioning requires a traced 'cond_enc' "
-                "component. Re-import a build that traces cond_enc."
+                "ZERO FALLBACK: tts_llm conditioning requires a 'cond_enc' "
+                "component in the container. Re-import a container built with cond_enc."
             )
         conds = self._load_default_conditioning()
         if conds is None:

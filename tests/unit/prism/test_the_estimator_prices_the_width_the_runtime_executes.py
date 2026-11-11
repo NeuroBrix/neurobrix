@@ -297,7 +297,7 @@ def test_refusals_name_what_they_refuse():
         _w(_block(), "cuda")
     g = _block()
     del g["tensors"]["r0"]["dtype"]
-    with pytest.raises(ValueError, match="no traced dtype"):
+    with pytest.raises(ValueError, match="no dtype recorded in the graph"):
         _w(g)
 
 
