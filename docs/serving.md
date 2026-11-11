@@ -315,9 +315,10 @@ The session keeps its KV cache between turns. For each `chat` request the daemon
 
 Turn *n* therefore costs a prefill of its own new tokens, not of the conversation. A prefill that continues a cache
 attends over the cached keys read back as whole cache pages, the keys past the true end masked, so the bytes do not
-depend on where a turn ended. With a planned prefill chunk (`KVCachePlan.prefill_chunk`, not chosen by Prism yet) a
-turn served from the session gives the same bytes as the same turns prefilled together in the same chunks, on both
-engines. `complete` keeps one cache record for the agent path the same way: a fixed system prompt and tools contract
+depend on where a turn ended. With a planned prefill chunk (`KVCachePlan.prefill_chunk`, chosen by Prism for a
+serving daemon) a turn served from the session gives the same bytes as the same turns prefilled together **with the
+same chunk boundaries**, on both engines — an equality between two reads cut at the same positions, which a
+continued turn and a whole re-read of its prompt do not share (the paragraph below). `complete` keeps one cache record for the agent path the same way: a fixed system prompt and tools contract
 are prefilled once.
 
 What that reuse does not promise is the same bytes as a fresh read: a prompt whose beginning is served from the kept
