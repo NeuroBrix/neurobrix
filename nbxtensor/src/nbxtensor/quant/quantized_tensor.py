@@ -98,6 +98,10 @@ class QuantizedTensor:
         return (self.qweight._nbytes + self.scales._nbytes
                 + self.qmins._nbytes)
 
+    def nbytes(self) -> int:
+        """The bytes held, as `NBXTensor.nbytes()`: a slot's value answers one call, whatever it is."""
+        return self._nbytes
+
     def numel(self) -> int:
         n, k = self.logical_shape
         return n * k

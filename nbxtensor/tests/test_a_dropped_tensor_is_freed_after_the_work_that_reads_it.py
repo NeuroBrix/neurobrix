@@ -112,3 +112,20 @@ def test_every_owning_device_is_synchronised_and_the_current_one_restored(monkey
     calls.clear()
     D.sync_devices_of([object()])
     assert calls == [("sync",)], "a batch naming no device synchronises the current one"
+
+
+def test_the_queue_takes_every_slot_value_the_hot_loop_drops_lazy_proxies_included():
+    """The hot loop drops whatever a slot held: an NBXTensor, a QuantizedTensor or a fused op's lazy proxy (a broadcast
+    clone, a residual chain). The queue sizes each by `nbytes()`; a broadcast-clone proxy had only `_nbytes` and the run
+    failed on CUDA (Sana 512 --triton, 2026-11-12). Every one now answers `nbytes()`."""
+    from nbxtensor.ops import fused_upsample_conv as F, residual_chain as R
+    from nbxtensor.quant.quantized_tensor import QuantizedTensor
+    lazy = [c for m in (F, R) for c in vars(m).values() if isinstance(c, type) and "_nbytes" in vars(c)]
+    for cls in lazy + [QuantizedTensor]:
+        assert callable(getattr(cls, "nbytes", None)), f"{cls.__name__} has _nbytes but no nbytes()"
+    proxy = F.BroadcastClonePyroxy.__new__(F.BroadcastClonePyroxy)
+    for name in F.BroadcastClonePyroxy.__slots__:
+        object.__setattr__(proxy, name, None)
+    frees = D.DeferredFrees(cliff=10 ** 12, count=10 ** 6)
+    frees.add(proxy)                                            # its _nbytes is 0 by design: it owns no storage
+    assert frees.nbytes == proxy._nbytes

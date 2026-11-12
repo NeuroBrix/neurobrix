@@ -60,6 +60,10 @@ class ChainSentinel:
     def _nbytes(self):
         return 0
 
+    def nbytes(self) -> int:
+        """The bytes held, as `NBXTensor.nbytes()`: a slot's value answers one call, whatever it is."""
+        return self._nbytes
+
     def __repr__(self):
         return f"ChainSentinel(chain_id={self.chain_id}, shape={self.shape})"
 

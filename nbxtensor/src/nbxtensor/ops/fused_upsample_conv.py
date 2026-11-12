@@ -101,6 +101,10 @@ class FusionUpsampleProxy:
     def _nbytes(self):
         return 0
 
+    def nbytes(self) -> int:
+        """The bytes held, as `NBXTensor.nbytes()`: a slot's value answers one call, whatever it is."""
+        return self._nbytes
+
     def __repr__(self):
         return (
             f"FusionUpsampleProxy(pre={tuple(self.pre_input.shape)}, "
@@ -156,6 +160,10 @@ class BroadcastClonePyroxy:
     @property
     def _nbytes(self):
         return 0
+
+    def nbytes(self) -> int:
+        """The bytes held, as `NBXTensor.nbytes()`: a slot's value answers one call, whatever it is."""
+        return self._nbytes
 
     def __repr__(self):
         return (
