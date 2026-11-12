@@ -16,7 +16,8 @@ What this test would do if the code were wrong: with experts {0, 2} on the first
 token routed to expert 1 is computed with expert 3's weights — O(1) against the fp64 oracle (case `in_table`); a token
 routed to expert 2 or 3 reads past a two-entry table (case `every_expert`). `one_device` runs the same op with every
 expert on one device — the op's own arithmetic (the routing read back, the positions mapped, the full-row outputs,
-the per-token sum) against the oracle, on a machine with one card."""
+the per-token sum) against the oracle, on a machine with one card. The last cell holds, on one card too, what the
+split stands on: a device's pairs keep their positions in the layer's routing."""
 from __future__ import annotations
 
 import numpy as np
@@ -87,3 +88,31 @@ def test_the_layer_is_the_sum_of_each_devices_share(held):
     rel = np.abs(got - ref).max() / np.abs(ref).max()
     assert rel < 2e-2, f"{held}: max rel {rel:.3e} against the oracle"
     tables.release_pins()
+
+
+def test_one_devices_pairs_keep_their_positions_in_the_layers_routing():
+    """What the split stands on, on ONE card: the pairs routed to a device's experts are aligned by expert there, and
+    the aligned ids name the pairs' positions in the LAYER's flat routing (the kernel reads a pair's score and writes
+    its row at that position); the padding is the layer's pair count, the kernel's sentinel. If the ids stayed the
+    device's own 0..n-1, a pair would read another pair's score and write another pair's row — RED here."""
+    from nbxtensor.ops.moe_multi_device import _aligned_at_flat_positions
+    from nbxtensor.ops.moe_wrappers import MOE_BLOCK_M
+    if DeviceAllocator.device_count() == 0:
+        pytest.skip("no accelerator on this machine")
+    DeviceAllocator.set_device(0)
+    DeviceAllocator.ensure_triton_device(0)
+    flat_ids = np.random.default_rng(5).integers(0, E, size=T * K_ * 4).astype(np.int64)
+    positions = np.where(np.isin(flat_ids, [1, 3]))[0]                  # this device holds experts 1 and 3
+    assert 0 < len(positions) < flat_ids.size
+    sorted_ids, block_experts, padded = _aligned_at_flat_positions(flat_ids, positions, MOE_BLOCK_M, E, 0, flat_ids.size)
+    DeviceAllocator.sync_device()
+    ids, experts = np.asarray(sorted_ids.numpy()).ravel(), np.asarray(block_experts.numpy()).ravel()
+    n_blocks = int(np.asarray(padded.numpy()).ravel()[0]) // MOE_BLOCK_M
+    seen = []
+    for b in range(n_blocks):
+        block = ids[b * MOE_BLOCK_M:(b + 1) * MOE_BLOCK_M]
+        real = block[block < flat_ids.size]
+        assert (block[block >= flat_ids.size] == flat_ids.size).all(), "the padding is the layer's pair count"
+        assert (flat_ids[real] == experts[b]).all(), f"block {b} of expert {experts[b]} names pairs of another expert"
+        seen += real.tolist()
+    assert sorted(seen) == positions.tolist(), "every pair of this device once, at its position in the layer"
