@@ -101,7 +101,7 @@ def da(monkeypatch):
 
 def _sync(dev):
     from neurobrix.core.strategies.triton.base import TritonStrategy
-    TritonStrategy.synchronize_device(None, dev)
+    TritonStrategy.synchronize_device(dev)            # the library's named wait, the strategy's own (2026-11-12)
 
 
 @pytest.mark.parametrize("dev,idx", [("cuda:1", 1), ("hip:2", 2), ("mps:0", 0), ("xpu:3", 3)])

@@ -11,7 +11,9 @@ import logging
 from typing import Dict, Optional, Any, Set
 
 from ..base import StrategyContext
-from .base import TritonStrategy, _ACCELERATOR_PREFIXES
+from nbxtensor.backend.device_names import ACCELERATOR_PREFIXES
+
+from .base import TritonStrategy
 from neurobrix.core.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
 
 
@@ -27,7 +29,7 @@ def _names_accelerator(device: str) -> bool:
     the strategy raised ZERO FALLBACK on hardware that has a GPU.
     """
     prefix, _, idx = str(device).partition(":")
-    return prefix in _ACCELERATOR_PREFIXES and idx.isdigit()
+    return prefix in ACCELERATOR_PREFIXES and idx.isdigit()
 
 logger = logging.getLogger(__name__)
 

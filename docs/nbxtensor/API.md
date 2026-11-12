@@ -3414,6 +3414,19 @@ def seeded_gaussian(seed: int, shape) -> np.ndarray   # Seeded fp32 standard-nor
 MAX_NDIM = ...   # (constant)
 ```
 
+### `nbxtensor.backend.device_names` — the names a device is known by
+
+```python
+def arch_string(model) -> str                       # "Apple M4 Pro" -> "apple-m4-pro": its device file's key
+ACCELERATOR_PREFIXES      # cuda, hip, xpu, mps, tt, musa, npu: a device name's prefixes that name an accelerator
+def accelerator_index(device) -> int | None
+    # the ordinal an accelerator's name carries ("hip:2" -> 2, "mps" -> 0); None for "cpu" or a compound placement
+def to_named_device(tensor, device)
+    # "cpu" -> to_cpu(), an accelerator -> to_cuda(ordinal), any other name -> the tensor itself
+def synchronize_named(device=None) -> None
+    # wait for the named device (the current one when none is named); the current device restored, even on a raise
+```
+
 ### `nbxtensor.backend.device_files` — the library's device files (API.md section 11)
 
 ```python

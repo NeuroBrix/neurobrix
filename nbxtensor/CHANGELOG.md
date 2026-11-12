@@ -124,6 +124,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `inspection.values_at(t, positions)`: a few values of a tensor at row-major positions, each element read alone after
   a device synchronisation (a view read in its logical order, never its storage's). The engine's sequential value
   sampler walked the strides and copied each element itself.
+- `backend.device_names.ACCELERATOR_PREFIXES`, `accelerator_index(device)`, `to_named_device(tensor, device)` and
+  `synchronize_named(device)`: a device name ("cuda:1", "hip:0", "mps:0", "cpu") read once for every backend, a tensor
+  moved to the device it names, the named device waited for with the current device restored. The engine's Triton
+  strategies and its parked values each read device names themselves.
 
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).

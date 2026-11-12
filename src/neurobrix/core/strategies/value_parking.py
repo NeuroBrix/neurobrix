@@ -2,16 +2,12 @@
 `Partition.swapped` (`LayerStreamingStrategy._run_pieces`, Prism's `LayerPartitioner._greedy_swapped`).
 
 Both engines, by what the tensor offers: an NBXTensor moves with `to_cpu(pinned=True)` / `to_cuda(index)` (the
-pinned host buffer is what an upload reads fastest), a torch tensor with `.to(device)`. No import of either (R33),
-no conversion between them; anything that is not a tensor (a dict of inputs, a scalar) passes through unchanged."""
+pinned host buffer is what an upload reads fastest), a torch tensor with `.to(device)`. No import of either tensor class
+(R33), no conversion between them; anything that is not a tensor (a dict of inputs, a scalar) passes through
+unchanged. A device name is read by nbxtensor's `accelerator_index`."""
 from __future__ import annotations
 
 from typing import Any, Optional
-
-
-def _index(device: Optional[str]) -> int:
-    text = str(device or "")
-    return int(text.split(":", 1)[1]) if ":" in text else 0
 
 
 def to_host(value: Any) -> Any:
@@ -31,10 +27,12 @@ def to_host(value: Any) -> Any:
 
 def to_device(value: Any, device: Optional[str]) -> Any:
     """`value` on `device` (the piece's executor's), itself when it already is there or is no tensor."""
-    if device is None or not str(device).startswith(("cuda", "mps", "xpu", "hip")):
+    from nbxtensor.backend.device_names import accelerator_index      # the one reading of a device name
+    index = accelerator_index(device)
+    if index is None:
         return value
     if hasattr(value, "to_cuda") and hasattr(value, "is_cuda"):          # NBXTensor
-        return value if value.is_cuda else value.to_cuda(_index(device))
+        return value if value.is_cuda else value.to_cuda(index)
     if hasattr(value, "is_cuda") and hasattr(value, "to"):              # torch.Tensor
         if str(getattr(value, "device", "")) == str(device):
             return value
