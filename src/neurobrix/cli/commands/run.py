@@ -554,13 +554,6 @@ def cmd_run(args):
             log.error("Error: --model is required when no daemon is running.")
             sys.exit(1)
 
-    # Agent mode: the orchestration loop above inference has its own
-    # daemon-first wiring (neurobrix.agent is engine-blind; adapters live
-    # in cli/commands/agent.py).
-    if getattr(args, "mode", None) == "agent":
-        from neurobrix.cli.commands.agent import run_agent_mode
-        sys.exit(run_agent_mode(args))
-
     # A session of turns is played here, through the engine's own session code (never by a daemon's generate)
     turns = load_turns(args)
 

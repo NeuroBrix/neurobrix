@@ -91,14 +91,7 @@ neurobrix run [options]
 | `--num-frames` `NUM_FRAMES` | — | Number of frames to generate (video) |
 | `--fps` `FPS` | — | Output frame rate (video) |
 | `--system` `SYSTEM` | — | System prompt for chat-style models (llm, vlm, audio_llm) |
-| `--mode` `{auto,text,chat,agent,image,audio,video,t2i,img2img,inpainting,t2v,i2v,v2v}` | — | Execution mode. Required for multimodal (text\|image). Auto-deduced for other families from inputs provided. |
-| `--workdir` `WORKDIR` | — | Agent workdir jail (default: current directory) |
-| `--max-turns` `MAX_TURNS` | — | Agent loop turn bound (default from family YAML) |
-| `--bash-timeout` `BASH_TIMEOUT` | — | Agent bash timeout in seconds (default from family YAML) |
-| `--allow-network` | off | Allow network inside the agent sandbox (off by default) |
-| `--approve-all` | off | Confirm every agent tool execution interactively |
-| `--yolo` | off | No confirmations (jail still enforced) |
-| `--transcript-dir` `TRANSCRIPT_DIR` | — | Agent transcript directory (default: &lt;workdir&gt;/.nbx_agent/&lt;ts&gt;) |
+| `--mode` `{auto,text,chat,image,audio,video,t2i,img2img,inpainting,t2v,i2v,v2v}` | — | Execution mode. Required for multimodal (text\|image). Auto-deduced for other families from inputs provided. |
 | `--chat` | — | Force chat template formatting |
 | `--no-chat` | off | Force raw text completion |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
@@ -302,14 +295,6 @@ neurobrix chat [options]
 | `--max-tokens` `MAX_TOKENS` | — | Max tokens per response (default: from model config) |
 | `--temperature` `TEMPERATURE` | — | Sampling temperature |
 | `--repetition-penalty` `REPETITION_PENALTY` | — | Repetition penalty (1.0 = none) |
-| `--agent` | off | Agent REPL: each input is a task the model completes with tools inside the workdir jail |
-| `--workdir` `WORKDIR` | — | Agent workdir jail (default: current directory) |
-| `--max-turns` `MAX_TURNS` | — | Agent loop turn bound (default from family YAML) |
-| `--bash-timeout` `BASH_TIMEOUT` | — | Agent bash timeout in seconds (default from family YAML) |
-| `--allow-network` | off | Allow network inside the agent sandbox (off by default) |
-| `--approve-all` | off | Confirm every agent tool execution interactively |
-| `--yolo` | off | No confirmations (jail still enforced) |
-| `--transcript-dir` `TRANSCRIPT_DIR` | — | Agent transcript directory (default: &lt;workdir&gt;/.nbx_agent/&lt;ts&gt;) |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
 
 ```text
@@ -448,14 +433,7 @@ neurobrix calibrate [options]
 | `--num-frames` `NUM_FRAMES` | — | Number of frames to generate (video) |
 | `--fps` `FPS` | — | Output frame rate (video) |
 | `--system` `SYSTEM` | — | System prompt for chat-style models (llm, vlm, audio_llm) |
-| `--mode` `{auto,text,chat,agent,image,audio,video,t2i,img2img,inpainting,t2v,i2v,v2v}` | — | Execution mode. Required for multimodal (text\|image). Auto-deduced for other families from inputs provided. |
-| `--workdir` `WORKDIR` | — | Agent workdir jail (default: current directory) |
-| `--max-turns` `MAX_TURNS` | — | Agent loop turn bound (default from family YAML) |
-| `--bash-timeout` `BASH_TIMEOUT` | — | Agent bash timeout in seconds (default from family YAML) |
-| `--allow-network` | off | Allow network inside the agent sandbox (off by default) |
-| `--approve-all` | off | Confirm every agent tool execution interactively |
-| `--yolo` | off | No confirmations (jail still enforced) |
-| `--transcript-dir` `TRANSCRIPT_DIR` | — | Agent transcript directory (default: &lt;workdir&gt;/.nbx_agent/&lt;ts&gt;) |
+| `--mode` `{auto,text,chat,image,audio,video,t2i,img2img,inpainting,t2v,i2v,v2v}` | — | Execution mode. Required for multimodal (text\|image). Auto-deduced for other families from inputs provided. |
 | `--chat` | — | Force chat template formatting |
 | `--no-chat` | off | Force raw text completion |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
@@ -585,14 +563,7 @@ neurobrix drift [options]
 | `--num-frames` `NUM_FRAMES` | — | Number of frames to generate (video) |
 | `--fps` `FPS` | — | Output frame rate (video) |
 | `--system` `SYSTEM` | — | System prompt for chat-style models (llm, vlm, audio_llm) |
-| `--mode` `{auto,text,chat,agent,image,audio,video,t2i,img2img,inpainting,t2v,i2v,v2v}` | — | Execution mode. Required for multimodal (text\|image). Auto-deduced for other families from inputs provided. |
-| `--workdir` `WORKDIR` | — | Agent workdir jail (default: current directory) |
-| `--max-turns` `MAX_TURNS` | — | Agent loop turn bound (default from family YAML) |
-| `--bash-timeout` `BASH_TIMEOUT` | — | Agent bash timeout in seconds (default from family YAML) |
-| `--allow-network` | off | Allow network inside the agent sandbox (off by default) |
-| `--approve-all` | off | Confirm every agent tool execution interactively |
-| `--yolo` | off | No confirmations (jail still enforced) |
-| `--transcript-dir` `TRANSCRIPT_DIR` | — | Agent transcript directory (default: &lt;workdir&gt;/.nbx_agent/&lt;ts&gt;) |
+| `--mode` `{auto,text,chat,image,audio,video,t2i,img2img,inpainting,t2v,i2v,v2v}` | — | Execution mode. Required for multimodal (text\|image). Auto-deduced for other families from inputs provided. |
 | `--chat` | — | Force chat template formatting |
 | `--no-chat` | off | Force raw text completion |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |

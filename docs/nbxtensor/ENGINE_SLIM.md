@@ -420,7 +420,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/core/runtime/prompt_length.py | ContextLengthExceeded | the refusal BY CLASS of a prompt past the reach (`refuse_past_reach`, the one check): the serving door answers it 400 context_length_exceeded (OpenAI's code) before it runs, any other engine failure a 500; `neurobrix run` says it in one line as the ValueError it is (2026-11-10; run, 2026-11-12) |
 | wrapper | src/neurobrix/kernels/census.py | install(hardware_profile) | the tests install the census for a profile they name (tests/unit/kernels/test_a_one_row_convolution_keys_its_width_on_the_ladder) |
 | wrapper | src/neurobrix/kernels/census_table.py | rows_for(root) | the tests read a table under a temporary root (tests/unit/kernels/test_the_census_is_one_table) |
-| wrapper | src/neurobrix/agent/sandbox.py | SandboxViolation | a named refusal: the agent tells a sandbox refusal from a tool's own failure (exported by neurobrix.agent) |
 | wrapper | src/neurobrix/core/workspace.py | SnapshotNotPresent | a named refusal: a missing snapshot, told apart from any other error by its callers |
 | fact | src/neurobrix/core/runtime/graph/compiled_sequence.py | _parse_dtype | returns a torch.dtype with the sequence's Prism remap (compute_dtype); nbxtensor's parse_dtype returns an NBXDtype — two types |
 | fact | src/neurobrix/core/runtime/precision_contract.py | kind | a different function under the same name: the precision class of an op (precision / casting / passthrough), not a dtype's kind |
@@ -461,7 +460,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/cli/commands/registry.py | download_resumable(chunk_size) | a test seam: the download tests pass small chunks to exercise resumption without megabytes |
 | wrapper | src/neurobrix/nbx/atomic_install.py | installing(allow_break) | the one deliberate opening of the install lock (a lock held by another host broken on purpose), named in the refusal a user reads |
 | wrapper | src/neurobrix/nbx/cache.py | extract(allow_replace) | the deliberate opening a refusal names (`extract(..., allow_replace=True)`, or its env): replacing a live model is said, never silent |
-| wrapper | src/neurobrix/cli/commands/agent.py | complete_fn | two closures returned as one callback (daemon client, cold engine): the agent loop calls whichever the launch chose |
 | wrapper | src/neurobrix/cli/commands/registry.py | _strip_build_stamp | a named rule (the build stamp a comparison ignores), pinned by its test |
 | wrapper | src/neurobrix/cli/commands/run.py | _rt | the one door for every runtime dimension (request -> container defaults -> family config -> refusal), 8 callers |
 | wrapper | src/neurobrix/cli/json_out.py | close | the writer's close of the JSON-lines protocol its callers hold |

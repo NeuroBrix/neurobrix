@@ -103,26 +103,10 @@ def _add_run_arguments(p):
     p.add_argument('--system', default=None,
                             help='System prompt for chat-style models (llm, vlm, audio_llm)')
     p.add_argument('--mode', default=None,
-                            choices=['auto', 'text', 'chat', 'agent', 'image', 'audio', 'video',
+                            choices=['auto', 'text', 'chat', 'image', 'audio', 'video',
                                      't2i', 'img2img', 'inpainting', 't2v', 'i2v', 'v2v'],
                             help='Execution mode. Required for multimodal (text|image). '
                                  'Auto-deduced for other families from inputs provided.')
-
-    # Agent-mode flags (run --mode agent); sandbox policy per the P-AGENTIC scoping
-    p.add_argument('--workdir', default=None,
-                            help='Agent workdir jail (default: current directory)')
-    p.add_argument('--max-turns', type=int, default=None, dest='max_turns',
-                            help='Agent loop turn bound (default from family YAML)')
-    p.add_argument('--bash-timeout', type=int, default=None, dest='bash_timeout',
-                            help='Agent bash timeout in seconds (default from family YAML)')
-    p.add_argument('--allow-network', action='store_true', dest='allow_network',
-                            help='Allow network inside the agent sandbox (off by default)')
-    p.add_argument('--approve-all', action='store_true', dest='approve_all',
-                            help='Confirm every agent tool execution interactively')
-    p.add_argument('--yolo', action='store_true',
-                            help='No confirmations (jail still enforced)')
-    p.add_argument('--transcript-dir', default=None, dest='transcript_dir',
-                            help='Agent transcript directory (default: <workdir>/.nbx_agent/<ts>)')
 
     chat_group = p.add_mutually_exclusive_group()
     chat_group.add_argument('--chat', action='store_true', default=None, dest='chat_mode',
@@ -499,23 +483,6 @@ Slash commands (inside chat):
     chat_parser.add_argument('--repetition-penalty', type=float, default=None,
                              dest='repetition_penalty',
                              help='Repetition penalty (1.0 = none)')
-    chat_parser.add_argument('--agent', action='store_true',
-                             help='Agent REPL: each input is a task the model '
-                                  'completes with tools inside the workdir jail')
-    chat_parser.add_argument('--workdir', default=None,
-                             help='Agent workdir jail (default: current directory)')
-    chat_parser.add_argument('--max-turns', type=int, default=None, dest='max_turns',
-                             help='Agent loop turn bound (default from family YAML)')
-    chat_parser.add_argument('--bash-timeout', type=int, default=None, dest='bash_timeout',
-                             help='Agent bash timeout in seconds (default from family YAML)')
-    chat_parser.add_argument('--allow-network', action='store_true', dest='allow_network',
-                             help='Allow network inside the agent sandbox (off by default)')
-    chat_parser.add_argument('--approve-all', action='store_true', dest='approve_all',
-                             help='Confirm every agent tool execution interactively')
-    chat_parser.add_argument('--yolo', action='store_true',
-                             help='No confirmations (jail still enforced)')
-    chat_parser.add_argument('--transcript-dir', default=None, dest='transcript_dir',
-                             help='Agent transcript directory (default: <workdir>/.nbx_agent/<ts>)')
 
     # ========================================
     # STOP command

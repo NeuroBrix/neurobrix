@@ -87,9 +87,8 @@ user message, and the full answer is printed when it is complete (chat answers a
 End-of-file or Ctrl-C also leaves chat. A turn past the session's ceiling is refused by name (see
 [When the conversation outgrows the cache](#when-the-conversation-outgrows-the-cache)).
 
-`chat --agent` starts the agent loop over the same daemon instead (each input is a task the model completes with tools
-inside a working-directory jail). Its flags are `--workdir`, `--max-turns`, `--bash-timeout`, `--allow-network`,
-`--approve-all`, `--yolo` and `--transcript-dir`; see the [CLI reference](reference/cli.md#chat).
+A coding agent that works in a project with tools is not part of the engine: it will be its own project, NBX Code,
+which speaks to `neurobrix serve` through the OpenAI-compatible API (forced tool calls are honoured there).
 
 ### `neurobrix stop`
 

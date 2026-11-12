@@ -23,12 +23,6 @@ def cmd_chat(args):
     """Interactive chat REPL connected to serving daemon."""
     from neurobrix.serving.client import DaemonClient
 
-    if getattr(args, "agent", False):
-        from neurobrix.cli.commands.agent import agent_defaults, cmd_agent_repl
-
-        cmd_agent_repl(args, agent_defaults())
-        return
-
     # Check daemon is running
     if not DaemonClient.is_running():
         log.error("Error: no daemon is running; start one first: neurobrix serve --model <name>")

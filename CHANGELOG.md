@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The terminal coding agent (`neurobrix chat --agent`, `neurobrix run --mode agent`) leaves the engine**, with its
+  flags (`--workdir`, `--max-turns`, `--bash-timeout`, `--allow-network`, `--approve-all`, `--yolo`,
+  `--transcript-dir`). Coding agents will be their own project (NBX Code, on the roadmap), speaking to
+  `neurobrix serve` through the OpenAI-compatible API, where forced tool calls stay honoured.
+
 ### Fixed
 
 - **`neurobrix run` refuses by name a prompt longer than the model's context**, before anything loads, with the
