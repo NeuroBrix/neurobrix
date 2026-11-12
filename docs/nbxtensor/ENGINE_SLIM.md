@@ -335,6 +335,13 @@ Code lines measured: 84 321 (main f816ec0fd, the replay's move landed) to 83 863
 | core/runtime/expert_residency.py | +2 | `resident()`: who sits where, least recently routed first — what the library's store reads in place of the residency's private map |
 | core/strategies/expert_store.py, kernels/autotune_certify.py | 0, 0 | the held blocks built from the library's `HeldExperts`; the certifier aligns through the library's launcher at the library's own row block |
 
+0.6.11 (2026-11-12): a census file the package should carry is never read as an empty table — 0.6.10 shipped
+without its census tables and Prism planned as if no model had a certified chunk, in silence. Policy, so in the
+engine: which census a hardware has (`census_table.census_declared`, read from the certified directory the package
+ships), the named refusal of a missing file (`_required`), and Prism's three cases (no census for this hardware or
+memory class: said; a certified hardware with no census file at all: a broken install, refused by name). 83 465 to
+83 479, +14 (measured): kernels/census_table.py +9, core/prism/prefill_chunk.py +5.
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
