@@ -64,6 +64,13 @@ def judge_conversation(on: list, off: list) -> tuple:
     return "GREEN", f"the {len(on)} turns of the conversation equal the replay-off oracle's"
 
 
+def spoken(part: dict) -> str:
+    """What a chat message or a stream delta says: its reasoning (`reasoning_content`, a thinking model's text between
+    its markers) then its answer (`content`). A thinking model's first tokens are all reasoning: counted as `content`
+    alone, Qwen3-30B-A3B-Thinking answered "0 chunks, no text to time" (2026-11-12)."""
+    return (part.get("reasoning_content") or "") + (part.get("content") or "")
+
+
 def converse(port: int, model: str, max_tokens: int, budget: float) -> list:
     """The conversation's answers, turn by turn (greedy, not streamed); a failed turn ends it."""
     msgs, texts = [{"role": "user", "content": PROMPT}], []
@@ -73,12 +80,14 @@ def converse(port: int, model: str, max_tokens: int, budget: float) -> list:
                                      headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=budget) as resp:
-                text = json.loads(resp.read())["choices"][0]["message"]["content"] or ""
+                message = json.loads(resp.read())["choices"][0]["message"]
+                text = spoken(message)
         except Exception:                                      # noqa: BLE001 — the judgment names the short turn
             return texts
         texts.append(text)
         if i < len(FOLLOW_UPS):
-            msgs = msgs + [{"role": "assistant", "content": text}, {"role": "user", "content": FOLLOW_UPS[i]}]
+            msgs = msgs + [{"role": "assistant", "content": message.get("content") or ""},
+                           {"role": "user", "content": FOLLOW_UPS[i]}]
     return texts
 
 
@@ -112,8 +121,7 @@ def ask(port: int, model: str, max_tokens: int, budget: float) -> dict:
                 line = raw.decode().strip()
                 if not line.startswith("data:") or line[5:].strip() == "[DONE]":
                     continue
-                piece = "".join((c.get("delta") or {}).get("content") or ""
-                                for c in json.loads(line[5:]).get("choices") or [])
+                piece = "".join(spoken(c.get("delta") or {}) for c in json.loads(line[5:]).get("choices") or [])
                 if piece:
                     times.append(time.time() - t0)
                     text += piece
