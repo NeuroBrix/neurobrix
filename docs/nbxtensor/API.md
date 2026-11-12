@@ -276,6 +276,8 @@ def arena_layout(sizes: Iterable[int], alignment: int=ARENA_ALIGNMENT)
 ```python
 def release_flow_memory(device=None)
     # Release what a finished stage held: synchronise the devices named, collect garbage (finalizers free), give the pool's cached blocks back to the driver.
+def break_aliases(tensors, freed) -> int
+    # Before the entries of `tensors` (list or dict) at `freed` are freed: every other entry viewing one of their allocations replaced by its contiguous(); the count.
 class ComponentArena
     # Single contiguous GPU memory block for one component's weights.
 class HostPinnedArena

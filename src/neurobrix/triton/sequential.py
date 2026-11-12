@@ -455,24 +455,5 @@ class SequentialWeightView:
     def materialize_slots_depending_on(self, weight_slot_ids) -> int:
         """Copy out every live store entry that views one of the weights about to be
         evicted (mirror of TritonSequence.materialize_slots_depending_on)."""
-        store = self.store
-        roots = set()
-        for tid in weight_slot_ids:
-            t = store.get(tid)
-            if t is not None:
-                roots.add(id(getattr(t, '_base', None) or t))
-        if not roots:
-            return 0
-        evicted = set(weight_slot_ids)
-        n = 0
-        for tid, t in list(store.items()):
-            if tid in evicted or t is None:
-                continue
-            node = getattr(t, '_base', None)
-            while node is not None and id(node) not in roots:
-                node = getattr(node, '_base', None)
-            if node is None:
-                continue
-            store[tid] = t.contiguous()
-            n += 1
-        return n
+        from nbxtensor.memory.memory_pool import break_aliases
+        return break_aliases(self.store, weight_slot_ids)

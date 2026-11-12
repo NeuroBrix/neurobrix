@@ -46,6 +46,29 @@ def release_flow_memory(device=None) -> None:
     DeviceAllocator.empty_cache_pool()
 
 
+def break_aliases(tensors, freed) -> int:
+    """Before the tensors of `tensors` (a list or a dict) at the keys `freed` are freed, replace every other entry that
+    is a view of one of their allocations (its view chain's root is one of theirs: `NBXTensor.storage_root`) by its
+    `contiguous()`; returns how many entries were replaced. None entries, non-tensors and tensors that view nothing are
+    left alone. Known limit, kept from the engine's two copies it replaces: a view that is already contiguous is its own
+    `contiguous()`, so it still reads the freed memory."""
+    from nbxtensor.tensor import NBXTensor
+    freed = set(freed)
+    get = tensors.get if isinstance(tensors, dict) else tensors.__getitem__
+    roots = {id(t.storage_root()) for t in map(get, freed) if isinstance(t, NBXTensor)}
+    if not roots:
+        return 0
+    copied = 0
+    for key, t in list(tensors.items() if isinstance(tensors, dict) else enumerate(tensors)):
+        if key in freed or not isinstance(t, NBXTensor):
+            continue
+        root = t.storage_root()
+        if root is not t and id(root) in roots:
+            tensors[key] = t.contiguous()
+            copied += 1
+    return copied
+
+
 class ComponentArena:
     """Single contiguous GPU memory block for one component's weights.
 

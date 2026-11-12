@@ -51,14 +51,17 @@ def test_a_rebind_lands_in_the_pass_store():
     assert view.mark_cpu_weighted_ops_for_transfer(0) == 0
 
 
-def test_a_view_of_an_evicted_weight_is_copied_out():
+def test_a_view_of_an_evicted_weight_is_copied_out(needs_device):
+    import numpy as np
+    from nbxtensor.tensor import NBXTensor
     view = SequentialWeightView(*_graph())
-    w = _T("cuda")
-    alias = _T("cuda", base=w)
-    store = {"param::model.layers.0.q.weight": w, "t1": alias, "t2": _T("cuda")}
+    w = NBXTensor.from_numpy(np.arange(6, dtype=np.float32).reshape(2, 3))
+    alias = w.t()
+    other = NBXTensor.from_numpy(np.ones((2, 2), np.float32))
+    store = {"param::model.layers.0.q.weight": w, "t1": alias, "t2": other}
     view.bind_store(store)
     assert view.materialize_slots_depending_on(["param::model.layers.0.q.weight"]) == 1
-    assert store["t1"] is not alias and store["t1"]._base is None
+    assert store["t1"] is not alias and store["t1"].storage_root() is store["t1"] and store["t2"] is other
 
 
 def test_zero3_finds_the_view_when_no_sequence_exists():

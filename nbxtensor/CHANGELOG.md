@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values read on the host for a diagnostic (a non-finite scan, the record a per-op value dump keeps, the last
   position's row, a digest of the bytes in row-major order). The engine's NaN scan, value dumps and op fingerprints
   call them instead of their own device-to-host copies.
+- `memory.memory_pool.break_aliases(tensors, freed)`: before the tensors at `freed` (keys of a list or a dict) are
+  freed, every other entry viewing one of their allocations is replaced by its `contiguous()`. The engine's weight
+  eviction called its own two copies of it. Known limit, kept from them: a view that is already contiguous is its own
+  `contiguous()` and still reads the freed memory.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's
