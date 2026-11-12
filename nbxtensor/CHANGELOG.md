@@ -47,6 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory.pages.MetalStateFence`: the release fence of the Triton kernels' queue on Metal (`record`, `completed`,
   `drain(pool)`), for the day launches stop waiting for their kernel; not in use today. It was the engine's
   `triton/state_fence.py`, which nothing called.
+- `memory.expert_slots.ExpertSlotStore(residency, device_idx, like, in_place=False)`: the device slots of a
+  mixture-of-experts component whose experts stay on the host — one arena carved into aligned views, the misses copied
+  into their slots on the store's own stream (`acquire`, `prefetch`), the experts of a unified device bound in place,
+  and for one decode token the residency kept on the card (`enable_device_decode`, `decode_on_card`: its slot map,
+  stamps and clock, the assign and miss-copy kernels' launches). Which expert sits in which slot stays the caller's: a
+  `residency` object answering a small written protocol. The engine carried all of this in its own store.
+- `memory.expert_slots.HeldExperts(device_idx, layers)`: every expert of whole layers copied once into one arena on
+  another device.
 - `ops.moe_wrappers.moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx, pairs=None)`: a routed
   layer's (token, expert) pairs sorted by expert and padded to the kernel's row block, on the device — the launcher of
   the three `ops.moe_align` stages, which the engine carried. `MOE_BLOCK_M` names the block to align by.
@@ -59,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
+- The slot store reads the card's clock at the size of the word it reads into, no byte count written in the code.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's
