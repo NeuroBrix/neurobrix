@@ -15,37 +15,39 @@ wrong or empty; and the server's tool-call formats, chat templates and error sta
 ### Added
 
 - **Two more tool-call formats in the server: GLM's and Mistral's.** A model whose chat template writes
-  `<tool_call>NAME<arg_key>…</arg_key><arg_value>…</arg_value></tool_call>` (GLM-4.7-Flash) or `[TOOL_CALLS]NAME[ARGS]{…}`
-  (Devstral Small 2) now has its calls returned as `tool_calls`, streamed or not. Each format is read from the
-  template's own markers, as before. A forced call (`tool_choice: "required"` or a named function) is written in the
-  form the parser reads back. Mistral's `[ARGS]` is a special token in its tokenizer, and the decode keeps it. A call that does not read as one is kept in `content`, whole. Tested against each vendor's own
+  `<tool_call>NAME<arg_key>…</arg_key><arg_value>…</arg_value></tool_call>` (GLM-4.7-Flash) or
+  `[TOOL_CALLS]NAME[ARGS]{…}` (Devstral Small 2) now has its calls returned as `tool_calls`, streamed or not. Each
+  format is read from the template's own markers, as before. A forced call (`tool_choice: "required"` or a named
+  function) is written in the form the parser reads back. Mistral's `[ARGS]` is a special token in its tokenizer, and
+  the decode keeps it. A call that does not read as one is kept in `content`, whole. Tested against each vendor's own
   template: a call it writes reads back the same. After a thinking model's reasoning, a forced call or a JSON answer
   now starts with what the model's own template writes there (nothing for GLM-4.7-Flash; the two new lines of Qwen3's
-  templates, as before), read from the template, not fixed. The models themselves join the catalogue when they are captured.
+  templates, as before), read from the template, not fixed. The models themselves join the catalogue when their
+  containers are built.
 
 ### Fixed
 
-- **A streamed request that fails before its first token answers with its own status.** The OpenAI-compatible
-  server sent its `200` and the event stream's headers before running the request, so a failure before the first
-  token reached the client as an error event inside a `200` ("refused (200)"). The stream now opens with its first
-  event; an earlier failure is a plain JSON error with its status (`500` for an engine failure). An error after
-  tokens have streamed is still an event in the stream, as the protocol requires.
+- **A streamed request that fails before its first token answers with its own status.** The OpenAI-compatible server
+  sent its `200` and the event stream's headers before running the request, so a failure before the first token
+  reached the client as an error event inside a `200` ("refused (200)"). The stream now opens with its first event; an
+  earlier failure is a plain JSON error with its status (`500` for an engine failure). An error after tokens have
+  streamed is still an event in the stream, as the protocol requires.
 - **A served mixture-of-experts model answers a conversation's later turns right.** When its experts stream from host
-  memory (one card too small to hold them all, e.g. Qwen3-Coder-30B-A3B on one V100-32GB), a turn that brought more
+  memory (one card too small to hold them all, e.g. Qwen3-Coder-30B-A3B on one 32 GB card), a turn that brought more
   than one new token could read some layers' experts from slots the previous answer had refilled with others: from
   about the third request of a session the answers came back empty, cut short or wrong. The server now sees every
   change the decode made to the card's experts before a turn is read. Measured on a five-turn conversation: the
   answers are byte-identical to the same server run without its fast decode path.
-- **A chat template renders the prompt its model was trained on.** The engine's template renderer wrote every
-  `tojson` value HTML-escaped (`if a < b` for `if a < b`, `é` for `é`) and with its keys sorted, so a
-  request's tool schemas and past calls reached the model reordered and escaped. A template that passes
-  `ensure_ascii=False` to `tojson` (GLM-4.7-Flash's, for a past call's number or list) stopped with a `TypeError`,
-  and `{% break %}` / `{% continue %}` were not tags. Templates now render in the environment their vendor's reference
-  uses: `tojson` as `json.dumps`, the keys in the order the request gave them, loop controls on. The renderer is now
-  sandboxed: a template is data inside a container, and it can no longer reach Python objects. Measured on the
-  catalogue's 17 chat templates over one conversation with tools: 8 render differently, and none fails; with no
-  tools, all 17 render byte-identically. The new environment with the old filter put back gives the old text
-  exactly, in all 34 renders, so the filter is the only difference.
+- **A chat template renders the prompt its model was trained on.** The engine's template renderer wrote every `tojson`
+  value HTML-escaped (`if a \u003c b` for `if a < b`, `\u00e9` for `é`) and with its keys sorted, so a request's tool
+  schemas and past calls reached the model reordered and escaped. A template that passes `ensure_ascii=False` to
+  `tojson` (GLM-4.7-Flash's, for a past call's number or list) stopped with a `TypeError`, and `{% break %}` / `{%
+  continue %}` were not tags. Templates now render in the environment their vendor's reference uses: `tojson` as
+  `json.dumps`, the keys in the order the request gave them, loop controls on. The renderer is now sandboxed: a
+  template is data inside a container, and it can no longer reach Python objects. Measured on the catalogue's 17 chat
+  templates over one conversation with tools: 8 render differently, and none fails; with no tools, all 17 render
+  byte-identically. The new environment with the old filter put back gives the old text exactly, in all 34 renders, so
+  the filter is the only difference.
 
 ## [0.6.8] - 2026-11-11
 
