@@ -33,6 +33,7 @@ from nbxtensor.backend.runtime import invalidate_current_device_cache
 from neurobrix.core.prism.memory_budget import deferred_drain_policy
 
 from nbxtensor.memory.arena import Arena
+from nbxtensor.memory.deferred_frees import DeferredFrees
 from nbxtensor.memory.memory_pool import break_aliases
 from .symbols import SymbolResolver, impossible_extent_context
 from .dtype import TritonDtypeEngine
@@ -42,22 +43,13 @@ _log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------
-# Periodic _deferred drain — Route A (April 2026)
+# The deferred drain's policy — Route A (April 2026)
 # ----------------------------------------------------------------------------
-# The hot loops in _run_single_device / _run_multi_device push any tensor
-# evicted from an arena slot (output overwrite + kill_slot) onto a local
-# `_deferred` list. Until April 2026 that list was drained exactly once
-# per run(), after a device sync. On a DiT with ~5600 ops per forward
-# pass (PixArt-Sigma 28 layers × ~200 ops/layer, CFG batch=2), `_deferred`
-# grew to ~950 live tensors × ~40 MB avg = 30 GB — on a V100 32 GB that
-# hit OOM inside the transformer, not because anything leaked but because
-# the peak concurrency was bounded only by the run's total allocation
-# volume.
-#
-# Fix: drain `_deferred` the moment it crosses a bytes threshold. The drain
-# uses `sync_device()` before clearing the list (cudaFree is synchronous and
-# releasing while a kernel is still reading would UAF), so correctness is
-# identical to the end-of-run drain — we just do it more often.
+# The hot loops keep every tensor evicted from an arena slot (output overwrite + kill_slot) in nbxtensor's
+# `DeferredFrees` (memory/deferred_frees.py), released in batches after the devices that may still read them
+# synchronise. Released once per run, the batch grew to ~950 tensors x ~40 MB = 30 GB on PixArt-Sigma (5600 ops a
+# forward, CFG batch 2) and ran a V100 32 GB out of memory: it is released at a bytes cliff. Its thresholds are this
+# engine's policy, below.
 #
 # Pressure-sensitive policy (audit #2 F1, P-TRITON-LIVE-SET): a flat 2 GB cap
 # let the deferred queue carry up to ~2 GB of dead tensors above the compiled
@@ -289,36 +281,6 @@ def _deferred_drain_context(exc, deferred_bytes: int, drain_cliff: int,
            f"{drain_cliff / mb:,.0f} MB priced for it ({whose}): "
            + ("the queue stayed inside its price, so the plan under-priced this op's live set"
               if within else "the queue overran its price"))
-
-
-def _sync_deferred_all_devices(deferred) -> None:
-    """Sync EVERY device that owns a tensor in the deferred batch before
-    clear() lets the finalizers cudaFree.
-
-    `sync_device()` alone syncs only the CURRENT device; on a
-    block-scatter placement the batch holds pointers from several GPUs,
-    and freeing a cuda:N pointer while cuda:N's stream is still reading
-    it is the documented multi-GPU illegal-access class (see the
-    allocator's malloc_cuda doctrine note; the compiled MemoryManager
-    contract already syncs every holding device — R30 symmetry). Proven
-    on the Qwen3-Omni audio triton leg: deterministic error-700 poison
-    at step-2 entry on cuda:3, gone under CUDA_LAUNCH_BLOCKING, ledger
-    clean — a cross-device drain race, not an allocator bug."""
-    devs = set()
-    for t in deferred:
-        d = getattr(t, "_device_idx", None)
-        if d is not None:
-            devs.add(int(d))
-    if not devs:
-        DeviceAllocator.sync_device()
-        return
-    prev = DeviceAllocator.get_device()
-    try:
-        for d in sorted(devs):
-            DeviceAllocator.set_device(d)
-            DeviceAllocator.sync_device()
-    finally:
-        DeviceAllocator.set_device(prev)
 
 
 @dataclass
@@ -3112,52 +3074,6 @@ class TritonSequence(SequenceSteps):
             self._symbol_resolver.bind_from_inputs(
                 inputs, self._input_ids, self.dag.get("tensors", {}))
 
-    def _ensure_oom_reclaim_hook(self) -> None:
-        """Register (once per instance) a reclaimer that drains this
-        sequence's CURRENT deferred dead-tensor queue (`self._oom_deferred_queue`,
-        rebound at the start of each run by both hot loops). Its one caller is
-        `wrappers._autotune_headroom_guard`, for the Triton autotuner's
-        benchmark buffer — the one device allocation the plan does not price.
-        `DeviceAllocator.malloc_cuda` no longer calls it (2026-10-11): Prism
-        prices the queue (`PrismSolver._deferred_drain_mb`) and a refused
-        malloc is raised, named by the hot loop (`_deferred_drain_context`).
-        The drain mirrors the in-loop drains exactly: device sync BEFORE the
-        frees (UAF-safe), then clear. The loop's local `_deferred_bytes`
-        counter is left stale after a hook drain: it only OVERSTATES, so the
-        next cliff check drains an already-empty queue and resets — never an
-        early free. Weakref-bound: a dead sequence's hook frees nothing and
-        unregisters itself.
-        """
-        if getattr(self, "_oom_hook_registered", False):
-            return
-        import weakref
-        wself = weakref.ref(self)
-
-        def _seq_oom_reclaim(dev_idx, nbytes_requested):
-            seq = wself()
-            if seq is None:
-                DeviceAllocator.unregister_oom_reclaim_hook(_seq_oom_reclaim)
-                return 0
-            queue = getattr(seq, "_oom_deferred_queue", None)
-            if not queue:
-                return 0
-            _sync_deferred_all_devices(queue)
-            freed = 0
-            for t in queue:
-                freed += getattr(t, "_nbytes", 0) or 0
-            queue.clear()
-            return freed
-
-        DeviceAllocator.register_oom_reclaim_hook(_seq_oom_reclaim)
-        # Eager deregistration when this sequence is collected — the
-        # weakref guard inside the hook stays as belt-and-braces, but the
-        # registry entry itself must not accumulate across many sequence
-        # lifetimes in a long-lived serving process (gardien MEDIUM,
-        # 2026-07-11).
-        weakref.finalize(
-            self, DeviceAllocator.unregister_oom_reclaim_hook, _seq_oom_reclaim)
-        self._oom_hook_registered = True
-
     def run(self, skip_kills: bool = False,
             pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
         """Execute all ops. Zero overhead hot loop.
@@ -3520,19 +3436,15 @@ class TritonSequence(SequenceSteps):
         multi-device (CPU weights), so this branch never runs under zero3.
         """
         arena = self._arena
-        _deferred: List[NBXTensor] = []
-        _deferred_bytes: int = 0
         (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
          _drain_count_limit) = _resolve_drain_policy(self._planned_drain_cliff)
         _drain_planned = _drain_cliff == self._planned_drain_cliff   # not the door's, not the profile's
-        _last_free_check = -(1 << 30)
+        # what the run drops waits there for the kernels that may still read it (the allocator's OOM reclaimer too)
+        _frees = DeferredFrees(_drain_cliff, _drain_count_limit, _drain_floor, _drain_reserve, _drain_interval,
+                               one_device=True)
+        _defer_free = _frees.add
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
-
-        # Expose THIS run's deferred queue to the autotune headroom guard (the
-        # one unplanned allocation); the allocator's own malloc never drains it.
-        self._oom_deferred_queue = _deferred
-        self._ensure_oom_reclaim_hook()
 
         # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
         # of the per-op hot loop — read ONCE per run. Same gate
@@ -3581,22 +3493,12 @@ class TritonSequence(SequenceSteps):
                     result = args[0]
                 else:
                     for s in op.output_slots:
-                        old = arena[s]
-                        if old is not None:
-                            _deferred.append(old)
-                            _deferred_bytes += old._nbytes
+                        _defer_free(arena[s])
                         arena[s] = None
                     if not skip_kills:
                         for s in op.kill_slots:
-                            old = arena[s]
-                            if old is not None:
-                                _deferred.append(old)
-                                _deferred_bytes += old._nbytes
+                            _defer_free(arena[s])
                             arena[s] = None
-                    # Drop the loop variable so it does not retain the
-                    # last killed tensor across subsequent outer-loop
-                    # iterations. See P-SANA-4KPX-RUNTIME 2026-05-06.
-                    old = None  # noqa: F841
                     continue
             else:
                 # Periodic live tracking — every NBX_LIVE_DUMP_EVERY ops,
@@ -3659,7 +3561,7 @@ class TritonSequence(SequenceSteps):
                                        f"intermediates={n_m}/{b_m/1024/1024:.0f}MB "
                                        f"none_slots={n_none} other_slots={n_other} "
                                        f"types={type_counts} "
-                                       f"deferred_queue={len(_deferred)}/{_deferred_bytes/1024/1024:.0f}MB")
+                                       f"deferred_queue={len(_frees)}/{_frees.nbytes/1024/1024:.0f}MB")
                             # P-TRITON-LIVE-WATERMARK-AUDIT L2: per-intermediate
                             # detail. For every non-None, non-weight, non-input
                             # slot at OOM, log: slot id, nbytes, shape, tid,
@@ -3977,7 +3879,7 @@ class TritonSequence(SequenceSteps):
                         if isinstance(a, NBXTensor))
                     _msg = _oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
-                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)} | None args at "
+                        f"{_deferred_drain_context(e, _frees.nbytes, _drain_cliff, _drain_planned)} | None args at "
                         f"positions {_none_pos} of {len(args)} | NBX args: {_arg_diag}",
                         e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
@@ -3989,14 +3891,7 @@ class TritonSequence(SequenceSteps):
             # drained when it crosses a bytes/count threshold (Route A)
             # and one final time after the loop to catch the tail.
             for s in op.output_slots:
-                old = arena[s]
-                if old is not None:
-                    _deferred.append(old)
-                    _deferred_bytes += old._nbytes
-            # Drop the loop variable so it does not retain the
-            # last seen NBXTensor across subsequent outer-loop
-            # iterations. See P-SANA-4KPX-RUNTIME 2026-05-06.
-            old = None  # noqa: F841
+                _defer_free(arena[s])
 
             # Store outputs
             if not op.output_slots:
@@ -4096,8 +3991,7 @@ class TritonSequence(SequenceSteps):
                                            f"data_ptr={getattr(old, '_data_ptr', '?')} "
                                            f"refcount_before_kill={_sys_tk.getrefcount(old)} "
                                            f"(if >2 = orphan-leak; arena+sys.getrefcount=2)")
-                        _deferred.append(old)
-                        _deferred_bytes += old._nbytes
+                        _defer_free(old)
                     arena[s] = None
                 # Python `for` loop variables persist after the loop,
                 # bound to the last iteration's value. If the last
@@ -4121,64 +4015,15 @@ class TritonSequence(SequenceSteps):
                 import gc as _gc_force
                 _gc_force.collect()
 
-            # Pressure-sensitive drain (see module header + deferred_drain_policy).
-            # Always drain at the cliff/count ceiling; drain EARLY (queue >=
-            # floor) only when a throttled driver-free probe shows the device
-            # within `reserve` of capacity. sync-before-free correctness is
-            # unchanged — draining more often is never a UAF risk, only a
-            # throughput cost, which the pressure gate confines to the case
-            # where the alternative is OOM.
-            _drain_now = (_deferred_bytes >= _drain_cliff
-                          or len(_deferred) >= _drain_count_limit)
-            _pressure = False
-            # Under the allocator pool the pressure probe has no object: a
-            # pressure drain parks dead blocks in the free-list (no driver
-            # memory comes back), and the queue's ceiling, the cliff, is priced
-            # by the plan (`PrismSolver._deferred_drain_mb`); a malloc refused
-            # anyway is raised. Measured (2026-09-02, xlong int4 prefill): 401
-            # cudaMemGetInfo calls = 1.8 s of the 22.7 s window.
-            if (not _drain_now and _drain_reserve > 0
-                    and not DeviceAllocator._pool_enabled
-                    and _deferred_bytes >= _drain_floor
-                    and (op_idx - _last_free_check) >= _drain_interval):
-                _last_free_check = op_idx
-                _free_b = DeviceAllocator.device_free_bytes()
-                if 0 <= _free_b < _drain_reserve:
-                    _drain_now = True
-                    _pressure = True
-            if _drain_now:
-                if _drain_stats is not None:
-                    _drain_stats[0] += 1
-                    _drain_stats[2 if _pressure else 1] += 1
-                    _log.debug(f"[NBX_DEFERRED_DRAIN] single-dev drain "
-                               f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
-                               f"{_deferred_bytes/1e9:.2f} GB, "
-                               f"trigger={'pressure' if _pressure else 'cliff'}")
-                # Under the allocator pool the drain is a stream-ordered
-                # hand-back to the free-list, not a cudaFree: a block
-                # re-issued to a later op on the same in-order stream cannot
-                # overtake the kernel still reading it, so the host sync is
-                # only needed when blocks actually leave for the driver
-                # (pool off, or a block over the parked cap — `free_cuda`
-                # then frees synchronously, and cudaFree itself orders
-                # against pending work). Premise, named: all triton work
-                # orders against the legacy default stream — kernel
-                # launches, D2D/H2D copies, memsets; the zero3 transfer
-                # stream is a BLOCKING stream (`DeviceAllocator.create_stream`,
-                # legacy-ordered); the replay-graph capture stream is the one
-                # non-blocking stream and is bracketed by context syncs.
-                # Measured (2026-09-02, xlong int4 prefill): 397 drain syncs
-                # = 15.5 s of host wait on a 22.7 s window.
-                if not DeviceAllocator._pool_enabled:
-                    _sync_deferred_all_devices(_deferred)
-                _deferred.clear()
-                _deferred_bytes = 0
+            _drained = _frees.step(op_idx)
+            if _drained is not None and _drain_stats is not None:
+                _drain_stats[0] += 1
+                _drain_stats[2 if _drained.reason == "pressure" else 1] += 1
+                _log.debug(f"[NBX_DEFERRED_DRAIN] single-dev drain #{_drain_stats[0]}: {_drained.tensors} tensors, "
+                           f"{_drained.nbytes/1e9:.2f} GB, trigger={_drained.reason}")
 
-        # All kernels submitted — sync GPU then release deferred tensors
-        if _deferred:
-            _sync_deferred_all_devices(_deferred)
-            _deferred.clear()
-            _deferred_bytes = 0
+        # All kernels submitted — every device synchronised, then the deferred tensors freed
+        _frees.release()
 
         if _drain_stats is not None and _drain_stats[0] > 0:
             _log.debug(f"[NBX_DEFERRED_DRAIN] single-dev totals: "
@@ -4195,13 +4040,9 @@ class TritonSequence(SequenceSteps):
           For CPU-backed weight inputs (zero3), the library's transfer_tensor handles
           H2D (kind=1) instead of D2D.
 
-        Uses cudaMalloc/cudaFree (sync) underneath, so both output-slot
-        overwrites and kill_slots batch their old tensors into a
-        `_deferred` list. The list is drained when its bytes or count
-        cross the Route A thresholds (NBX_DEFERRED_DRAIN_BYTES /
-        NBX_DEFERRED_DRAIN_COUNT) and one final time after the loop —
-        same correctness as the original end-of-run-only drain (sync
-        before free), just more often.
+        Both output-slot overwrites and kill_slots hand their old tensors to
+        nbxtensor's `DeferredFrees`, released at the Route A thresholds and
+        once after the loop, every owning device synchronised first.
 
         pre_op_callback is invoked with (op_idx, op) BEFORE each op's
         args are resolved. Used by zero3 for first-tick priming and by
@@ -4210,12 +4051,13 @@ class TritonSequence(SequenceSteps):
         """
         arena = self._arena
         _current_dev = self.device_idx
-        _deferred: List[NBXTensor] = []
-        _deferred_bytes: int = 0
         (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
          _drain_count_limit) = _resolve_drain_policy(self._planned_drain_cliff)
         _drain_planned = _drain_cliff == self._planned_drain_cliff   # not the door's, not the profile's
-        _last_free_check = -(1 << 30)
+        # what the run drops waits there for the kernels that may still read it (the allocator's OOM reclaimer too)
+        _frees = DeferredFrees(_drain_cliff, _drain_count_limit, _drain_floor, _drain_reserve, _drain_interval,
+                               one_device=False)
+        _defer_free = _frees.add
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
         _wm_path = os.environ.get("NBX_LIVE_WATERMARK_TRACE", "")
@@ -4227,11 +4069,6 @@ class TritonSequence(SequenceSteps):
         if not (0 <= _watch_slot < len(arena)):
             _watch_slot = -1
         _watch_ref = arena[_watch_slot] if _watch_slot >= 0 else None
-
-        # Expose THIS run's deferred queue to the autotune headroom guard (the
-        # one unplanned allocation); the allocator's own malloc never drains it.
-        self._oom_deferred_queue = _deferred
-        self._ensure_oom_reclaim_hook()
 
         # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
         # of the per-op hot loop — read ONCE per run (same gate
@@ -4264,7 +4101,7 @@ class TritonSequence(SequenceSteps):
             if _skip is not None and _skip[op_idx]:
                 continue                    # an invariant op: its outputs are the kept state's
             if _wm_path and _wm_every > 0 and op_idx % _wm_every == 0:
-                _watermark_sample(_wm_path, op_idx, op, arena, _deferred_bytes)
+                _watermark_sample(_wm_path, op_idx, op, arena, _frees.nbytes)
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
@@ -4275,19 +4112,12 @@ class TritonSequence(SequenceSteps):
             # NOP propagation — deactivated MoE expert path returns None.
             if args and args[0] is None:
                 for s in op.output_slots:
-                    old = arena[s]
-                    if old is not None:
-                        _deferred.append(old)
-                        _deferred_bytes += old._nbytes
+                    _defer_free(arena[s])
                     arena[s] = None
                 if not skip_kills:
                     for s in op.kill_slots:
-                        old = arena[s]
-                        if old is not None:
-                            _deferred.append(old)
-                            _deferred_bytes += old._nbytes
+                        _defer_free(arena[s])
                         arena[s] = None
-                old = None  # noqa: F841 — see P-SANA-4KPX-RUNTIME 2026-05-06
                 continue
 
             # FAST PATH: no transfer needed
@@ -4307,7 +4137,7 @@ class TritonSequence(SequenceSteps):
                     _none_pos = [i for i, a in enumerate(args) if a is None]
                     raise RuntimeError(_oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
-                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)} | None args at "
+                        f"{_deferred_drain_context(e, _frees.nbytes, _drain_cliff, _drain_planned)} | None args at "
                         f"positions {_none_pos} of {len(args)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
@@ -4327,16 +4157,13 @@ class TritonSequence(SequenceSteps):
                 except Exception as e:
                     raise RuntimeError(_oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
-                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)}", e,
+                        f"{_deferred_drain_context(e, _frees.nbytes, _drain_cliff, _drain_planned)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
 
             # Defer any tensors currently in the output slots before overwriting.
             for s in op.output_slots:
-                old = arena[s]
-                if old is not None:
-                    _deferred.append(old)
-                    _deferred_bytes += old._nbytes
+                _defer_free(arena[s])
 
             # Store outputs
             if not op.output_slots:
@@ -4374,53 +4201,18 @@ class TritonSequence(SequenceSteps):
 
             if not skip_kills:
                 for s in op.kill_slots:
-                    old = arena[s]
-                    if old is not None:
-                        _deferred.append(old)
-                        _deferred_bytes += old._nbytes
+                    _defer_free(arena[s])
                     arena[s] = None
-            old = None  # noqa: F841 — see P-SANA-4KPX-RUNTIME 2026-05-06
 
-            # Pressure-sensitive drain — mirror of the single-device path
-            # (see module header + deferred_drain_policy). The free probe uses
-            # the current device (no-arg → DeviceAllocator.get_device()); the
-            # cliff is the hard guarantee, the pressure gate is best-effort
-            # across devices.
-            _drain_now = (_deferred_bytes >= _drain_cliff
-                          or len(_deferred) >= _drain_count_limit)
-            _pressure = False
-            # Under the allocator pool the pressure probe has no object: a
-            # pressure drain parks dead blocks in the free-list (no driver
-            # memory comes back), and the queue's ceiling, the cliff, is priced
-            # by the plan (`PrismSolver._deferred_drain_mb`); a malloc refused
-            # anyway is raised. Measured (2026-09-02, xlong int4 prefill): 401
-            # cudaMemGetInfo calls = 1.8 s of the 22.7 s window.
-            if (not _drain_now and _drain_reserve > 0
-                    and not DeviceAllocator._pool_enabled
-                    and _deferred_bytes >= _drain_floor
-                    and (op_idx - _last_free_check) >= _drain_interval):
-                _last_free_check = op_idx
-                _free_b = DeviceAllocator.device_free_bytes()
-                if 0 <= _free_b < _drain_reserve:
-                    _drain_now = True
-                    _pressure = True
-            if _drain_now:
-                if _drain_stats is not None:
-                    _drain_stats[0] += 1
-                    _drain_stats[2 if _pressure else 1] += 1
-                    _log.debug(f"[NBX_DEFERRED_DRAIN] multi-dev drain "
-                               f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
-                               f"{_deferred_bytes/1e9:.2f} GB, "
-                               f"trigger={'pressure' if _pressure else 'cliff'}")
-                _sync_deferred_all_devices(_deferred)
-                _deferred.clear()
-                _deferred_bytes = 0
+            _drained = _frees.step(op_idx)
+            if _drained is not None and _drain_stats is not None:
+                _drain_stats[0] += 1
+                _drain_stats[2 if _drained.reason == "pressure" else 1] += 1
+                _log.debug(f"[NBX_DEFERRED_DRAIN] multi-dev drain #{_drain_stats[0]}: {_drained.tensors} tensors, "
+                           f"{_drained.nbytes/1e9:.2f} GB, trigger={_drained.reason}")
 
-        # All kernels submitted — sync GPU then release deferred tensors
-        if _deferred:
-            _sync_deferred_all_devices(_deferred)
-            _deferred.clear()
-            _deferred_bytes = 0
+        # All kernels submitted — every device synchronised, then the deferred tensors freed
+        _frees.release()
 
         if _drain_stats is not None and _drain_stats[0] > 0:
             _log.debug(f"[NBX_DEFERRED_DRAIN] multi-dev totals: "

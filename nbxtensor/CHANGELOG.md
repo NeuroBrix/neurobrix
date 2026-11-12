@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,
   _WARPS, _BND, _WARPS_D, _STAGES, read by the engine until now): they are the defaults those variables had.
+- `memory.deferred_frees`: `DeferredFrees`, `Drain`, `sync_devices_of` — the tensors a run drops, released in batches
+  at a bytes cliff, a count or (pool off) a free-memory reserve, every owning device synchronised first, and the
+  allocator's out-of-memory reclaimer while the batch lives. The engine's two hot loops held this queue themselves.
 
 ## [0.1.4] - 2026-11-12
 

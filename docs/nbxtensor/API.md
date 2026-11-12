@@ -282,6 +282,18 @@ def arena_layout(sizes: Iterable[int], alignment: int=ARENA_ALIGNMENT)
     # The layout of tensors of `sizes` bytes (placement order) in one arena
 ```
 
+`nbxtensor.memory.deferred_frees` — the tensors a run dropped, freed after the work that may still read them
+
+```python
+def sync_devices_of(tensors) -> None
+    # synchronise every device owning one of them (the current device when none names one), the current one restored
+class Drain(NamedTuple)               # reason ("cliff" | "pressure"), tensors, nbytes
+class DeferredFrees(cliff, count, floor=None, reserve=0, interval=1, one_device=True)
+    # add(t); step(at) -> Drain | None (released at the bytes cliff or the count; with the pool off, at `floor` bytes
+    # when the free bytes read every `interval` steps fall under `reserve`); release(sync=True) -> bytes; len, nbytes;
+    # the allocator's out-of-memory reclaimer while it lives
+```
+
 `nbxtensor.memory.memory_pool`
 
 ```python
