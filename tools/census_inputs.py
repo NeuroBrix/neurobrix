@@ -141,12 +141,14 @@ def _unit_sha(node) -> str:
 
 
 def _rel(path: Path) -> str:
-    """A path as the record writes it: relative to the repository (`repo:`), to the catalogue (`cache:`) or to the
-    engine's home (`home:`, the calibration records and hardware profiles of ~/.neurobrix), absolute otherwise — a
+    """A path as the record writes it: relative to the repository (`repo:`), to the catalogue (`cache:`), to the
+    engine's home (`home:`, the calibration records and hardware profiles of ~/.neurobrix) or to the workshop's
+    communication directory (`comm:`, the catalogue), absolute otherwise — a
     committed record never names a machine's home directory (the owner, 2026-11-07)."""
     from neurobrix.core.paths import cache_dir, neurobrix_home
     rp = path.resolve()
-    for tag, root in (("repo", REPO), ("cache", Path(cache_dir()).resolve()), ("home", Path(neurobrix_home()).resolve())):
+    for tag, root in (("repo", REPO), ("cache", Path(cache_dir()).resolve()), ("home", Path(neurobrix_home()).resolve()),
+                      ("comm", _communication_root())):
         if rp.is_relative_to(root):
             return f"{tag}:{rp.relative_to(root)}"
     return str(rp)
@@ -162,7 +164,17 @@ def _abs(name: str, repo: Path = REPO) -> Path:
     if tag == "home":
         from neurobrix.core.paths import neurobrix_home
         return Path(neurobrix_home()) / rest
+    if tag == "comm":
+        return _communication_root() / rest
     return Path(name)
+
+
+def _communication_root() -> Path:
+    """The workshop's communication directory (`atelier.root("communication")`: the catalogue a derivation reads lives
+    there, outside a worktree's repository). Recorded as `comm:`: a committed record never names a machine's directory —
+    read from a worktree, the catalogue was written as an absolute path (qa, 2026-11-12)."""
+    import atelier
+    return Path(atelier.root("communication")).resolve()
 
 
 def _file_sha(path: Path) -> str:
