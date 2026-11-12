@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-11-12
+
+The library takes back what is its own: nbxtensor 0.1.4 now holds the engine's replay, its mixture-of-experts store and
+its tensor helpers, and the engine calls it; plus long prompts tokenized in linear time and a server that no longer
+measures again what this machine already measured.
+
 ### Removed
 
 - **The terminal coding agent (`neurobrix chat --agent`, `neurobrix run --mode agent`) leaves the engine**, with its
@@ -25,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix run` refuses by name a prompt longer than the model's context**, before anything loads, with the
   prompt's token count and the model's context, as `neurobrix serve` does. It used to fail in a GPU kernel (`--triton`)
   or abort the process (`--compiled`).
+- **A run whose card reports its error late exits with that error named**, rc 1, instead of aborting the process
+  (`--compiled` on a Mac: a device-side index error surfaced from a destructor at exit).
 - **`neurobrix run --turns` states each turn's own timings.** From the second turn on, the `[Timings]` line repeated the
   first turn's time to first token and load time, and its rate and time per token were wrong.
 - **A long prompt to a Llama-tokenizer model is tokenized in linear time, with the same tokens.** TinyLlama's
@@ -6751,7 +6759,9 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.8...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.10...main
+[0.6.10]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.9...v0.6.10
+[0.6.9]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.5...v0.6.6
