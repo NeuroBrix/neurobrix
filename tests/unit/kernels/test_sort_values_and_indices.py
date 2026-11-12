@@ -8,9 +8,8 @@ its indices while plausible in its values passes every gate the project
 has. `topk_wrapper` shipped exactly that way in 0.5.1.
 
 It is reached in production through the `aten::sort` dispatch
-(`kernels/dispatch.py`), which is how Ming's windowed-ViT uses it — not
-through the sampler, where the triton `TopPSampler` is defined but never
-instantiated and `CombinedSampler` sorts on the host.
+(`kernels/dispatch.py`), which is how Ming's windowed-ViT uses it, and
+through the triton `CombinedSampler`'s top-p filter without a top-k cut.
 
 === WHAT IS CHECKED, SEPARATELY ===
 

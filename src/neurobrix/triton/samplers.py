@@ -6,14 +6,12 @@ All tensor ops use NBXTensor + Triton kernel wrappers from kernels/.
 Implements: greedy, temperature, top-k, top-p, repetition penalty, combined.
 """
 
-import ctypes as _ctypes
 from typing import Any, Dict, Optional
 
 import numpy as np
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
@@ -22,63 +20,10 @@ from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family 
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 
 
-def _cpu_sort(tensor: NBXTensor, descending: bool = False):
-    """Sort via CPU numpy. For top-p sampling (once per token, ~1ms)."""
-    n = tensor.numel()
-    # the tensor's own dtype, bf16 decoded exactly (a bf16 row read as float32 was garbage)
-    arr = _decode_float(_host_bytes(tensor, n), tensor._dtype).reshape(tensor.shape)
-
-    if descending:
-        indices = np.argsort(-arr, axis=-1, kind='stable')
-    else:
-        indices = np.argsort(arr, axis=-1, kind='stable')
-    sorted_arr = np.take_along_axis(arr, indices, axis=-1)
-
-    DeviceAllocator.set_device(tensor._device_idx)
-    sorted_t = NBXTensor.from_numpy(np.ascontiguousarray(sorted_arr))
-    indices_t = NBXTensor.from_numpy(indices.astype(np.int64))
-    return sorted_t, indices_t
-
-
 # =============================================================================
 # Config (pure Python — shared with native mode)
 # =============================================================================
 
-
-def _host_bytes(tensor, n: int) -> bytes:
-    """The first `n` elements of a device tensor, copied to the host as raw bytes at the tensor's own width."""
-    import ctypes as _ct
-    from nbxtensor.memory.allocator import DeviceAllocator as _DA
-    width = {NBXDtype.float32: 4, NBXDtype.float16: 2, NBXDtype.bfloat16: 2}.get(tensor._dtype)
-    if width is None:
-        raise TypeError(f"ZERO FALLBACK: the sampler reads float logits; {tensor._dtype} is none")
-    buf = (_ct.c_char * (n * width))()
-    _DA.memcpy(_ct.addressof(buf), tensor.data_ptr(), n * width, 2)  # D2H
-    return bytes(buf)
-
-
-def _decode_float(raw: bytes, dtype) -> "np.ndarray":
-    """Raw float bytes at `dtype` -> a float32 array (bf16 widened by its 16 high bits, exactly)."""
-    if dtype == NBXDtype.float32:
-        return np.frombuffer(raw, dtype=np.float32).copy()
-    if dtype == NBXDtype.float16:
-        return np.frombuffer(raw, dtype=np.float16).astype(np.float32)
-    if dtype == NBXDtype.bfloat16:
-        return (np.frombuffer(raw, dtype=np.uint16).astype(np.uint32) << 16).view(np.float32).copy()
-    raise TypeError(f"ZERO FALLBACK: no float decoding for {dtype}")
-
-
-def _encode_float(arr: "np.ndarray", dtype) -> "np.ndarray":
-    """A float32 array -> a contiguous array at `dtype`'s bits (bf16 rounded to nearest even), ready for a H2D copy."""
-    a = np.ascontiguousarray(arr, dtype=np.float32)
-    if dtype == NBXDtype.float32:
-        return a
-    if dtype == NBXDtype.float16:
-        return a.astype(np.float16)
-    if dtype == NBXDtype.bfloat16:
-        u = a.view(np.uint32)
-        return ((u + 0x7FFF + ((u >> 16) & 1)) >> 16).astype(np.uint16)
-    raise TypeError(f"ZERO FALLBACK: no float encoding for {dtype}")
 
 class SamplerConfig:
     """Config validation for LLM samplers."""
@@ -221,26 +166,11 @@ class CombinedSampler:
         if input_ids is None or self.repetition_penalty == 1.0:
             return logits
 
-        # Read input_ids to CPU for the penalty loop
-        # This is a small transfer (seq_len ints) — acceptable at sampling time
-        import ctypes
-        import numpy as np
-        n = input_ids.numel()
-        buf = (ctypes.c_char * (n * 8))()  # int64 = 8 bytes
-        # Through DeviceAllocator, not a hardcoded libcudart: this is the
-        # triton path, and `libcudart.so` does not exist on ROCm or Apple.
-        # It also checks the return code, which the raw call did not — a
-        # failed copy used to return silent garbage.
-        DeviceAllocator.memcpy(ctypes.addressof(buf), input_ids.data_ptr(),
-                               n * 8, 2)  # D2H
-        ids = np.frombuffer(bytes(buf), dtype=np.int64)
-
-        # Read logits to CPU at THEIR dtype (fp32, or the compute dtype a half head stores under the fp16 contract —
-        # 2026-10-26: orpheus's lm_head stored fp16 logits and the fp32-sized copy read past them, CUDA error 1),
-        # apply the penalty in fp32, write back at the same dtype.
+        # The ids and the logits read on the host (the logits always arrive in fp32: sample_next_id and the
+        # TritonGenerator cast them once), the penalty applied there, the row written back in place.
+        ids = input_ids.numpy().reshape(-1)
         vocab = logits.shape[-1]
-        raw = _host_bytes(logits, vocab)
-        logits_np = _decode_float(raw, logits._dtype)
+        logits_np = logits.to(NBXDtype.float32).numpy().reshape(-1)
 
         for token_id in set(ids.tolist()):
             if 0 <= token_id < vocab:
@@ -249,13 +179,7 @@ class CombinedSampler:
                 else:
                     logits_np[token_id] *= self.repetition_penalty
 
-        # Write back to GPU. BOTH pointers must be wrapped in c_void_p: a
-        # bare numpy `.ctypes.data` is a Python int, which a no-argtypes ctypes
-        # call coerces to a 32-bit C int → the 64-bit host address is truncated
-        # → invalid src pointer → segfault. (The D2H reads above already wrap
-        # both ends, which is why only this H2D write crashed.)
-        out = _encode_float(logits_np, logits._dtype)
-        DeviceAllocator.memcpy(logits.data_ptr(), out.ctypes.data, out.nbytes, 1)  # H2D
+        logits.copy_(NBXTensor.from_numpy(logits_np.reshape(logits.shape), device=logits._device_idx))
         return logits
 
     def _shift_mask_right(self, mask: NBXTensor) -> NBXTensor:
@@ -266,16 +190,10 @@ class CombinedSampler:
         distribution whose top probability already exceeds top_p masks
         every token, softmax returns NaN, and the sampler yields 0.
         """
-        shape = mask.shape
-        n = mask.numel()
-        buf = (_ctypes.c_char * n)()
-        DeviceAllocator.memcpy(_ctypes.addressof(buf), mask.data_ptr(),
-                               n, kind=2)  # D2H
-        arr = np.frombuffer(buf, dtype=np.bool_).reshape(shape).copy()
+        arr = mask.numpy().copy()
         arr[..., 1:] = arr[..., :-1]
         arr[..., 0] = False
-        DeviceAllocator.set_device(mask._device_idx)
-        return NBXTensor.from_numpy(np.ascontiguousarray(arr))
+        return NBXTensor.from_numpy(arr, device=mask._device_idx)
 
     def _sample_from_candidates(self, logits: NBXTensor) -> NBXTensor:
         """Sample from the top-k candidates, working at width k.
@@ -333,9 +251,10 @@ class CombinedSampler:
         if self.top_k > 0:
             return self._sample_from_candidates(logits)
 
-        # 4. Top-p filtering (sort via CPU for portability — ~1ms per token)
+        # 4. Top-p filtering (the library's sort; values read in fp32)
         if self.top_p < 1.0:
-            sorted_logits, sorted_indices = _cpu_sort(logits, descending=True)
+            sorted_logits, sorted_indices = _nbx_elementwise_wrappers.sort_wrapper(
+                logits.to(NBXDtype.float32), dim=-1, descending=True)
             sorted_probs = _nbx_attention_wrappers.softmax(sorted_logits, dim=-1)
             cum_probs = _nbx_reduction_wrappers.cumsum_wrapper(sorted_probs, dim=-1)
             sorted_mask = self._shift_mask_right(_nbx_elementwise_wrappers.gt(cum_probs, self.top_p))
@@ -361,7 +280,6 @@ def sample_next_id(sampler: CombinedSampler, logits: NBXTensor, context_ids) -> 
     row = row.to(NBXDtype.float32) if row._dtype != NBXDtype.float32 else row.clone()
     ids = None
     if context_ids:
-        DeviceAllocator.set_device(row._device_idx)
-        ids = NBXTensor.from_numpy(np.array([list(context_ids)], dtype=np.int64))
+        ids = NBXTensor.from_numpy(np.array([list(context_ids)], dtype=np.int64), device=row._device_idx)
     return int(sampler(row, input_ids=ids).item())
 
