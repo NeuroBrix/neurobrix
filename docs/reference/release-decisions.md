@@ -424,3 +424,35 @@ content, every member's sha256 equal: 548 of 548 in the wheel, 549 of 549 in the
 `nbxgrammar` stays 0.1.1. Said in the release notes and not as a claim: for a MoE model that does not fit one card, two
 cards are not faster than one today (the two-card plan runs op by op: the reading, with the measures, is in the
 register), and how to run it on one card.
+
+## 2026-11-12 08:00 — NEUROBRIX 0.6.9 IS PUBLISHED, NBXTENSOR STAYS 0.1.3: A CORRECTIVE VERSION (the supervisor 05:40)
+
+Found while NBX Code's ten-task run used a served Qwen3-Coder-30B-A3B (one 32 GB card, experts streamed): from about
+the third request of a conversation the answers came back empty or wrong. Bisected to the decode replay (the same
+requests with it off were right), then to the experts store: a replayed decode step runs no Python, so the host's map of
+which expert each slot holds never learnt what a replayed step had moved, and the next turn's prompt (more than one new
+row: every agent turn after the first) read slots refilled with other experts — in 0.6.8 too. The host now reads the
+card's own clock before taking the slots back. The supervisor's order: a corrective version at once with what was green
+on main — that fix, a streamed request's error status (its `200` sent with the first event, an earlier failure a plain
+`500`), the GLM and Mistral tool-call formats, the template renderer in its vendor's environment, the reasoning gap read
+from the template. The out-of-memory fix of long served turns is NOT in it: its chunked plan is correct but its prefill
+is slow (a cold 4 500-token prompt 306 s to its first token on one V100-32GB) — it follows when right.
+
+**The gate's serve cell gained the case that would have caught it, seen failing first:** after its three requests a
+five-turn conversation (each request adds the last answer and a new user turn) against the same conversation on a
+second daemon with its replay off (`tools/serve_without_replay.py`). RED on the tree before the fix (317d5af35: turn 3
+answered nothing), GREEN on the freeze (the five turns read). Register entry 125.
+
+**Proofs on the freeze b98af9fc3** (the tag commit 84589bb0d adds only the Mac's CHANGELOG reread and the README's
+release line): torch-free PASS (0 torch imports, the library's 399 tests, the five shas equal); the serve cell with its
+conversation GREEN; the two-card cells, dense and MoE, PASS; trials L (wheels; both legs) and M (Mac, Metal, with this
+release's conversation case: 0 of 5 empty, two daemons byte-identical) PASS, 0 Traceback, the Sana image looked at.
+The whole suite: 28 failures, each re-run on the 0.6.8 freeze — 24 fail there identically, 4 pass alone on both (load
+in the 1 h 46 run): none is this version's (named in the campaign's RUN.md). The ratchet's nbxtensor limit lowered to
+its percentile (36) with the five 37-line functions listed (no library code moved: DÉCIDÉ between the agents).
+
+**Published, each read back:** the tag `v0.6.9` on `84589bb0d` (origin and GitLab); PyPI `neurobrix` 0.6.9 (publish.yml
+43171976082; every common member of its wheel equal to the freeze's but METADATA/RECORD — the README line); GitHub and
+GitLab releases. `nbxtensor` stays 0.1.3 (its code unchanged since its tag; its published wheel's 273 library files
+equal the freeze's), `nbxgrammar` 0.1.1. Found reading the wheel, as in 0.6.8: the published wheel carries no census or
+refused tables (`*.jsonl`, excluded from the sdist the wheel is built from) — registered, measured next.
