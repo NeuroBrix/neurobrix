@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (its arena clears synchronised only the current device).
 - `nbxtensor.memory.release_weights`, `join_weights`, `pool_enabled`, `pool_parked_cap_bytes`, `pool_fit_slack`: the
   application's door to the release and the pool's rules, beside `set_limit`.
-- `memory.pool.enabled`, `parked_cap_bytes`, `fit_slack`: the pool's rules for a device, from its file — the
+- `memory.pool.parks_freed_blocks`, `parked_cap_bytes`, `fit_slack`: the pool's rules for a device, from its file — the
   allocator's own switch, and what a planner prices the pool by. Prism read the same keys and switch again itself.
 
 ### Changed

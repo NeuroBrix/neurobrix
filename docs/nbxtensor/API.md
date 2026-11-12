@@ -132,7 +132,7 @@ The application's door (`nbxtensor.memory` itself), each name answered by the mo
 def set_limit(nbytes, device=None) -> None
 def release_weights(weights: dict) -> bool                     # memory_pool.release_weights
 def join_weights(held: dict, loaded: dict) -> dict             # memory_pool.join_weights
-def pool_enabled() -> bool                                      # pool.enabled
+def pool_enabled() -> bool                                      # pool.parks_freed_blocks
 def pool_parked_cap_bytes(vendor, architecture, total_bytes) -> int   # pool.parked_cap_bytes
 def pool_fit_slack(vendor, architecture) -> float              # pool.fit_slack
 ```
@@ -382,7 +382,7 @@ class HeldExperts(device_idx: int, layers)
 `nbxtensor.memory.pool`
 
 ```python
-def enabled() -> bool
+def parks_freed_blocks() -> bool
     # whether the allocator parks freed blocks (NBX_ALLOC_POOL, on unless "0"): the switch's one reading
 def parked_cap_bytes(vendor, architecture, total_bytes) -> int
     # the bytes the pool may keep parked on such a device (0: unbounded), its file's alloc_pool_parked_cap_fraction
