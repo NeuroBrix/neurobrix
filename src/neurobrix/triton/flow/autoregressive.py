@@ -140,7 +140,8 @@ def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
         (in_force() or {}).get("memory"), int(getattr(kv_plan, "memory_bytes", 0) or 0),
         PAGED_DECODE_TILE_CANDIDATES)
     cache = PagedTritonKVCache(page_tokens=tokens, async_release=async_release, **kv_params)
-    cache.on_reallocate = retire_replay_plans
+    # the route budget the plan states for a served chunk's attention over the cached keys (None: the device's own)
+    cache.on_reallocate, cache.chunk_scores_budget = retire_replay_plans, kv_plan.chunk_scores_budget_bytes
     return cache
 
 

@@ -622,6 +622,12 @@ def unit_flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: N
                           tag(q), tag(k), tag(v), tag(bias if bias is not None else q), tag(q), tag(F32)))]
 
 
+def sdpa_math_scores_bound(budget_bytes: int, D: int) -> int:
+    """The fp32 scores bound under which `sdpa_route` takes the math route at head dim `D` on a device of math budget
+    `budget_bytes` (`tiling_sizes.sdpa_math_scores_budget`): the one figure the route decides on and a price reads."""
+    return _ts.sdpa_scores_bound(budget_bytes, _pow2(D) or flash_any_head_dim())
+
+
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
                min_chunk_rows: int, max_chunks: int, force_math: bool = False,
                unit_flash: bool = False) -> Tuple[str, int]:
@@ -634,7 +640,7 @@ def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budge
     if force_math or Dv != D:
         return ("math", 0)
     scores = _ts.sdpa_scores_bytes(batch, nheads, Tq, Tk)
-    bound = _ts.sdpa_scores_bound(budget_bytes, _pow2(D) or flash_any_head_dim())
+    bound = sdpa_math_scores_bound(budget_bytes, D)
     if scores <= bound:
         return ("math", 0)
     if unit_flash:

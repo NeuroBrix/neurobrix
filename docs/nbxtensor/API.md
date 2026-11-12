@@ -909,6 +909,8 @@ def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, unit: Option
     # Whether the device's matrix unit runs this attention's flash route (`unit_flash`)
 def unit_flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, bias: Optional[NBXDtype]=None)
     # The flash on the profile's matrix unit (`unit_flash`, ops/flash_attention_m8n8k4.py)
+def sdpa_math_scores_bound(budget_bytes: int, D: int)
+    # The fp32 scores bound under which `sdpa_route` takes the math route at head dim `D` on a device of math budget
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int, min_chunk_rows: int, max_chunks: int, force_math: bool=False, unit_flash: bool=False)
     # The attention route
 def math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, native_bf16: bool, force_accum: bool=False, contract_half: bool=False)

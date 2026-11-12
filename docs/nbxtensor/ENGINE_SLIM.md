@@ -277,6 +277,22 @@ missed it and a served MoE's next prompt read slots refilled with other experts.
 store (triton/expert_store.py, +11: `_card_moved_slots` and the clock it compares); whether the store itself belongs in
 the library is the store's own question, not this fix's. 86 109 to 86 120, +11 (measured).
 
+A served turn priced in chunks, its attention over the cached keys on the route the plan states, and a stream's status
+sent with its first event (2026-11-12, an out-of-memory and a "refused (200)" at a user). Policy: Prism's price of a
+served chunk (which rows, which route, what its attention over the session's keys holds) and the server's status; the
+mechanisms it needs went into the library (`launch_keys.sdpa_math_scores_bound`, the wrapper's `scores_budget_bytes`,
+`PagedTritonKVCache.chunk_scores_budget`). The Triton engine's attention price moved out of the solver into its brick
+(`attention_scratch.triton_routes` / `triton_scratch`), so the solver shrank. 86 120 to 86 213, +93 (measured,
+`brick_ratchet.code_lines`):
+
+| file | lines | what it holds |
+|---|---|---|
+| core/prism/served_attention.py | +56 | new: the served chunk's attention at its dearest key length; the route budget the plan states |
+| core/prism/attention_scratch.py | +48 | the Triton price, moved from the solver and split (the devices' routes; the price) |
+| core/prism/solver.py | -31 | the price moved out; the plan's new field; thin calls to the bricks |
+| core/prism/prefill_chunk.py, served_prefill.py | +5, +3 | a served turn with no certified chunk; a chunk not raised priced once over the keys |
+| serving/openai_api/door.py, routes.py | +8, +4 | the stream opens with its first event; an earlier error answers with its status |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

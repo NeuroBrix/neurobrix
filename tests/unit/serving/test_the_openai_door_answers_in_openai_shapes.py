@@ -469,6 +469,26 @@ def test_an_engine_failure_is_a_500_with_its_named_refusal_and_the_daemon_serves
     assert _get(base + "/v1/models")[0] == 200
 
 
+def test_a_streamed_request_failing_before_its_first_token_answers_with_its_status_not_200(make):
+    """A stream opens with its first event: an engine failure before any token is a 500 with its named refusal, never
+    an error event inside a 200 (the served Qwen3-Coder's out-of-memory reached an agent as "refused (200)",
+    2026-11-12). Red when the stream's 200 goes out before the operation runs."""
+    engine = FakeEngine()
+
+    def boom(*a, **k):
+        raise RuntimeError("Prism: CUDA out of memory on cuda:0 (needs 1.6 GB, 0.0 GB free)")
+    engine.complete_turn = boom
+    engine.generate = boom
+    _, base = make(engine)
+    for path, body in (("/v1/chat/completions", {"model": "fake-model", "messages": [{"role": "user", "content": "x"}],
+                                                 "stream": True}),
+                       ("/v1/completions", {"model": "fake-model", "prompt": "x", "stream": True})):
+        status, got, headers = _post(base + path, body)
+        _assert_error(status, got, 500, code="engine_error")
+        assert "out of memory" in got["error"]["message"] and headers.get("Content-Type") == "application/json", headers
+    assert _get(base + "/v1/models")[0] == 200
+
+
 def test_a_json_schema_answer_is_compiled_and_handed_to_the_decode(make):
     """response_format json_schema: the schema compiled by our grammar engine and handed to complete_turn; a construct it
     cannot enforce answers 400 naming it; json_object refused by name (point 9a)."""

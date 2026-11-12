@@ -97,3 +97,17 @@ def chunk_record(cache_dir: Path, vendor: str, profile: str, memory_gb: int, mod
     if rec is None or rec.get("container") != T.container_sha(cache_dir):
         return None
     return rec
+
+
+def served_untimed(candidates: List[int], why: str, page: int) -> Tuple[int, str]:
+    """A SERVED turn's chunk when no certified time chooses one (`choose` returned None for `why`): the largest
+    candidate, the rows the plan prices a served turn's prefill at, priced over the session's keys (`served_prefill`) —
+    never one pass of rows the plan did not price. Unchunked, a served Qwen3-Coder-30B-A3B priced at 128 rows ran its
+    2 800- to 3 700-row agent turns in one pass and out of memory (2026-11-12). Not raised: every chunk is padded to its
+    full rows (nbxtensor `kv_session.chunk_rows`), and raised to 16 384 rows the same plan answered a short request's
+    first token in 51 s instead of 4.9 and decoded at 0.142 s a token instead of 0.053, its experts' cache taken from
+    20.9 GB to 3.8 (measured 2026-11-12, one V100-32GB, gate_serve_cell)."""
+    C = int(candidates[-1])
+    return C, (f"chunks of {C} rows: the rows the plan prices a served turn's prefill at (whole pages of {page}); "
+               f"{why.split(': ', 1)[-1]}, so no certified time chooses among them, and a chunk padded to more rows "
+               f"is slower for every shorter turn")

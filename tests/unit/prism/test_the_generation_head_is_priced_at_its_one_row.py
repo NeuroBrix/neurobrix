@@ -13,7 +13,8 @@ What this test does if the code is wrong:
    whose head does run every position — is priced at one row) — red;
 2. the profiler's map of the head's graph binds its sequence symbol to the request's rows — red on main (1024);
 3. a served compiled plan keeps the prompt margin's chunk when larger ones hold the plan, raises past the first size
-   that moves a resident, or a plan with certified times is touched — red (on main: no such module);
+   that moves a resident, or a plan with certified times does not keep its chunk (it is priced once over the cached
+   keys, served_prefill's contract since 2026-11-12) — red (on main: no such module);
 4. `--set global.score_mode=1` is not read as a scoring request, or `=0` is — red.
 
 No card. Run: python -m pytest tests/unit/prism/test_the_generation_head_is_priced_at_its_one_row.py
@@ -122,9 +123,11 @@ def test_an_engine_with_certified_times_keeps_its_own_choice(monkeypatch):
     solver, c, cfg = _served(monkeypatch, "triton")
     base = solver.solve_smart(c, profile(V100_16GB), cfg, serve_mode=True, mode="triton")
     plan, used = SP_solve_served(c, profile(V100_16GB), cfg, mode="triton")
-    assert used is cfg
-    assert (plan.kv_cache_plan.prefill_chunk, plan.kv_cache_plan.prefill_chunk_reason) == (
-        base.kv_cache_plan.prefill_chunk, base.kv_cache_plan.prefill_chunk_reason)
+    kv = plan.kv_cache_plan
+    # its own choice kept, priced once at that chunk over the cached keys it attends
+    assert (kv.prefill_chunk, kv.prefill_chunk_reason) == (base.kv_cache_plan.prefill_chunk,
+                                                           base.kv_cache_plan.prefill_chunk_reason)
+    assert (used.seq_len, used.prefill_keys, used.prefill_key_dtype) == (kv.prefill_chunk, kv.max_cache_len, str(kv.dtype))
     assert "no certified kernel times" not in plan.kv_cache_plan.prefill_chunk_reason
 
 

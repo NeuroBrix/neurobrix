@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   about the third request of a session the answers came back empty, cut short or wrong. The server now sees every
   change the decode made to the card's experts before a turn is read. Measured on a five-turn conversation: the
   answers are byte-identical to the same server run without its fast decode path.
+- **A served model no longer runs out of memory on a long turn.** On the Triton engine a served session with no
+  certified prefill chunk ran each turn's whole prompt in one pass that its memory plan had not priced: a served
+  Qwen3-Coder-30B-A3B on one V100-32GB stopped on agent turns of 2 800 to 3 700 tokens. A served turn now runs in
+  chunks of the rows its plan prices, and the plan holds what each chunk's attention over every cached position
+  needs, at its dearest length. Where the card's matrix unit runs the flash attention (Volta), that attention takes the
+  flash route, which writes no score matrix, so the memory the session keeps for decoding stays where it was.
+- **A streamed request that fails before its first token answers with its own status.** The OpenAI-compatible
+  server sent its `200` and the event stream's headers before running the request, so a failure before the first
+  token reached the client as an error event inside a `200` ("refused (200)"). The stream now opens with its first
+  event; an earlier failure is a plain JSON error with its status (`500` for an engine failure). An error after
+  tokens have streamed is still an event in the stream, as the protocol requires.
 - **A chat template renders the prompt its model was trained on.** The engine's template renderer wrote every
   `tojson` value HTML-escaped (`if a < b` for `if a < b`, `é` for `é`) and with its keys sorted, so a
   request's tool schemas and past calls reached the model reordered and escaped. A template that passes
