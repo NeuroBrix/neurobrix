@@ -34,6 +34,7 @@ character classes -- the third-party ``regex`` module is never imported.
 
 from __future__ import annotations
 
+import heapq
 import json
 import re
 import unicodedata
@@ -214,9 +215,7 @@ class _Normalizer:
             if right:
                 text = text.rstrip()
             return text
-        if t in ("NFKC", "BertNormalizer", "Nmt"):  # not used; pass-through-ish
-            return text
-        # Unknown normalizer: identity (data-driven; none of our models hit this)
+        # Unknown normalizer (BertNormalizer, Nmt, ...): identity (data-driven; none of our models hit this)
         return text
 
     @staticmethod
@@ -559,22 +558,27 @@ class _BPE:
             word = word[:1] + [self.cont_prefix + c for c in word[1:]]
         if self.end_suffix:
             word[-1] = word[-1] + self.end_suffix
-        if len(word) <= 1:
-            self._cache[token] = word
-            return word
-        while True:
-            best_rank = None
-            best_idx = -1
-            for i in range(len(word) - 1):
-                r = self.ranks.get((word[i], word[i + 1]))
-                if r is not None and (best_rank is None or r < best_rank):
-                    best_rank = r
-                    best_idx = i
-            if best_idx < 0:
-                break
+        # tokenizers' Word::merge_all (v0.23.3, models/bpe/word.rs): a min-heap of (rank, position) over a linked list
+        # of symbols, the lowest rank then the leftmost merged first. A text with no pre-tokenizer (Llama's Metaspace
+        # normalizer) is one word: rescanning every pair for each merge was quadratic in its length.
+        n = len(word)
+        nxt, prv = list(range(1, n + 1)), list(range(-1, n - 1))      # n / -1: no neighbour
+        heap = [(self.ranks[p], i) for i, p in enumerate(zip(word, word[1:])) if p in self.ranks]
+        heapq.heapify(heap)
+        while heap:
+            rank, i = heapq.heappop(heap)
+            j = nxt[i]
+            if j == n or word[i] is None or self.ranks.get((word[i], word[j])) != rank:
+                continue        # expired: a side of this pair was merged since it was pushed
             # the merged token drops the right side's continuing_subword_prefix
             # (tokenizers' BpeBuilder::build: `&b[prefix_len..]`)
-            word[best_idx:best_idx + 2] = [word[best_idx] + word[best_idx + 1][len(self.cont_prefix):]]
+            word[i], word[j], nxt[i] = word[i] + word[j][len(self.cont_prefix):], None, nxt[j]
+            if nxt[i] < n:
+                prv[nxt[i]] = i
+            for a, b in ((prv[i], i), (i, nxt[i])):       # the two pairs the merged symbol forms with its neighbours
+                if a >= 0 and b < n and (word[a], word[b]) in self.ranks:
+                    heapq.heappush(heap, (self.ranks[(word[a], word[b])], a))
+        word = [w for w in word if w is not None]
         self._cache[token] = word
         return word
 
@@ -930,7 +934,6 @@ class PyTokenizer:
                 if left_cut > buf_start:
                     out.append((text[buf_start:left_cut], None))
                 out.append(("", matched))
-                i = i + len(matched.content)
                 buf_start = end
                 i = end
             else:

@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or abort the process (`--compiled`).
 - **`neurobrix run --turns` states each turn's own timings.** From the second turn on, the `[Timings]` line repeated the
   first turn's time to first token and load time, and its rate and time per token were wrong.
+- **A long prompt to a Llama-tokenizer model is tokenized in linear time, with the same tokens.** TinyLlama's
+  12 265-token prompt: 25.7 s -> 0.03 s (4 078 tokens: 3.0 s -> 0.01 s), on every platform, in `run` and `serve`.
 
 ## [0.6.9] - 2026-11-12
 
