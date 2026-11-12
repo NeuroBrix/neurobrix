@@ -44,7 +44,6 @@ ORCHESTRATOR_MODULES = [
     "neurobrix.core.prism.solver",
     "neurobrix.core.strategies.zero3",
     "neurobrix.core.runtime.graph.tensor_resolver",
-    "neurobrix.core.runtime.graph.memory_pool",
     "neurobrix.core.runtime.graph.execution_context",
     "neurobrix.core.components",
     "neurobrix.core.components.base",

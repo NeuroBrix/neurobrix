@@ -56,7 +56,6 @@ if TYPE_CHECKING:
 
 from .graph.execution_context import ExecutionContext
 from .graph.tensor_resolver import TensorResolver
-from .graph.memory_pool import MemoryPool
 from neurobrix.core.memory import MemoryManager
 import logging
 _log = logging.getLogger(__name__)
@@ -448,10 +447,6 @@ class GraphExecutor:
         # Pre-compiled dispatch table: op_uid -> OpExecution type
         # Computed once in _init_from_dag(), avoids per-op get_execution_type() calls
         # _exec_type_map removed — old triton dispatch path eliminated
-
-        # Memory pooling - DISABLED (PyTorch's internal caching allocator is optimal)
-        self._use_memory_pool = False
-        self._memory_pool: Optional[MemoryPool] = None
 
         # Op interceptors for KV cache injection (LLM execution)
         # Maps op_type (e.g., "aten::scaled_dot_product_attention") to interceptor callable
@@ -3617,17 +3612,6 @@ class GraphExecutor:
         _tsq_per = int(_os_tsq.environ.get("NBX_TRITONSEQ_LIVE_DUMP_EVERY",
                                             "0") or "0")
 
-        # P-PRISM-NEVER-REFUSE B.1.a — liveness audit hook
-        # When `NBX_LIVENESS_AUDIT_AT_OP_UID=<uid>` is set, dump at the moment
-        # the matching op_uid is about to execute: store contents (tid →
-        # bytes), DeviceAllocator live_tracked counter, and a diff between
-        # store and the graph-declared liveness (expected-live = tids whose
-        # last_use is > op_idx, plus protected weights/inputs/outputs).
-        # R34: pure introspection, no model-specific behaviour. Generic for
-        # any op_uid in any component.
-        _liveness_target = _os_tsq.environ.get(
-            "NBX_LIVENESS_AUDIT_AT_OP_UID", "")
-        _liveness_audited = False
 
         # Multi-device (pipeline_parallel) activation tracker — mirror of the
         # compiled hot loop's `current_activation_device` (sequence.py
@@ -3655,65 +3639,6 @@ class GraphExecutor:
                     # TritonSequence.run() contract where cb failures are
                     # isolated from the compute loop.
                     pass
-
-            # P-PRISM-NEVER-REFUSE B.1.a — liveness audit
-            if (_liveness_target and op_uid == _liveness_target
-                    and not _liveness_audited):
-                _liveness_audited = True
-                from nbxtensor.memory.allocator import DeviceAllocator as _DA
-                _live_bytes = _DA._cuda_live_bytes.get(_DA.get_device(), 0)
-                # Tids currently in store, with sizes
-                _store_entries = []
-                _total_store_bytes = 0
-                for _tid, _t in store.items():
-                    _sz = getattr(_t, '_nbytes', 0) if _t is not None else 0
-                    _store_entries.append((_tid, _sz))
-                    _total_store_bytes += _sz
-                _store_entries.sort(key=lambda kv: -kv[1])
-                # Tids whose last_use already passed (should NOT be in store
-                # unless protected). Build the "expected-dead" set.
-                _expected_dead = set()
-                _expected_live = set()
-                for _tid in list(store.keys()):
-                    _lu = last_use.get(_tid, None)
-                    if _tid in protected:
-                        _expected_live.add(_tid)
-                    elif _lu is None or _lu >= op_idx:
-                        _expected_live.add(_tid)
-                    else:
-                        _expected_dead.add(_tid)
-                # Stale: tids in store whose last_use is in the past but
-                # weren't evicted. These are the runtime leaks vs estimator.
-                _stale = []
-                _stale_bytes = 0
-                for _tid, _sz in _store_entries:
-                    if _tid in _expected_dead:
-                        _stale.append((_tid, _sz))
-                        _stale_bytes += _sz
-                _eligible_to_drain = sum(
-                    _sz for _tid, _sz in _store_entries
-                    if _tid not in protected and last_use.get(_tid, -1) < op_idx
-                )
-                _log.debug(f"[LIVENESS_AUDIT op_uid={op_uid} op_idx={op_idx}]")
-                _log.debug(f"  device_live_tracked = {_live_bytes/1024/1024:.0f} MB")
-                _log.debug(f"  store_total = {_total_store_bytes/1024/1024:.0f} MB "
-                           f"({len(store)} tids)")
-                _log.debug(f"  expected_live (in store) = "
-                           f"{sum(sz for tid, sz in _store_entries if tid in _expected_live)/1024/1024:.0f} MB "
-                           f"({len(_expected_live)} tids)")
-                _log.debug(f"  STALE (in store but last_use passed) = "
-                           f"{_stale_bytes/1024/1024:.0f} MB ({len(_stale)} tids)")
-                _log.debug(f"  Top 10 store entries:")
-                for _tid, _sz in _store_entries[:10]:
-                    _flag = "PROTECTED" if _tid in protected else (
-                        f"alive_until_op_idx={last_use.get(_tid, '?')}")
-                    _log.debug(f"    {_tid:<50} {_sz/1024/1024:>8.0f} MB  {_flag}")
-                if _stale:
-                    _log.debug(f"  Top 10 STALE tids (drain candidates):")
-                    for _tid, _sz in _stale[:10]:
-                        _log.debug(f"    {_tid:<50} {_sz/1024/1024:>8.0f} MB  last_use={last_use.get(_tid)}")
-                import sys as _sys
-                _sys.stdout.flush()
 
             op_type = op_data.get("op_type", "")
             attrs = op_data.get("attributes", {})
@@ -5378,13 +5303,6 @@ class GraphExecutor:
                 if tid in self._consumed_input_tids:
                     self._ctx.inputs.pop(tid[len("input::"):], None)
                 if tid not in self._ctx.output_tensor_ids and tid not in self._persistent_tensor_ids:
-                    # Phase 2+3: If memory pooling enabled, release to pool instead of deleting
-                    if self._use_memory_pool and self._memory_pool is not None:
-                        tensor = self._ctx.get_tensor(tid)
-                        if tensor is not None and is_torch_tensor(tensor):
-                            # Only pool contiguous tensors that own their storage
-                            if tensor.is_contiguous() and tensor.storage_offset() == 0:
-                                self._memory_pool.release(tensor)
                     self._ctx.delete_tensor(tid)
 
     # =========================================================================

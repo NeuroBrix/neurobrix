@@ -34,13 +34,6 @@ except ImportError:
     HAS_SAFETENSORS = False
     safetensors_load_file = None  # type: ignore
 
-# SmartLoader for pinned memory DMA transfers
-try:
-    from neurobrix.core.io.memory import get_io_config, PinnedMemoryManager
-    HAS_SMART_IO = True
-except ImportError:
-    HAS_SMART_IO = False
-
 # Import cache system
 try:
     from neurobrix.nbx.cache import ensure_extracted, get_cache

@@ -46,13 +46,13 @@ def test_the_loaders_read_it_when_they_load_never_at_import():
     saved = W._IO_WORKERS
     try:
         W.declare_io_workers(None)
-        for mod in ("neurobrix.core.io.loader", "neurobrix.core.io.weight_loader", "neurobrix.nbx.loader"):
+        for mod in ("neurobrix.core.io.weight_loader", "neurobrix.nbx.loader"):
             importlib.reload(importlib.import_module(mod))          # no profile in force: the import must not read it
     finally:
         W.declare_io_workers(saved)
 
 
 def test_no_loader_declares_a_count_of_its_own():
-    for rel in ("core/io/weight_loader.py", "core/io/loader.py", "nbx/loader.py", "core/strategies/tp_sharding.py"):
+    for rel in ("core/io/weight_loader.py", "nbx/loader.py"):
         text = (SRC / rel).read_text()
         assert not re.search(r"WORKERS\s*=\s*(int\(os\.environ\.get\([^)]*\)\)|\d+)\s*$", text, re.M), rel

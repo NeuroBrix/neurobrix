@@ -6,7 +6,6 @@ Extracted from GraphExecutor for clarity and testability.
 Components:
 - ExecutionContext: Shared state dataclass for a single run()
 - TensorResolver: Tensor resolution from DAG to live tensors
-- MemoryPool: GPU memory pooling for tensor reuse
 - CompiledSequence: Pre-compiled execution sequence (GraphVM Lite)
 
 Op dispatch:
@@ -17,7 +16,6 @@ Op dispatch:
 
 from .execution_context import ExecutionContext
 from .tensor_resolver import TensorResolver
-from .memory_pool import MemoryPool
 # The compiled sequence is the ATen branch's hot loop; it resolves on
 # request so the shared executor imports this package without torch (R33).
 _COMPILED = ("CompiledSequence", "CompiledOp", "TensorSlot", "ScalarArg", "ListArg", "DtypeArg")
@@ -32,7 +30,6 @@ def __getattr__(name):
 __all__ = [
     "ExecutionContext",
     "TensorResolver",
-    "MemoryPool",
     "CompiledSequence",
     "CompiledOp",
     "TensorSlot",
