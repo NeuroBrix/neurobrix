@@ -1,23 +1,64 @@
-# NeuroBrix
+<p align="center">
+  <img src="./assets/logo_NeuroBrix.png" alt="NeuroBrix logo" width="140"/>
+</p>
 
-NeuroBrix is an open-source inference engine that runs AI models (language models,
-vision-language and omni models, speech recognition, speech synthesis, image and video
-generation, and image upscaling) from one container format and one command-line tool.
-It is for developers who want to run these models on their own GPUs or CPUs, on Linux,
-Windows and macOS, without writing or maintaining a separate pipeline for each model family. NeuroBrix does not
-train models. It runs published models that have been packaged as `.nbx` containers and
-distributed through the [NeuroBrix Hub](https://neurobrix.org/models).
+<h1 align="center">NeuroBrix</h1>
 
 <p align="center">
-  <img src="./assets/logo_NeuroBrix.png" alt="NeuroBrix logo" width="160"/>
+  <b>Run real AI models on the GPU you already own. No PyTorch required.</b><br/>
+  Language, speech, image and video models from one engine and one container format.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/v/neurobrix?color=blue" alt="PyPI"/></a>
-  <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/pyversions/neurobrix" alt="Python versions"/></a>
   <a href="https://github.com/NeuroBrix/neurobrix/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License: Apache 2.0"/></a>
   <a href="https://neurobrix.org/models"><img src="https://img.shields.io/badge/hub-neurobrix.org-orange" alt="NeuroBrix Hub"/></a>
+  <a href="https://github.com/NeuroBrix/neurobrix/stargazers"><img src="https://img.shields.io/github/stars/NeuroBrix/neurobrix?style=social" alt="GitHub stars"/></a>
 </p>
+
+<!-- Demo GIF: uncomment when assets/demo.gif is delivered (the Mac captures it after 0.6.11).
+<p align="center">
+  <img src="./assets/demo.gif" alt="pip install, import a model, run it: the answer in the terminal" width="760"/>
+</p>
+-->
+
+```bash
+pip install neurobrix                      # the Triton engine: no PyTorch (about 1.8 GB installed)
+neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Write a Python function that reverses a string."
+```
+
+## Why NeuroBrix
+
+- **Your hardware, not a rented API.** NeuroBrix plans where each part of a model runs from the GPUs and memory it
+  finds: one GPU, several GPUs, streamed through GPU memory, or offloaded to the host. A request that does not fit is
+  refused with the figures, never silently degraded.
+- **One engine for every family.** A mixture-of-experts language model, a speech recognizer and a video diffusion model
+  run through the same engine from the same `.nbx` container: 49 models ready on the
+  [hub](https://neurobrix.org/models), no pipeline per model.
+- **No PyTorch underneath, if you want.** The Triton engine runs on [nbxtensor](https://github.com/NeuroBrix/nbxtensor),
+  our tensor library, with kernel settings certified per GPU class against a float64 reference. The PyTorch engine runs
+  the same container, so each can be checked against the other.
+
+## Runs on hardware you own
+
+| Hardware | Status |
+|---|---|
+| NVIDIA GPUs on Linux and Windows | Released; both engines. Our own test machines are V100s. |
+| Mac GPUs (Metal) | Released; both engines (`python -m nbxtensor install-metal`). |
+| CPU (x86-64) | Released (PyTorch engine). |
+| Other GPUs | Experimental, not yet validated on hardware by our lab; reports welcome: [open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
+
+Three things to try, one command each:
+
+```bash
+neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello from my own GPU." --output speech.wav   # text to speech
+neurobrix run --model openai/whisper-large-v3-turbo --audio recording.wav                        # speech to text
+neurobrix run --model ostris/Flex.1-alpha --prompt "a lighthouse at dusk" --output lighthouse.png  # text to image
+```
+<!-- Commands and flags from "## Usage by family" below (checked against 0.6.11, 2026-11-12). -->
+
+If NeuroBrix runs a model for you, a ⭐ helps other people find it.
 
 <p align="center">
   <a href="https://neurobrix.org/models">Hub</a> &nbsp;|&nbsp;
