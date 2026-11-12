@@ -45,7 +45,7 @@ H2D = "h"        # (dst, host_snapshot: bytes) — the recorded host
 
 
 class _State(SlabInterceptor):
-    """The replayer's state, and the allocator's interceptor while it is installed (`_install_seams`): the slab
+    """The replayer's state, and the allocator's interceptor while it is installed (`install_seams`): the slab
     routing and the watermark measurement are the library's (`nbxtensor.memory.slab.SlabInterceptor`); what is the
     replayer's own is the recording — the copies, sets and synchronisations a plan must reproduce."""
 
@@ -128,7 +128,7 @@ STATE = _State()
 
 
 
-def _plan_of(state):
+def plan_of(state):
     """The FrozenPlan behind a plans-dict state, if it holds resources:
     a frozen plan, or a pending ("VERIFY", plan) whose slab was already
     allocated and whose verify pass has not run yet."""
@@ -140,8 +140,8 @@ def _plan_of(state):
     return None
 
 
-def _drop_plan(plans: dict, sig) -> None:
-    plan = _plan_of(plans.pop(sig, None))
+def drop_plan(plans: dict, sig) -> None:
+    plan = plan_of(plans.pop(sig, None))
     if plan is not None:
         plan.slab.retire()   # deferred: frees once carved tensors die
         for _o in (getattr(plan, "other_slabs", None) or {}).values():
@@ -225,7 +225,7 @@ def _nbx_record(prep, grid, params, extents=None) -> None:
     STATE.records.append((KERNEL, (adapter, grid[0], grid[1], grid[2], 0, flat)))
 
 
-def _arm_launch_recorder(on: bool) -> None:
+def arm_launch_recorder(on: bool) -> None:
     from nbxtensor.backend import launcher as _lnch
     _lnch.set_launch_recorder(_nbx_record if on else None)
 
@@ -270,7 +270,7 @@ def _recording_run(kernel, raw):
     return recording_run
 
 
-def _install_seams() -> None:
+def install_seams() -> None:
     """Install the recording seams once: Triton's launch property, the allocator's interceptor (`STATE`), and the
     host read that breaks a recording (`NBXTensor.item`)."""
     global _INSTALLED
@@ -423,7 +423,7 @@ class FrozenPlan:
                     f"{tuple(frozen.shape)}/{frozen.nbx_dtype} — the bucket signature should have caught this")
             _scan_copied += 1
             DeviceAllocator.set_device(frozen.device_idx)
-            _copy_into(frozen, new)
+            copy_into(frozen, new)
         return _scan_copied
 
     def _dump_small_inputs(self, _scan_copied: int) -> None:
@@ -534,7 +534,7 @@ class FrozenPlan:
             frozen = self.arena_snapshot[slot]
             if frozen is None:
                 continue
-            arena[slot] = _heap_copy(frozen)
+            arena[slot] = heap_copy(frozen)
 
     def crosses_cards(self) -> bool:
         """The recorded actions switch to a card other than the plan's own (`SETDEV`)."""
@@ -598,7 +598,7 @@ def _run_action(tag, rec) -> None:
 
 
 
-def _heap_copy(t: NBXTensor) -> NBXTensor:
+def heap_copy(t: NBXTensor) -> NBXTensor:
     """A fresh heap tensor holding `t`'s LOGICAL values, contiguous. A graph output can be a view (a permute, a
     transpose): copying its storage bytes into a contiguous tensor of its shape scrambled it — Allegro-TI2V's encoder
     ends on a permute to frames-first, and every replayed tile of the I2V conditioning came back in the wrong order,
@@ -610,7 +610,7 @@ def _heap_copy(t: NBXTensor) -> NBXTensor:
     return t.contiguous()                          # a strided copy kernel: the values in their logical order
 
 
-def _copy_into(frozen: NBXTensor, new: NBXTensor) -> None:
+def copy_into(frozen: NBXTensor, new: NBXTensor) -> None:
     """`new`'s values into the recorded `frozen` buffer, whatever either's layout (a view on either side is copied
     element by element, the recorded layout kept)."""
     if new.is_same_memory(frozen):
@@ -622,9 +622,9 @@ def _copy_into(frozen: NBXTensor, new: NBXTensor) -> None:
 
 
 def _copy_slot(slot, frozen: NBXTensor, new: NBXTensor) -> None:
-    """`_copy_into`, a failure named with both buffers."""
+    """`copy_into`, a failure named with both buffers."""
     try:
-        _copy_into(frozen, new)
+        copy_into(frozen, new)
     except Exception as e:
         raise RuntimeError(
             f"replay input-copy failed at slot {slot}: shape "

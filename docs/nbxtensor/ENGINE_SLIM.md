@@ -281,6 +281,19 @@ A streamed request's status sent with its first event (2026-11-12, "refused (200
 opens at its first event, and a route re-raises an error that arrives before it, so the error answers with its own
 status. Policy (the server's protocol). serving/openai_api/door.py +8, routes.py +4. 86 120 to 86 132, +12 (measured).
 
+The frozen-plan replay's mechanism moved into the library (2026-11-12, the owner's red line: replay is tensor work):
+the recording interceptor (the allocator's copies, sets and synchronisations as actions), the launch recorder and the
+seams that arm it, the frozen plan (its input scan, its direct and graph replay) and its copies by logical values are
+`nbxtensor.backend.frozen_plan`; the long replay split into named functions holding the same statements. The engine's
+`triton/replay.py` keeps policy: when a sequence measures, records, verifies and replays, its signature, the lifetime
+of its plans, which frame names a broken recording (`STATE.site_of`). The library gained `Arena.slots` and
+`NBXTensor.device_idx` for it. 86 125 to 85 771, -354 (measured, `brick_ratchet.code_lines`):
+
+| file | lines | what it holds |
+|---|---|---|
+| triton/replay.py | -354 (961 -> 607) | the moved mechanism out; one import of the library's names |
+| nbxtensor backend/frozen_plan.py | +396 (library) | the recording, the seams, the plan, the copies |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
@@ -492,7 +505,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | duplicate | src/neurobrix/triton/samplers.py | __init__ | the Triton branch's twin of core/module/autoregressive/samplers.py, which imports torch at module level (R33) |
 | wrapper | src/neurobrix/kernels/autotune_certify.py | log | certify's default log when no caller gives one: an unbuffered print, so an hours-long run is read while it runs |
 | wrapper | src/neurobrix/triton/kv_cache.py | intercept(enable_gqa) | the SDPA signature the interceptor stands in for: a graph's call may carry the kwarg, and the interceptor must accept every argument of the op it replaces |
-| wrapper | src/neurobrix/triton/replay.py | slab_refused | the allocator-interceptor protocol's hook: nbxtensor's slab allocator (nbxtensor/memory/slab.py) calls `slab_refused(reason)` on the interceptor in force |
 | wrapper | src/neurobrix/triton/moe.py | _host_expert(_h) | the default argument binds the layer's host tables at definition — a closure capture, not a parameter a caller passes |
 | wrapper | src/neurobrix/triton/generator.py | from_config | the factory interface every generator shares (core/module/autoregressive's generators and samplers have it): the flows construct through it |
 | wrapper | src/neurobrix/triton/symbols.py | get | the symbol table's accessor (6 403 call sites): the bindings dict stays private, `is_bound` decides boundness |

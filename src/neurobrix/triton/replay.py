@@ -165,7 +165,8 @@ def _store_slab_size(seq, sig: tuple, nbytes: int) -> None:
 # engine's policy: when a sequence measures, records, verifies and replays, its signature, its plans' lifetimes.
 from nbxtensor.backend.frozen_plan import (  # noqa: E402
     FrozenPlan, STATE, H2D as _H2D, KERNEL as _KERNEL, MEMCPY as _MEMCPY, MEMSET as _MEMSET, SETDEV as _SETDEV,
-    SYNC as _SYNC, _arm_launch_recorder, _copy_into, _drop_plan, _heap_copy, _install_seams, _plan_of)
+    SYNC as _SYNC, arm_launch_recorder as _arm_launch_recorder, copy_into as _copy_into, drop_plan as _drop_plan,
+    heap_copy as _heap_copy, install_seams as _install_seams, plan_of as _plan_of)
 # where a recording broke: the first engine frame outside the replayer (the library names no application's files)
 STATE.site_of = lambda filename: "neurobrix" in filename and "replay" not in filename
 

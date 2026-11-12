@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nbxtensor.backend.frozen_plan`: the frozen-plan replay — a device step recorded once (the allocator's copies, sets
   and synchronisations and the launcher's launches, as actions) and replayed as direct launches or captured device
   graphs: `STATE` (the recording interceptor; `site_of`, the caller's predicate naming where a recording broke),
-  `FrozenPlan`, `_install_seams`, `_arm_launch_recorder`, the action tags. Moved from the NeuroBrix engine, which
+  `FrozenPlan`, `install_seams`, `arm_launch_recorder`, the action tags. Moved from the NeuroBrix engine, which
   keeps only when a step is recorded, verified and replayed.
 - `Arena.slots`: the slot list itself, for a reader pairing it with a snapshot.
 - `NBXTensor.device_idx`: the card a tensor's memory is on.
