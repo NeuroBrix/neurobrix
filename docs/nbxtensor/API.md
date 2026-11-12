@@ -2652,6 +2652,11 @@ t.dtype: DType               t.device: Device              t.itemsize: int
 t.numel: int                 t.nbytes: int                 t.is_contiguous: bool
 t.memory_layout() -> (address, device kind, device index, dtype, shape, strides)   # what a kernel reads
 t.is_same_memory(other) -> bool   # the very same elements in the same order (two view objects of one layout); not an overlap test
+t.bits() -> Tensor                # the same bytes as the integer of the element width (uint8/int16/int32/int64); bool as itself
+t.same_bits(other) -> bool        # shape, dtype, device and every bit equal, compared on the device (+0.0 != -0.0, NaN == same NaN)
+t.storage_root() -> Tensor        # the allocation a view reads (its chain's root); a host tensor over numpy is its own root
+t.storage_address() -> int        # the address that allocation starts at (data_ptr() less the view's offset)
+t.shares_storage(other) -> bool   # one start address, or one root of the two view chains
 t.data_ptr() -> int          t.__cuda_array_interface__    # kept (nbx_tensor.py:3514)
 t.__dlpack__(stream=None)    t.__dlpack_device__()         # new: the only exchange protocol (rule 6)
 ```

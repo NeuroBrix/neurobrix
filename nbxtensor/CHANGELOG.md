@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device now breaks its plan by name instead of recording an action without its card.
 - `Arena.slots`: the slot list itself, for a reader pairing it with a snapshot.
 - `NBXTensor.device_idx`: the card a tensor's memory is on.
+- `NBXTensor.bits()`, `same_bits(other)`, `storage_root()`, `storage_address()` and `shares_storage(other)`: a
+  tensor read as the integers of its element width, a bit-for-bit comparison on the device (+0.0 and -0.0 differ, a
+  NaN equals itself), the allocation a view reads and whether two tensors view one allocation. The engine's invariant
+  state asks them before reusing or keeping a result; they lived in the engine until now.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

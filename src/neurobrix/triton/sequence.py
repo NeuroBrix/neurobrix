@@ -333,54 +333,6 @@ def _sync_deferred_all_devices(deferred) -> None:
         DeviceAllocator.set_device(prev)
 
 
-_BITS_OF_ITEMSIZE = {1: NBXDtype.uint8, 2: NBXDtype.int16, 4: NBXDtype.int32, 8: NBXDtype.int64}
-
-
-def _nbx_bits(t: NBXTensor) -> NBXTensor:
-    """The same bytes read as the unsigned/signed integer of the element's width (no copy of a contiguous tensor)."""
-    t = t.contiguous()
-    if t._dtype == NBXDtype.bool_:
-        return t
-    return NBXTensor(t._data_ptr, tuple(t.shape), tuple(t.stride()), _BITS_OF_ITEMSIZE[t.element_size()], t._device,
-                     t._offset, device_idx=t._device_idx, base=t._base if t._base is not None else t)
-
-
-def _nbx_same_bits(a: NBXTensor, b: NBXTensor) -> bool:
-    """Bitwise equality (shape, dtype, device and every bit) — the invariant state's reuse test, R30 mirror of
-    compiled_sequence._torch_same_bits, on this engine's own comparison and reduction kernels."""
-    if tuple(a.shape) != tuple(b.shape) or a._dtype != b._dtype or a._device_idx != b._device_idx:
-        return False
-    if a.numel() == 0:
-        return True
-    if a._dtype != NBXDtype.bool_ and a.element_size() not in _BITS_OF_ITEMSIZE:
-        return False                    # no integer of that width: never reused, always evaluated (exact)
-    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
-    return bool(_nbx_reduction_wrappers.all_wrapper(_nbx_elementwise_wrappers.eq(_nbx_bits(a), _nbx_bits(b))).item())
-
-
-def _nbx_keep(t: NBXTensor) -> NBXTensor:
-    return t.clone()
-
-
-def _nbx_address(t: NBXTensor) -> int:
-    return int(t._data_ptr) + int(t._offset) * t.element_size()
-
-
-def _nbx_root(t: NBXTensor) -> NBXTensor:
-    """The allocation a view reads: every NBXTensor view stores its chain's ROOT as `_base` (view, reshape, slices,
-    copies: `base=x._base if x._base is not None else x`), so the root is one step away — no walk. A base that is not
-    an NBXTensor (the numpy array `from_numpy` keeps alive) is no allocation of the device: the tensor is its own root.
-    (A walk to `_base is None` never ended on the gate scope's opaque arguments: two step-4 gates hung on it.)"""
-    b = t._base
-    return b if isinstance(b, NBXTensor) else t
-
-
-def _nbx_shares_storage(a: NBXTensor, b: NBXTensor) -> bool:
-    """Whether a and b view one allocation: the roots of their view chains (a view keeps its parent as `_base`)."""
-    return a._data_ptr == b._data_ptr or _nbx_root(a)._data_ptr == _nbx_root(b)._data_ptr
-
-
 @dataclass
 class CompiledOp:
     """Pre-compiled operation with closure-based argument resolution."""
@@ -924,7 +876,8 @@ class TritonSequence(SequenceSteps):
         for op in self._ops:
             if any(k in frontier for k in op.kill_slots):
                 op.kill_slots = tuple(k for k in op.kill_slots if k not in frontier)
-        self._invariant = InvariantState(plan, _nbx_same_bits, _nbx_keep, _nbx_shares_storage, _nbx_address)
+        self._invariant = InvariantState(plan, NBXTensor.same_bits, NBXTensor.clone, NBXTensor.shares_storage,
+                                         NBXTensor.data_ptr)
         self._inv_skip = self._invariant.skip_flags(len(self._ops))
 
     def release_invariant_state(self) -> None:

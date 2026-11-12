@@ -62,6 +62,8 @@ except Exception:
 # ============================================================================
 
 _TL_DTYPE_MAP = None
+# The integer that reads an element of each width as its bits (NBXTensor.bits).
+_BITS_OF_WIDTH = {1: NBXDtype.uint8, 2: NBXDtype.int16, 4: NBXDtype.int32, 8: NBXDtype.int64}
 
 
 def _get_tl_dtype(nbx_dtype: NBXDtype):
@@ -1533,6 +1535,48 @@ class NBXTensor:
     def memory_layout(self) -> tuple:
         """(address of the first element, device kind, device index, dtype, shape, strides): what a kernel reads."""
         return (self.data_ptr(), self._device, self._device_idx, self._dtype, tuple(self._shape), tuple(self._strides))
+
+    def bits(self) -> 'NBXTensor':
+        """The same bytes read as an integer of the element's width (uint8, int16, int32, int64), a bool tensor as
+        itself; no copy of a contiguous tensor. A width with no integer (complex128) is refused by name."""
+        if not self._contig:
+            return self.contiguous().bits()
+        if self._dtype == NBXDtype.bool_:
+            return self
+        if self._elem_size not in _BITS_OF_WIDTH:
+            raise TypeError(f"no integer is {self._elem_size} bytes wide: a {self._dtype.name}'s bits cannot be read")
+        return NBXTensor(self._data_ptr, self._shape, self._strides, _BITS_OF_WIDTH[self._elem_size], self._device,
+                         self._offset, device_idx=self._device_idx,
+                         base=self._base if self._base is not None else self)
+
+    def same_bits(self, other: 'NBXTensor') -> bool:
+        """Whether `other` holds the very bits `self` does: same shape, dtype and device, and every element bit for
+        bit (a NaN equals the same NaN; +0.0 differs from -0.0). Compared on the device by the library's kernels. A
+        dtype with no integer of its width is never the same (False: the caller evaluates again)."""
+        if (tuple(self._shape) != tuple(other.shape) or self._dtype != other.nbx_dtype
+                or self.memory_layout()[2] != other.memory_layout()[2]):
+            return False
+        if self._numel == 0:
+            return True
+        if self._dtype != NBXDtype.bool_ and self._elem_size not in _BITS_OF_WIDTH:
+            return False
+        from nbxtensor.ops import elementwise_wrappers as _ew, reduction_wrappers as _red
+        return bool(_red.all_wrapper(_ew.eq(self.bits(), other.bits())).item())
+
+    def storage_root(self) -> 'NBXTensor':
+        """The allocation this tensor reads: a view keeps its chain's root as `_base`, so the root is one step away. A
+        base that is not an NBXTensor (the numpy array a host tensor keeps alive) is no device allocation: the tensor
+        is its own root."""
+        return self._base if isinstance(self._base, NBXTensor) else self
+
+    def storage_address(self) -> int:
+        """The address the allocation this tensor views starts at (`data_ptr()` less the view's offset)."""
+        return self._data_ptr
+
+    def shares_storage(self, other: 'NBXTensor') -> bool:
+        """Whether `self` and `other` view one allocation: one start address, or one root of their view chains."""
+        return (self._data_ptr == other.storage_address()
+                or self.storage_root().storage_address() == other.storage_root().storage_address())
 
     def copy_(self, src, non_blocking: bool = False) -> 'NBXTensor':
         if isinstance(src, NBXTensor):
