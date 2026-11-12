@@ -1184,6 +1184,28 @@ class PrismSolver:
         return loose + max(sum(costs.get(n, 0) for n in ph) + (0 if owner in ph else int(outliving))
                            for ph in phases)
 
+    def _kv_capacity_bytes(self, dev: "DeviceState", bounded: set) -> int:
+        """What the decode cache may be sized against on `dev`: the USABLE part where a component's residency is granted
+        after the cache (`bounded`: an expert store, a zero3 card, a decoder's dealt files); on the Triton engine, the
+        part a component held WHOLE was accepted against (`_whole_usable_mb`, net of the drain's floor: the hot loop's
+        dead-tensor queue is a plan promise, never memory a cache is granted on); elsewhere the rung."""
+        if dev.device_string in bounded:
+            return int(self._usable_mb(dev) * 1024 * 1024)
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            return int(self._whole_usable_mb(dev) * 1024 * 1024)
+        return int(self._effective_capacity_mb(dev) * 1024 * 1024)
+
+    def _kv_card_room(self, cards, held: int, kv_plan) -> Optional[Tuple[str, int]]:
+        """(card, bytes) the decode cache and what the plan holds beside it leave the cache's ONE card on the Triton
+        engine, from the accounting that sized the cache — the drain's room there (`_assign_drain_cliffs`). Sized apart,
+        the two promised the same memory: deepseek-moe-16b-chat served on one V100-32GB, 31 376 MB held whole + a
+        session reach of 2 126 positions (930 MB) + a 725 MB cliff on a 32 195 MB card, out of memory from request 2
+        (2026-11-12). None elsewhere (several cards, another engine, no cache)."""
+        if kv_plan is None or not cards or len(cards) != 1 or engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        room = int(self._rung_part_mb(cards[0]) * 1024 * 1024)
+        return cards[0].device_string, room - held - int(kv_plan.memory_bytes)
+
     def _assign_drain_cliffs(self, container, plan, devices) -> None:
         """The deferred-drain cliff of every accelerator the plan uses, set on each component held
         there (`ComponentAllocation.deferred_drain_cliff_bytes`) — the figure the Triton hot loop
@@ -1236,6 +1258,11 @@ class PrismSolver:
                     continue
                 if key not in cliffs:
                     room_mb = self._rung_part_mb(dev) - whole_mb.get(key, 0.0)
+                    left = getattr(self, "_kv_card_left", None)
+                    if left is not None and left[0] == key:
+                        # the decode cache's card: what the components held there AND the cache leave it, as the
+                        # cache was sized (`_kv_card_left`) — the largest whole component alone left it the cache too
+                        room_mb = min(room_mb, left[1] / mib)
                     cliffs[key] = planned_drain_cliff_bytes(memory, room_mb * mib)
                 own.append(cliffs[key])
             # A component spread over several cards runs one queue per card's sequence; it
@@ -2936,6 +2963,7 @@ class PrismSolver:
 
         for best in ranked:
             score, strat_name, strat_allocs, strat_devices = best
+            _kv_only, self._kv_card_left = None, None
 
             if strat_name in self._host_declined:
                 self._rejected.append((strat_name, float(score), "its host side overshot the pool the profile declares (installed RAM less the engine's measured base), at this rung"))
@@ -3035,10 +3063,10 @@ class PrismSolver:
                     # PyTorch engine — 29 016 MB of files + 3 084 MB of cache planned on a card of 32 195 MB, out of
                     # memory at 31.7 GB in its first prefill (2026-11-11).
                     _bounded = (_store_devs | _z3_devs | self._dealt_cache_cards(strat_allocs, _kv_cards)) & {d.device_string for d in _cards}
-                    if _bounded:
-                        total_capacity = min(total_capacity, sum(
-                            int(self._usable_mb(d) * 1024 * 1024) if d.device_string in _bounded
-                            else int(self._effective_capacity_mb(d) * 1024 * 1024) for d in _cards))
+                    # ... and on the Triton engine a card whose components are held WHOLE keeps the drain's floor
+                    # (`_kv_capacity_bytes`): never a cache granted on the hot loop's queue (2026-11-12)
+                    total_capacity = min(total_capacity, sum(self._kv_capacity_bytes(d, _bounded) for d in _cards))
+                    _kv_only = _cards
 
                 if strat_name == "zero3":
                     # Weights leave the device only where the host is a
@@ -3157,6 +3185,7 @@ class PrismSolver:
                                            f"{decision.name} has no runtime yet ({decision.reason})"))
                     continue
                 kv_cache_plan = kv_plan
+                self._kv_card_left = self._kv_card_room(_kv_only, total_allocated, kv_plan)
                 if kv_plan is not None:
                     from neurobrix.core.state.policy import PolicyDecision
                     self._state_policy = PolicyDecision("pages", f"pages: the whole cache fits "

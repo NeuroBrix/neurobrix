@@ -666,3 +666,8 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | dead | src/neurobrix/nbx/neurotax.py | NeuroTaxParser.normalize_parent_module | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | dead | src/neurobrix/serving/engine.py | InferenceEngine.is_loaded | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | fact | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | _chunk_mask | the compiled engine's prefill-chunk mask as a torch tensor in the cache's dtype; nbxtensor's `paged_kv.chunk_mask` builds the same 0/-inf values as an NBXTensor, and nbxtensor never holds torch (R33) (lot A, 2026-11-08) |
+
+A served cache and the drain queue never share a byte (2026-11-12): Prism, policy, so in the engine. On the Triton engine
+the served decode cache of a card holding its components whole is granted beside the drain's floor (`_kv_capacity_bytes`),
+and that card's drain cliff is read from the same accounting (`_kv_card_room`). +14 code lines (measured), paid by
+`engine_of` imported once at the top of solver.py (-22): 82 843 to 82 835 (measured).
