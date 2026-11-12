@@ -958,8 +958,8 @@ def row_reduce_launches(kind: str, rows: int, feat: int, x: NBXDtype) -> List[La
 
 
 def fused_moe_launches(tokens: int, top_k: int, experts: int, hidden: int, inter: int, w: NBXDtype) -> List[Launch]:
-    """A fused MoE layer's three grouped GEMMs (`moe_wrappers.invoke_fused_moe`, `triton/moe._fused_moe_pass` and its
-    multi-card and expert-store forms): gate and up [hidden -> inter], down [inter -> hidden] with the routing weight
+    """A fused MoE layer's three grouped GEMMs (`moe_wrappers.invoke_fused_moe`, `ops.moe_fused`'s grouped passes and
+    their multi-card and expert-store forms): gate and up [hidden -> inter], down [inter -> hidden] with the routing weight
     and no top-k division. Every float operand is in the experts' dtype `w` (the layer casts the hidden states and the
     scores to it), the routing tables int64. The key's length class is the valid (token, expert) pairs' bucket,
     `tokens * top_k` — the same for every launch of the layer, whatever the routing (the padded extent is not keyed) —
