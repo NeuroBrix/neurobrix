@@ -2516,6 +2516,8 @@ plan_of(state) / drop_plan(plans, sig)    # a plan's resources, and their releas
 heap_copy(t) -> NBXTensor ; copy_into(frozen, new) -> None   # the copies by logical values (views kept in order)
 FrozenPlan.hand_out_outputs(arena) -> None   # the plan's outputs handed to the arena as fresh heap copies
 STATE.open_measurement() -> None             # a fresh watermark window
+StepSlab.for_carved(carved_bytes, dev_idx) -> StepSlab   # a decode step's slab (margin: MARGIN_RATIO, MARGIN_BYTES)
+DeviceAllocator.register_idle_reclaimer(reclaim) -> None  # reclaim(dev) -> bytes, called on a refused malloc
 measure(run, device_idx) -> (slab_bytes, {other card: slab_bytes}, live_peak)   # run() under the watermark counter
 room_for(dev, slab_bytes, verify_bytes) -> (fits, free)   # cached memory given back, then whether both fit
 slabs(slab_bytes, device_idx, others) -> (SlabAllocator, {card: SlabAllocator})  # nothing held on a failure

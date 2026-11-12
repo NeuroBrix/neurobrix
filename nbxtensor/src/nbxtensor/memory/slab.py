@@ -137,9 +137,18 @@ class StepSlab(SlabAllocator):
     recycled — safe because each step's consumers run before the next
     step begins in the synchronous decode timeline)."""
 
+    #: what a step slab adds to the bytes a measured step carved: a quarter more, and 64 MiB (the decode stabilizer's
+    #: own margin since its introduction — a measured step's carve sequence may vary by a few allocations)
+    MARGIN_RATIO, MARGIN_BYTES = 1.25, 64 << 20
+
     def __init__(self, nbytes: int, dev_idx: Optional[int]) -> None:
         super().__init__(nbytes, dev_idx)
         self.stale: set = set()
+
+    @classmethod
+    def for_carved(cls, carved_bytes: int, dev_idx: Optional[int]) -> "StepSlab":
+        """The step slab for a step that carved `carved_bytes` in total (pure bump: no reuse inside a step)."""
+        return cls(int(carved_bytes * cls.MARGIN_RATIO) + cls.MARGIN_BYTES, dev_idx)
         self.carve_sizes: List[int] = []   # diagnosis: per-step size seq
         self.prev_carve: Optional[List[int]] = None
 

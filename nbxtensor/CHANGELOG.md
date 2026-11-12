@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   released — the mechanism of the replay's state machine, whose decisions stay the caller's.
 - `DeviceAllocator.give_back_cached(dev)`: a card's cached free memory (the expandable range's chunks, the pool's
   blocks) back to the driver after its work ends.
+- `StepSlab.for_carved`, `DeviceAllocator.register_idle_reclaimer`: a decode step's slab sized in the library; an
+  application's idle-memory reclaimer registered through a public call. A recording that cannot read the current
+  device now breaks its plan by name instead of recording an action without its card.
 - `Arena.slots`: the slot list itself, for a reader pairing it with a snapshot.
 - `NBXTensor.device_idx`: the card a tensor's memory is on.
 

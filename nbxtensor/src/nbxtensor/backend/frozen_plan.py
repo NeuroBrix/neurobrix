@@ -86,7 +86,8 @@ class _State(SlabInterceptor):
         """
         try:
             dev = DeviceAllocator.get_device()
-        except Exception:                                   # pragma: no cover
+        except Exception as e:                              # pragma: no cover
+            self.break_plan(f"the current device could not be read ({e}): an action's card cannot be recorded")
             return
         if dev != self.rec_dev:
             self.rec_dev = dev

@@ -203,13 +203,9 @@ def _stabilize_tick(seq) -> None:
             seq.__dict__.get("_stab_slab") is None:
         # PURE-BUMP sizing: the slab must hold the step's TOTAL carved
         # bytes (no intra-step reuse), not the live high-water.
-        need = int(seq.__dict__.pop("_stab_total") * 1.25) + (64 << 20)
-        dev = None
-        try:
-            dev = DeviceAllocator.get_device()
-        except Exception:
-            pass
-        seq.__dict__["_stab_slab"] = StepSlab(need, dev)
+        slab = StepSlab.for_carved(seq.__dict__.pop("_stab_total"), DeviceAllocator.get_device())
+        need = slab.size
+        seq.__dict__["_stab_slab"] = slab
         comp = str((seq.dag or {}).get("component_name", "?"))
         _log.debug(f"[StepSlab] {comp}: stabilizing decode allocations "
                    f"({need / 1e6:.0f} MB slab)")
@@ -321,7 +317,7 @@ def release_idle_slabs(dev: int) -> int:
     return freed
 
 
-DeviceAllocator._idle_reclaimers.append(release_idle_slabs)
+DeviceAllocator.register_idle_reclaimer(release_idle_slabs)
 
 
 def retire_sequence_plans(seq) -> int:
@@ -578,7 +574,7 @@ def _mem_diag(tag: str) -> None:
     at replay state transitions (retention forensics)."""
     if os.environ.get("NBX_REPLAY_MEM_DIAG") != "1":
         return
-    total = sum(DeviceAllocator._cuda_live_bytes.values())
+    total = DeviceAllocator.memory_allocated()
     _log.debug(f"[Replay][MEM] {tag}: live_tracked={total/1e6:.0f}MB")
 
 

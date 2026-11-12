@@ -1320,6 +1320,13 @@ class DeviceAllocator:
     # specific zero3 leak).
     # ------------------------------------------------------------------
 
+    @classmethod
+    def register_idle_reclaimer(cls, reclaim) -> None:
+        """`reclaim(dev) -> bytes` is called when a malloc on `dev` is refused after the pool's flush, to release memory
+        an application holds idle (a replayer's slabs between runs); registered once."""
+        if reclaim not in cls._idle_reclaimers:
+            cls._idle_reclaimers.append(reclaim)
+
     @staticmethod
     def memory_allocated(device_idx: Optional[int] = None) -> int:
         """Live bytes allocated via malloc_cuda on the given device.
