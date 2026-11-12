@@ -2675,6 +2675,7 @@ t.same_bits(other) -> bool        # shape, dtype, device and every bit equal, co
 t.storage_root() -> Tensor        # the allocation a view reads (its chain's root); a host tensor over numpy is its own root
 t.storage_address() -> int        # the address that allocation starts at (data_ptr() less the view's offset)
 t.shares_storage(other) -> bool   # one start address, or one root of the two view chains
+t.saturated(dtype) -> Tensor      # a one-element f32/f64 tensor beyond a half dtype's finite range: a new one holding the clamped value; else itself
 t.data_ptr() -> int          t.__cuda_array_interface__    # kept (nbx_tensor.py:3514)
 t.__dlpack__(stream=None)    t.__dlpack_device__()         # new: the only exchange protocol (rule 6)
 ```

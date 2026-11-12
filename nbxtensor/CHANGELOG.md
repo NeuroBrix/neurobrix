@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   freed, every other entry viewing one of their allocations is replaced by its `contiguous()`. The engine's weight
   eviction called its own two copies of it. Known limit, kept from them: a view that is already contiguous is its own
   `contiguous()` and still reads the freed memory.
+- `NBXTensor.saturated(dtype)`: a one-element float32 or float64 tensor holding a finite value beyond a half dtype's
+  range comes back as a new tensor (same dtype, shape and card) holding the clamped value (`saturate_scalar`);
+  anything else is itself. The engine's `where` wrap called its own copy, which uploaded to the current card.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

@@ -1563,6 +1563,22 @@ class NBXTensor:
         from nbxtensor.ops import elementwise_wrappers as _ew, reduction_wrappers as _red
         return bool(_red.all_wrapper(_ew.eq(self.bits(), other.bits())).item())
 
+    def saturated(self, dtype) -> 'NBXTensor':
+        """`self`, unless it is a one-element float32 or float64 tensor holding a finite value beyond the range of the
+        half floating `dtype` (a name or an enum member) — then a new one-element tensor of self's dtype, shape and
+        card holding that value clamped to the range (`dtype.convert.saturate_scalar`): a mask sentinel written for
+        one half format holds in the other. The element is read on the host (one element, once)."""
+        if self._numel != 1 or self._dtype not in (NBXDtype.float32, NBXDtype.float64):
+            return self
+        import numpy as np
+        from nbxtensor.dtype.convert import saturate_scalar
+        v = float(self.numpy().reshape(-1)[0])
+        sv = saturate_scalar(v, dtype)
+        if sv == v:
+            return self
+        host = np.full(self._shape, sv, dtype=np.float64 if self._dtype == NBXDtype.float64 else np.float32)
+        return NBXTensor.from_numpy(host, device=self._device_idx)
+
     def storage_root(self) -> 'NBXTensor':
         """The allocation this tensor reads: a view keeps its chain's root as `_base`, so the root is one step away. A
         base that is not an NBXTensor (the numpy array a host tensor keeps alive) is no device allocation: the tensor

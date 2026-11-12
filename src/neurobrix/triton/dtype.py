@@ -145,24 +145,6 @@ def _is_half(dtype) -> bool:
     return _itemsize.kind(name) == "float" and _itemsize.itemsize(name) == 2
 
 
-def _saturated_one_element(t, out_dt):
-    """`t` itself, unless it is a one-element float tensor wider than `out_dt` holding a finite
-    value beyond `out_dt`'s range — then a one-element tensor of `t`'s dtype holding the
-    saturated value, same shape."""
-    if not _is_float_tensor(t) or t.numel() != 1:
-        return t
-    if _get_nbx_dtype(t) not in (NBXDtype.float32, NBXDtype.float64):
-        return t
-    import numpy as np
-    v = float(np.asarray(t.numpy()).reshape(-1)[0])
-    sv = saturate_scalar(v, out_dt)
-    if sv == v:
-        return t
-    arr = np.full(tuple(t.shape), sv, dtype=np.float64 if _get_nbx_dtype(t) == NBXDtype.float64 else np.float32)
-    return NBXTensor.from_numpy(arr)
-
-
-
 # `traced_output_dtype_name`, `traced_output_is_complex` and `amp_fp32_output_dtype` are the library's
 # (nbxtensor/dtype/outputs.py), one definition for both engines.
 from nbxtensor.dtype.outputs import (  # noqa: F401 — the library's rules, one definition for both engines
@@ -661,7 +643,7 @@ class TritonDtypeEngine:
         def where_func(cond, x, y, *rest, **kwargs):
             out_dt = _get_nbx_dtype(x) if _is_float_tensor(x) else None
             if _is_half(out_dt):
-                x, y = (_saturated_one_element(t, out_dt) for t in (x, y))
+                x, y = (t.saturated(out_dt) if isinstance(t, NBXTensor) else t for t in (x, y))
             return func(cond, x, y, *rest, **kwargs)
         return where_func
 
