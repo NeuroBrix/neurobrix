@@ -1034,14 +1034,18 @@ def _attention_oracle_fn(q, k, v, mask, scale):
     (a query row's cost: its Tk scores and their Tk x D products)."""
     tq, hd = q.shape[-2], q.shape[-1]
     tk = k.shape[-2]
+    # K and V read and widened ONCE, the window's two products through BLAS (`np.matmul` on the profile's threads):
+    # widened again in every window by a one-core `np.einsum`, a key over 262 144 cached positions took minutes of
+    # host time while its card waited (2026-11-12, the served chunks' certification of Qwen3-Coder-30B-A3B)
+    kt, vf = np.swapaxes(_f64(k), -1, -2), _f64(v)
 
     def rows(r0, r1):
-        s = np.einsum("bhqd,bhkd->bhqk", _f64(q[..., r0:r1, :]), _f64(k)) * scale
+        s = np.matmul(_f64(q[..., r0:r1, :]), kt) * scale
         if mask is not None:
             s = s + _f64(mask[..., r0:r1, :])
         s = s - s.max(axis=-1, keepdims=True)
         e = np.exp(s)
-        return np.einsum("bhqk,bhkd->bhqd", e / e.sum(axis=-1, keepdims=True), _f64(v))
+        return np.matmul(e / e.sum(axis=-1, keepdims=True), vf)
     wins = _row_windows(tq, hd, 2 * tk)
     if wins is None:
         return lambda: rows(0, tq)
