@@ -22,6 +22,9 @@ from neurobrix.kernels.classification import kernel_for as _kernel_for
 # Imported once for ALL THREE op-failure seams in this file: wiring only the
 # single-device one left the real reproducer — real-esrgan-x8 at 16 GB, which
 # goes through the multi-device path — printing no advice at all (2026-09-18).
+import numpy as np
+
+from nbxtensor import inspection as _inspection
 from nbxtensor.memory.oom_advice import annotate as _oom_annotate
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
@@ -355,31 +358,14 @@ class CompiledOp:
 
 
 def _fingerprint(t):
-    """A few deterministic samples of a tensor, cheap enough to print per op.
-
-    Shape and dtype alone cannot separate two runs that diverge in VALUE, which
-    is the only thing a two-arm comparison is looking for.
-    """
+    """A digest of every byte of a tensor, cheap enough to print per op: shape and dtype alone cannot separate two runs
+    that diverge in VALUE. A hash over the whole tensor, never a few samples (2026-09-17, whisper: five sampled
+    positions named the first place a difference reached a sample, not where it began)."""
     if t is None:
         return "None"
     try:
-        import numpy as _np
-        a = t.numpy() if getattr(t, "_device", "cpu") == "cpu" else t.to_cpu().numpy()
-        a = _np.asarray(a).reshape(-1)
-        if a.dtype == _np.uint16:                      # bf16 bits
-            a = ((a.astype(_np.uint32) << 16).view(_np.float32))
-        n = a.size
-        if n == 0:
-            return "empty"
-        # A HASH over every byte, not a handful of samples. Sampling five
-        # positions made two tensors that differ elsewhere look identical, and
-        # the first "divergence" it reported was simply the first place the
-        # difference reached a sampled index (2026-09-17, whisper: it named
-        # aten.native_layer_norm::12, and that kernel proved deterministic in
-        # isolation over 40 launches).
-        import hashlib as _h
-        digest = _h.blake2b(_np.ascontiguousarray(a).tobytes(), digest_size=8).hexdigest()
-        return f"n={n}#{digest}"
+        n = t.numel()
+        return "empty" if n == 0 else f"n={n}#{_inspection.digest(t, 'blake2b', digest_size=8)}"
     except Exception as e:                             # noqa: BLE001
         return f"<{type(e).__name__}>"
 
@@ -3369,29 +3355,10 @@ class TritonSequence(SequenceSteps):
             if t is None:
                 continue
             try:
-                from nbxtensor.dtype.nbx_dtype import NBXDtype
-                from nbxtensor.memory.allocator import DeviceAllocator
-                import ctypes as _ct
-                # Complex tensors: check finiteness on the real VIEW (interleaved
-                # real/imag floats), not by casting the complex elements to a
-                # single fp32 (which reads half the bytes -> false NaN/Inf). The
-                # view_as_real path reads all real+imag components correctly.
-                src = t.view_as_real() if t.is_complex() else t
-                full = src if src._dtype == NBXDtype.float32 else src.to(NBXDtype.float32)
-                full = full.contiguous()
-                DeviceAllocator.set_device(full._device_idx)
-                n = full.numel()
-                if n == 0:
-                    continue
-                buf = (_ct.c_float * n)()
-                DeviceAllocator.memcpy(_ct.addressof(buf), full.data_ptr(),
-                                       n * 4, kind=2)
-                import math as _math
-                has_nan = any(_math.isnan(v) for v in buf)
-                has_inf = any(_math.isinf(v) for v in buf)
-                if has_nan or has_inf:
+                # A complex tensor is read as its real view (both parts), never cast to one real per element.
+                flag = _inspection.non_finite(t) if t.numel() else None
+                if flag:
                     self._trace_nan_seen = True
-                    flag = "NaN" if has_nan else "Inf"
                     inp_info = []
                     for si in op.all_input_slots[:4]:
                         ti = arena[si] if arena else None
@@ -3419,125 +3386,19 @@ class TritonSequence(SequenceSteps):
         re/im) so l2/head cover BOTH components; memcpy'ing a complex buffer
         as N floats would read only the real parts (half the energy).
         """
-        from nbxtensor.dtype.nbx_dtype import NBXDtype
-        from nbxtensor.memory.allocator import DeviceAllocator
-        import ctypes as _ct
-        # Zero-numel guard: an empty tensor (e.g. a VACE all-generate control
-        # prefix new_zeros [1,0,1536]) has a 0-size dim. The reduction path below
-        # would index into that 0-dim (`flat[0]`) and launch contiguous/cast
-        # kernels over 0 elements → CUDA illegal address (error 700) that, async,
-        # corrupts the context and only surfaces at a later op's malloc — making
-        # the dump itself crash a run that computes fine without it. Empty
-        # tensors carry no values to diff, so return a trivial record.
-        if getattr(tensor, "_numel", None) == 0 or 0 in list(tensor.shape):
-            return {
-                "shape": list(tensor.shape),
-                "dtype": str(tensor.dtype),
-                "is_complex": bool(getattr(
-                    tensor, "is_complex", lambda: False)()),
-                "head10": [],
-                "last_pos10": None,
-                "l2_norm": 0.0,
-                "batch_norms": None,
-            }
-        # Multi-device: switch to the tensor's device before D2H memcpy.
-        if hasattr(tensor, '_device_idx'):
-            DeviceAllocator.set_device(tensor._device_idx)
-        src = tensor.view_as_real() if getattr(
-            tensor, "is_complex", lambda: False)() else tensor
-        flat = src
-        while flat.ndim > 1:
-            flat = flat[0]
-        # Cast to fp32 for comparable dumps across engines.
-        if flat.dtype != NBXDtype.float32:
-            flat = flat.to(NBXDtype.float32)
-        flat = flat.contiguous()
-        n = min(10, flat.numel())
-        buf = (_ct.c_float * n)()
-        DeviceAllocator.memcpy(_ct.addressof(buf), flat.data_ptr(),
-                               n * 4, kind=2)
-        head = list(buf)
-        # L2 norm over the full (flattened) tensor.
-        full = src
-        if full.dtype != NBXDtype.float32:
-            full = full.to(NBXDtype.float32)
-        full = full.contiguous()
-        N = full.numel()
-        fbuf = (_ct.c_float * N)()
-        DeviceAllocator.memcpy(_ct.addressof(fbuf), full.data_ptr(),
-                               N * 4, kind=2)
-        # numpy, never a Python loop: the norm was a per-element Python sum over a list of the
-        # whole tensor — minutes per op on a video-sized output, so an NBX_DUMP_TIDS run of
-        # Wan2.1-VACE triton-sequential stalled after the VAE encoder for 50 minutes where the
-        # run itself takes 77 s (2026-09-26). Same float64 accumulation as before.
-        import numpy as _np_st
-        vals = _np_st.frombuffer(fbuf, dtype=_np_st.float32)
-        _v64 = vals.astype(_np_st.float64)
-        norm = float(_np_st.sqrt(_np_st.dot(_v64, _v64)))
-        # Last-position window — mirror of the compiled and sequential
-        # dumpers (D-TSEQ-ORPHEUS-STEP110): first ten elements of the last
-        # index along axis 1 (rank >= 3, batch 0) or axis 0 (rank 2) of the
-        # (real-view) tensor; None below rank 2. `full` is contiguous, so
-        # the row offset is plain arithmetic on its shape.
-        _sshp = list(full.shape)
-        last = None
-        if len(_sshp) >= 3:
-            _row = 1
-            for _d in _sshp[2:]:
-                _row *= _d
-            _off = (_sshp[1] - 1) * _row
-            last = vals[_off:_off + min(10, _row)].tolist()     # never past the row
-        elif len(_sshp) == 2:
-            _off = (_sshp[0] - 1) * _sshp[1]
-            last = vals[_off:_off + min(10, _sshp[1])].tolist()
-        _batch_norms = None
-        _shp = list(tensor.shape)
-        if len(_shp) >= 2 and _shp[0] in (2, 3) and N % _shp[0] == 0:
-            _per = N // _shp[0]
-            _batch_norms = [
-                float(_np_st.sqrt(_np_st.dot(_v64[bi * _per:(bi + 1) * _per], _v64[bi * _per:(bi + 1) * _per])))
-                for bi in range(_shp[0])]
-        # NBX_DUMP_LASTROW=<dir>: write the FULL last-position row, not just
-        # its first ten values. `last_pos10` is a window, and a window cannot
-        # measure the distance between a logit vector and an fp64 oracle's —
-        # which is what re-baselining a byte gate on an accuracy change
-        # requires. Gated, off by default, and written from `vals`, which is
-        # already on the host for the L2 norm above, so it costs one file
-        # write and no extra device traffic. Use with NBX_DUMP_TIDS_FILTER to
-        # select the op.
-        import os as _os_lr
-        _lastrow_dir = _os_lr.environ.get("NBX_DUMP_LASTROW")
-        if _lastrow_dir and len(_sshp) >= 2:
+        rec = _inspection.value_stats(tensor)
+        # NBX_DUMP_LASTROW=<dir>: the FULL last-position row as .npy, not just its first ten values — a window cannot
+        # measure the distance between a logit vector and an fp64 oracle's, which re-baselining a byte gate on an
+        # accuracy change requires. Gated, off by default. Use with NBX_DUMP_TIDS_FILTER to select the op.
+        lastrow_dir = os.environ.get("NBX_DUMP_LASTROW")
+        if lastrow_dir and rec["last_pos10"] is not None:
             try:
-                import numpy as _np_lr
-                if len(_sshp) >= 3:
-                    _r = 1
-                    for _d in _sshp[2:]:
-                        _r *= _d
-                    _o = (_sshp[1] - 1) * _r
-                else:
-                    _r = _sshp[1]
-                    _o = (_sshp[0] - 1) * _r
-                _os_lr.makedirs(_lastrow_dir, exist_ok=True)
-                _np_lr.save(
-                    _os_lr.path.join(
-                        _lastrow_dir,
-                        "".join(c if c.isalnum() or c in "._-" else "_"
-                                for c in str(tid))
-                        + ".npy"),
-                    _np_lr.asarray(vals[_o:_o + _r], dtype=_np_lr.float32))
+                os.makedirs(lastrow_dir, exist_ok=True)
+                name = "".join(c if c.isalnum() or c in "._-" else "_" for c in str(tid)) + ".npy"
+                np.save(os.path.join(lastrow_dir, name), _inspection.last_position_row(tensor))
             except Exception:
                 pass  # a diagnostic must never break the run
-
-        return {
-            "shape": _shp,
-            "dtype": str(tensor.dtype),
-            "is_complex": bool(getattr(tensor, "is_complex", lambda: False)()),
-            "head10": head,
-            "last_pos10": last,
-            "l2_norm": norm,
-            "batch_norms": _batch_norms,
-        }
+        return rec
 
     def _maybe_dump_tid(self, op: 'CompiledOp', dump_path: str) -> None:
         """TEMP diagnostic: dump op output tensor to JSON if its tid matches.
@@ -3663,8 +3524,7 @@ class TritonSequence(SequenceSteps):
         Diff the JSONL across 3 runs: the FIRST op whose sha256 differs is
         the causal non-determinism site. Diagnostic only, same retained
         class as NBX_DUMP_TIDS / NBX_TRITON_TRACE_NAN."""
-        import os as _os_f, json as _json_f, hashlib as _hl
-        import ctypes as _ct_f
+        import os as _os_f, json as _json_f
         if not hasattr(self, "_fp_idx"):
             self._fp_idx = 0
         # Optional global cap on number of fingerprinted op-outputs
@@ -3680,7 +3540,6 @@ class TritonSequence(SequenceSteps):
         if not hasattr(self, "_slot_to_tid"):
             self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
         try:
-            from nbxtensor.memory.allocator import DeviceAllocator
             recs = []
             for out_slot in op.output_slots:
                 t = arena[out_slot] if arena else None
@@ -3693,23 +3552,17 @@ class TritonSequence(SequenceSteps):
                                  "op_type": op.op_type, "tid": tid,
                                  "sha": "none"})
                     continue
-                if hasattr(t, "_device_idx"):
-                    DeviceAllocator.set_device(t._device_idx)
-                c = t.contiguous()
-                nb = c._nbytes
+                nb = t.nbytes()
                 # The whole tensor unless a cap is asked for by name (core/runtime/fingerprint.py, the one door of
                 # both engines): a prefix named the wrong first differing op for Kokoro (2026-09-20)
                 from neurobrix.core.runtime.fingerprint import hashed_span
                 hb = hashed_span(nb)
-                buf = (_ct_f.c_char * hb)()
-                DeviceAllocator.memcpy(_ct_f.addressof(buf), c.data_ptr(),
-                                       hb, kind=2)
                 recs.append({
                     "i": self._fp_idx, "op_uid": op.op_uid,
                     "op_type": op.op_type, "tid": tid,
                     "shape": list(t.shape), "dtype": str(t.dtype),
                     "nbytes": nb, "hashed": hb,
-                    "sha": _hl.sha256(bytes(buf)).hexdigest()})
+                    "sha": _inspection.digest(t, "sha256", hb)})
             with open(path, "a") as f:
                 for r in recs:
                     _json_f.dump(r, f)

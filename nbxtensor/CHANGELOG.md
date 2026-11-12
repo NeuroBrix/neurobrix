@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tensor read as the integers of its element width, a bit-for-bit comparison on the device (+0.0 and -0.0 differ, a
   NaN equals itself), the allocation a view reads and whether two tensors view one allocation. The engine's invariant
   state asks them before reusing or keeping a result; they lived in the engine until now.
+- `nbxtensor.inspection`: `host_values`, `non_finite`, `value_stats`, `last_position_row` and `digest` — a tensor's
+  values read on the host for a diagnostic (a non-finite scan, the record a per-op value dump keeps, the last
+  position's row, a digest of the bytes in row-major order). The engine's NaN scan, value dumps and op fingerprints
+  call them instead of their own device-to-host copies.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

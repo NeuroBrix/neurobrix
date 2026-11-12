@@ -462,6 +462,22 @@ def token_bitmask(allowed, vocab) -> np.ndarray
     # the [1, ceil(vocab / 32)] int32 mask allowing exactly `allowed`
 ```
 
+### `nbxtensor.inspection` — a tensor's values read on the host for a diagnostic
+
+```python
+def host_values(t) -> np.ndarray
+    # every value as one flat float32 array (cast on the device); a complex tensor as its interleaved real/imag parts
+def non_finite(t) -> str | None
+    # "NaN" when a value is NaN, else "Inf" when one is infinite, else None
+def value_stats(t) -> dict
+    # shape, dtype, is_complex, head10 (first row), last_pos10 (last position's row, None below rank 2),
+    # l2_norm (float64 accumulation), batch_norms (per batch item when the batch is 2 or 3)
+def last_position_row(t) -> np.ndarray | None
+    # the whole last position's row: index -1 along axis 1 at rank >= 3 (batch 0), along axis 0 at rank 2
+def digest(t, algorithm: str, nbytes: int | None = None, **params) -> str
+    # hashlib.new(algorithm, bytes, **params).hexdigest() over the elements in row-major order, the first nbytes
+```
+
 ### `nbxtensor.ops.fused_upsample_conv` — a convolution streamed in bands of output rows
 
 ```python
