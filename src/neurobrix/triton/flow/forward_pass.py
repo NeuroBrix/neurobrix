@@ -14,6 +14,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import neurobrix.kernels.torch_interop as _torch_interop
 
 
 class TritonForwardPassHandler(ComponentFlowHandler):
@@ -112,12 +113,12 @@ class TritonForwardPassHandler(ComponentFlowHandler):
             input_ids, attention_mask = tp.tokenize_for_diffusion(prompt, device)
 
             # Convert torch tensors to NBXTensor if needed
-            input_ids = _ensure_nbx_tensor(input_ids)
+            input_ids = _torch_interop.torch_to_nbx(input_ids)
             self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
             self.ctx.variable_resolver.resolved["input_ids"] = input_ids
 
             if attention_mask is not None:
-                attention_mask = _ensure_nbx_tensor(attention_mask)
+                attention_mask = _torch_interop.torch_to_nbx(attention_mask)
                 self.ctx.variable_resolver.resolved["global.attention_mask"] = attention_mask
                 self.ctx.variable_resolver.resolved["attention_mask"] = attention_mask
 
@@ -125,17 +126,3 @@ class TritonForwardPassHandler(ComponentFlowHandler):
             raise RuntimeError(f"Tokenization failed: {e}") from e
 
 
-def _ensure_nbx_tensor(tensor) -> NBXTensor:
-    """Convert a tensor to NBXTensor if it isn't already.
-
-    Handles torch.Tensor → numpy → NBXTensor conversion at the boundary.
-    """
-    if isinstance(tensor, NBXTensor):
-        return tensor
-    # torch.Tensor boundary: convert via numpy
-    if hasattr(tensor, 'cpu'):
-        arr = tensor.detach().cpu().numpy()
-        return NBXTensor.from_numpy(arr)
-    if isinstance(tensor, np.ndarray):
-        return NBXTensor.from_numpy(tensor)
-    raise TypeError(f"Cannot convert {type(tensor)} to NBXTensor")

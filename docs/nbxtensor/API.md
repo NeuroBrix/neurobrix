@@ -2802,6 +2802,16 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs, make_buffer, r
     # Exercise a driver against the contract.
 ```
 
+### `nbxtensor.interop` — another library's array taken in through DLPack (never torch)
+
+`nbxtensor.interop`
+
+```python
+def from_dlpack(obj, device=None) -> NBXTensor
+    # The elements `obj` exports through DLPack: host memory copied in the order it shows (strides, bfloat16), this
+    # backend's own device memory wrapped in place, another vendor's device memory refused by name.
+```
+
 ### `nbxtensor.quant` — quantized tensors
 
 `nbxtensor.quant.quantized_tensor`

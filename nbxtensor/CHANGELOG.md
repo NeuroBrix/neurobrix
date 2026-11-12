@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a value read answering a host-born value or a benign one — refused while a device is visible. Moved from the
   NeuroBrix engine's census, which keeps which keys are recorded and its own seams; `from_numpy`'s stand-in now takes
   every argument `from_numpy` takes.
+- `nbxtensor.interop.from_dlpack(obj, device=None)`: take in another library's array through DLPack (a torch tensor,
+  a numpy array): host memory is copied in the order it shows, strided views and bfloat16 included; this backend's own
+  device memory is used in place; another vendor's device memory is refused with its name.
 - `ops.moe_fused.fused_moe(gate_scores, hidden_states, gate_weights, up_weights, down_weights, top_k, num_experts,
   ...)`: a whole mixture-of-experts layer in one call — the routing (top-k and renormalisation, or a blended routing
   taken as given), host experts promoted for the call, the experts' pointer tables, and the path the call's shape and

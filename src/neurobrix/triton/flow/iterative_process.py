@@ -27,6 +27,7 @@ from neurobrix.triton import vace_control_conditioning
 from neurobrix.triton import flux_video_conditioning
 from neurobrix.core.runtime.progress import StepProgress
 from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
+import neurobrix.kernels.torch_interop as _torch_interop
 import logging
 _log = logging.getLogger(__name__)
 
@@ -107,40 +108,6 @@ def _vram_probe(tag: str) -> None:
         _log.debug(f"[VRAM_PROBE {tag}] failed: {_e}")
 
 
-def _to_nbx(tensor) -> NBXTensor:
-    """Convert torch.Tensor to NBXTensor at the boundary.
-
-    CPU tensors: numpy → from_numpy on device 0 (H2D via cudaMemcpy, zero torch).
-    CUDA tensors: from_raw (pointer wrap, zero copy).
-    """
-    if isinstance(tensor, NBXTensor):
-        return tensor
-    if hasattr(tensor, 'data_ptr'):
-        # Contiguous-guard at the torch->NBXTensor boundary. The CUDA path
-        # (from_raw) wraps the data_ptr with CONTIGUOUS strides derived from
-        # shape alone, and the CPU path reads the buffer flat — both ignore a
-        # non-contiguous torch input's real strides. A non-contiguous input
-        # (e.g. run.py's --input-image `.permute(2,0,1)` channels-last view fed
-        # as global.image to an I2V vae_encoder) would then be read as if NCHW-
-        # contiguous, interleaving the RGB channels -> the VAE encoder encodes
-        # garbage -> wrong I2V conditioning (blue-cast). Materialise first.
-        # Zero-cost for already-contiguous tensors; triton-only (compiled
-        # unaffected). Mirror of the CLAUDE.md contiguous-guard pattern.
-        if hasattr(tensor, 'is_contiguous') and not tensor.is_contiguous():
-            tensor = tensor.contiguous()
-        if hasattr(tensor, 'is_cuda') and not tensor.is_cuda:
-            # CPU → CUDA via numpy path (zero torch)
-            DeviceAllocator.set_device(0)
-            arr = tensor.detach().numpy()
-            return NBXTensor.from_numpy(arr)
-        didx = tensor.device.index if hasattr(tensor.device, 'index') and tensor.device.index is not None else 0
-        return NBXTensor.from_raw(
-            tensor.data_ptr(), tuple(tensor.shape),
-            parse_dtype(str(tensor.dtype)), 'cuda',
-            owns_data=False, device_idx=didx, base=tensor)
-    return tensor
-
-
 class TritonIterativeProcessHandler(IterativeSteps):
     """
     Flow handler for iterative diffusion process — triton mode.
@@ -191,7 +158,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
     def _resolve_as_nbx(self, key: str):
         """Get value from variable_resolver, converting torch.Tensor → NBXTensor."""
         val = self.ctx.variable_resolver.get(key)
-        return _to_nbx(val) if val is not None else None
+        return _torch_interop.torch_to_nbx(val) if val is not None else None
 
     def execute(self) -> Dict[str, Any]:
         """
@@ -307,7 +274,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
                     candidate = f"{comp_name}.{suffix}"
                     if candidate in self.ctx.variable_resolver.resolved:
                         hidden_key = candidate
-                        hidden_state = _to_nbx(self.ctx.variable_resolver.resolved[candidate])
+                        hidden_state = _torch_interop.torch_to_nbx(self.ctx.variable_resolver.resolved[candidate])
                         break
                 if hidden_state is not None and hidden_key is not None:
                     tokenizer_vals = self._tokenizer_config_with_flags(comp_name, "tokenizer")
@@ -441,7 +408,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
         if handler and hasattr(handler, 'finalize_embeddings'):
             finalized = handler.finalize_embeddings(
                 hidden_state=neg_hidden_state,
-                attention_mask=_to_nbx(neg_attention_mask),  # REQUIRED for zero_pad_embeddings
+                attention_mask=_torch_interop.torch_to_nbx(neg_attention_mask),  # REQUIRED for zero_pad_embeddings
                 tokenizer_config=tokenizer_vals
             )
             neg_hidden_state = finalized["hidden_state"]
@@ -704,14 +671,14 @@ class TritonIterativeProcessHandler(IterativeSteps):
                     model_output = _sc.prev_pred
                     step_result = driver.step(model_output, timestep, current_state)
                     prev = step_result["prev_sample"] if isinstance(step_result, dict) else step_result.prev_sample
-                    current_state = _to_nbx(prev)
+                    current_state = _torch_interop.torch_to_nbx(prev)
                     _gate_loop_state_finite(current_state, step_idx,
                                             timestep, comp_name)
                     self.ctx.variable_resolver.set(state_key, current_state)
                     continue
 
                 # Scale model input — triton scheduler is NBXTensor-native (zero torch).
-                scaled_state = _to_nbx(driver.scale_model_input(current_state, timestep))
+                scaled_state = _torch_interop.torch_to_nbx(driver.scale_model_input(current_state, timestep))
                 self.ctx.variable_resolver.set(state_key, scaled_state)
 
                 # Get timestep scale for component
@@ -830,7 +797,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
                     # Driver step — triton scheduler is NBXTensor-native (zero torch).
                     step_result = driver.step(model_output, timestep, current_state)
                     prev = step_result["prev_sample"] if isinstance(step_result, dict) else step_result.prev_sample
-                    current_state = _to_nbx(prev)
+                    current_state = _torch_interop.torch_to_nbx(prev)
 
                     # Always-on state-finiteness gate (one isfinite per
                     # step boundary; raises with step context). R30

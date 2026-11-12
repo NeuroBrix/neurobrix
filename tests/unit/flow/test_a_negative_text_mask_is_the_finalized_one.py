@@ -94,8 +94,8 @@ def _run_negative_encoding(monkeypatch, module_name, tokenizer_cfg, encoded_len,
             return ids, mask
 
     monkeypatch.setattr("neurobrix.core.module.text.processor.TextProcessor", _TextProcessor)
-    if hasattr(flow, "_to_nbx"):                       # the Triton flow wraps at its boundary; the stand-ins pass through
-        monkeypatch.setattr(flow, "_to_nbx", lambda t, *a, **k: t)
+    if hasattr(flow, "_torch_interop"):                # the Triton flow converts at its boundary; the stand-ins pass through
+        monkeypatch.setattr(flow._torch_interop, "torch_to_nbx", lambda t, *a, **k: t)
 
     finalizer = SimpleNamespace(
         finalize_embeddings=lambda **kw: TextEncoderComponentHandler.finalize_embeddings(None, **kw))

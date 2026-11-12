@@ -667,6 +667,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | wrapper | src/neurobrix/core/runtime/symint.py | __radd__ | Python's reflected-operator protocol: 2 + s calls it, never by name |
 | wrapper | src/neurobrix/core/runtime/symint.py | __rmul__ | Python's reflected-operator protocol: 2 * s calls it, never by name |
 | wrapper | src/neurobrix/core/runtime/symint.py | __str__ | Python's str() protocol |
+| wrapper | src/neurobrix/kernels/torch_interop.py | torch_to_nbx(device) | torch's names, which nbxtensor never holds (it never imports torch): an MPS tensor's buffer is torch's on Metal and travels as a host copy, a tensor needing grad is detached; the crossing itself is the library's `interop.from_dlpack` (replaces four engine copies, 2026-11-12) |
 | dead | src/neurobrix/nbx/cache.py | NBXCache.list_cached | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | dead | src/neurobrix/nbx/neurotax.py | NeuroTaxParser.normalize_parent_module | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | dead | src/neurobrix/serving/engine.py | InferenceEngine.is_loaded | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |

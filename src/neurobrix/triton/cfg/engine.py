@@ -25,30 +25,9 @@ from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_f
 from neurobrix.core.runtime.resolution.negative_pooled_condition import negative_swaps as _negative_swaps
 from neurobrix.triton import i2v_conditioning as _i2v
 from neurobrix.triton import vace_control_conditioning as _vace
+import neurobrix.kernels.torch_interop as _torch_interop
 import logging
 _log = logging.getLogger(__name__)
-
-
-def _ensure_nbx(tensor) -> NBXTensor:
-    """Convert torch.Tensor → NBXTensor at the boundary.
-
-    CPU tensors: numpy → from_numpy (H2D via cudaMemcpy, zero torch).
-    CUDA tensors: from_raw (pointer wrap, zero copy).
-    """
-    if isinstance(tensor, NBXTensor) or tensor is None:
-        return tensor
-    if hasattr(tensor, 'data_ptr'):
-        if hasattr(tensor, 'is_cuda') and not tensor.is_cuda:
-            # CPU → CUDA via numpy path (zero torch)
-            DeviceAllocator.set_device(DeviceAllocator.get_device())
-            arr = tensor.detach().numpy()
-            return NBXTensor.from_numpy(arr)
-        didx = tensor.device.index if hasattr(tensor.device, 'index') and tensor.device.index is not None else 0
-        return NBXTensor.from_raw(
-            tensor.data_ptr(), tuple(tensor.shape),
-            parse_dtype(str(tensor.dtype)), 'cuda',
-            owns_data=False, device_idx=didx, base=tensor)
-    return tensor
 
 
 def _resolve_optional_port(variable_resolver: Any, port: str) -> Any:
@@ -197,8 +176,8 @@ class TritonCFGEngine(CFGSteps):
         splits this component's guidance (`ExecutionPlan.cfg_split_components`) — one pass per
         branch. R30 mirror of core/cfg/engine.py."""
         # Convert torch.Tensor → NBXTensor at boundary
-        current_state = _ensure_nbx(current_state)
-        timestep = _ensure_nbx(timestep)
+        current_state = _torch_interop.torch_to_nbx(current_state)
+        timestep = _torch_interop.torch_to_nbx(timestep)
 
         return self._execute_batched_cfg(
             comp_name, current_state, timestep, guidance_scale, encoder_dtype
@@ -227,8 +206,8 @@ class TritonCFGEngine(CFGSteps):
         encoder_comp = encoder_key.split(".")[0]
         negative_key = f"{encoder_comp}.negative_hidden_state"
 
-        pos_hidden = _ensure_nbx(self._ctx.variable_resolver.get(encoder_key))
-        neg_hidden = _ensure_nbx(self._ctx.variable_resolver.get(negative_key))
+        pos_hidden = _torch_interop.torch_to_nbx(self._ctx.variable_resolver.get(encoder_key))
+        neg_hidden = _torch_interop.torch_to_nbx(self._ctx.variable_resolver.get(negative_key))
 
         if neg_hidden is None:
             raise RuntimeError(
@@ -245,9 +224,9 @@ class TritonCFGEngine(CFGSteps):
         if encoder_comp != "text_encoder" and encoder_comp.startswith("text_encoder_"):
             suffix = "_" + encoder_comp.split("text_encoder_")[1]
         mask_var = f"global.attention_mask{suffix}"
-        pos_mask = _ensure_nbx(self._ctx.variable_resolver.get(mask_var))
+        pos_mask = _torch_interop.torch_to_nbx(self._ctx.variable_resolver.get(mask_var))
         if pos_mask is None:
-            pos_mask = _ensure_nbx(self._ctx.variable_resolver.get("global.attention_mask"))
+            pos_mask = _torch_interop.torch_to_nbx(self._ctx.variable_resolver.get("global.attention_mask"))
 
         if pos_hidden.shape[1] != neg_hidden.shape[1]:
             raise RuntimeError(
@@ -255,9 +234,9 @@ class TritonCFGEngine(CFGSteps):
             )
 
         # Save originals
-        orig_hidden = _ensure_nbx(self._ctx.variable_resolver.get(encoder_key))
+        orig_hidden = _torch_interop.torch_to_nbx(self._ctx.variable_resolver.get(encoder_key))
         orig_state = current_state
-        orig_timestep = _ensure_nbx(self._ctx.variable_resolver.loop_state.get(self._ctx.loop_id))
+        orig_timestep = _torch_interop.torch_to_nbx(self._ctx.variable_resolver.loop_state.get(self._ctx.loop_id))
 
         # Batch inputs: [uncond, cond] — align dtypes before cat
         if hasattr(neg_hidden, '_dtype') and hasattr(pos_hidden, '_dtype') and neg_hidden._dtype != pos_hidden._dtype:
@@ -272,7 +251,7 @@ class TritonCFGEngine(CFGSteps):
         batched_mask = None
         if pos_mask is not None and pos_mask.shape[-1] == pos_hidden.shape[1]:
             neg_mask = _negative_mask_for(
-                _ensure_nbx(self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None)),
+                _torch_interop.torch_to_nbx(self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None)),
                 neg_hidden, encoder_comp)
             if neg_mask is None:
                 # Create ones tensor via NBXTensor
@@ -343,10 +322,10 @@ class TritonCFGEngine(CFGSteps):
             # below; real resolver failures (and _ensure_nbx boundary-
             # conversion errors) propagate (ZERO FALLBACK).
             _raw = _resolve_optional_port(self._ctx.variable_resolver, from_port)
-            _v = _ensure_nbx(_raw)
+            _v = _torch_interop.torch_to_nbx(_raw)
             if isinstance(_v, NBXTensor) and _v.dim() >= 1 and _v.shape[0] == 1:
                 extra_restore[from_port] = _v
-                self._ctx.variable_resolver.set(from_port, NBXTensor.cat([_ensure_nbx(_negatives[from_port]) if from_port in _negatives else _v, _v], dim=0))
+                self._ctx.variable_resolver.set(from_port, NBXTensor.cat([_torch_interop.torch_to_nbx(_negatives[from_port]) if from_port in _negatives else _v, _v], dim=0))
 
         # Batch timestep
         if timestep.dim() == 0:
@@ -373,10 +352,10 @@ class TritonCFGEngine(CFGSteps):
             if batched_mask is not None:
                 batched["global.encoder_attention_mask"] = batched_mask
             if _vace_restore is not None:
-                batched[_vace.CONTROL_VAR] = _ensure_nbx(
+                batched[_vace.CONTROL_VAR] = _torch_interop.torch_to_nbx(
                     self._ctx.variable_resolver.resolved.get(_vace.CONTROL_VAR))
             for _k in extra_restore:
-                batched[_k] = _ensure_nbx(self._ctx.variable_resolver.get(_k))
+                batched[_k] = _torch_interop.torch_to_nbx(self._ctx.variable_resolver.get(_k))
             halves = []
             for branch in range(2):
                 for _k, _t in batched.items():

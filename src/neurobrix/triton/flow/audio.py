@@ -21,6 +21,7 @@ from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.flow.shared_steps import AudioSteps   # the steps both branches share
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
+import neurobrix.kernels.torch_interop as _torch_interop
 import logging
 _log = logging.getLogger(__name__)
 
@@ -191,8 +192,8 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
                 variable_resolver=self.ctx.variable_resolver,
             )
             input_ids_torch, attention_mask_torch = tp.tokenize_for_diffusion(prompt, device)
-            input_ids = _torch_to_nbx(input_ids_torch)
-            attention_mask = _torch_to_nbx(attention_mask_torch) if attention_mask_torch is not None else None
+            input_ids = _torch_interop.torch_to_nbx(input_ids_torch)
+            attention_mask = _torch_interop.torch_to_nbx(attention_mask_torch) if attention_mask_torch is not None else None
 
         self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
         self.ctx.variable_resolver.resolved["input_ids"] = input_ids
@@ -301,11 +302,11 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
                 if c.get("to") == f"{comp_name}.{iname}":
                     v = resolved.get(c.get("from"))
                     if _is_tensor(v):
-                        return _torch_to_nbx(v)
+                        return _torch_interop.torch_to_nbx(v)
             for key in (f"global.{iname}", iname, f"{comp_name}.{iname}"):
                 v = resolved.get(key)
                 if _is_tensor(v):
-                    return _torch_to_nbx(v)
+                    return _torch_interop.torch_to_nbx(v)
             return None
 
         actual_input = _resolve(graph_input_name)
@@ -409,17 +410,6 @@ def _is_tensor(val) -> bool:
     if isinstance(val, NBXTensor):
         return True
     return hasattr(val, 'shape') and hasattr(val, 'dtype') and hasattr(val, 'device')
-
-
-def _torch_to_nbx(tensor) -> NBXTensor:
-    """Convert torch.Tensor to NBXTensor at the boundary.
-
-    This is the ONLY place torch is used — at the preprocessing boundary.
-    """
-    if isinstance(tensor, NBXTensor):
-        return tensor
-    arr = tensor.detach().cpu().numpy()
-    return NBXTensor.from_numpy(arr)
 
 
 def _find_model_config_path(ctx) -> Path:

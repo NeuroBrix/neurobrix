@@ -115,6 +115,19 @@ def set_torch_device(device) -> None:
     torch.cuda.set_device(device)
 
 
+def torch_to_nbx(tensor, device=None):
+    """A torch tensor (or a numpy array) as an NBXTensor, through DLPack (`nbxtensor.interop.from_dlpack`: strides,
+    bfloat16 and the producer's lifetime handled there). The engine's part is torch's names: an MPS tensor's buffer
+    is torch's on Metal, never this runtime's, so it travels as a host copy; a tensor needing grad is detached. An
+    NBXTensor, None or a non-tensor value passes through unchanged."""
+    if tensor is None or isinstance(tensor, NBXTensor) or not hasattr(tensor, "__dlpack__"):
+        return tensor
+    from nbxtensor.interop import from_dlpack
+    if getattr(getattr(tensor, "device", None), "type", "cpu") == "mps":
+        tensor = tensor.cpu()
+    return from_dlpack(tensor.detach() if hasattr(tensor, "detach") else tensor, device=device)
+
+
 def nbx_to_torch(tensor: 'NBXTensor'):
     """Convert NBXTensor to torch.Tensor via D2D copy.
 
@@ -134,9 +147,9 @@ def nbx_to_torch(tensor: 'NBXTensor'):
     if shares_heap:
         t = torch.empty(tensor.shape, dtype=nbx_dtype_to_torch(tensor._dtype),
                         device=device)
-        if tensor._nbytes > 0:
-            DeviceAllocator.memcpy(t.data_ptr(), tensor.data_ptr(),
-                                   tensor._nbytes)
+        if tensor._nbytes > 0:                  # a strided view's buffer is not its values in order: C order first
+            src = tensor.contiguous()
+            DeviceAllocator.memcpy(t.data_ptr(), src.data_ptr(), src.numel() * dtype_size(src._dtype))
         return t
 
     # Separate heaps: the values travel through the host. On unified memory
