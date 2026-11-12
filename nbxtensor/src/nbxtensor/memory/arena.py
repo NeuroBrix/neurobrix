@@ -107,6 +107,13 @@ class Arena:
         for i in range(start, end):
             self._slots[i] = None
 
+    def release(self) -> None:
+        """`clear_all` after every device holding one of the slots' tensors synchronised: a slot's last reference
+        dropped frees its memory, which a kernel still queued must not be reading."""
+        from nbxtensor.memory.deferred_frees import sync_devices_of
+        sync_devices_of(t for t in self._slots if t is not None)
+        self.clear_all()
+
     def clear_all(self) -> None:
         """Clear all tensors."""
         for i in range(len(self._slots)):

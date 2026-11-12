@@ -2381,6 +2381,7 @@ class GraphExecutor:
     def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
         """Load weights as NBXTensor (triton mode). Zero torch."""
         from neurobrix.triton.weight_loader import load_component_weights
+        from nbxtensor.memory.memory_pool import join_weights
         from nbxtensor.dtype.nbx_dtype import parse_dtype
         from nbxtensor.memory.allocator import DeviceAllocator
         from nbxtensor.ops import wrappers as _w
@@ -2456,7 +2457,7 @@ class GraphExecutor:
             # met a freed address (Ming-Lite-Omni triton, 2026-09-16: the
             # malloc trace names this line as the freer, through
             # set_moe_config → _load_what_the_rewrite_added).
-            self._weights.update(self._join_arenas(self._weights, loaded))
+            self._weights.update(join_weights(self._weights, loaded))
         else:
             self._weights = loaded
             self._weights.update(_taken)          # borrowed, not loaded: the lender's copy
@@ -2573,29 +2574,6 @@ class GraphExecutor:
         self._fp32_constants_bound = True
         if n:
             _log.debug(f"   [Triton] {n} constant(s) bound in fp32 once: their consumers compute in fp32")
-
-    @staticmethod
-    def _join_arenas(held: dict, loaded: dict) -> dict:
-        """`loaded` with its `_arenas` merged into `held`'s: every arena of
-        both loads stays referenced (the memory manager frees them by their
-        `device_idx`, never by the key, so a second arena on a device takes
-        a distinct key). Returns the dict to `update` with."""
-        if "_arenas" not in loaded:
-            return loaded
-        # An EMPTY `_arenas` from a load that put nothing on a device (the
-        # fusion's few added weights) replaced the first load's dict all the
-        # same — the second hole, found by the same trace (12:45).
-        merged = dict(held.get("_arenas") or {})
-        for dev, arena in (loaded.get("_arenas") or {}).items():
-            key = dev
-            n = 1
-            while key in merged and merged[key] is not arena:
-                key = f"{dev}#{n}"
-                n += 1
-            merged[key] = arena
-        out = dict(loaded)
-        out["_arenas"] = merged
-        return out
 
     def _reconcile_weight_keys(self) -> None:
         """Reconcile weight dict keys with graph param names.
@@ -6053,9 +6031,7 @@ class GraphExecutor:
         so `__del__` -> free_cuda cannot race an async kernel still reading the memory, and its
         recorded replay plans (slabs + captured graphs), which the weak registry does not. The
         next triton run compiles anew (`_ensure_triton_compiled`)."""
-        from nbxtensor.memory.allocator import DeviceAllocator as _DA
-        _DA.sync_device()
-        self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+        self._triton_seq._arena.release()  # type: ignore[attr-defined]
         from neurobrix.triton.replay import retire_sequence_plans
         retire_sequence_plans(self._triton_seq)
         self._triton_seq = None
@@ -6148,9 +6124,7 @@ class GraphExecutor:
             if self._compiled_seq is not None:
                 self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
             if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-                from nbxtensor.memory.allocator import DeviceAllocator as _DA
-                _DA.sync_device()
-                self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+                self._triton_seq._arena.release()  # type: ignore[attr-defined]
             if hasattr(self, '_tritonseq_captured'):
                 self._tritonseq_captured = {}
             if self._pieces_capture is not None:
@@ -6169,9 +6143,7 @@ class GraphExecutor:
             # Keep _persistent_tensor_ids — slot mappings remain valid in same sequence
 
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-            from nbxtensor.memory.allocator import DeviceAllocator as _DA
-            _DA.sync_device()
-            self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+            self._triton_seq._arena.release()  # type: ignore[attr-defined]
             # Keep _triton_seq alive — R2 rebinds fresh weights into same slots
 
         # Per-request state: drop the triton_sequential capture refs (mirror

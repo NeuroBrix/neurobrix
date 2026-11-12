@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   who holds the device's memory (blocks in use by size, the tensors alive on the large ones named or ORPHAN with their
   referrers, autotuners still holding tensors) and what an arena holds by region. The engine's NBX_LIVE_DUMP_ON_OOM
   dump walked the allocator's tables and the garbage collector itself.
+- `memory.memory_pool.release_weights`, `join_weights` and `Arena.release`: a loaded weight set released after
+  every device holding it synchronised (the library's bias and pointer-table caches dropped, the pool emptied), a
+  second load's arenas joined to the first's, an arena cleared after its devices drain. The engine did each itself
+  (its arena clears synchronised only the current device).
 
 ### Changed
 - The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,

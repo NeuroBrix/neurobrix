@@ -250,6 +250,7 @@ class Arena
     # O(1) tensor storage via integer-indexed list.
     # bytes_on(device_idx) -> (weights, rest): the bytes its slots hold on the device, each allocation once
     # census(large) -> {weights|inputs|intermediates: [tensors, bytes], empty, other, types, large: [(slot, tensor)]}
+    # release(): clear_all() after every device holding one of the slots' tensors synchronised
 ```
 
 `nbxtensor.memory.device_memory`
@@ -300,6 +301,11 @@ class DeferredFrees(cliff, count, floor=None, reserve=0, interval=1, one_device=
 ```python
 def release_flow_memory(device=None)
     # Release what a finished stage held: synchronise the devices named, collect garbage (finalizers free), give the pool's cached blocks back to the driver.
+def release_weights(weights: dict) -> bool
+    # the library's weight caches dropped; a set of NBXTensors (arenas under "_arenas") released after its devices
+    # synchronise, the pool emptied — True; another library's weights untouched — False
+def join_weights(held: dict, loaded: dict) -> dict
+    # `loaded` with its arenas merged into `held`'s (a second arena on a device under a distinct key), to update `held`
 def break_aliases(tensors, freed) -> int
     # Before the entries of `tensors` (list or dict) at `freed` are freed: every other entry viewing one of their allocations replaced by its contiguous(); the count.
 class ComponentArena
