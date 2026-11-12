@@ -212,7 +212,7 @@ def _left_after_release(device, mode) -> str:
     if str(mode or "").startswith("triton"):
         from nbxtensor.memory.allocator import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
-        return f"; the device still holds {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB live"
+        return f"; the device still holds {DA.memory_allocated(idx) / 2**20:.0f} MB live"
     from neurobrix.core.device_utils import device_allocator_figures
     f = device_allocator_figures(dev or None)
     if "allocated_mb" not in f:
@@ -3868,7 +3868,7 @@ class GraphExecutor:
                     from nbxtensor.memory.allocator import DeviceAllocator as _DA_ts
                     # Sum NBX live across all devices for parity with
                     # native path.
-                    _live = sum(_DA_ts._cuda_live_bytes.values()) / 1024 / 1024
+                    _live = _DA_ts.memory_allocated() / 1024 / 1024
                     _out_ptr = "?"
                     if output_tids and output_tids[0] in store:
                         _t = store[output_tids[0]]

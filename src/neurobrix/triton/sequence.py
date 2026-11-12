@@ -186,27 +186,11 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
     sampled, so a streamed component (Wan2.1-I2V's transformer at 480x832, where it runs out of
     memory) ran unseen."""
     try:
-        import ctypes as _ct
         import json as _json
-        from nbxtensor.memory.allocator import DeviceAllocator as _DA
-        from nbxtensor.backend.runtime import gpu_runtime as _rt_fn, backend_table as _bk_fn
-        rt, bk = _rt_fn(), _bk_fn()
-        dev = _DA.get_device()
-        live = _DA._cuda_live_bytes.get(dev, 0)
-        pool = sum(sz * len(ptrs) for sz, ptrs in _DA._POOL.free.get(dev, {}).items())
-        free_b, total_b = _ct.c_size_t(), _ct.c_size_t()
-        mgi = bk.get("mem_get_info", "cudaMemGetInfo")
-        if hasattr(rt, mgi):
-            getattr(rt, mgi)(_ct.byref(free_b), _ct.byref(total_b))
-        drv_free, drv_total = free_b.value, total_b.value
-        seen, held = set(), [0, 0]
-        for i, t in enumerate(arena._slots):
-            if t is None or not hasattr(t, "data_ptr") or getattr(t, "_device_idx", dev) != dev:
-                continue
-            ptr = t.data_ptr()
-            if ptr and ptr not in seen:
-                seen.add(ptr)
-                held[i >= arena._num_weights] += getattr(t, "_nbytes", 0)
+        dev = DeviceAllocator.get_device()
+        live, pool = DeviceAllocator.memory_allocated(dev), DeviceAllocator.pool_cached_bytes(dev)
+        drv_free, drv_total = DeviceAllocator.mem_get_info(dev)
+        held = arena.bytes_on(dev)
         mb = 1 << 20
         rec = {"op_idx": op_idx, "op_uid": op.op_uid, "op_type": getattr(op, "op_type", ""),
                "nbx_live_mb": live / mb, "nbx_pool_cached_mb": pool / mb,
@@ -3222,8 +3206,8 @@ class TritonSequence(SequenceSteps):
         if _live_diag:
             self._run_live_n = getattr(self, "_run_live_n", 0) + 1
             _log.debug(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} entry "
-                       f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
-                       f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB")
+                       f"live={DeviceAllocator.memory_allocated(self.device_idx) / 2**20:.0f}MB "
+                       f"pool={DeviceAllocator.pool_cached_bytes(self.device_idx) / 2**20:.0f}MB")
         try:
             # Phase 4a frozen-plan replay (the engine's default, `replay.ENABLED`):
             # 1st run per bucket = warmup (autotune fires), 2nd =
@@ -3291,8 +3275,8 @@ class TritonSequence(SequenceSteps):
             _w.set_activations_fp16_safe(_prev_safe)
             if _live_diag:
                 _log.debug(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} exit  "
-                           f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
-                           f"pool={DeviceAllocator._POOL.cached.get(self.device_idx, 0) / 2**20:.0f}MB")
+                           f"live={DeviceAllocator.memory_allocated(self.device_idx) / 2**20:.0f}MB "
+                           f"pool={DeviceAllocator.pool_cached_bytes(self.device_idx) / 2**20:.0f}MB")
 
     def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
         """Scan op output(s) for Inf/NaN. Print the first offender on
@@ -3620,8 +3604,7 @@ class TritonSequence(SequenceSteps):
                 # find when leakage begins. Cheap: just a counter read.
                 # Gate hoisted to run start (C1).
                 if _live_dump_n > 0 and op_idx % _live_dump_n == 0:
-                    from nbxtensor.memory.allocator import DeviceAllocator as _DA_p
-                    _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
+                    _live = DeviceAllocator.memory_allocated(DeviceAllocator.get_device())
                     _log.debug(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB")
                 # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L1: extended
                 # periodic trace. NBX_LIVE_WATERMARK_TRACE=path/to/file.jsonl

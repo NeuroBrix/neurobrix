@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stitch of a computation run in slices. Moved from the NeuroBrix engine's chunked region.
 - `io.safetensors.bf16_abs_maxima`: the largest magnitude of every bfloat16 tensor of a safetensors file, from its
   stored bytes. Moved from the engine's float16-safety scan.
+- `DeviceAllocator.pool_cached_bytes`, `pool_enabled`, `pool_stats`, `blocks_in_use` and `Arena.bytes_on`: the
+  allocator's and an arena's figures for an application's memory lines, forensic dumps and per-key states. The engine
+  read the allocator's private tables (`_cuda_live_bytes`, `_POOL`, `_cuda_ptr_size`, `_pool_enabled`) in a dozen places.
 
 ### Changed
 - The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,

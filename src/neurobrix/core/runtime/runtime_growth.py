@@ -70,7 +70,7 @@ def untracked_mb(devices) -> Optional[Dict[int, float]]:
         held = process_device_bytes(int(d))
         if held is None:
             return None
-        out[int(d)] = (int(held) - DA._cuda_live_bytes.get(int(d), 0)) / (1024 * 1024)
+        out[int(d)] = (int(held) - DA.memory_allocated(int(d))) / (1024 * 1024)
     return out
 
 

@@ -97,37 +97,12 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
 
 
 def _vram_probe(tag: str) -> None:
-    """Print free/total CUDA VRAM via cudaMemGetInfo, plus the NBX live-bytes
-    watermark from the DeviceAllocator (the raw cudaMalloc pool NBXTensor uses).
-    Zero torch — the triton path is torch-free end to end. Cheap — only fires
-    when NBX_UNLOAD_DIAG=1."""
-    import ctypes as _ct
+    """The current device's free and total memory from its runtime, and what the allocator holds live
+    (NBX_UNLOAD_DIAG=1); every backend, no vendor library loaded here."""
     try:
-        _libname = "libcudart.so"
-        try:
-            _rt = _ct.CDLL(_libname)
-        except OSError:
-            for _v in (12, 11, 10):
-                try:
-                    _rt = _ct.CDLL(f"libcudart.so.{_v}")
-                    break
-                except OSError:
-                    continue
-            else:
-                _log.debug(f"[VRAM_PROBE {tag}] libcudart not found")
-                return
-        _free = _ct.c_size_t(0)
-        _total = _ct.c_size_t(0)
-        _rt.cudaMemGetInfo(_ct.byref(_free), _ct.byref(_total))
-        _free_gb = _free.value / 1e9
-        _total_gb = _total.value / 1e9
-        _used_gb = _total_gb - _free_gb
-        try:
-            _nbx_alloc_gb = DeviceAllocator.memory_allocated() / 1e9
-        except Exception:
-            _nbx_alloc_gb = -1.0
-        _log.debug(f"[VRAM_PROBE {tag}] used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
-                   f"total={_total_gb:.2f}GB nbx_alloc={_nbx_alloc_gb:.2f}GB")
+        free_b, total_b = DeviceAllocator.mem_get_info()
+        _log.debug(f"[VRAM_PROBE {tag}] used={(total_b - free_b) / 1e9:.2f}GB free={free_b / 1e9:.2f}GB "
+                   f"total={total_b / 1e9:.2f}GB nbx_alloc={DeviceAllocator.memory_allocated() / 1e9:.2f}GB")
     except Exception as _e:
         _log.debug(f"[VRAM_PROBE {tag}] failed: {_e}")
 
@@ -1068,9 +1043,9 @@ class TritonIterativeProcessHandler(IterativeSteps):
             import os as _os_dbg
             if _os_dbg.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1":
                 from nbxtensor.memory.allocator import DeviceAllocator as _DA
-                pre_live = sum(_DA._cuda_live_bytes.values())
+                pre_live = _DA.memory_allocated()
                 self._unload_component(comp_name, force=True)
-                post_live = sum(_DA._cuda_live_bytes.values())
+                post_live = _DA.memory_allocated()
                 _log.debug(f"[UNLOAD] {comp_name}: live {pre_live/1024/1024:.0f}MB → {post_live/1024/1024:.0f}MB "
                            f"(freed {(pre_live-post_live)/1024/1024:.0f}MB)")
             else:

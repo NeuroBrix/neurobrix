@@ -59,6 +59,19 @@ class Arena:
         if not same:
             self.epoch += 1
 
+    def bytes_on(self, device_idx: int) -> tuple:
+        """(weights, the rest): the bytes the slots hold on device `device_idx`, each allocation counted once by its
+        address — the weight slots apart from the inputs and the intermediates."""
+        seen, held = set(), [0, 0]
+        for i, t in enumerate(self._slots):
+            if t is None or not hasattr(t, "data_ptr") or getattr(t, "_device_idx", device_idx) != device_idx:
+                continue
+            ptr = t.data_ptr()
+            if ptr and ptr not in seen:
+                seen.add(ptr)
+                held[i >= self._num_weights] += t.nbytes()
+        return held[0], held[1]
+
     def clear_intermediates(self):
         """Free intermediate slots (keep weights + inputs)."""
         start = self._num_weights + self._num_inputs

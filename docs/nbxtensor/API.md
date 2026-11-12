@@ -133,6 +133,10 @@ class ImpossibleExtentError(RuntimeError)
     # An op would produce a tensor with an extent that cannot exist (<= 0 where the op defines a length, or a rank the op does not produce).
 class AllocatorInterceptor
     # What stands in front of the allocator's five device operations (allocate, free, copy, set, synchronise) while installed.
+DeviceAllocator.pool_cached_bytes(device_idx=None) -> int   # bytes parked in the pool's free blocks (None: every device)
+DeviceAllocator.pool_enabled() -> bool                      # freed blocks parked rather than returned (NBX_ALLOC_POOL)
+DeviceAllocator.pool_stats() -> dict                        # a copy of the pool's counters (hits, miss, flushes, evictions)
+DeviceAllocator.blocks_in_use(device_idx=None) -> dict      # {address: bytes} of the blocks tensors hold, the free ones apart
 ```
 
 `nbxtensor.memory.pages` — pure bookkeeping (standard library only: no tensor, no triton, no torch)
@@ -244,6 +248,7 @@ def append_counts(path) -> None                # append this process's line
 ```python
 class Arena
     # O(1) tensor storage via integer-indexed list.
+    # bytes_on(device_idx) -> (weights, rest): the bytes its slots hold on the device, each allocation once
 ```
 
 `nbxtensor.memory.device_memory`

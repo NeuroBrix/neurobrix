@@ -2746,36 +2746,6 @@ def oversize_for_class(exc: BaseException):
     return (asked, total_mb * 1024 * 1024) if asked > total_mb * 1024 * 1024 else None
 
 
-#: The allocator's pool drain, by the names an allocator may legitimately use. Probed as a
-#: LIST and refused when none matches: the previous code asked `empty_cache` then
-#: `device_empty_cache`, DeviceAllocator has neither (its drain is `empty_cache_pool`), and
-#: `getattr(a, x, None) or getattr(a, y, None)` inside `except Exception: pass` turned that
-#: into silence. A whole Apple campaign ran with the drain inert.
-_POOL_DRAIN_NAMES = ("empty_cache_pool", "empty_cache", "device_empty_cache")
-
-
-def _resolve_pool_drain(allocator=None):
-    """The allocator's pool drain, or a refusal naming what it does expose.
-
-    ZERO FALLBACK: an allocator that exposes no drain at all is a defect to surface at the
-    first key, not a condition to carry silently through a sweep."""
-    if allocator is None:
-        from nbxtensor.memory.allocator import DeviceAllocator as allocator  # noqa: N813
-    for name in _POOL_DRAIN_NAMES:
-        drain = getattr(allocator, name, None)
-        if callable(drain):
-            return drain
-    exposed = sorted(n for n in dir(allocator) if "cache" in n.lower() or "pool" in n.lower())
-    raise RuntimeError(
-        "ZERO FALLBACK: the device allocator exposes no pool drain under any of "
-        f"{_POOL_DRAIN_NAMES!r}, so the certifier cannot give the device back between keys.\n"
-        f"  What it does expose: {exposed or '<nothing cache- or pool-named>'}\n"
-        "  Add the drain to the allocator, or add its name above — do not let the release "
-        "become a no-op, which is how one campaign reached 21.9 GB of footprint on a 24 GB "
-        "machine and had its sweeps refused for witness drift."
-    )
-
-
 def _alloc_state() -> str:
     """Live bytes, pool-cached bytes and the pool's flush/evict counters, for the per-key line.
 
@@ -2783,49 +2753,33 @@ def _alloc_state() -> str:
     about 8 GB (M_BUCKET=163840 addmm), driving swap to 27.9 GB of 28.7 and taking jetsam
     kills. Whether the excess is live, pool-cached or neither is not readable from outside the
     process, and a footprint alone cannot say. Printed per key so a run answers it instead of
-    another round of reading the code.
-
-    `_pool_cached_bytes` is a dict KEYED BY DEVICE, not a scalar, and `_pool_enabled` is set
-    lazily by the first allocation — read from a bare process both look empty, which is how a
-    disabled pool and an idle one come to look identical. Summed here. Never raises: a probe
-    that can end a sweep is worse than no probe."""
+    another round of reading the code. Never raises: a probe that can end a sweep is worse than
+    no probe."""
     try:
         from nbxtensor.memory.allocator import DeviceAllocator as A
-
-        parts = []
-        live = A.memory_allocated() if callable(getattr(A, "memory_allocated", None)) else None
-        if isinstance(live, (int, float)):
-            parts.append(f"live {live / 2**20:.0f}MB")
-        _pool = getattr(A, "_POOL", None)      # the allocator's pool (nbxtensor.memory.pool.SegmentPool)
-        cached = sum(_pool.cached.values()) if _pool is not None else None
-        if cached is not None:
-            parts.append(f"pool {cached / 2**20:.0f}MB")
-        if getattr(A, "_pool_enabled", None) is False:
+        parts = [f"live {A.memory_allocated() / 2**20:.0f}MB", f"pool {A.pool_cached_bytes() / 2**20:.0f}MB"]
+        if not A.pool_enabled():
             parts.append("pool OFF")
-        st = _pool.stats if _pool is not None else None
-        if isinstance(st, dict) and (st.get("flushes") or st.get("evictions")):
-            parts.append(f"flush {st.get('flushes', 0)}/evict {st.get('evictions', 0)}")
-        return ", ".join(parts) or "alloc ?"
+        st = A.pool_stats()
+        if st["flushes"] or st["evictions"]:
+            parts.append(f"flush {st['flushes']}/evict {st['evictions']}")
+        return ", ".join(parts)
     except Exception:  # noqa: BLE001
         return "alloc ?"
 
 
-def _release_between_keys(allocator=None) -> None:
-    """Give the device back between keys.
+def _release_between_keys() -> None:
+    """Give the device back between keys: the operands collected, the pool's free blocks returned
+    (`release_flow_memory`).
 
     The certifier held nothing deliberately and freed nothing either: a key's synthetic
     operands are released when Python collects them, which had not happened by the time the
     next key asked for its own. Measured 2026-09-22 on the 16 GB class — a matmul needing
     11.0 GiB was refused on a 15.8 GiB card with `live_tracked=5632MB` still resident from
-    the key before it, and reported as a failure when it was a certifiable shape meeting
-    someone else's leftovers. Cheap: a collection between keys costs milliseconds against a
-    sweep that costs seconds a key.
-
-    The drain is resolved by `_resolve_pool_drain`, which REFUSES rather than returning None:
-    this hook spent the whole 2026-09-22 Apple campaign calling nothing at all."""
-    import gc
-    gc.collect()
-    _resolve_pool_drain(allocator)()
+    the key before it. The same day, a drain looked up by guessed names resolved to nothing
+    and a whole Apple campaign ran with it inert: the library's release is called by name."""
+    from nbxtensor.memory.memory_pool import release_flow_memory
+    release_flow_memory()
 
 
 def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str, log) -> bool:

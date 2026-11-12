@@ -133,10 +133,7 @@ def measure(container_dir: str, component: str, hardware_id: str, scale: int = 1
     executor = ExecutorFactory.create(component, alloc, str(container_dir), dag, mode="triton")
     executor.load_weights(str(container_dir), component)
     executor.run(_inputs(dag, scale))
-    DA.device_synchronize(0)
-    if DA._range_vmm(0) is not None:
-        DA._range_reclaim(0, None)
-    DA._pool_flush(0)
+    DA.give_back_cached(0)
     inputs = _inputs(dag, scale)
     token = DA.open_window(0)
     executor.run(inputs)

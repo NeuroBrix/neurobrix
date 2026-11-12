@@ -1335,6 +1335,35 @@ class DeviceAllocator:
             return sum(DeviceAllocator._cuda_live_bytes.values())
         return DeviceAllocator._cuda_live_bytes.get(device_idx, 0)
 
+    @classmethod
+    def pool_cached_bytes(cls, device_idx: Optional[int] = None) -> int:
+        """Bytes the pool keeps parked in free blocks on `device_idx` (None: every device). They are held from the
+        driver and counted in `memory_allocated`; the next request that fits takes them."""
+        cached = cls._POOL.cached
+        return sum(cached.values()) if device_idx is None else cached.get(device_idx, 0)
+
+    @classmethod
+    def pool_enabled(cls) -> bool:
+        """Whether a freed block is parked in the pool rather than returned to the driver (`NBX_ALLOC_POOL`, read
+        once)."""
+        cls._maybe_init_pool()
+        return cls._pool_enabled
+
+    @classmethod
+    def pool_stats(cls) -> Dict[str, int]:
+        """A copy of the pool's counters since the process began: hits (`exact`, `fit`), `miss`, `flushes`,
+        `evictions` and the bytes they returned."""
+        return dict(cls._POOL.stats)
+
+    @classmethod
+    def blocks_in_use(cls, device_idx: Optional[int] = None) -> Dict[int, int]:
+        """{address: bytes} of every block a tensor holds on `device_idx` (None: every device); the pool's free
+        blocks are not in it."""
+        parked = {p for per in cls._POOL.free.values() for ptrs in per.values() for p in ptrs}
+        where = cls._cuda_ptr_device
+        return {p: n for p, n in cls._cuda_ptr_size.items()
+                if p not in parked and (device_idx is None or where.get(p) == device_idx)}
+
     @staticmethod
     def peak_memory_allocated(device_idx: Optional[int] = None) -> int:
         """Highest live-bytes watermark observed for the device.
