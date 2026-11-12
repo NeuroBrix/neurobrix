@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `NBXTensor.saturated(dtype)`: a one-element float32 or float64 tensor holding a finite value beyond a half dtype's
   range comes back as a new tensor (same dtype, shape and card) holding the clamped value (`saturate_scalar`);
   anything else is itself. The engine's `where` wrap called its own copy, which uploaded to the current card.
+- `memory.paged_kv.keys_seq_major(q, k, pre_transposed=None)` and `one_head_per_group(t, kv_heads, group)`: the keys
+  an attention reads put in the queries' order (the recorded layout first, the shape only without one, the square
+  case refused by name), and keys or values repeated for grouped-query attention read back as their own heads. The
+  engine's KV interceptor held both.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

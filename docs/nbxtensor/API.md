@@ -209,6 +209,10 @@ def require_causal_mask(attn_mask, rows, memo, where) -> None
     # refuse by name a graph mask that is not the causal pattern over the chunk's rows
 def chunk_attention(cache, layer_idx, q, start, heads, scale, dropout_p, memo)
     # a prefill chunk attending over the cache's keys gathered as whole pages
+def keys_seq_major(q, k, pre_transposed=None)
+    # k in q's [B, H, S, D] order: the recorded layout decides, else a k shaped [B, H, D, S] is transposed; square and unrecorded: refused
+def one_head_per_group(t, kv_heads, group)
+    # keys or values whose heads were repeated `group` times (GQA), [B, kv_heads*group, S, D], read as [B, kv_heads, S, D] (a view)
 ```
 
 `nbxtensor.memory.host_spill` — the positions a decoding sequence spilled from the card's pages to host memory

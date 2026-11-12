@@ -517,6 +517,32 @@ class PagedTritonKVCache:
         return granted * per_page * self.num_layers
 
 
+def keys_seq_major(q, k, pre_transposed=None):
+    """Keys `k` in the [B, H, S, D] order of the queries `q` an attention reads them against. `pre_transposed`, the
+    graph's recorded answer, decides when given (True: k is [B, H, D, S] and is transposed into a new tensor); without
+    it a k whose shape is q's with its last two axes swapped is transposed, and the square case (S == D: both layouts
+    have one shape) is refused by name rather than guessed. Anything but two rank-4 tensors is returned as is."""
+    if k.ndim != 4 or q.ndim != 4:
+        return k
+    if pre_transposed is not None:
+        return k.transpose(2, 3).contiguous() if pre_transposed else k
+    if k.shape[2] != q.shape[3] or k.shape[3] != q.shape[2]:
+        return k
+    if k.shape[2] == q.shape[2]:
+        raise RuntimeError(
+            f"KV interceptor: K is square {tuple(k.shape)} with seq_len == head_dim, so its layout cannot be read "
+            f"from its shape and none was recorded. Refusing to guess.")
+    return k.transpose(2, 3).contiguous()
+
+
+def one_head_per_group(t, kv_heads: int, group: int):
+    """Keys or values whose `kv_heads` heads were each repeated `group` times to meet the query heads (grouped-query
+    attention), [B, kv_heads * group, S, D], read back as their `kv_heads` heads: [B, kv_heads, S, D], a view (the
+    first head of each group)."""
+    b, _, s, d = t.shape
+    return t.view(b, kv_heads, group, s, d).select(2, 0)
+
+
 def chunk_mask(device_idx: int, start: int, rows: int, keys: int, memo: Dict) -> NBXTensor:
     """A prefill chunk's additive attention mask [rows, keys] (fp32): 0 where key j <= start + i (causal, bottom-right
     at the cached length), -inf elsewhere — the values the causal bias adds — which also masks the whole pages' keys

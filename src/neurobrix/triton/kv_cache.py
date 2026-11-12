@@ -98,6 +98,17 @@ class TritonAttentionInterceptor:
             b.cache, b.is_prefill, b.call_count, b.position_offset = (
                 self.cache, self._is_prefill, self._call_count, self._position_offset)
 
+    def _expanded_heads(self, q, k) -> bool:
+        """Whether k carries the query heads (its KV heads repeated, GQA). The group size is learnt on the first
+        call: query heads over KV heads when k arrives with the query heads, else 1."""
+        if self._gqa_group_size == 0:
+            if self._num_heads == 0:
+                self._num_heads = q.shape[1]
+            incoming = k.shape[1]
+            expanded = incoming > self._num_kv_heads and incoming == self._num_heads
+            self._gqa_group_size = self._num_heads // self._num_kv_heads if expanded else 1
+        return self._gqa_group_size > 1 and k.shape[1] == self._num_heads
+
     def intercept(self, q, k, v, attn_mask=None, dropout_p=0.0,
                   is_causal=True, scale=None, layer_idx=-1,
                   k_pre_transposed=None, enable_gqa=None):
@@ -111,53 +122,25 @@ class TritonAttentionInterceptor:
         (correct dtypes already) or create unwanted upcasts. Marked
         explicit on the bound method below.
         """
+        from nbxtensor.memory.paged_kv import keys_seq_major, one_head_per_group
         from nbxtensor.ops.attention_wrappers import scaled_dot_product_attention_wrapper
 
         if layer_idx < 0:
             layer_idx = self._call_count % self.cache.num_layers
             self._call_count += 1
 
-        # Fix pre-transposed K from graph math decomposition path.
-        #
-        # `k_pre_transposed` is the graph's recorded answer (GraphExecutor.
-        # _mark_sdpa_k_layout); the shape test below is only for callers that
-        # do not carry it, and it refuses the square case rather than guess —
-        # at seq_len == head_dim the two layouts have the same shape, and
-        # guessing there ran attention with K's axes crossed.
-        if k.ndim == 4 and q.ndim == 4:
-            if k_pre_transposed is not None:
-                if k_pre_transposed:
-                    k = k.transpose(2, 3).contiguous()
-            elif (k.shape[2] == q.shape[3] and k.shape[3] == q.shape[2]
-                    and k.shape[2] == q.shape[2]):
-                raise RuntimeError(
-                    f"KV interceptor: K is square {tuple(k.shape)} with "
-                    f"seq_len == head_dim, so its layout cannot be read from "
-                    f"its shape and none was recorded. Refusing to guess.")
-            elif (k.shape[2] == q.shape[3] and k.shape[3] == q.shape[2]):
-                k = k.transpose(2, 3).contiguous()
+        # K in Q's [B, H, S, D] order: the graph's recorded layout decides (GraphExecutor._mark_sdpa_k_layout); the
+        # shape decides only without a record, and the square case is refused rather than guessed.
+        k = keys_seq_major(q, k, k_pre_transposed)
 
         # PREFILL: Use standard SDPA with is_causal=True (drop explicit mask).
         # Also populate the KV cache so decode steps have context.
         if self._is_prefill:
             # GQA: un-expand to KV heads for cache storage
-            k_for_cache = k
-            v_for_cache = v
-            if self._gqa_group_size == 0:
-                if self._num_heads == 0:
-                    self._num_heads = q.shape[1]
-                incoming = k.shape[1]
-                if incoming > self._num_kv_heads and incoming == self._num_heads:
-                    self._gqa_group_size = self._num_heads // self._num_kv_heads
-                else:
-                    self._gqa_group_size = 1
-
-            if self._gqa_group_size > 1 and k.shape[1] == self._num_heads:
-                batch, _, seq_len, head_dim = k.shape
-                k_for_cache = k.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, head_dim)
-                k_for_cache = k_for_cache.select(2, 0).contiguous()
-                v_for_cache = v.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, v.shape[-1])
-                v_for_cache = v_for_cache.select(2, 0).contiguous()
+            k_for_cache, v_for_cache = k, v
+            if self._expanded_heads(q, k):
+                k_for_cache = one_head_per_group(k, self._num_kv_heads, self._gqa_group_size).contiguous()
+                v_for_cache = one_head_per_group(v, self._num_kv_heads, self._gqa_group_size).contiguous()
 
             if self._whole_pages:
                 return self._prefill_over_pages(q, k, v, k_for_cache, v_for_cache,
@@ -175,19 +158,9 @@ class TritonAttentionInterceptor:
                 is_causal=True, scale=scale, k_pre_transposed=False)
 
         # GQA: un-expand K/V if needed
-        if self._gqa_group_size == 0:
-            if self._num_heads == 0:
-                self._num_heads = q.shape[1]
-            incoming_heads = k.shape[1]
-            if incoming_heads > self._num_kv_heads and incoming_heads == self._num_heads:
-                self._gqa_group_size = self._num_heads // self._num_kv_heads
-            else:
-                self._gqa_group_size = 1
-
-        if self._gqa_group_size > 1 and k.shape[1] == self._num_heads:
-            batch, _, seq_len, head_dim = k.shape
-            k = k.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, head_dim)[:, :, 0]
-            v = v.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, v.shape[-1])[:, :, 0]
+        if self._expanded_heads(q, k):
+            k = one_head_per_group(k, self._num_kv_heads, self._gqa_group_size)
+            v = one_head_per_group(v, self._num_kv_heads, self._gqa_group_size)
 
         # The paged cache: append at the device length, read through the block table (state engine step 2).
         # Each sequence reads its own length, so no pad mask exists. The graph's own decode mask covers only the
