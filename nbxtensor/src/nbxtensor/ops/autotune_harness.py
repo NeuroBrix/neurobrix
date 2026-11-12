@@ -942,7 +942,8 @@ class LaunchUnderTest:
 def fused_moe_unit_runs(tuner, args, kwargs) -> List[Tuple[Dict[str, Any], Any]]:
     """(tile, run) for each `matrix_unit.mm` tile of the profile for a `fused_moe_kernel` launch on experts of the
     unit's operand dtype: the routing the launch's alignment holds, read back and aligned again at the tile's rows,
-    each run writing the launch's output through `invoke_fused_moe_m8n8k4`. Empty for any other launch."""
+    each run writing the launch's output through `invoke_fused_moe_m8n8k4` (the route `ops.moe_fused`'s grouped passes
+    take when the certificate names the unit). Empty for any other launch."""
     if getattr(getattr(tuner, "base_fn", None), "__name__", None) != "fused_moe_kernel":
         return []
     from nbxtensor.ops import moe_wrappers as MW

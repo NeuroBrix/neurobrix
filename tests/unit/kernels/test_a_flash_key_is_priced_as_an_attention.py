@@ -3,12 +3,13 @@ oracle's own — q's rows, k and v whole and the window's scores in float64, eve
 geometry the function fell through to: every Apple flash certification (C3) failed on 'geometry' before its first
 launch (Mac, 2026-10-23). What this test would do if the code were wrong: KeyError 'geometry' -> red."""
 from neurobrix.kernels import autotune_certify as C
+from nbxtensor.ops import attention_wrappers as AW
 
 Q = "nbxtensor.ops.flash_attention.flash_attention_certified_kernel"
 
 
 def test_a_flash_key_is_priced(monkeypatch):
-    monkeypatch.setattr(C, "_flash_batch_heads", lambda *a, **k: (1, 4))
+    monkeypatch.setattr(AW, "flash_route_heads", lambda *a, **k: 4)
     key = (2048, 2048, 96, "bf16", "bf16", "bf16", "bf16", "bf16", "fp32", "fp32")
     p = C.price_key(Q, None, key)
     assert p is not None and p["peak"] >= p["draws"] + p["device"]
@@ -16,6 +17,6 @@ def test_a_flash_key_is_priced(monkeypatch):
 
 
 def test_a_long_flash_key_fits_the_card_on_windows(monkeypatch):
-    monkeypatch.setattr(C, "_flash_batch_heads", lambda *a, **k: (1, 1))
+    monkeypatch.setattr(AW, "flash_route_heads", lambda *a, **k: 1)
     key = (81920, 81920, 96, "bf16", "bf16", "bf16", "bf16", "bf16", "fp32", "fp32")
     assert C.price_key(Q, None, key)["peak"] < 18 * 2**30

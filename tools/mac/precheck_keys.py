@@ -19,6 +19,7 @@ from neurobrix.kernels import census_table as T
 import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
 from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as A
+from nbxtensor.ops import autotune_harness as H
 from nbxtensor.backend.host_memory import memory_state
 
 A._bind_hardware_profile()
@@ -38,14 +39,14 @@ def covered(r):
     entries = A._file_entries(per.setdefault(qual, {}), dtype, C.file_for(vendor, profile, qual, dtype))
     if C.entry_covers(entries, C.key_repr(key), klass, need_clock=False, need_generator=gen):
         return True
-    # the certifier's own rule for a key its class never forms (`_refuse_oversize` -> KeyTooLargeForClass, read
+    # the certifier's own rule for a key its class never forms (`autotune_harness.Room.refuse` -> KeyTooLargeForClass, read
     # by `oversize_for_class`: "no entry is owed, the plan tiles before it"): its tensors exceed the CARD, counted
     # as on this unified device — not owed, so not missing (swin2SR-realworld's 4 416 px conv, 2026-10-04)
     # v3: the certifier's unified rule since mq20 is `_refuse_unified` (the key's phase price against the card);
     # `_refuse_oversize` is the discrete card's and no longer takes `unified=`
     try:
         A._refuse_unified(qual, tuner, key, int(A._certifying_device()["memory_mb"]) * 2**20)
-    except A.KeyTooLargeForClass:
+    except H.KeyTooLargeForClass:
         return True
     return False
 rc = 0

@@ -27,6 +27,8 @@ import numpy as np
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
+from nbxtensor.ops import autotune_harness as H
+from nbxtensor.ops.oracles import fp64 as F
 
 
 def test_the_launch_oracle_is_computed_from_the_launch_operands_not_the_whole(monkeypatch):
@@ -42,18 +44,18 @@ def test_the_launch_oracle_is_computed_from_the_launch_operands_not_the_whole(mo
     tuner = types.SimpleNamespace(base_fn=matmul_kernel.fn if hasattr(matmul_kernel, "fn") else matmul_kernel,
                                   nargs={"a_ptr": NBXTensor.from_numpy(np.ascontiguousarray(band)),
                                          "b_ptr": NBXTensor.from_numpy(b), "c_ptr": out, "M": 8, "N": 32, "K": 16})
-    oracle = AC.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out)
+    oracle = H.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out)
     assert hasattr(oracle, "blocks") and [w for w, _ in oracle.blocks] == [(0, 8)], oracle.describe
     np.testing.assert_allclose(oracle.blocks[0][1], band.astype(np.float64) @ b.astype(np.float64), rtol=0, atol=1e-12)
     # a launch over the cap is windowed on ITS rows, never past them
-    monkeypatch.setattr(AC, "ORACLE_MAX_MACS", 8 * 32 * 16 // 2)
-    windowed = AC.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out)
+    monkeypatch.setattr(F, "ORACLE_MAX_MACS", 8 * 32 * 16 // 2)
+    windowed = H.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out)
     assert all(r1 <= 8 for (r0, r1), _ in windowed.blocks), windowed.describe
     # families the screen does not row-window, or whose output is not a matrix, keep the
     # synthesized oracle — read from the screen's table and the output's rank, not a name list
-    assert AC.launch_oracle("nbxtensor.ops.baddbmm_op.baddbmm_kernel", tuner, {}, out) is None
+    assert H.launch_oracle("nbxtensor.ops.baddbmm_op.baddbmm_kernel", tuner, {}, out) is None
     out4 = NBXTensor.from_numpy(np.zeros((1, 2, 4, 4), np.float32))
-    assert AC.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out4) is None
+    assert H.launch_oracle("nbxtensor.ops.matmul.matmul_kernel", tuner, {}, out4) is None
 
 
 def _cuda_free_bytes():
@@ -127,7 +129,7 @@ def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tm
     # The injection: the SECOND band's comparison reads as an unwritten band (infinite
     # deviation) — the first band's candidates are measured as usual, so on a certifier that
     # counts later launches instead of measuring them this key certifies with `launches == 2`.
-    orig_dev = AC.deviation_against
+    orig_dev = F.deviation_against
     calls = {"n": 0}
 
     def dev_of_unwritten_second_band(out_, oracle_):
@@ -135,7 +137,7 @@ def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tm
         if calls["n"] > 1 and hasattr(oracle_, "blocks") and oracle_.blocks[0][0][1] <= 128:
             return float("inf")
         return orig_dev(out_, oracle_)
-    monkeypatch.setattr(AC, "deviation_against", dev_of_unwritten_second_band)
+    monkeypatch.setattr(F, "deviation_against", dev_of_unwritten_second_band)
     with pytest.raises(RuntimeError, match="does not hold on every band"):
         AC.certify_key(qual, tuner, key, 1e-4, np.random.default_rng(3))
 

@@ -43,8 +43,8 @@ def test_every_keyed_bucket_s_representative_forms_its_key(bound_profile):
 
 
 def test_the_volta_fp32_class_below_the_unit_is_certified_at_63(bound_profile):
-    from neurobrix.kernels import autotune_certify as A
-    assert A._gemm_rows((64, 128, 57, True, False, False, "fp32", "fp32", "fp32", "fp32"), ["fp32"] * 4) == 63
+    from nbxtensor.ops import autotune_harness as H
+    assert H.gemm_rows((64, 128, 57, True, False, False, "fp32", "fp32", "fp32", "fp32"), ["fp32"] * 4) == 63
 
 
 

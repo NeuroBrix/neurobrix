@@ -132,7 +132,7 @@ def _deviation(got, want) -> float:
     the one the engine trusts is how a correct kernel gets rejected -- or a
     wrong one accepted, since the same floor can hide a real error too.
     """
-    from neurobrix.kernels.autotune_certify import oracle_deviation
+    from nbxtensor.ops.oracles.fp64 import oracle_deviation
 
     return oracle_deviation(np.asarray(got), np.asarray(want))
 

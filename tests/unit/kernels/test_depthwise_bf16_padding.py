@@ -46,14 +46,16 @@ def _reference(x, wt, stride, pad):
 
 def _deviation(c, h, kh, sh, ph, dt):
     from neurobrix.kernels import autotune_certify as AC
+    from nbxtensor.ops.oracles import fp64 as F
+    from nbxtensor.ops import autotune_harness as H
     oh = (h + 2 * ph - kh) // sh + 1
     key = (c, h, h, oh, oh, kh, kh, sh, sh, ph, ph, dt == "fp16", dt, dt, dt)
     call, _oracle, _ = AC.synthesize(QUAL, None, key, np.random.default_rng(SEED))
-    got = np.asarray(AC.host_values(call()), dtype=np.float64)
+    got = np.asarray(F.host_values(call()), dtype=np.float64)
     r = np.random.default_rng(SEED)                 # the same draws synthesize made
-    x = AC._arr(r, (1, c, h, h), dt)
-    wt = AC._arr(r, (c, 1, kh, kh), dt)
-    ref = _reference(AC.values(x).astype(np.float64), AC.values(wt).astype(np.float64), (sh, sh), (ph, ph))
+    x = H.draw(r, (1, c, h, h), dt)
+    wt = H.draw(r, (c, 1, kh, kh), dt)
+    ref = _reference(F.values(x).astype(np.float64), F.values(wt).astype(np.float64), (sh, sh), (ph, ph))
     scale = np.abs(ref).max()
     return float(np.abs(got - ref).max() / scale) if scale else 0.0
 

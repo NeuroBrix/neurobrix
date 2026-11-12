@@ -10,23 +10,24 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.kernels import autotune_certify as A
+from nbxtensor.ops import autotune_harness as H
 from nbxtensor.ops.launch_keys import softmax_feat_bucket
 
 CARD = 16 * 1024 ** 3
 
 
 def test_a_key_the_card_holds_is_drawn_at_its_class_top():
-    assert A._softmax_shape(1024, 256, CARD, "fp32", "fp32", "softmax") == (1024, 256)
+    assert A._room(CARD).row_shape(1024, 256, "fp32", "fp32", "softmax") == (1024, 256)
 
 
 def test_a_key_over_the_card_is_drawn_at_the_shortest_row_of_its_class():
-    rows, feat = A._softmax_shape(2097152, 1024, CARD, "fp32", "fp32", "softmax")
+    rows, feat = A._room(CARD).row_shape(2097152, 1024, "fp32", "fp32", "softmax")
     assert rows == 2097152 and feat == 513 and softmax_feat_bucket(feat) == 1024, (rows, feat)
 
 
 def test_a_key_no_row_of_its_class_fits_is_refused_by_name():
-    with pytest.raises(A.KeyTooLargeForClass):
-        A._softmax_shape(25165824, 1024, CARD, "fp32", "fp32", "softmax")
+    with pytest.raises(H.KeyTooLargeForClass):
+        A._room(CARD).row_shape(25165824, 1024, "fp32", "fp32", "softmax")
 
 
 # On a UNIFIED-memory device the bound is the key's phase price (`_refuse_unified`) and `_softmax_shape` was called
@@ -59,5 +60,5 @@ def test_on_unified_memory_a_key_over_the_card_is_drawn_at_the_shortest_row(fp32
 def test_on_unified_memory_a_key_no_row_of_its_class_holds_is_still_refused(fp32_out):
     key = (25165824, 1024, False, "fp32", "fp32")
     drawn = A._unified_padded_row(SOFTMAX, None, key, UNIFIED, "softmax_forward_kernel")
-    with pytest.raises(A.KeyTooLargeForClass):
+    with pytest.raises(H.KeyTooLargeForClass):
         A._refuse_unified(SOFTMAX, None, drawn, UNIFIED)

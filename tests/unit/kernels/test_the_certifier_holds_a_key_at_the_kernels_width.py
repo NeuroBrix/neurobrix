@@ -23,6 +23,8 @@ from nbxtensor.dtype import convert as CV
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
+from nbxtensor.ops import autotune_harness as H
+from nbxtensor.ops.oracles import fp64 as F
 
 CONV = "nbxtensor.ops.conv2d.conv2d_forward_kernel"
 ADDMM = "nbxtensor.ops.matmul.addmm_kernel"
@@ -68,7 +70,7 @@ def test_a_key_the_plan_places_whole_reaches_its_draw_on_unified_memory(qual, ke
                                                                         monkeypatch):
     def drawn(*a, **k):
         raise _Drawn()
-    monkeypatch.setattr(AC, "_arr", drawn)
+    monkeypatch.setattr(H, "draw", drawn)
     with pytest.raises(_Drawn):
         AC.synthesize(qual, _Tuner(), key, np.random.default_rng(0), card_bytes=CARD, unified=True)
 
@@ -76,7 +78,7 @@ def test_a_key_the_plan_places_whole_reaches_its_draw_on_unified_memory(qual, ke
 def test_on_unified_memory_a_key_over_the_card_is_refused_by_its_phases(out_dtype_of_key):
     qual, key = REFUSED_ON_MQ19[3]
     peak = AC.price_key(qual, _Tuner(), key)["peak"]
-    with pytest.raises(AC.KeyTooLargeForClass) as e:
+    with pytest.raises(H.KeyTooLargeForClass) as e:
         AC.synthesize(qual, _Tuner(), key, _NoDraw(), card_bytes=peak - 1, unified=True)
     assert e.value.asked == peak and e.value.card == peak - 1
     for word in ("draws", "device", "oracle", "unified"):
@@ -93,21 +95,21 @@ def test_the_draws_are_priced_at_the_kernels_width(out_dtype_of_key):
 
 
 def test_a_bf16_operand_is_its_rounded_bits_and_reads_back_as_its_values():
-    a = AC._arr(np.random.default_rng(1), (257, 129), "bf16")
-    assert a._nbx_dtype == "bf16" and a.dtype == np.uint16
+    a = H.draw(np.random.default_rng(1), (257, 129), "bf16")
+    assert a.key_dtype == "bf16" and a.dtype == np.uint16
     ref = np.random.default_rng(1).standard_normal((257, 129), dtype=np.float32) * np.float32(0.1)
     bits = CV.f32_to_bf16_bits(ref)
     assert np.array_equal(np.asarray(a), bits)
-    v = AC.values(a)
+    v = F.values(a)
     assert v.dtype == np.float32 and np.array_equal(v, CV.bf16_bits_to_f32(bits))
-    assert np.array_equal(AC.values(a[3:9, 1:4]), CV.bf16_bits_to_f32(bits)[3:9, 1:4])
+    assert np.array_equal(F.values(a[3:9, 1:4]), CV.bf16_bits_to_f32(bits)[3:9, 1:4])
 
 
 def test_the_same_draws_as_before_for_every_width():
     """Drawn in chunks, the values are the whole draw's: a certificate made before stays the
     proof of the same numbers."""
     for dt, np_dt in (("fp16", np.float16), ("fp32", np.float32)):
-        a = AC._arr(np.random.default_rng(5), (3, 1_000_003), dt)
+        a = H.draw(np.random.default_rng(5), (3, 1_000_003), dt)
         ref = (np.random.default_rng(5).standard_normal((3, 1_000_003), dtype=np.float32)
                * np.float32(0.1)).astype(np_dt)
         assert np.array_equal(np.asarray(a), ref), dt
@@ -115,7 +117,7 @@ def test_the_same_draws_as_before_for_every_width():
 
 def test_a_bf16_carrier_refuses_a_float_cast():
     """Its bits cast to float are integers, not values: refused by name, never silently read."""
-    a = AC._arr(np.random.default_rng(1), (4, 4), "bf16")
+    a = H.draw(np.random.default_rng(1), (4, 4), "bf16")
     with pytest.raises(TypeError, match="values"):
         a.astype(np.float64)
     assert np.asarray(a).astype(np.uint32).dtype == np.uint32       # the bits stay readable as bits
@@ -123,11 +125,11 @@ def test_a_bf16_carrier_refuses_a_float_cast():
 
 def test_the_oracles_read_bf16_values_not_bits():
     r = np.random.default_rng(3)
-    a, b = AC._arr(r, (2, 24, 16), "bf16"), AC._arr(r, (2, 16, 8), "bf16")
-    got = AC._matmul_oracle_fn(a, b)()
-    assert np.array_equal(got, AC.values(a).astype(np.float64) @ AC.values(b).astype(np.float64))
-    x, w = AC._arr(r, (1, 4, 9, 7), "bf16"), AC._arr(r, (6, 4, 3, 3), "bf16")
+    a, b = H.draw(r, (2, 24, 16), "bf16"), H.draw(r, (2, 16, 8), "bf16")
+    got = F.matmul_oracle(a, b)()
+    assert np.array_equal(got, F.values(a).astype(np.float64) @ F.values(b).astype(np.float64))
+    x, w = H.draw(r, (1, 4, 9, 7), "bf16"), H.draw(r, (6, 4, 3, 3), "bf16")
     from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference_window
-    ref = conv2d_reference_window(AC.values(x).astype(np.float64), AC.values(w).astype(np.float64),
+    ref = conv2d_reference_window(F.values(x).astype(np.float64), F.values(w).astype(np.float64),
                                   stride=(1, 1), padding=(1, 1), dilation=(1, 1), groups=1)
-    assert np.array_equal(AC._conv_oracle_fn(x, w, (1, 1), (1, 1), (1, 1), 1)(), ref)
+    assert np.array_equal(F.conv_oracle(x, w, (1, 1), (1, 1), (1, 1), 1)(), ref)

@@ -15,6 +15,7 @@ import pytest
 
 from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as Z
+from nbxtensor.ops.oracles import fp64 as F
 import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 cuda = pytest.importorskip("triton")
@@ -123,13 +124,13 @@ def test_a_config_that_diverges_from_the_oracle_is_excluded_and_recorded(root, m
     key = _recorded_key(matmul_kernel, lambda: _nbx_linalg_wrappers.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
     matmul_kernel.cache.pop(key, None)
     tol = Z._tolerance(vendor, profile, C.output_dtype(matmul_kernel, key))
-    real = Z.oracle_deviation
+    real = F.oracle_deviation
     calls = {"n": 0}
 
     def sabotage(out, oracle):          # the first candidate's result reads as garbage
         calls["n"] += 1
         return 0.75 if calls["n"] == 1 else real(out, oracle)
-    monkeypatch.setattr(Z, "oracle_deviation", sabotage)
+    monkeypatch.setattr(F, "oracle_deviation", sabotage)
     entry = Z.certify_key(qual, matmul_kernel, key, tol, np.random.default_rng(3), bench=lambda fn: (fn(), 0.5)[1])
     assert len(entry["excluded"]) == 1 and entry["excluded"][0]["deviation"] == 0.75
     assert entry["proof"]["accepted"] == entry["proof"]["candidates"] - 1

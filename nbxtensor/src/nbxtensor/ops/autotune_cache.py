@@ -177,10 +177,6 @@ def config_from_dict(d):
                          maxnreg=d.get("maxnreg"))
 
 
-#: the names the engine's certifier still reads (it switches to the public ones next)
-_config_to_dict, _config_from_dict = config_to_dict, config_from_dict
-
-
 def _exclusions_path() -> Optional[str]:
     """Where the correctness screen's exclusions are kept, beside the sweep."""
     path = _artifact_path()

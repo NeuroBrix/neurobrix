@@ -3,10 +3,15 @@
 For one vendor profile, on the machine that carries it: every candidate
 config of every autotuned kernel is run on every shape the zoo encountered,
 its result compared to the fp64 oracle (the reference bank's definition of
-the op, computed here in float64 with numpy — no torch under `src/`), the
-configs that diverge beyond the profile's tolerance excluded with their
-deviation, the rest timed, and the winner written with its proof into
-``config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json``.
+the op in float64), the configs that diverge beyond the profile's tolerance
+excluded with their deviation, the rest timed, and the winner written with its
+proof into ``config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json``.
+
+The kernel-level harness is nbxtensor's (`nbxtensor.ops.autotune_harness`: the
+operands drawn, the launch, the candidates run on a poisoned output, measured
+and timed; `nbxtensor.ops.oracles.fp64`: the references and the deviation).
+This module keeps the campaign: which keys, at which tolerance, under which
+witness protocol, priced against which card and budget, written where.
 
 The shapes come from the machine's replay cache — the accumulation of every
 key the zoo's runs resolved on this machine — or from a census file. Nothing
@@ -32,23 +37,15 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-from nbxtensor.dtype.convert import bf16_bits_to_f32, f32_to_bf16_bits
 
 from nbxtensor.ops import autotune_certified as C
+from nbxtensor.ops import autotune_harness as H
+from nbxtensor.ops.oracles import fp64 as F
 from nbxtensor.dtype import itemsize as _isz
 import logging
 _log = logging.getLogger(__name__)
 
 ORACLE = "fp64: the op in float64 (numpy), the reference bank's definition"
-# The whole oracle of a convolution is computed when it costs at most this many multiply-adds;
-# above it, the oracle is computed on WINDOWS of the output — exact float64 on every position
-# of the windows, the corners and the centre of the plane, on the first, middle and last batch
-# element — and the deviation is measured there. A kernel config's arithmetic is the same at
-# every output position (one tile shape, one accumulation order), and a tiling or boundary
-# fault reaches a corner: the census's video and 4K shapes (49 frames of 1024², 512 channels)
-# would otherwise cost days of float64 each on this machine (2026-09-07: three 896² shapes an
-# hour). The proof names the windows.
-ORACLE_MAX_MACS = 2_000_000_000
 BENCH_WARMUP_MS = 10
 BENCH_REP_MS = 40
 # Every candidate config runs once against the oracle, and that run is timed; only the
@@ -193,184 +190,23 @@ def census(vendor: str, profile: str, memory_class: int, models: Optional[List[s
 
 
 # ---------------------------------------------------------------------------
-# inputs from a key, and the fp64 oracle
+# the size a key is drawn at: the card's share the campaign plans against
 # ---------------------------------------------------------------------------
-_NP = {"fp16": np.float16, "bf16": np.uint16, "fp32": np.float32, "fp64": np.float64,
-       # The integer and boolean dtypes a real key carries. A batched GEMM's BIAS is an
-       # attention MASK on some models — MiniCPM-o's is `uint8` — and without these entries
-       # the lookup below fell back to float32, the wrapper recomputed the key as fp16, and
-       # the certification reported the key UNREACHABLE. It is not: a judged run of
-       # MiniCPM-o on 2026-09-22 forms
-       # `(64, 1024, 128, True, False, True, 'fp16','fp16','fp16','uint8')` and MISSES on it.
-       # This is the same defect the class below records for bf16, in a second spelling.
-       # Every name `autotune_certified._DTYPES` recognises must be buildable here, or a key
-       # carrying it is recognised and then unsynthesisable — the failure simply moves. A cell
-       # ties the two tables together so a third omission cannot be silent.
-       # `int1` is Triton's spelling of a boolean tensor.
-       "uint8": np.uint8, "uint16": np.uint16, "uint32": np.uint32, "uint64": np.uint64,
-       "int1": np.bool_, "int8": np.int8, "int16": np.int16,
-       "int32": np.int32, "int64": np.int64, "bool": np.bool_}
-
-_INTEGRAL = {"uint8", "uint16", "uint32", "uint64",
-             "int1", "int8", "int16", "int32", "int64", "bool"}
-
-
-class _Synth(np.ndarray):
-    """An array that remembers the NBX dtype its values belong to.
-
-    numpy has no bfloat16, and that single fact locked the whole Apple
-    certification: `_NP` mapped `"bf16"` to `np.float32`, so a census key
-    saying bf16 got an fp32 tensor, the wrapper recomputed an fp32 key, and
-    the two could not match. Every shape with a bf16 input failed by
-    construction — and Apple models are massively bf16.
-
-    The refusal was right and must not be relaxed: an entry written under a
-    key the runtime will never recompute is an entry nobody finds. What was
-    needed was to be able to recompute the key.
-
-    bf16 is nothing but the top sixteen bits of an fp32, so a bf16 operand is
-    carried as its BITS, in a uint16 array at the kernel's own width, and
-    this tag says what the kernel must receive. Its values are read through
-    `values()`, which is exact: a bf16 value is exactly representable in fp32
-    and in fp64. No dependency is added — measured 2026-09-11, the integer
-    conversion below agrees with `torch.bfloat16` on 200 013 values with
-    ZERO divergence, exact halves, subnormals, infinities, NaN and the fp32
-    maximum included.
-
-    Carried until 2026-10-05 as float32 VALUES, twice the operand: with the
-    device copy beside it on a unified-memory machine, that is what made the
-    Mac's certifier refuse convolutions its plans form (see `_refuse_unified`).
-    """
-
-    def __new__(cls, arr, nbx_dtype):
-        obj = np.asarray(arr).view(cls)
-        obj._nbx_dtype = nbx_dtype
-        return obj
-
-    def __array_finalize__(self, obj):
-        if obj is not None:
-            self._nbx_dtype = getattr(obj, "_nbx_dtype", None)
-
-    def astype(self, dtype, *args, **kwargs):
-        # bf16 BITS cast to a float are integers, not values: refused by name, never read silently
-        if getattr(self, "_nbx_dtype", None) == "bf16" and np.dtype(dtype).kind == "f":
-            raise TypeError("a bf16 operand is carried as its bits: read its numbers through "
-                            "autotune_certify.values(), not astype")
-        return super().astype(dtype, *args, **kwargs)
-
-
-def values(a) -> np.ndarray:
-    """An operand's NUMBERS as a plain array: a bf16 operand's bits decoded exactly to float32,
-    any other operand as it is."""
-    if getattr(a, "_nbx_dtype", None) == "bf16":
-        return bf16_bits_to_f32(np.asarray(a))
-    return np.asarray(a)
-
-
-class _Exact:
-    """An oracle of integers, met exactly: the deviation is 0 where every value equals, else inf (`oracle_deviation`
-    reads its `slices`)."""
-    describe = "exact integers"
-
-    def __init__(self, ref):
-        self.ref = np.asarray(ref, dtype=np.int64).reshape(-1)
-
-    def slices(self, out):
-        got = np.asarray(out).astype(np.int64).reshape(-1)
-        if got.shape != self.ref.shape:
-            return [(np.ones(1), np.zeros(1))]
-        return [((got != self.ref).astype(np.float64), np.zeros(got.shape))]
-
-
-def _f64(a) -> np.ndarray:
-    return values(a).astype(np.float64)
-
-
 class WitnessDrift(RuntimeError):
     """The regime witness moved beyond its tolerance across a sweep or a re-prove: not a measurement.
     A key refused for this is neither certified nor swept — its retry pass re-proves it (inbox 60, 65)."""
 
 
-class KeyTooLargeForClass(RuntimeError):
-    """The key's operands and output exceed what the certifying card holds: refused BEFORE a value is drawn.
-
-    The census can record a shape its class never forms (a plan tiles before it — see
-    `oversize_for_class`). It used to be discovered only when the device allocation failed,
-    AFTER the host had drawn every operand in float64: on 2026-09-26 a 16 GB certifier held
-    65 GB of host memory and a 32 GB one 52 GB, for an hour, on keys asking 37 GiB of a
-    31.7 GiB card, with 30 GB of the host left for everything else.
-
-    `usable` is the capacity the door compares against — the card's bytes at the share Prism plans
-    against (`PRISM_DEFAULTS["safety_margin"]`); a key no plan of the class can form is one no run of it
-    presents."""
-
-    def __init__(self, asked: int, card: int, what: str, usable: Optional[int] = None):
-        self.asked, self.card = int(asked), int(card)
-        self.usable = int(usable) if usable is not None else self.card
-        super().__init__(f"the key's operands and output ask {self.asked} bytes of the {self.usable} bytes a "
-                         f"{self.card}-byte card plans against ({what})")
-
-
-def _softmax_shape(rows: int, feat: int, card_bytes, in_dt: str, out_dt: str, what: str) -> Tuple[int, int]:
-    """The (rows, row length) a softmax key is synthesised at. The key carries the row length's CLASS
-    (`launch_keys.softmax_feat_bucket`: the padded row, every length of (feat/2, feat] forms it) and the rows
-    (`bucket_of("M")`). At the class's top the draw is the key's whole; where the card cannot hold it in and out
-    within the capacity Prism plans against (`PRISM_DEFAULTS["safety_margin"]`), it is drawn at the shortest row
-    that still forms the key, as a GEMM key is drawn at its representative (`_gemm_rows`) — a key a plan forms
-    fits that capacity by construction. HAT-L at 2048 px on 16 GB: its sliced stretch forms softmax 2 097 152 rows
-    of 576 (the overlapping window's 24 x 24 keys), class 1 024 — 16 GiB at the class's top, the class's whole
-    nominal bytes, against 9.0 GiB at the run's own length (2026-10-22). No length of the class fitting is refused
-    by name."""
+def _room(card_bytes) -> "H.Room":
+    """The capacity a key on a DISCRETE card is drawn within: the card's bytes at the share Prism plans against
+    (`PRISM_DEFAULTS["safety_margin"]`) — never the card's whole bytes: Sana 4K's 16g rms_norm key (16 252 928 rows of
+    128 fp32, in and out 15.5 GiB of a 16 GiB card) passed a door at the whole card, then failed its output's allocation
+    at every pass (2026-10-23); a key no plan of the class can form is one no run of it presents. None: unbounded (a
+    unified-memory device is bounded by its phase price, `_refuse_unified`)."""
     if card_bytes is None:
-        return rows, feat
+        return H.Room()
     from neurobrix.core.config.system import PRISM_DEFAULTS
-    from nbxtensor.ops.launch_keys import softmax_feat_bucket
-    per_elem = _isz.itemsize(_isz.from_autotune_key(in_dt)) + _isz.itemsize(_isz.from_autotune_key(out_dt))
-    usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
-    if rows * feat * per_elem <= usable:
-        return rows, feat
-    # the SHORTEST row of the class: every config's tile, register budget and pruning are the padded row's, so it
-    # stands for the class as well as any, and leaves the sweep its own buffers (drawn at the longest that fit,
-    # 2 097 152 x 972, in and out took 15.2 GiB and the sweep's next 256 MB found no room, 2026-10-22)
-    shortest = feat // 2 + 1 if feat > 1 else 1
-    if softmax_feat_bucket(shortest) != feat or rows * shortest * per_elem > usable:
-        raise KeyTooLargeForClass(rows * feat * per_elem, int(card_bytes), what)
-    return rows, int(shortest)
-
-
-def _ew_count(top: int, card_bytes, dt: str, what: str) -> int:
-    """The elements an element-wise class is certified at: its top where the card holds the copy's in and out within
-    the capacity Prism plans against (`PRISM_DEFAULTS["safety_margin"]`), else its floor (`autotune_bucket.class_floor`,
-    the fewest that form it — the open class's top is no count a run reaches); a floor that does not fit is refused
-    by name."""
-    if card_bytes is None:
-        return top
-    from neurobrix.core.config.system import PRISM_DEFAULTS
-    from nbxtensor.ops.autotune_bucket import class_floor
-    per = 2 * _isz.itemsize(_isz.from_autotune_key(dt))
-    usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
-    if top * per <= usable:
-        return top
-    floor = class_floor("elements", top)
-    if floor * per > usable:
-        raise KeyTooLargeForClass(floor * per, int(card_bytes), what)
-    return floor
-
-
-def _refuse_oversize(card_bytes, specs, what: str) -> None:
-    """`specs`: (shape, dtype) of every operand AND the output, at their device widths, against the capacity of
-    a DISCRETE card that Prism plans against (`PRISM_DEFAULTS["safety_margin"]`, as `_softmax_shape` and
-    `_ew_count` draw their keys) — never the card's whole bytes: Sana 4K's 16g rms_norm key (16 252 928 rows of
-    128 fp32, in and out 7.75 GiB each, 15.5 GiB of a 16 GiB card) passed a door at the whole card, then failed its
-    output's allocation at every pass with 7.9 GB free (2026-10-23). Checked before any draw. A unified-memory
-    device is `_refuse_unified`'s."""
-    if card_bytes is None:
-        return
-    from neurobrix.core.config.system import PRISM_DEFAULTS
-    asked = sum(int(np.prod(shape, dtype=np.int64)) * _isz.itemsize(_isz.from_autotune_key(dt)) for shape, dt in specs)
-    usable = int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"]))
-    if asked > usable:
-        raise KeyTooLargeForClass(asked, int(card_bytes), what, usable=usable)
+    return H.Room(int(card_bytes), int(int(card_bytes) * float(PRISM_DEFAULTS["safety_margin"])))
 
 
 def refused_path(vendor: str, profile: str, memory_class: int, root: Optional[Path] = None) -> Path:
@@ -419,14 +255,14 @@ def record_refusal(path: Path, qual: str, ktext: str, asked: int, usable: int, c
 
 
 #: the kernels whose key carries a padded row length (`launch_keys.softmax_feat_bucket`), drawn at the class's top where
-#: the card holds it and else at the shortest row that forms the key (`_softmax_shape`)
+#: the card holds it and else at the shortest row that forms the key (`H.Room.row_shape`)
 _PADDED_ROW = ("softmax_forward_kernel", "softmax_forward_looped_kernel", "mean_forward_kernel", "sum_forward_kernel",
                "amax_forward_kernel", "group_norm_forward_kernel")
 
 
 def _unified_padded_row(qual: str, tuner, key: tuple, card_bytes, short: str) -> tuple:
     """On a unified-memory device, the key a padded-row kernel is DRAWN at: the class's top where its phase price fits
-    the card, else the shortest row that forms the key — `_softmax_shape`'s rule, which a unified device skipped: its
+    the card, else the shortest row that forms the key — `Room.row_shape`'s rule, which a unified device skipped: its
     bound is the phase price, so it was called with no card and drew every softmax at its top; the Mac's census on
     00e31765 refused HAT-L's 1 572 864 - 2 621 440 rows of 1 024 at 21-27 GB of a 19 GB card while the shortest row of
     the class (513) holds them (2026-10-24 07:18). The key filed is the census's; only the drawn row length moves."""
@@ -434,7 +270,7 @@ def _unified_padded_row(qual: str, tuner, key: tuple, card_bytes, short: str) ->
         return key
     pr = price_key(qual, tuner, key)
     if short == "ew_launch_kernel":
-        # `_ew_count`'s rule on the phase price: the class's top where it fits, else its floor. The open class's key is
+        # `Room.ew_count`'s rule on the phase price: the class's top where it fits, else its floor. The open class's key is
         # its label (68 719 476 736 elements on the four-row ladder), no count a run reaches: priced there, every Apple
         # profile refused it at 2 TB and canary / granite-speech missed it under certified-only (2026-10-24 13:43)
         if pr is None or pr["peak"] <= card_bytes:
@@ -444,10 +280,8 @@ def _unified_padded_row(qual: str, tuner, key: tuple, card_bytes, short: str) ->
 
     if pr is None or pr["peak"] <= card_bytes:
         return key
-    from nbxtensor.ops.launch_keys import softmax_feat_bucket
-    feat = int(key[1])
-    shortest = feat // 2 + 1 if feat > 1 else 1
-    if softmax_feat_bucket(shortest) != feat:
+    shortest = H.shortest_row(int(key[1]))
+    if shortest is None:
         return key                              # no shorter row forms the key: priced, and refused, at its top
     return (key[0], shortest) + tuple(key[2:])
 
@@ -470,7 +304,7 @@ def _refuse_unified(qual: str, tuner, key: tuple, card_bytes) -> None:
     if pr is None or pr["peak"] <= card_bytes:
         return
     mib = lambda b: f"{b / 2**20:.0f} MiB"                                 # noqa: E731
-    raise KeyTooLargeForClass(
+    raise H.KeyTooLargeForClass(
         int(pr["peak"]), int(card_bytes),
         f"{C.kernel_short(qual)} on unified memory, priced at its peak phase: draws "
         f"{mib(pr['draws'])} + device {mib(pr['device'])} + max(oracle {mib(pr['oracle'])}, "
@@ -481,28 +315,12 @@ def _refuse_unified(qual: str, tuner, key: tuple, card_bytes) -> None:
 # ---------------------------------------------------------------------------
 # the price of a key: what a certification holds at each of its phases
 # ---------------------------------------------------------------------------
-def _gemm_rows(key: tuple, dts, unit_keyed: bool = False) -> int:
-    """The row count a GEMM key is priced and synthesised at: the largest one whose launch forms the key
-    (`launch_keys.gemm_row_representative`), not the bucket's top — at the top the matrix unit may take the GEMM and
-    the wrapper never reaches the autotuner. A key no row count forms is refused by name: a census defect."""
-    from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.dtype.nbx_dtype import NBXDtype
-    nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
-    a = nbx.get(dts[0], NBXDtype.float16) if dts else NBXDtype.float16
-    b = nbx.get(dts[1], a) if len(dts) > 1 else a
-    m = LK.gemm_row_representative(int(key[0]), a, b, unit_keyed)
-    if m is None:
-        raise ValueError(f"no row count forms the GEMM key {key}: the matrix unit takes every M of bucket {key[0]} "
-                         f"— a census defect, the key should not exist")
-    return m
-
-
 def unit_owed(qual: str, key: tuple, stored: Optional[Dict[str, Any]]) -> bool:
     """A served FMA certificate of an `mm` / `addmm` key the matrix unit can take, made before the unit was a
     candidate beside the FMA configurations (1.8): its proof names no unit measurement, so the runtime serves the FMA
     kernel where, until 1.8, the unit ran keyless by threshold (2026-11-04: ~880 keys a class, 41 models). The unit's
     tiles are owed — measured beside the stored configuration, kept (the owner's rule 2026-11-03 17:48: only the new
-    candidate is measured, the certificate stays). Read at the operands `synthesize` draws (`_gemm_rows`)."""
+    candidate is measured, the certificate stays). Read at the operands `synthesize` draws (`H.gemm_rows`)."""
     if not stored or not stored.get("config") or "unit_measured" in (stored.get("proof") or {}):
         return False
     if C.kernel_short(qual) not in ("matmul_kernel", "addmm_kernel"):
@@ -514,122 +332,10 @@ def unit_owed(qual: str, key: tuple, stored: Optional[Dict[str, Any]]) -> bool:
     if len(dts) < 2 or dts[0] not in nbx or dts[1] not in nbx:
         return False
     try:
-        m = _gemm_rows(key, dts, unit_keyed=True)
+        m = H.gemm_rows(key, dts, unit_keyed=True)
     except ValueError:
         return False
     return LK.matrix_unit_operands(nbx[dts[0]], nbx[dts[1]], m) is not None
-
-
-def _expert_table(experts: List[Any]) -> Any:
-    """The device-address table of `experts` the MoE kernels read their weights through, built as the runtime builds
-    it (`nbxtensor.memory.pointer_tables.build_ptr_tables`): on Metal a shader dereferences captured addresses held
-    under a pinned scope, never a buffer's `data_ptr()` — written by hand, every fused MoE key of the Apple census failed
-    its oracle with a relative error of exactly 1, the experts never read (the Mac, 2026-11-04 11:34). The table
-    object keeps the pins for as long as the run that reads it holds the returned tensor (`_EXPERT_TABLES`)."""
-    from nbxtensor.memory.pointer_tables import build_ptr_tables
-    from nbxtensor.memory.allocator import DeviceAllocator
-    tables = build_ptr_tables(experts, experts, experts)
-    _EXPERT_TABLES.append(tables)
-    while len(_EXPERT_TABLES) > 8:              # the last few keys' tables: a key's runs are done when the next draws
-        _EXPERT_TABLES.pop(0).release_pins()     # Metal: the pins go with the table (CUDA: none)
-    return tables.gate_ptrs[DeviceAllocator.get_device()]
-
-
-_EXPERT_TABLES: List[Any] = []
-
-
-def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
-    """The operands `synthesize` draws for `key` — (shape, dtype) of each input and of the
-    output, plus the geometry its oracle is windowed on — read from the same key fields, so the
-    price and the synthesis cannot disagree about what is drawn."""
-    short = C.kernel_short(qual)
-    dts = C.key_dtypes(key)
-    out_dt = C.output_dtype(tuner, key)
-    d = lambda i, default="fp16": (dts[i] if len(dts) > i else default)   # noqa: E731
-    if short in ("matmul_kernel", "addmm_kernel"):
-        M, N, K = _gemm_rows(key, dts, unit_keyed=True), int(key[1]), int(key[2])
-        ins = [("a", (M, K), d(0)), ("b", (K, N), d(1))]
-        if short == "addmm_kernel":
-            ins.append(("bias", (N,), d(2)))
-        return {"family": "mm", "inputs": ins, "out": ((M, N), out_dt), "mnk": (M, N, K), "batch": 1,
-                "row_windowed_launch": True}
-    if short == "baddbmm_kernel":
-        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
-        has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
-        B = 2
-        ins = [("a", (B, M, K), d(0)), ("b", (B, K, N), d(1))]
-        if has_bias:
-            ins.append(("bias", (B, M, N), d(3, d(0))))
-        return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
-                "row_windowed_launch": False}
-    if short in ("flash_attention_m8n8k4_kernel", "flash_attention_certified_kernel"):
-        tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
-        B, H = _flash_batch_heads(tq, tk, hd, d(0), d(1), d(2))
-        ins = [("q", (B, H, tq, hd), d(0)), ("k", (B, H, tk, hd), d(1)), ("v", (B, H, tk, hd), d(2))]
-        if d(3) != d(0):
-            ins.append(("mask", (B, H, tq, tk), d(3)))
-        return {"family": "attention", "inputs": ins, "out": ((B, H, tq, hd), d(0)), "mnk": (tq, hd, 2 * tk),
-                "batch": B * H, "row_windowed_launch": True}
-    if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
-        rows, feat = int(key[0]), int(key[1])
-        return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows, feat), out_dt),
-                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
-    if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
-        # (BATCH_BUCKET, FEAT_BUCKET, scale_by_weight, [add_bias, save_stats | SATURATE_F16], dtypes...): the rows, the
-        # padded row (its top: the longest row of the class), the weight (and bias) the flags name
-        rows, feat = int(key[0]), int(key[1])
-        ins = [("x", (rows, feat), d(0))]
-        if bool(key[2]):
-            ins.append(("w", (feat,), d(1)))
-        if short == "layer_norm_forward_kernel" and bool(key[2]) and bool(key[3]):
-            ins.append(("b", (feat,), d(2)))
-        return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
-                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
-    if short in ("mean_forward_kernel", "sum_forward_kernel", "amax_forward_kernel"):
-        # (BATCH_BUCKET, FEAT_BUCKET, x, out): rows of the padded row (its top, else the shortest of the class)
-        rows, feat = int(key[0]), int(key[1])
-        return {"family": "softmax", "inputs": [("x", (rows, feat), d(0))], "out": ((rows,), out_dt),
-                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
-    if short == "group_norm_forward_kernel":
-        # (PROG_BUCKET, HIDDEN_BUCKET, scale_by_weight, add_bias, dtypes...): one group per program, one channel per
-        # group (the chunk walks the group's extent whatever its channels), the per-channel weight and bias
-        rows, feat = int(key[0]), int(key[1])
-        ins = [("x", (rows, feat), d(0))]
-        if bool(key[2]):
-            ins.append(("w", (rows,), d(2)))
-        if bool(key[3]):
-            ins.append(("b", (rows,), d(3)))
-        return {"family": "rownorm", "inputs": ins, "out": ((rows, feat), out_dt),
-                "mnk": (rows, feat, 1), "batch": 1, "row_windowed_launch": True}
-    if short == "ew_launch_kernel":
-        # (N_BUCKET, fp32, fp32): the element-wise class's copy at its top, else at its floor (`_ew_count`)
-        n = int(key[0])
-        return {"family": "elementwise", "inputs": [("x", (n,), d(0))], "out": ((n,), out_dt), "mnk": (n, 1, 1),
-                "batch": 1, "row_windowed_launch": False}
-    if short in ("gemv_vec_kernel", "addmv_kernel"):
-        # (N_BUCKET, K_BUCKET | M_BUCKET, dtypes...): the matrix [N, K] at the buckets' tops (a bucket's top forms it),
-        # the vector [K], the bias [N] for addmv
-        N, K = int(key[0]), int(key[1])
-        ins = [("mat", (N, K), d(0)), ("vec", (K,), d(1))]
-        if short == "addmv_kernel":
-            ins.append(("bias", (N,), d(2)))
-        return {"family": "gemv", "inputs": ins, "out": ((N,), out_dt), "mnk": (1, N, K), "batch": 1,
-                "row_windowed_launch": False}
-    if short == "fused_moe_kernel":
-        N, K, nv, n_exp = int(key[0]), int(key[1]), int(key[2]), int(key[3])
-        return {"family": "moe", "inputs": [("x", (nv, K), d(0)), ("w", (n_exp * N, K), d(0)), ("score", (nv,), d(0)),
-                                            ("route", (nv,), "int64")],
-                "out": ((nv, N), d(0)), "mnk": (nv, N, K), "experts": n_exp}
-    if short == "conv2d_forward_kernel":
-        (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
-        ci_g = ci // max(groups, 1)
-        return {"family": "conv", "inputs": [("x", (n, ci, h, w), d(0)), ("w", (co, ci_g, kh, kw), d(1))],
-                "out": ((n, co, oh, ow), out_dt), "geometry": (n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw)}
-    if short == "depthwise_conv2d_kernel":
-        (c, h, w, oh, ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
-        return {"family": "conv", "inputs": [("x", (1, c, h, w), d(0)), ("w", (c, 1, kh, kw), d(1))],
-                "out": ((1, c, oh, ow), out_dt), "geometry": (1, c, h, w, c, oh, ow, 1, kh, kw, ph, pw)}
-    return None
 
 
 def _refuse_unpriced(qual: str, tuner, key: tuple, budget_bytes: int, floor_bytes: int) -> None:
@@ -641,7 +347,7 @@ def _refuse_unpriced(qual: str, tuner, key: tuple, budget_bytes: int, floor_byte
     asked = int(floor_bytes) + int(pr["peak"])
     if asked > budget_bytes:
         mib = lambda b: f"{b / 2**20:.0f} MiB"                             # noqa: E731
-        raise KeyTooLargeForClass(
+        raise H.KeyTooLargeForClass(
             asked, int(budget_bytes),
             f"{C.kernel_short(qual)} priced at its peak phase: draws {mib(pr['draws'])} + device "
             f"{mib(pr['device'])} + max(oracle {mib(pr['oracle'])}, deviation {mib(pr['deviation'])}) "
@@ -650,7 +356,7 @@ def _refuse_unpriced(qual: str, tuner, key: tuple, budget_bytes: int, floor_byte
 
 def _draw_bytes(dt: str) -> int:
     """What one element of a drawn operand costs on the host for the whole key: its own width
-    (`_arr` draws through a bounded chunk into the kernel's dtype, bf16 as its bits)."""
+    (`H.draw` draws through a bounded chunk into the kernel's dtype, bf16 as its bits)."""
     return _isz.itemsize(_isz.from_autotune_key(dt))
 
 
@@ -666,14 +372,14 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
                   whole key (the oracle closures read them);
       device    — every operand and the output on the device at the key's width, plus `do_bench`'s
                   256 MiB flush buffer; on a unified-memory device these bytes are the host's;
-      oracle    — the fp64 reference: whole under ORACLE_MAX_MACS, windowed above it
-                  (`_row_windows` / `_conv_windows`), with the transient of one window's build on
+      oracle    — the fp64 reference: whole under F.ORACLE_MAX_MACS, windowed above it
+                  (`F.row_windows` / `F.conv_windows`), with the transient of one window's build on
                   top of the blocks kept;
       deviation — the kept oracle plus one candidate's readback of what is compared (fp32 read,
                   float64 cast), whole or on the windows.
     `peak` = draws + device + max(oracle, deviation). The process's own floor (its memory before
     the key) is not in it: the caller adds what it measures."""
-    ops = _key_operands(qual, tuner, key)
+    ops = H.key_operands(qual, tuner, key)
     if ops is None:
         return None
     E = lambda shape: int(np.prod(shape, dtype=np.int64))                # noqa: E731
@@ -687,7 +393,7 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
         ea = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "a")
         eb = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "b")
         ebias = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "bias")
-        wins = _row_windows(M * B, N, K)
+        wins = F.row_windows(M * B, N, K)
         if wins is None:                                                 # whole: a, b, bias, out in float64
             oracle = 8 * (ea + eb + ebias + e_out)
             kept = 8 * e_out
@@ -701,9 +407,9 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
                 kept = len(wins) * rows * N * 8
                 oracle = kept + per_win
             else:
-                # the synthesized oracle (`_matmul_oracle_fn`): a's rows cast to float64 from
+                # the synthesized oracle (`F.matmul_oracle`): a's rows cast to float64 from
                 # the host draw, b whole in float64, the window's product kept
-                wins_b = _row_windows(M, N, K, cap=max(1, ORACLE_MAX_MACS // B)) or [(0, M)]
+                wins_b = F.row_windows(M, N, K, cap=max(1, F.ORACLE_MAX_MACS // B)) or [(0, M)]
                 rows = wins_b[0][1] - wins_b[0][0]
                 per_win = B * rows * K * 8 + eb * 8 + B * rows * N * 8
                 kept = len(wins_b) * B * rows * N * 8
@@ -712,10 +418,10 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
     if ops["family"] == "gemv":
-        # `_gemv_oracle_fn`: the matrix's rows cast to float64 a block at a time (`_gemv_oracle_rows`), the vector in
+        # `F.gemv_oracle`: the matrix's rows cast to float64 a block at a time (`F.gemv_rows`), the vector in
         # float64, the whole fp64 result kept
         _, N, K = ops["mnk"]
-        rows = _gemv_oracle_rows(N, K)
+        rows = F.gemv_rows(N, K)
         oracle = N * 8 + rows * K * 8 + K * 8
         deviation = N * 8 + N * (4 + 8)
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
@@ -726,31 +432,31 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
         return {"draws": draws, "device": device, "oracle": n * 8, "deviation": n * 8 + n * (4 + 8),
                 "peak": draws + device + n * 8 + n * (4 + 8)}
     if ops["family"] in ("softmax", "rownorm"):
-        # `_softmax_oracle_fn`: per row window, the window cast to float64 plus the fp64 arrays it computes
-        # (`_SOFTMAX_ORACLE_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
+        # `F.softmax_oracle`: per row window, the window cast to float64 plus the fp64 arrays it computes
+        # (`F.ROW_F64_ARRAYS`), the windows' results kept (`RowWindowedOracle`); whole under the cap.
         # Priced with the mm and conv families: without it a softmax key read the conv geometry and every Apple
         # softmax certification failed on 'geometry' before its first launch (Mac, 2026-10-21).
         m, n, _ = ops["mnk"]
-        wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)          # the oracle's own windows (bytes)
+        wins = F.row_windows(m, n, F.ROW_F64_ARRAYS * 8)          # the oracle's own windows (bytes)
         rows = m if wins is None else wins[0][1] - wins[0][0]
         kept = (m if wins is None else len(wins) * rows) * n * 8           # the windows' fp64 results (whole: all)
         if wins is not None:
-            # the draw is on the device once and the host keeps only the windows' rows (`_oracle_rows`), as numbers
+            # the draw is on the device once and the host keeps only the windows' rows (`F.oracle_rows`), as numbers
             _, xs, xdt = ops["inputs"][0]
             draws += len(wins) * rows * n * (4 if xdt == "bf16" else _draw_bytes(xdt)) - E(xs) * _draw_bytes(xdt)
-        oracle = kept + rows * n * 8 * (1 + _SOFTMAX_ORACLE_F64_ARRAYS)
+        oracle = kept + rows * n * 8 * (1 + F.ROW_F64_ARRAYS)
         deviation = kept + kept // 8 * (4 + 8)                             # the windows' readback and cast
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
     if ops["family"] == "attention":
-        # `_attention_oracle_fn`: per query-row window, q's rows, k and v whole and the window's scores in float64
+        # `F.attention_oracle`: per query-row window, q's rows, k and v whole and the window's scores in float64
         # (scores, their exp and the quotient), the window's result kept (`RowWindowedOracle`); whole under the cap.
         # Priced with the other families: without it a flash key read the conv geometry and every Apple flash
         # certification failed on 'geometry' before its first launch (C3, Mac 2026-10-23).
         q = next(shape for name, shape, _ in ops["inputs"] if name == "q")
         k = next(shape for name, shape, _ in ops["inputs"] if name == "k")
         bh, tq, hd, tk = q[0] * q[1], q[2], q[3], k[2]
-        wins = _row_windows(tq, hd, 2 * tk)
+        wins = F.row_windows(tq, hd, 2 * tk)
         rows = tq if wins is None else wins[0][1] - wins[0][0]
         kept = bh * tq * hd * 8
         oracle = kept + bh * (rows * hd + 2 * tk * hd + 3 * rows * tk) * 8
@@ -758,12 +464,12 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
         return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
                 "peak": draws + device + max(oracle, deviation)}
     if ops["family"] == "moe":
-        # `_moe_oracle_fn`: per row window of the pairs (whole under the cap), the window's activations in float64 and
+        # `F.moe_oracle`: per row window of the pairs (whole under the cap), the window's activations in float64 and
         # their gather per expert, one expert's weights in float64 at a time, the window's product and its result kept;
         # the device beside it also holds the alignment's tables (the padded worst case, int64)
         nv, N, K = ops["mnk"]
         device += 8 * 2 * (nv + ops["experts"] * 16)
-        wins = _row_windows(nv, N, K) or [(0, nv)]
+        wins = F.row_windows(nv, N, K) or [(0, nv)]
         rows = wins[0][1] - wins[0][0]
         kept = len(wins) * rows * N * 8
         oracle = kept + rows * K * 8 * 2 + N * K * 8 + rows * N * 8
@@ -772,7 +478,7 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
                 "peak": draws + device + max(oracle, deviation)}
     n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw = ops["geometry"]
     ew = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "w")
-    wins = _conv_windows(n, oh, ow, ci_g, co, kh, kw)
+    wins = F.conv_windows(n, oh, ow, ci_g, co, kh, kw)
     if wins is None:                                                     # whole: x and its padded copy, w, out in float64
         ex = n * ci * h * w
         ex_pad = n * ci * (h + 2 * ph) * (w + 2 * pw)
@@ -794,909 +500,34 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
     return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
             "peak": draws + device + max(oracle, deviation)}
 
-def _arr(rng, shape, dtype_name, scale=0.1):
-    if dtype_name not in _NP:
-        # ZERO FALLBACK. A dtype this table does not know used to become float32 in silence,
-        # and the key the wrapper then computed was not the key the census recorded — which
-        # reads as UNREACHABLE and hides a real miss. Refuse and name it instead.
-        raise RuntimeError(
-            f"certify: no synthesis for dtype {dtype_name!r}. A key carrying it cannot be "
-            f"proven until this table knows it; defaulting to float32 would certify a "
-            f"different key than the one asked for.")
-    if dtype_name in _INTEGRAL:
-        # An integral operand in these kernels is a MASK or an index, not a sample from a
-        # normal distribution: zeros and ones, which is what a mask carries and what the
-        # oracle can reproduce exactly.
-        a = rng.integers(0, 2, size=shape, dtype=np.int8)
-        return _Synth(a.astype(_NP[dtype_name], copy=False), dtype_name)
-    # Drawn in float32 (float64 only for an fp64 operand), scaled, and written at the KERNEL'S
-    # width through a bounded chunk: the host holds the operand itself plus one chunk. The whole
-    # draw in float32 before its cast was three times a half operand; a bf16 operand carried as
-    # float32 values was twice its bits for the whole key (2026-10-05, `_refuse_unified`). The
-    # generator fills sequentially, so the chunks are the whole draw's values, bit for bit.
-    draw = np.float64 if dtype_name == "fp64" else np.float32
-    out = np.empty(shape, dtype=_NP[dtype_name])
-    flat = out.reshape(-1)
-    step = 1 << 18                                       # a 1 MB float32 chunk, whatever the operand
-    for i in range(0, flat.size, step):
-        chunk = rng.standard_normal(min(step, flat.size - i), dtype=draw)
-        chunk *= draw(scale)
-        # bf16: the bits of the value rounded to nearest, ties to even (`f32_to_bf16_bits`)
-        flat[i:i + step] = f32_to_bf16_bits(chunk) if dtype_name == "bf16" else chunk
-    return _Synth(out, dtype_name)
-
-
-class _ArgSpec:
-    """An operand known by its shape and dtype only (`synthesize(values=False)`)."""
-    __slots__ = ("shape", "dtype_name")
-
-    def __init__(self, shape, dtype_name):
-        self.shape, self.dtype_name = tuple(int(v) for v in shape), dtype_name
-
-
-#: A key's dtype spelling where NBXTensor's differs (Triton's `int1` is a boolean tensor).
-_SPEC_NBX = {"int1": "bool"}
-
-
-def _spec(rng, shape, dtype_name, scale=0.1):
-    """`_arr`'s signature, no draw: the same ZERO FALLBACK on a dtype the table cannot build."""
-    if dtype_name not in _NP:
-        raise RuntimeError(f"certify: no synthesis for dtype {dtype_name!r}")
-    return _ArgSpec(shape, dtype_name)
-
-
-def _conv_out_hw(h, wd, kh, kw, stride, padding, dilation):
-    sh, sw = stride; ph, pw = padding; dh, dw = dilation
-    return (h + 2 * ph - dh * (kh - 1) - 1) // sh + 1, (wd + 2 * pw - dw * (kw - 1) - 1) // sw + 1
-
-
-def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
-    """Direct convolution in float64 (NCHW, OIHW), the reference bank's definition.
-    `window` = (n_idx, r0, r1, c0, c1): only the output block [n_idx, :, r0:r1, c0:c1],
-    exact on every position of it (its receptive field is what is read).
-
-    The arithmetic lives in `oracles.conv2d_fp64.conv2d_reference_window` since 2026-09-26 —
-    the runtime screen windows the same family through the same brick, so the receptive-field
-    geometry is written once (a 1024²×256 input is 2 GB of float64 per window, 109 s of an
-    oracle on 2026-09-07; the whole input in float64 was the Mac's 27.5 GB on 2026-09-25)."""
-    from nbxtensor.ops.oracles.conv2d_fp64 import conv2d_reference_window
-    # the input's numbers are read slab by slab, so a bf16 operand is decoded on the window only
-    return conv2d_reference_window(None, _f64(w), stride=stride, padding=padding, dilation=dilation,
-                                   groups=groups, window=window, shape=x.shape,
-                                   slab_of=lambda n0, n1, u0, u1, v0, v1: _f64(x[n0:n1, :, u0:u1, v0:v1]))
-
-
-def _conv_windows(n, oh, ow, ci_g, co, kh, kw):
-    """None when the whole oracle fits the cap; else the windows of the output the oracle is
-    computed on — the top-left corner of the first batch element, the centre of the middle
-    one, the bottom-right corner of the last — each of at most cap/3 multiply-adds."""
-    cap = ORACLE_MAX_MACS
-    per_position = ci_g * co * kh * kw
-    if n * oh * ow * per_position <= cap:
-        return None
-    budget = max(1, int(cap / 3 // per_position))
-    side = max(1, int(budget ** 0.5))
-    rh, rw = min(oh, side), min(ow, side)
-    if rh * rw > budget:
-        rw = max(1, budget // rh)
-    wins = [(0, 0, rh, 0, rw),
-            (n // 2, (oh - rh) // 2, (oh - rh) // 2 + rh, (ow - rw) // 2, (ow - rw) // 2 + rw),
-            (n - 1, oh - rh, oh, ow - rw, ow)]
-    seen, out = set(), []
-    for w in wins:
-        if w not in seen:
-            seen.add(w); out.append(w)
-    return out
-
-
-class WindowedOracle:
-    """The float64 oracle on windows of a convolution's output; the deviation of a kernel's
-    result is measured on those windows only, and the proof names them."""
-
-    def __init__(self, blocks, oh, ow, n):
-        self.blocks = blocks                              # [(window, float64 array [1, co, rh, rw])]
-        self.describe = (f"on {len(blocks)} window(s) of the output (" +
-                         "; ".join(f"batch {w[0]} rows {w[1]}-{w[2]} cols {w[3]}-{w[4]}" for w, _ in blocks) +
-                         f") of {n}x{oh}x{ow}")
-
-    def slices(self, out):
-        for (ni, r0, r1, c0, c1), ref in self.blocks:
-            yield out[ni:ni + 1, :, r0:r1, c0:c1], ref
-
-    def device_slices(self, t):
-        """The same windows, cut on the tensor WHERE IT LIVES. The whole output used to cross
-        to the host once per candidate config so that three small windows could be read out of
-        it — 1.73 GB a candidate on a 49x128x96x720 convolution, eighteen candidates a key."""
-        for (ni, r0, r1, c0, c1), ref in self.blocks:
-            yield _materialise(t[ni:ni + 1, :, r0:r1, c0:c1]), ref
-
-
-class RowWindowedOracle:
-    """The float64 oracle on row windows of a matrix product's output (matmul, addmm, batched
-    matmul); the deviation is measured on those rows only, and the proof names them.
-
-    Why (measured 2026-09-21 23:32 on the project's V100 machine): the certifier computed the whole fp64 oracle on
-    the HOST — a 44 544 x 3 072 x 8 192 product in numpy, 2.2 TFLOP of fp64 through OpenBLAS's
-    thread pool — so four certifiers saturated eighty cores (load 74, swap full, 155 GB of host
-    RSS in one of them) while their cards read 0 %. A window of rows carries the same per-element
-    bound; the first and last rows are the masked edges a wrong tiling shows at, the middle rows
-    the interior."""
-
-    def __init__(self, blocks, m):
-        self.blocks = blocks                              # [((r0, r1), float64 array [..., r1-r0, N])]
-        self.describe = (f"on {len(blocks)} row window(s) of the output (" +
-                         "; ".join(f"rows {r0}-{r1}" for (r0, r1), _ in blocks) + f") of {m} rows")
-
-    def slices(self, out):
-        for (r0, r1), ref in self.blocks:
-            yield out[..., r0:r1, :], ref
-
-    def device_slices(self, t):
-        """The same row windows, cut on the tensor WHERE IT LIVES (see WindowedOracle)."""
-        for (r0, r1), ref in self.blocks:
-            # the rows are the second-to-last axis whatever the rank (a product's [M, N] or [B, M, N], an
-            # attention's [B, H, Tq, D]: the 4-D output was cut along its heads, 2026-10-21)
-            cut = t[(slice(None),) * (len(tuple(t.shape)) - 2) + (slice(r0, r1), slice(None))]
-            yield _materialise(cut), ref
-
-
-def _row_windows(m, n, k, cap=None):
-    """None when the whole product fits the cap; else the row windows the oracle is computed
-    on — the first rows, the middle rows, the last rows — each of at most cap/3 multiply-adds."""
-    cap = ORACLE_MAX_MACS if cap is None else cap
-    if m * n * k <= cap:
-        return None
-    rows = max(1, min(m, int(cap / 3 // max(1, n * k))))
-    wins = [(0, rows), ((m - rows) // 2, (m - rows) // 2 + rows), (m - rows, m)]
-    seen, out = set(), []
-    for w in wins:
-        if w not in seen:
-            seen.add(w); out.append(w)
-    return out
-
-
-def _matmul_oracle_fn(a, b, bias=None):
-    """The fp64 oracle of a (..., M, K) x (..., K, N) product (+ bias over N), whole under the
-    cap, row-windowed above it."""
-    m, k = a.shape[-2], a.shape[-1]
-    n = b.shape[-1]
-    batch = int(np.prod(a.shape[:-2])) if a.ndim > 2 else 1
-    wins = _row_windows(m * batch, n, k)
-
-    def whole():
-        r = _f64(a) @ _f64(b)
-        return r if bias is None else r + _f64(bias)
-    if wins is None:
-        return whole
-    rows = wins[0][1] - wins[0][0]
-    wins = _row_windows(m, n, k, cap=max(1, ORACLE_MAX_MACS // batch)) or [(0, m)]
-
-    def windowed():
-        blocks = []
-        for (r0, r1) in wins:
-            r = _f64(a[..., r0:r1, :]) @ _f64(b)
-            if bias is not None:
-                bb = _f64(bias)
-                r = r + (bb[..., r0:r1, :] if bb.ndim >= 2 and bb.shape[-2] == m else bb)
-            blocks.append(((r0, r1), r))
-        return RowWindowedOracle(blocks, m)
-    return windowed
-
-
-def _flash_batch_heads(tq: int, tk: int, hd: int, q, k, v) -> Tuple[int, int]:
-    """(batch, heads) of a synthesised matrix-unit flash: one batch and the fewest heads (a power of two) with which
-    the wrapper's own route (`launch_keys.sdpa_route` at this device's scores budget) takes the flash — the key holds
-    the lengths and the head dim, not the heads, and below the budget the attention takes the math route and never
-    reaches the flash (a 32 768 x 512 key at two heads, 2026-10-21)."""
-    from nbxtensor.ops import launch_keys as LK
-    from nbxtensor.ops import wrappers as W
-    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.dtype.nbx_dtype import NBXDtype
-    nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
-    qd, kd, vd = nbx[q], nbx[k], nbx[v]
-    budget = _nbx_attention_wrappers._sdpa_math_scores_budget_bytes_for(None)
-    rows, chunks = _nbx_attention_wrappers._sdpa_math_min_chunk_rows(), _nbx_attention_wrappers._sdpa_math_max_chunks()
-    h = 1
-    while LK.sdpa_route(1, h, tq, tk, hd, hd, budget, rows, chunks,
-                        unit_flash=LK.unit_flash_takes(hd, qd, kd, vd))[0] != "flash":
-        h *= 2
-        if h > (1 << 16):
-            raise ValueError(f"no head count takes the flash route at ({tq}, {tk}, {hd}) — a census defect")
-    return 1, h
-
-
-def _moe_oracle_fn(x, ws, score, route, mul):
-    """The fp64 oracle of a grouped MoE product (`fused_moe_kernel`): each pair's row times its expert's weights (times
-    its routed weight on the down projection), on row windows of the pairs above the cap (`_row_windows`, as a matmul's;
-    `RowWindowedOracle`) — whole, a 327 680-pair key held ~25 GB of float64 on the host (the Mac's unified pool, RUN 24,
-    2026-11-04). Per window: its activations in float64, gathered per expert, one expert's weights at a time."""
-    nv, K = int(x.shape[0]), int(x.shape[1])
-    N = int(ws[0].shape[0])
-
-    def window(r0, r1):
-        xs, rt = _f64(x[r0:r1]), route[r0:r1]
-        y = np.empty((r1 - r0, N), dtype=np.float64)
-        for e in np.unique(rt):
-            idx = np.nonzero(rt == e)[0]
-            y[idx] = xs[idx] @ _f64(ws[int(e)]).T
-        return y * _f64(score[r0:r1])[:, None] if mul else y
-
-    def build():
-        wins = _row_windows(nv, N, K)
-        if wins is None:
-            return window(0, nv)
-        return RowWindowedOracle([((r0, r1), window(r0, r1)) for r0, r1 in wins], nv)
-    return build
-
-
-def _attention_oracle_fn(q, k, v, mask, scale):
-    """The fp64 oracle of softmax(q k^T * scale + mask) v over [B, H, Tq, D] (`nbxtensor.ops.oracles.attention_fp64`),
-    on query-row windows above the cap (a query row's cost: its Tk scores and their Tk x D products)."""
-    from nbxtensor.ops.oracles.attention_fp64 import attention_fp64
-    tq, hd, tk = q.shape[-2], q.shape[-1], k.shape[-2]
-    wins = _row_windows(tq, hd, 2 * tk)
-    if wins is None:
-        return lambda: attention_fp64(q, k, v, scale, [(0, tq)], mask, values)[0][1]
-    return lambda: RowWindowedOracle(attention_fp64(q, k, v, scale, wins, mask, values), tq)
-
-
-#: the full-size fp64 arrays the softmax oracle holds per element of its window (z, exp(z), the quotient)
-_SOFTMAX_ORACLE_F64_ARRAYS = 3
-
-
-def _softmax_oracle_fn(x, log: bool):
-    """The fp64 oracle of a row softmax (or log-softmax) of x [rows, feat], whole under the cap, row-windowed above."""
-    m, n = x.shape[-2], x.shape[-1]
-
-    def rows(r0, r1):
-        z = _f64(x[r0:r1, :])
-        z = z - z.max(axis=-1, keepdims=True)
-        if log:
-            return z - np.log(np.exp(z).sum(axis=-1, keepdims=True))
-        e = np.exp(z)
-        return e / e.sum(axis=-1, keepdims=True)
-    # priced as the fp64 work it does per element — the shifted row, its exponential and the quotient, each a full
-    # fp64 array (`_SOFTMAX_ORACLE_F64_ARRAYS`) — not as one multiply-add: priced at one, a 1 310 720 x 1 024 key
-    # computed its whole oracle on the host (58 GB resident) and read the whole 5.4 GB output back per candidate,
-    # 2.5 h on one key and the certification timed out (2026-10-20); windowed, the candidates are read on the rows
-    # the oracle holds (`device_slices`)
-    # priced in BYTES against the cap (each element's fp64 arrays x 8 bytes): a softmax does a few operations per
-    # element, so a multiply-add count let a 131 072 x 4 096 key run its oracle whole — 17 GB of fp64 on an 18 GB
-    # Apple card, refused by its price (the Mac, 2026-10-21 04:10); its bytes are what bound its memory (Dell 8d7aad8dc)
-    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
-    if wins is None:
-        return lambda: rows(0, m)
-    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
-
-
-def _gemv_oracle_rows(n: int, k: int) -> int:
-    """The matrix rows the GEMV oracle casts to float64 at once: all of them under a third of the oracle's cap in
-    bytes (`ORACLE_MAX_MACS`, read as the softmax's windows read it), else that third's worth of rows."""
-    return max(1, min(n, int(ORACLE_MAX_MACS / 3 // max(1, k * 8))))
-
-
-def _gemv_oracle_fn(mat, vec, bias=None):
-    """The fp64 oracle of mat [N, K] @ vec [K] (+ bias [N]): every output row, the matrix cast a block of rows at a
-    time (`_gemv_oracle_rows`) so a vocabulary head is never one float64 copy."""
-    n, k = mat.shape
-    rows = _gemv_oracle_rows(n, k)
-
-    def run():
-        v = _f64(vec)
-        out = np.empty(n, dtype=np.float64)
-        for r0 in range(0, n, rows):
-            out[r0:r0 + rows] = _f64(mat[r0:r0 + rows]) @ v
-        return out if bias is None else out + _f64(bias)
-    return run
-
-
-class _HostWindows:
-    """The rows of a host draw a row-windowed oracle reads, and nothing else: on a unified-memory device the host draw
-    and its device copy live in one pool, and the draw was held whole for the oracle's closures though the oracle reads
-    only its three windows (softmax 2 621 440 x 1 024 fp32: 10 GB of draw for 3 windows' rows; the Mac's re-proof,
-    2026-11-07). Built from the draw before it is dropped; read as `x[r0:r1, :]` like the draw, as its numbers."""
-
-    def __init__(self, x, wins):
-        self.shape = tuple(x.shape)
-        self._rows = {(int(r0), int(r1)): np.array(values(x[r0:r1])) for r0, r1 in wins}
-
-    def __getitem__(self, idx):
-        rs = idx[0] if isinstance(idx, tuple) else idx
-        return self._rows[(int(rs.start), int(rs.stop))]
-
-
-def _oracle_rows(x):
-    """What a row-windowed oracle keeps of a host draw: the draw itself when it reads it whole (under the cap), else
-    only the rows of its windows (`_HostWindows`) — the caller drops the draw once it is on the device."""
-    m, n = x.shape[-2], x.shape[-1]
-    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
-    return x if wins is None else _HostWindows(x, wins)
-
-
-def _rownorm_oracle_fn(x, w, b, layer: bool):
-    """The fp64 oracle of a row layer norm (eps 1e-5, `native_layer_norm`'s default) or RMS norm (eps 1e-6, `rms_norm`'s)
-    of x [rows, feat] with its weight and bias, whole under the cap, row-windowed above — priced as the softmax's
-    (`_SOFTMAX_ORACLE_F64_ARRAYS` fp64 arrays per element: the row, its centred or squared values, the result)."""
-    m, n = x.shape[-2], x.shape[-1]
-    wf = None if w is None else _f64(w)
-    bf = None if b is None else _f64(b)
-
-    def rows(r0, r1):
-        z = _f64(x[r0:r1, :])
-        if layer:
-            z = z - z.mean(axis=-1, keepdims=True)
-            z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-5)
-        else:
-            z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-6)
-        if wf is not None:
-            z = z * wf
-        if bf is not None:
-            z = z + bf
-        return z
-    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
-    if wins is None:
-        return lambda: rows(0, m)
-    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
-
-
-def _row_reduce_oracle_fn(x, red: str):
-    """The fp64 oracle of a row reduction (mean, sum or max) of x [rows, feat]: rows a window at a time."""
-    m, n = x.shape[-2], x.shape[-1]
-    op = {"mean": np.mean, "sum": np.sum, "amax": np.max}[red]
-
-    def run():
-        out = np.empty(m, dtype=np.float64)
-        step = max(1, ORACLE_MAX_MACS // (8 * max(1, n)))      # a window of ORACLE_MAX_MACS bytes in fp64
-        for r0 in range(0, m, step):
-            out[r0:r0 + step] = op(_f64(x[r0:r0 + step, :]), axis=-1)
-        return out
-    return run
-
-
-def _groupnorm_oracle_fn(x, w, b):
-    """The fp64 oracle of a group norm of x [groups, extent] (one channel per group: eps 1e-5, `group_norm_wrapper`'s
-    default) with its per-group weight and bias — the row norm's, the affine per row; row-windowed above the cap."""
-    m, n = x.shape[-2], x.shape[-1]
-    wf = None if w is None else _f64(w)[:, None]
-    bf = None if b is None else _f64(b)[:, None]
-
-    def rows(r0, r1):
-        z = _f64(x[r0:r1, :])
-        z = z - z.mean(axis=-1, keepdims=True)
-        z = z / np.sqrt((z * z).mean(axis=-1, keepdims=True) + 1e-5)
-        if wf is not None:
-            z = z * wf[r0:r1]
-        if bf is not None:
-            z = z + bf[r0:r1]
-        return z
-    wins = _row_windows(m, n, _SOFTMAX_ORACLE_F64_ARRAYS * 8)
-    if wins is None:
-        return lambda: rows(0, m)
-    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], m)
-
-
-def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
-    n, ci, h, wd = x.shape
-    co, ci_g, kh, kw = wt.shape
-    oh, ow = _conv_out_hw(h, wd, kh, kw, stride, padding, dilation)
-    wins = _conv_windows(n, oh, ow, ci_g, co, kh, kw)
-    if wins is None:
-        return lambda: _conv2d_oracle(x, wt, stride, padding, dilation, groups)
-    return lambda: WindowedOracle([(w, _conv2d_oracle(x, wt, stride, padding, dilation, groups, window=w)) for w in wins], oh, ow, n)
-
-
 def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = None, unified: bool = False,
                values: bool = True, budget_bytes: Optional[int] = None,
-               floor_bytes: int = 0) -> Optional[Tuple[Callable[[], Any], Optional[Callable[[], np.ndarray]], str]]:
-    """(call, oracle_fn, output_arg_name): a callable that runs the wrapper on
-    inputs of this key's shape and dtypes, a callable computing the fp64
-    oracle of the same inputs (LAZY: only once the wrapper's key is known to
-    be the census's — an oracle for a mismatched key is minutes wasted), and
-    the name of the kernel argument that is the output. None when this
-    kernel has no synthesizer here.
+               floor_bytes: int = 0) -> Optional[Tuple[Callable[[], Any], Optional[Callable[[], Any]], str]]:
+    """(call, oracle_fn, output_arg_name) for `key` — the library's synthesis (`nbxtensor.ops.autotune_harness.
+    synthesize`: the wrapper run on operands of the key's shape and dtypes, and its LAZY fp64 oracle) behind the
+    campaign's doors, all before any draw:
 
-    `values=False`: the arguments only — each operand allocated on the device with the key's
-    shape and dtype (so its strides, alignment and integer specialisation are the real key's),
-    nothing drawn on the host, no oracle (None). For a caller that compiles without running (the
-    Mac's `msl_census.py`, 2026-09-26: it needs the key's dtypes, strides and `==1`/`%16`/i32
-    specialisation, never the values)."""
-    from nbxtensor.tensor import NBXTensor
-    from nbxtensor.dtype.nbx_dtype import NBXDtype
-    from nbxtensor.ops import wrappers as W
-    from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.ops import conv_wrappers as _nbx_conv_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.ops import norm_wrappers as _nbx_norm_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
-    dts = C.key_dtypes(key)
-    short = C.kernel_short(qual)
-    arr = _arr if values else _spec
+    - `budget_bytes`: THE PRICE BEFORE ANY DRAW (supervisor, 2026-09-28 05:41): what this key's certification will hold
+      at its peak phase, over the process's measured floor, against the budget the run is gated on — the same figure
+      its guard kills at; refused by name, with the phases (`_refuse_unpriced`). The key DRAWN is priced, not the key
+      filed: on a unified device the open element class (its label, 68 719 476 736 elements) asked 2.2 TB of an 18 GB
+      Mac at its filed top and was refused at every re-proof (2026-11-07).
+    - `unified`: the host draws and the device copies share one pool — a padded-row or element-wise class is drawn at
+      the size its phase price fits (`_unified_padded_row`) and the key is refused over the card by its phase price
+      (`_refuse_unified`);
+    - else `card_bytes`: each operand and the output against the card's share Prism plans against (`_room`).
+
+    `values=False`: the arguments only, no draw and no oracle (the Mac's `msl_census.py` compiles without running)."""
     if budget_bytes is not None:
-        # THE PRICE BEFORE ANY DRAW (supervisor, 2026-09-28 05:41): what this key's certification
-        # will hold at its peak phase, over the process's measured floor, against the budget the
-        # run is gated on — the same figure its guard kills at. Refused by name, with the phases.
-        # the key DRAWN, not the key filed: on a unified device a padded-row or element-wise class is drawn at the size
-        # its phase price fits (`_unified_padded_row`); priced at its filed top, the open element class (its label,
-        # 68 719 476 736 elements) asked 2.2 TB of an 18 GB Mac and was refused at every re-proof (2026-11-07)
         drawn = _unified_padded_row(qual, tuner, key, card_bytes, C.kernel_short(qual)) if unified else key
         _refuse_unpriced(qual, tuner, drawn, budget_bytes, floor_bytes)
-
-    def to(a):
-        """The NBXTensor the kernel must receive, with the dtype the key names.
-
-        A bf16 operand IS its bits in a uint16 container, which `from_numpy`'s
-        `dtype` argument exists for — it names the NBX dtype the BITS already
-        are. Passing an fp32 carrier instead is what made every bf16 shape
-        uncertifiable.
-        """
-        if isinstance(a, _ArgSpec):
-            return NBXTensor.empty(a.shape, dtype=_SPEC_NBX.get(a.dtype_name, a.dtype_name))
-        if getattr(a, "_nbx_dtype", None) == "bf16":
-            return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)), dtype=NBXDtype.bfloat16)
-        return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)))
-
-    def to_conv_weight(a, groups):
-        """The convolution weight in the order the loader stores it on this arch
-        (`launch_keys.conv_weight_layout`): a KRSC weight is timed and checked as the run reads it,
-        the logical (K, C, R, S) tensor over channels-innermost memory."""
-        from nbxtensor.ops import launch_keys as _lk
-        if not _lk.conv_weight_krsc(tuple(a.shape), groups, False, _lk.conv_weight_layout()):
-            return to(a)
-        K, Cg, R, S = a.shape
-        if isinstance(a, _ArgSpec):
-            return NBXTensor.empty((K, R, S, Cg), dtype=_SPEC_NBX.get(a.dtype_name, a.dtype_name)).permute(0, 3, 1, 2)
-        bits = np.ascontiguousarray(np.asarray(a).transpose(0, 2, 3, 1))
-        if getattr(a, "_nbx_dtype", None) == "bf16":
-            return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16).permute(0, 3, 1, 2)
-        return NBXTensor.from_numpy(bits).permute(0, 3, 1, 2)
     out_dt = C.output_dtype(tuner, key) if card_bytes is not None else None   # sized only to refuse
-    ew_top = int(key[0]) if short == "ew_launch_kernel" else None    # the class the copy files under, whatever is drawn
+    filed = key
     if unified:
-        key = _unified_padded_row(qual, tuner, key, card_bytes, short)
+        key = _unified_padded_row(qual, tuner, key, card_bytes, C.kernel_short(qual))
         _refuse_unified(qual, tuner, key, card_bytes)
         card_bytes = None                       # the phase price is the bound on a unified device
-    if short in ("matmul_kernel", "addmm_kernel"):
-        M, N, K = _gemm_rows(key, dts, unit_keyed=True), int(key[1]), int(key[2])
-        _refuse_oversize(card_bytes, [((M, K), dts[0] if dts else "fp16"),
-                                      ((K, N), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((N,), dts[2] if len(dts) > 2 and short == "addmm_kernel" else out_dt),
-                                      ((M, N), out_dt)], short)
-        a = arr(rng, (M, K), dts[0] if dts else "fp16")
-        b = arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
-        if short == "matmul_kernel":
-            return (lambda: _nbx_linalg_wrappers.mm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "c_ptr"
-        bias = arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
-        return ((lambda: _nbx_linalg_wrappers.addmm(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias[None, :]) if values else None), "c_ptr")
-    if short == "ew_launch_kernel":
-        # the class's shared copy (`ops/elementwise_launch.py`) launched itself — no wrapper reaches it but `ew_meta` —
-        # at the class's top where the card holds it, else at its floor (`_ew_count`); its oracle is the draw itself:
-        # an element-wise result is each element's alone, so no tile moves a bit
-        import triton
-        from nbxtensor.ops.elementwise_launch import ew_launch_kernel as _ew
-        top = ew_top
-        n = _ew_count(int(key[0]), card_bytes, dts[0] if dts else "fp32", short)
-        x = arr(rng, (n,), dts[0] if dts else "fp32")
-
-        def run_ew():
-            xd = to(x)
-            y = NBXTensor.empty_like(xd)
-            _ew[lambda META: (triton.cdiv(n, META['BLOCK_SIZE']),)](xd, y, n, top)
-            return y
-        return run_ew, ((lambda: np.asarray(x, dtype=np.float64)) if values else None), "y_ptr"
-    if short in ("gemv_vec_kernel", "addmv_kernel"):
-        # through the wrappers (`mv_wrapper`, `addmv_wrapper`) at the buckets' tops; the fp64 oracle by row blocks
-        N, K = int(key[0]), int(key[1])
-        mat_dt, vec_dt = (dts[0] if dts else "fp16"), (dts[1] if len(dts) > 1 else "fp32")
-        sizes = [((N, K), mat_dt), ((K,), vec_dt), ((N,), out_dt)]
-        if short == "addmv_kernel":
-            sizes.append(((N,), dts[2] if len(dts) > 2 else out_dt))
-        _refuse_oversize(card_bytes, sizes, short)
-        mat = arr(rng, (N, K), mat_dt)
-        vec = arr(rng, (K,), vec_dt)
-        if short == "gemv_vec_kernel":
-            return (lambda: _nbx_linalg_wrappers.mv_wrapper(to(mat), to(vec))), (_gemv_oracle_fn(mat, vec) if values else None), "C_ptr"
-        bias = arr(rng, (N,), dts[2] if len(dts) > 2 else out_dt)
-        return ((lambda: _nbx_linalg_wrappers.addmv_wrapper(to(bias), to(mat), to(vec))),
-                (_gemv_oracle_fn(mat, vec, bias) if values else None), "out_ptr")
-    if short == "baddbmm_kernel":
-        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
-        has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
-        B = 2
-        _refuse_oversize(card_bytes, [((B, M, K), dts[0] if dts else "fp16"),
-                                      ((B, K, N), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((B, M, N), out_dt)]
-                         + ([((B, M, N), dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16"))]
-                            if has_bias else []), short)
-        a = arr(rng, (B, M, K), dts[0] if dts else "fp16")
-        b = arr(rng, (B, K, N), dts[1] if len(dts) > 1 else "fp16")
-        if has_bias:
-            bias_dt = dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16")
-            bias = arr(rng, (B, M, N), bias_dt)
-            return ((lambda: _nbx_linalg_wrappers.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
-        return (lambda: _nbx_linalg_wrappers.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
-    if short in ("flash_attention_m8n8k4_kernel", "flash_attention_certified_kernel"):
-        # (Q_BUCKET, K_BUCKET, headdim, split, q, k, v, bias, out, lse): the buckets' top lengths, through the
-        # attention wrapper itself (the matrix-unit route it takes for these dtypes and head dim); a mask only where
-        # the key's bias dtype is not Q's (the zero bias the wrapper builds otherwise); the fp64 oracle per query row
-        tq, tk, hd = int(key[0]), int(key[1]), int(key[2])
-        qd = dts[0] if dts else "fp16"
-        B, H = _flash_batch_heads(tq, tk, hd, qd, dts[1] if len(dts) > 1 else qd, dts[2] if len(dts) > 2 else qd)
-        shapes = [((B, H, tq, hd), qd), ((B, H, tk, hd), dts[1] if len(dts) > 1 else qd),
-                  ((B, H, tk, hd), dts[2] if len(dts) > 2 else qd), ((B, H, tq, hd), qd)]
-        masked = len(dts) > 3 and dts[3] != qd
-        _refuse_oversize(card_bytes, shapes + ([((B, H, tq, tk), dts[3])] if masked else []), short)
-        q, k, v = (arr(rng, sh, dt) for sh, dt in shapes[:3])
-        mask = arr(rng, (B, H, tq, tk), dts[3]) if masked else None
-        scale = 1.0 / float(np.sqrt(hd))
-        # K is drawn (B, H, tk, hd), never transposed: said, because where tk == hd its layout cannot be read from its
-        # shape and the wrapper refuses to guess (four Apple flash keys, 64 x 64 and 128 x 128, 2026-10-24)
-        return ((lambda: _nbx_attention_wrappers.scaled_dot_product_attention_wrapper(to(q), to(k), to(v),
-                                                                attn_mask=to(mask) if masked else None,
-                                                                k_pre_transposed=False)),
-                (_attention_oracle_fn(q, k, v, mask, scale) if values else None), "Out")
-    if short in ("mean_forward_kernel", "sum_forward_kernel", "amax_forward_kernel"):
-        # through the wrappers over the last dim (`mean_wrapper`, `sum_wrapper`, `amax_wrapper`), rows of the padded row
-        # (`_softmax_shape`); the fp64 oracle of each row's reduction (its window cast whole, row-windowed above the cap)
-        rows, feat = int(key[0]), int(key[1])
-        x_dt = dts[0] if dts else "fp32"
-        rows, feat = _softmax_shape(rows, feat, card_bytes, x_dt, x_dt, short)
-        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows,), out_dt)], short)
-        x = arr(rng, (rows, feat), x_dt)
-        red = short.split("_")[0]
-        fn = {"mean": _nbx_reduction_wrappers.mean_wrapper, "sum": _nbx_reduction_wrappers.sum_wrapper, "amax": _nbx_reduction_wrappers.amax_wrapper}[red]
-        return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
-    if short in ("moe_align_stage1_kernel", "moe_align_stage2_kernel", "moe_align_stage3_kernel"):
-        # ((BS, BE,) E, N_BUCKET, ids/tables): the class's (token, expert) pairs at its floor, routed uniformly at random
-        # over the key's experts, through the library's own `moe_align_block_size` (stage 3, whose key names no block,
-        # at the FMA kernel's block); the oracle is the host sort it replaced, compared EXACTLY (integers: one wrong
-        # index is a wrong routing, never a small deviation)
-        from nbxtensor.ops.moe_wrappers import moe_align_block_size, MOE_BLOCK_M as _BLOCK_SIZE_M
-        from nbxtensor.ops.autotune_bucket import class_floor
-        stage = int(short[len("moe_align_stage")])
-        bs, n_exp, nb = (_BLOCK_SIZE_M, int(key[0]), int(key[1])) if stage == 3 else (int(key[0]), int(key[2]), int(key[3]))
-        nb = class_floor("elements", nb)                       # the class is certified at its floor, as an element-wise's
-        route = rng.integers(0, n_exp, size=nb).astype(np.int64)
-        def run():
-            from nbxtensor.memory.allocator import DeviceAllocator
-            sids, eids, _npad = moe_align_block_size(NBXTensor.from_numpy(route), bs, n_exp, DeviceAllocator.get_device())
-            return eids if stage == 2 else sids
-        def oracle():
-            counts = np.bincount(route, minlength=n_exp)
-            padded = -(-counts // bs) * bs
-            offsets = np.concatenate([[0], np.cumsum(padded)[:-1]])
-            if stage == 1:
-                return _Exact(offsets)
-            bound = min(nb * bs, nb + n_exp * (bs - 1))
-            max_total = -(-bound // bs) * bs
-            if stage == 2:
-                starts = np.arange(max_total // bs) * bs
-                own = (starts[:, None] >= offsets[None, :]) & (starts[:, None] < (offsets + padded)[None, :])
-                return _Exact(np.where(own.any(axis=1), own.argmax(axis=1), -1))
-            ref = np.full(max_total, -1, dtype=np.int64)          # stage 3 writes the routed slots only (the poison)
-            for e in range(n_exp):
-                tok = np.nonzero(route == e)[0]
-                ref[offsets[e]:offsets[e] + tok.size] = tok
-            return _Exact(ref)
-        return run, (oracle if values else None), {1: "offsets_ptr", 2: "expert_ids_ptr", 3: "sorted_ids_ptr"}[stage]
-    if short == "fused_moe_kernel":
-        # (N, K, NV_BUCKET, NUM_EXPERTS, MUL_ROUTED_WEIGHT, TOPK_DIVIDE, dtypes): the bucket's valid (token, expert)
-        # pairs at its top, one expert per token (top_k 1: the key does not name it), the key's experts of [N, K] weights
-        # routed uniformly at random and aligned by the library's own `moe_align_block_size`, through `invoke_fused_moe`;
-        # the fp64 oracle per pair
-        from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers
-        from nbxtensor.ops.moe_wrappers import moe_align_block_size, MOE_BLOCK_M as _BLOCK_SIZE_M
-        N, K, nv, n_exp, mul, divide = int(key[0]), int(key[1]), int(key[2]), int(key[3]), bool(key[4]), bool(key[5])
-        w_dt = dts[0] if dts else "fp16"
-        _refuse_oversize(card_bytes, [((nv, K), w_dt), ((n_exp * N, K), w_dt), ((nv, N), w_dt)], short)
-        x = arr(rng, (nv, K), w_dt)
-        ws = [arr(rng, (N, K), w_dt) for _ in range(n_exp)]
-        score = arr(rng, (nv,), w_dt)
-        route = rng.integers(0, n_exp, size=nv).astype(np.int64)
-        def run():
-            from nbxtensor.memory.allocator import DeviceAllocator
-            wt = [to(w) for w in ws]
-            ptrs = _expert_table(wt)
-            sids, eids, npad = moe_align_block_size(NBXTensor.from_numpy(route), _BLOCK_SIZE_M, n_exp,
-                                                    DeviceAllocator.get_device())
-            out = NBXTensor.zeros((nv, N), dtype={"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16,
-                                                  "fp32": NBXDtype.float32}[w_dt])
-            _nbx_moe_wrappers.invoke_fused_moe(to(x), ptrs, out, to(score), sids, eids, npad, N, K, 1, K, 1,
-                                               mul_routed_weight=mul, topk_divide=divide)
-            return out
-        return run, (_moe_oracle_fn(x, ws, score, route, mul) if values else None), "c_ptr"
-    if short in ("moe_gateup_vec_half_kernel", "moe_down_split_vec_half_kernel", "moe_part_reduce_kernel"):
-        # the one-token MoE band (`nbxtensor.ops.moe_wrappers.moe_decode_vec_half_pass`), each launch on its own: TOP_K experts (a
-        # permutation of as many) of [N, K] half weights, the routed rows fp32; the fp64 oracle per expert row
-        from nbxtensor.ops import moe_decode_vec as _mv
-        import triton as _tr
-        f32 = NBXDtype.float32
-        if short == "moe_part_reduce_kernel":
-            n_out, top_k = int(key[0]), int(key[1])
-            part = arr(rng, (top_k, n_out), "fp32")
-            def run():
-                out = NBXTensor.empty((n_out,), dtype=f32)
-                _mv.moe_part_reduce_kernel[lambda META: (_tr.cdiv(n_out, META["BLOCK_N"]),)](to(part), out, n_out,
-                                                                                            TOP_K=top_k)
-                return out
-            return run, ((lambda: _f64(part).sum(axis=0)) if values else None), "out_ptr"
-        k_in, n_out, top_k, bf = int(key[0]), int(key[1]), int(key[2]), bool(key[3])
-        w_dt = "bf16" if bf else "fp16"
-        gate = short == "moe_gateup_vec_half_kernel"
-        _refuse_oversize(card_bytes, [((top_k * (2 if gate else 1) * n_out, k_in), w_dt), ((top_k, n_out), "fp32")], short)
-        ids = rng.permutation(top_k).astype(np.int64)
-        x = arr(rng, (k_in,) if gate else (top_k, k_in), w_dt if gate else "fp32")
-        rw = arr(rng, (top_k,), w_dt)
-        ws = [[arr(rng, (n_out, k_in), w_dt) for _ in range(top_k)] for _ in range(2 if gate else 1)]
-        def run():
-            wt = [[to(w) for w in proj] for proj in ws]
-            tabs = [_expert_table(proj) for proj in wt]
-            out = NBXTensor.empty((top_k, n_out), dtype=f32)
-            grid = lambda META: (top_k, _tr.cdiv(n_out, META["BLOCK_N"]))     # noqa: E731
-            if gate:
-                _mv.moe_gateup_vec_half_kernel[grid](to(x), to(ids), tabs[0], tabs[1], out, k_in, n_out, 1, k_in,
-                                                     top_k, W_BF16=bf)
-            else:
-                _mv.moe_down_split_vec_half_kernel[grid](to(x), to(ids), to(rw), tabs[0], out, k_in, n_out, 1, k_in,
-                                                         top_k, W_BF16=bf)
-            return out
-        def oracle():
-            y = np.empty((top_k, n_out), dtype=np.float64)
-            for p_, e in enumerate(ids):
-                if gate:
-                    g, u = _f64(x) @ _f64(ws[0][e]).T, _f64(x) @ _f64(ws[1][e]).T
-                    y[p_] = g / (1.0 + np.exp(-g)) * u
-                else:
-                    y[p_] = (_f64(x)[p_] @ _f64(ws[0][e]).T) * _f64(rw)[p_]
-            return y
-        return run, (oracle if values else None), ("h_ptr" if gate else "part_ptr")
-    if short == "decode_attn_vec_split_kernel":
-        # (T_BUCKET, D, D_V, GQA_GROUPS, HAS_BIAS, q, k, v, bias, partials): one KV head and its GQA group of query rows
-        # over the bucket's top of keys, through `_decode_attn_vec` (its split, the reduce after); the fp64 oracle is
-        # each split's unnormalised partial output (`opart`), the split the wrapper computes
-        from nbxtensor.ops import attention_wrappers as AW
-        import math as _m
-        T, D, Dv, G, has_b = int(key[0]), int(key[1]), int(key[2]), int(key[3]), bool(key[4])
-        q_dt, k_dt, v_dt = (dts + ["fp16"] * 3)[:3]
-        b_dt = dts[3] if has_b and len(dts) > 3 else None
-        _refuse_oversize(card_bytes, [((T, D), k_dt), ((T, Dv), v_dt)], short)
-        q, k, v = arr(rng, (1, G, 1, D), q_dt), arr(rng, (1, 1, T, D), k_dt), arr(rng, (1, 1, T, Dv), v_dt)
-        b = arr(rng, (T,), b_dt) if has_b else None
-        scale = 1.0 / _m.sqrt(D)
-        q_round = None if q_dt == k_dt else {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}[k_dt]
-        run = lambda: AW._decode_attn_vec(to(q), to(k), to(v), to(b) if has_b else None, scale, 1, G, 1, T, D,  # noqa: E731
-                                          q_round=q_round)
-        def oracle():
-            from nbxtensor.ops.decode_attn_vec import decode_vec_splits
-            split = decode_vec_splits(T)
-            seg = -(-T // split)
-            qs, ks, vs = _f64(q).reshape(G, D), _f64(k).reshape(T, D), _f64(v).reshape(T, Dv)
-            if q_round is not None:                  # Q rounded to the cache's dtype on load, as the kernel does
-                qs = (qs.astype(np.float16).astype(np.float64) if k_dt == "fp16" else
-                      bf16_bits_to_f32(f32_to_bf16_bits(qs.astype(np.float32))).astype(np.float64) if k_dt == "bf16"
-                      else qs.astype(np.float32).astype(np.float64))
-            sc = qs @ ks.T * scale + (_f64(b)[None, :] if has_b else 0.0)
-            out = np.zeros((G, split, Dv), dtype=np.float64)
-            for s_ in range(split):
-                lo, hi = s_ * seg, min((s_ + 1) * seg, T)
-                if lo >= hi:
-                    continue
-                blk = sc[:, lo:hi]
-                p_ = np.exp(blk - blk.max(axis=1, keepdims=True))
-                out[:, s_] = p_ @ vs[lo:hi]
-            return out
-        return run, (oracle if values else None), "opart_ptr"
-    if short == "flash_decode_reduce_kernel":
-        # (SPLIT, GROUPS, D, partials, out): the combine after both split decodes, through `decode_reduce` — a batch of
-        # query rows, each split's partial output, running max and sum of exponentials drawn (a split's max may be
-        # -inf with a sum of 0, a split that saw only masked keys); the fp64 oracle is the log-sum-exp combine
-        from nbxtensor.ops import attention_wrappers as AW
-        split, groups, dv = int(key[0]), int(key[1]), int(key[2])
-        if groups != 1:
-            raise ValueError(f"no launch forms the reduce key {key}: every decode views its partials at GROUPS 1")
-        out_dt = dts[3] if len(dts) > 3 else "fp16"
-        rows = 64
-        opart, mpart, lpart = arr(rng, (rows, split, dv), "fp32"), arr(rng, (rows, split), "fp32"), arr(rng, (rows, split), "fp32")
-        if values:
-            mpart, lpart = np.array(mpart, dtype=np.float32) * 10.0, np.abs(np.array(lpart, dtype=np.float32)) * 10.0 + 0.5
-            dead = rng.random((rows, split)) < (0.1 if split > 1 else 0.0)
-            mpart[dead], lpart[dead] = -np.inf, 0.0
-        nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
-        def run():
-            out = NBXTensor.empty((rows, 1, dv), dtype=nbx[out_dt])
-            AW.decode_reduce(to(opart), to(mpart), to(lpart), out)
-            return out
-        def oracle():
-            o, m, l_ = _f64(opart), _f64(mpart), _f64(lpart)
-            top = np.max(np.where(np.isfinite(m), m, -np.inf), axis=1, keepdims=True)
-            top = np.where(np.isfinite(top), top, 0.0)
-            c = np.where(np.isfinite(m), np.exp(m - top), 0.0)
-            den = (l_ * c).sum(axis=1)
-            num = (o * c[:, :, None]).sum(axis=1)
-            return (num / np.where(den == 0.0, 1.0, den)[:, None]).reshape(rows, 1, dv)
-        return run, (oracle if values else None), "out_ptr"
-    if short == "paged_decode_attn_split_kernel":
-        # (SPLITS, page_tokens, D, D_V, GQA_GROUPS, q, pools, tables, partials): one sequence of the class's top (its
-        # splits' positions, the most work a split of the class does) over shuffled pages, one KV head and its group,
-        # through `paged_decode_attention`; the fp64 oracle is each split's unnormalised partial output, the split the
-        # kernel cuts (whole PAGED_DECODE_SPLIT_ALIGN positions)
-        from nbxtensor.ops import attention_wrappers as AW
-        from nbxtensor.ops import paged_decode_attn as PD
-        import math as _m
-        splits, pt, D, Dv, G = (int(x) for x in key[:5])
-        T = splits * PD.PAGED_DECODE_SPLIT_POSITIONS
-        if PD.paged_decode_splits(T) != splits:
-            raise ValueError(f"no length forms the paged decode key {key}: {splits} splits is not a split count")
-        q_dt, kv_dt = (dts + ["fp16"] * 2)[:2]
-        pages = -(-T // pt)
-        _refuse_oversize(card_bytes, [((pages * pt, D), kv_dt), ((pages * pt, Dv), kv_dt)], short)
-        q = arr(rng, (1, G, 1, D), q_dt)
-        kp, vp = arr(rng, (pages, 1, pt, D), kv_dt), arr(rng, (pages, 1, pt, Dv), kv_dt)
-        order = rng.permutation(pages).astype(np.int32)
-        scale = 1.0 / _m.sqrt(D)
-        nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
-        run = lambda: AW.paged_decode_attention(to(q), to(kp), to(vp), NBXTensor.from_numpy(order.reshape(1, pages)),  # noqa: E731
-                                                NBXTensor.from_numpy(np.array([T], dtype=np.int32)), scale, T,
-                                                q_round=nbx[kv_dt])
-        def oracle():
-            split = PD.paged_decode_splits(T)
-            seg = -(-(-(-T // split)) // PD.PAGED_DECODE_SPLIT_ALIGN) * PD.PAGED_DECODE_SPLIT_ALIGN
-            ks = np.concatenate([_f64(kp)[order[i], 0] for i in range(pages)])[:T]
-            vs = np.concatenate([_f64(vp)[order[i], 0] for i in range(pages)])[:T]
-            qs = _f64(q).reshape(G, D)
-            if q_dt != kv_dt:                        # Q rounded to the cache's dtype on load, as the kernel does
-                qs = (qs.astype(np.float16).astype(np.float64) if kv_dt == "fp16" else
-                      bf16_bits_to_f32(f32_to_bf16_bits(qs.astype(np.float32))).astype(np.float64) if kv_dt == "bf16"
-                      else qs.astype(np.float32).astype(np.float64))
-            sc = qs @ ks.T * scale
-            out = np.zeros((G, split, Dv), dtype=np.float64)
-            for s_ in range(split):
-                lo, hi = s_ * seg, min((s_ + 1) * seg, T)
-                if lo >= hi:
-                    continue
-                blk = sc[:, lo:hi]
-                out[:, s_] = np.exp(blk - blk.max(axis=1, keepdims=True)) @ vs[lo:hi]
-            return out
-        return run, (oracle if values else None), "opart_ptr"
-    if short == "group_norm_forward_kernel":
-        # through the wrapper (`group_norm_wrapper`, eps its default): N = 1, one channel per group, the groups the
-        # programs' bucket, the group's extent the padded class (at its top where the card holds it, else at the
-        # shortest that forms it, `_softmax_shape`); the fp64 oracle per group (row-windowed above the cap)
-        rows, feat = int(key[0]), int(key[1])
-        x_dt = dts[0] if dts else "fp32"
-        rows, feat = _softmax_shape(rows, feat, card_bytes, x_dt, x_dt, short)
-        has_w, has_b = bool(key[2]), bool(key[3])
-        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows, feat), x_dt)], short)
-        x = arr(rng, (rows, feat), x_dt)
-        w = arr(rng, (rows,), dts[2]) if has_w else None
-        b = arr(rng, (rows,), dts[3]) if has_b else None
-        xd, oracle = to(x), (_groupnorm_oracle_fn(_oracle_rows(x), w, b) if values else None)
-        del x                                      # the host keeps only the rows the oracle reads (`_oracle_rows`)
-        run = lambda: _nbx_norm_wrappers.group_norm_wrapper(xd.view(1, rows, feat), rows, to(w) if has_w else None,
-                                           to(b) if has_b else None)[0].view(rows, feat)
-        return run, oracle, "Y"
-    if short in ("layer_norm_forward_kernel", "rms_norm_forward_kernel"):
-        # the row norms through their wrappers (`native_layer_norm`, `rms_norm`), the padded row at its top, eps the
-        # wrappers' own default; the fp64 oracle per row (row-windowed above the oracle's cap, as a softmax's)
-        rows, feat, has_w = int(key[0]), int(key[1]), bool(key[2])
-        ln = short == "layer_norm_forward_kernel"
-        has_b = ln and has_w and bool(key[3])
-        x_dt = dts[0] if dts else "fp32"
-        _refuse_oversize(card_bytes, [((rows, feat), x_dt), ((rows, feat), out_dt)], short)
-        x = arr(rng, (rows, feat), x_dt)
-        w = arr(rng, (feat,), dts[1]) if has_w else None
-        b = arr(rng, (feat,), dts[2]) if has_b else None
-        xd, oracle = to(x), (_rownorm_oracle_fn(_oracle_rows(x), w, b, ln) if values else None)
-        del x                                      # the host keeps only the rows the oracle reads (`_oracle_rows`)
-        if ln:
-            run = lambda: _nbx_norm_wrappers.native_layer_norm(xd, [feat], to(w) if has_w else None, to(b) if has_b else None)[0]
-        else:
-            run = lambda: _nbx_norm_wrappers.rms_norm(xd, to(w) if has_w else None)
-        return run, oracle, "output_ptr"
-    if short in ("softmax_forward_kernel", "softmax_forward_looped_kernel"):
-        # (BATCH_BUCKET, FEAT_BUCKET, log, x, out): the bucket's rows of the padded row length (a length of the class), through the wrapper itself; the
-        # fp64 oracle per row (row-windowed above the oracle's cap, as a product's)
-        rows, feat, log = int(key[0]), int(key[1]), bool(key[2])
-        rows, feat = _softmax_shape(rows, feat, card_bytes, dts[0] if dts else "fp32", out_dt, short)
-        _refuse_oversize(card_bytes, [((rows, feat), dts[0] if dts else "fp32"), ((rows, feat), out_dt)], short)
-        x = arr(rng, (rows, feat), dts[0] if dts else "fp32")
-        fn = _nbx_attention_wrappers.log_softmax if log else _nbx_attention_wrappers.softmax
-        # on the device once; the host keeps only the rows the oracle reads (`_oracle_rows`)
-        xd, oracle = to(x), (_softmax_oracle_fn(_oracle_rows(x), log) if values else None)
-        del x
-        return (lambda: fn(xd, -1)), oracle, "output_ptr"
-    if short == "conv2d_forward_kernel":
-        (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
-        _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
-                                      ((co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((n, co, _oh, _ow), out_dt)], short)
-        x = arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
-        wt = arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
-        return ((lambda: _nbx_conv_wrappers.conv2d_wrapper(to(x), to_conv_weight(wt, groups), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
-                (_conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (dh, dw), groups) if values else None), "output_pointer")
-    if short == "depthwise_conv2d_kernel":
-        (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
-        _refuse_oversize(card_bytes, [((1, c, h, w), dts[0] if dts else "fp16"),
-                                      ((c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((1, c, _oh, _ow), out_dt)], short)
-        x = arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
-        wt = arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
-        return ((lambda: _nbx_conv_wrappers.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
-                (_conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (1, 1), c) if values else None), "out_ptr")
-    return None
-
-
-def host_values(t) -> np.ndarray:
-    """A kernel's output as NUMBERS, whatever dtype the tensor carries.
-
-    `NBXTensor.numpy()` hands bf16 back as a 2-byte VOID array (`|V2`): numpy
-    has no bfloat16, so the bits are correct and nothing can read them as
-    numbers. `np.asarray(that, dtype=np.float64)` raises "setting an array
-    element with a sequence", and that is how EVERY bf16 shape failed
-    certification — reported as "no config could run (10 of 10)" on kernels
-    that had in fact run correctly and produced the right answer. Measured
-    2026-09-17: `mm` on a (22,2048)x(2048,2048) bf16 pair returns a bf16
-    tensor of the right shape, and only the READING of it failed.
-
-    The input half of this defect was found and fixed earlier (`_NP` mapped
-    bf16 to fp32, so a bf16 census key was handed an fp32 tensor and the
-    wrapper recomputed an fp32 key). This is the output half of the same
-    thing, and on Apple it is the more expensive half: 58 of the 84 shapes the
-    seven proven cells demand are bf16, conv2d alone accounting for 53.
-
-    Decoded through `bf16_bits_to_f32`, which is exact — a bf16 value is
-    exactly representable in fp32 — so the comparison against the fp64 oracle
-    loses nothing here.
-    """
-    host = t.numpy()
-    dt = getattr(host, "dtype", None)
-    if dt is not None and dt.kind == "V" and dt.itemsize == 2:
-        return bf16_bits_to_f32(np.ascontiguousarray(host).view(np.uint16))
-    return host
-
-
-def _materialise(piece):
-    """A cut ready to be read as numbers: an NBXTensor slice is a VIEW whose strides no flat
-    reader can follow, so it is made contiguous on the device (R33: `NBXTensor.contiguous()`
-    materialises through the `_strided_copy` Triton kernel) before it crosses. Anything that
-    is already an array is handed back."""
-    contiguous = getattr(piece, "contiguous", None)
-    return contiguous() if callable(contiguous) else piece
-
-
-def deviation_against(out_tensor, oracle) -> float:
-    """The deviation of a kernel's output against the oracle, reading from the device ONLY
-    what the oracle measures.
-
-    A windowed oracle already refuses to compute the whole reference; it was still handed the
-    whole result, because the windows were cut AFTER the crossing. A window of a large
-    convolution is a thousandth of its output, so this is the same comparison on the same
-    values, and a window cut wrongly fails loudly — its values would not match the reference
-    and every config would read as diverging."""
-    if hasattr(oracle, "device_slices"):
-        return max(oracle_deviation(host_values(piece) if hasattr(piece, "data_ptr") else piece, ref)
-                   for piece, ref in oracle.device_slices(out_tensor))
-    return oracle_deviation(host_values(out_tensor), oracle)
-
-
-def oracle_deviation(out: np.ndarray, oracle) -> float:
-    """max |out - oracle| relative to the oracle's own magnitude; inf when one
-    side is not finite where the other is. A windowed oracle is measured on
-    its windows, the largest deviation among them."""
-    if hasattr(oracle, "slices"):                       # a windowed oracle of either kind
-        return max(oracle_deviation(piece, ref) for piece, ref in oracle.slices(np.asarray(out)))
-    x = np.asarray(out, dtype=np.float64).reshape(-1)
-    y = np.asarray(oracle, dtype=np.float64).reshape(-1)
-    if x.shape != y.shape:
-        return float("inf")
-    fx, fy = np.isfinite(x), np.isfinite(y)
-    if not np.array_equal(fx, fy):
-        return float("inf")
-    if not fy.any():
-        return 0.0
-    scale = float(np.abs(y[fy]).max())
-    if scale == 0.0:
-        return 0.0 if np.array_equal(x, y) else float("inf")
-    return float(np.abs(x[fy] - y[fy]).max() / scale)
+    return H.synthesize(qual, tuner, key, rng, room=_room(card_bytes), values=values, filed_key=filed, out_dt=out_dt)
 
 
 # ---------------------------------------------------------------------------
@@ -2096,23 +927,13 @@ def _witness_time_ms(proto: Dict[str, Any]) -> float:
     """Time the protocol's witness kernel — a fixed-shape matmul, always the
     same — with the sweep's own timer (`L.do_bench`). The one number whose only
     variable across a sweep's open and close is the GPU regime: same shape, same
-    inputs, same timer, so a change in it is a change in the machine."""
-    from nbxtensor.backend import launcher as L
-    from nbxtensor.ops import wrappers as W
-    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.tensor import NBXTensor
-    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    inputs, same timer, so a change in it is a change in the machine (`autotune_harness.witness_ms`)."""
     spec = proto["witness"]
     if spec.get("kernel", "matmul") != "matmul":
         raise RuntimeError(f"witness kernel {spec.get('kernel')!r} not supported "
                            f"(only 'matmul')")
-    M, N, K = int(spec["M"]), int(spec["N"]), int(spec["K"])
-    dtype = spec.get("dtype", "fp16")
-    npd = _NP.get(dtype, np.float16)
-    rng = np.random.default_rng(0)                      # fixed inputs, every time
-    a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((M, K)) * 0.1).astype(npd)))
-    b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((K, N)) * 0.1).astype(npd)))
-    return float(L.do_bench(lambda: _nbx_linalg_wrappers.mm(a, b), warmup=BENCH_WARMUP_MS, rep=BENCH_REP_MS))
+    return H.witness_ms(int(spec["M"]), int(spec["N"]), int(spec["K"]), spec.get("dtype", "fp16"),
+                        BENCH_WARMUP_MS, BENCH_REP_MS)
 
 
 def _witness_entry_refusal(proto: Dict[str, Any], path: Path, say) -> None:
@@ -2154,59 +975,6 @@ def _backend() -> Dict[str, Any]:
     return dict(C.generator_identity())
 
 
-def launch_oracle(qual: str, tuner, meta, out_tensor):
-    """The fp64 oracle of THE LAUNCH THE AUTOTUNER SEES, from the kernel's own named operands —
-    or None for a launch this brick does not cover, whose synthesized oracle then stands.
-
-    Why the launch and not the synthesized shape (measured 2026-09-26 on this rack): the `mm`
-    wrapper band-streams a product above `NBX_MM_MAX_OUTPUT_ELEMS` output elements (Metal's
-    boundary, applied on every backend) and keys every band on the WHOLE shape's bucket, so the
-    census key `(4194304, 512, 256, ...)` — mochi's — is served by two launches of 4 192 256 and
-    2 048 rows. The certifier computed one oracle over the whole synthesized product and cut its
-    comparison windows on whichever band tensor the launch carried: past the band it read memory
-    the kernel never wrote, every candidate read as wrong (best deviation 1.0), and a correct
-    kernel (relative deviation under 1e-6 on the production path at exactly 2^31 output
-    elements) was refused. An oracle of a launch is computed from that launch's operands — the
-    runtime screen's brick, `screen_oracle.windowed_reference`, which merges the positional
-    arguments with the launch kwargs (a constexpr such as `HAS_BIAS` travels as a kwarg) and is
-    row-windowed on the launch's own rows — so it is band-agnostic by construction, and one
-    brick serves both instruments.
-
-    WHICH LAUNCHES, read from the screen's own table and the output's structure, never from a
-    name list: a kernel the screen row-windows (`screen_oracle.ROW_WINDOWABLE`) whose output is
-    a 2-D matrix — the rows `RowWindowedOracle` slices. Everything else keeps the synthesized
-    oracle: the batched family (`bmm`/`baddbmm`: single launches, chunked only at the grid's z
-    extent, whose batch-aware oracle `_matmul_oracle_fn` already windows) and the convolution
-    family (census keys recorded per launch; a banded launch changes `out_height` and fails the
-    key check before any comparison).
-    """
-    from nbxtensor.ops import screen_oracle as _so
-    name = C.kernel_short(qual)
-    if name not in _so.ROW_WINDOWABLE:
-        return None
-    try:
-        shape = tuple(int(x) for x in out_tensor.shape)
-    except Exception:                                    # noqa: BLE001
-        return None
-    if len(shape) != 2:
-        return None
-    m, n = shape
-    named = {**dict(getattr(tuner, "nargs", None) or {}), **dict(meta or {})}
-    k = int(named.get("K", 0) or 0)
-    wins = _row_windows(m, n, k) if k else None
-    if wins is None:
-        wins = [(0, m)]
-    blocks = []
-    for r0, r1 in wins:
-        ref = _so.windowed_reference(tuner, meta, (r0, r1))
-        if ref is None:
-            raise RuntimeError(f"{qual}: the launch's operands could not be read for the oracle "
-                               f"(rows {r0}-{r1} of {m})")
-        blocks.append(((r0, r1), ref))
-    return RowWindowedOracle(blocks, m)
-
-
-
 def _phase(label: str) -> None:
     """NBX_CERTIFY_PHASES=1: one line per phase of a key with the process's memory now and at
     its peak so far (macOS `footprint`-style figures from `getrusage` and `mach`-free reading:
@@ -2239,9 +1007,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     witness — a certificate made under a retired code generator is re-PROVEN, not
     re-swept (the owner, 2026-09-29 01:37, release-decisions); the proof then
     carries `reproven_from`, the generator label it was first proven under."""
-    from nbxtensor.backend import launcher as L
     from nbxtensor.ops import autotune_cache as atc
-    from triton.runtime.autotuner import Autotuner
     made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes, unified=unified,
                       budget_bytes=budget_bytes, floor_bytes=floor_bytes)
     if made is None:
@@ -2249,8 +1015,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     call, oracle_fn, out_name = made
     _phase("synthesized")
     oracle_box: Dict[str, Any] = {}
-    bench = bench or (lambda fn: L.do_bench(fn, warmup=BENCH_WARMUP_MS, rep=BENCH_REP_MS))
-    upstream_prune = getattr(Autotuner.prune_configs, "_nbx_upstream", Autotuner.prune_configs)
+    bench = bench or (lambda fn: H.time_launch(fn, BENCH_WARMUP_MS, BENCH_REP_MS))
     state: Dict[str, Any] = {}
     saved_run = tuner.run
 
@@ -2267,20 +1032,17 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         out0 = args[out_idx0] if out_idx0 is not None and out_idx0 < len(args) else None
         if "config" in state:
             # A LATER launch of the same key inside one wrapper call — a band of a product the
-            # wrapper streams (see `launch_oracle`). It runs the configuration chosen on the
+            # wrapper streams (see `H.launch_oracle`). It runs the configuration chosen on the
             # first launch, exactly as the runtime serves it, AND IS MEASURED against its own
             # oracle: the last band has another M, another grid and another edge mask, and an
             # entry that answers for N launch shapes is proven on each of them. A count is not
             # a comparison (the guardian, 2026-09-26).
-            from nbxtensor.memory.allocator import DeviceAllocator
-            oracle_k = launch_oracle(qual, tuner, kwargs, out0)
+            oracle_k = H.launch_oracle(qual, tuner, kwargs, out0)
             if oracle_k is None:
                 raise RuntimeError(f"{qual} at {key!r}: a second launch of this key inside one "
                                    f"wrapper call, and no launch oracle covers it — nothing can "
                                    f"vouch for that band; not certified")
-            ret = tuner.fn.run(*args, **{**kwargs, **state["best_config"].all_kwargs()})
-            DeviceAllocator.stream_synchronize(0)
-            dev_k = deviation_against(out0, oracle_k)
+            ret, dev_k = H.launch_and_measure(tuner, args, kwargs, state["best_config"], out0, oracle_k)
             state["launches"] = int(state.get("launches", 1)) + 1
             state.setdefault("launch_deviations", [state["deviation"]]).append(dev_k)
             if not (dev_k <= state["tolerance"]):
@@ -2293,7 +1055,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         t_or = time.time()
         # The oracle is THIS LAUNCH's, from its own operands, wherever the brick covers it; the
         # synthesized oracle for the families whose key names a single launch.
-        oracle = launch_oracle(qual, tuner, kwargs, out0)
+        oracle = H.launch_oracle(qual, tuner, kwargs, out0)
         if oracle is None:
             oracle = oracle_box.get("v")
             if oracle is None:
@@ -2302,51 +1064,14 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         state["t_oracle"] = round(time.time() - t_or, 3)
         state["oracle"] = ORACLE + (" " + oracle.describe if hasattr(oracle, "describe") else "")
         if only_config is not None:
-            configs = [atc._config_from_dict(only_config)]          # re-prove: the stored configuration, alone
+            configs = [H.stored_config(only_config)]          # re-prove: the stored configuration, alone
         else:
-            configs = restrict_num_stages(list(upstream_prune(tuner, kwargs)), num_stages)
-        names = list(tuner.arg_names)
-        out_idx = next((i for i, n in enumerate(names) if n == out_name), None)
-        if out_idx is None or out_idx >= len(args):
-            raise RuntimeError(f"{qual}: output argument {out_name!r} not among the kernel's arguments")
-        out_tensor = args[out_idx]
-        buffers = L._writable_buffers(args)
-        if buffers is None:
-            raise RuntimeError(f"{qual}: a strided view among the arguments — not certifiable")
-        from nbxtensor.memory.allocator import DeviceAllocator
-        out_addr, out_nbytes = int(out_tensor.data_ptr()), int(out_tensor._nbytes)
-
-        def poison():
-            # Every byte of the output is set to 0xFF (NaN for every float
-            # dtype) before a candidate runs, on the device: a config that
-            # writes only part of its output — the class the screen found on
-            # 2026-09-07 — cannot inherit the previous candidate's correct
-            # values. The sanctioned kernels read their inputs and write
-            # their output, so nothing else needs restoring; the screen's
-            # snapshot/restore of every buffer through the host is what made
-            # a shape cost ten seconds.
-            DeviceAllocator.memset_cuda(out_addr, 0xFF, out_nbytes)
-
-        results: List[Tuple[Any, float, float]] = []
-        excluded: List[Dict[str, Any]] = []
-        unrun: List[Any] = []
+            configs = restrict_num_stages(H.candidate_configs(tuner, kwargs), num_stages)
+        # every config run once on a poisoned output, measured against the oracle on its windows, its run timed
+        launch = H.LaunchUnderTest(tuner, args, kwargs, out_name, qual)
         t_runs = time.time()
-        for cfg in configs:
-            poison()
-            try:
-                t_one = time.time()
-                tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
-                DeviceAllocator.stream_synchronize(0)
-                run_s = time.time() - t_one                # the run every config makes anyway, timed
-                dev = deviation_against(out_tensor, oracle)
-                _phase("deviation measured")
-            except Exception as exc:                     # a config the backend refuses: counted, never trusted
-                unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
-                continue
-            if not (dev <= tolerance):
-                excluded.append({"config": atc._config_to_dict(cfg), "deviation": dev, "tolerance": tolerance})
-            else:
-                results.append((cfg, dev, run_s))
+        results, excluded, unrun = launch.sweep(configs, oracle, tolerance)
+        _phase("deviation measured")
         if not results:
             if not excluded and unrun:
                 raise RuntimeError(f"{qual} at {key!r}: no config could run ({len(unrun)} of {len(configs)}; "
@@ -2368,7 +1093,6 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                                f"{len(excluded)} excluded, {len(unrun)} could not run"
                                + (f"; first error: {unrun[0]['error']}" if unrun else "") + ")")
         state["t_runs"] = round(time.time() - t_runs, 3)
-        timed: List[Tuple[Any, float, float]] = []
         t_bench = time.time()
         contenders = _contenders(results)
         # STABILITY REGIME. The candidate timings below decide `best_ms` by
@@ -2407,7 +1131,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                 tuner.run = certifying_run
 
         def _time_one(cfg):
-            return float(bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})))
+            return launch.time(cfg, bench)
 
         if _regime_kind == "witness":
             timed, state["stability_witness"] = witnessed_bench(
@@ -2420,38 +1144,23 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         # THE MATRIX UNIT, a candidate beside the FMA configurations (the list of what remains 1.8, the owner's rule
         # 2026-11-03 17:48): a GEMM the unit can take is run at each of the profile's unit tiles, proven against the
         # same oracle and timed with the same bench; the faster route is the one the runtime serves.
-        units = []
-        from nbxtensor.ops.linalg_wrappers import matrix_unit_runs
-        for tile, run_unit in matrix_unit_runs(tuner, args, kwargs) + _fused_moe_unit_runs(tuner, args, kwargs):
-            poison()
-            try:
-                run_unit()
-                DeviceAllocator.stream_synchronize(0)
-                udev = deviation_against(out_tensor, oracle)
-            except Exception as exc:                 # a tile the backend refuses: counted, never trusted
-                unrun.append({"unit_tile": tile, "error": str(exc)[:200]})
-                continue
-            if not (udev <= tolerance):
-                excluded.append({"unit_tile": tile, "deviation": udev, "tolerance": tolerance})
-                continue
-            units.append((tile, udev, float(bench(run_unit))))
+        units = launch.sweep_units(H.unit_runs(tuner, args, kwargs), oracle, tolerance, bench, excluded, unrun)
         if units:
             utile, udev, ums = min(units, key=lambda t: t[2])
             state["unit_measured"] = {"tiles": [{"tile": t, "deviation": d, "ms": m} for t, d, m in units],
                                       "fma_best_ms": ms, "chosen": "unit" if ums < ms else "fma"}
             if ums < ms:
                 state["unit"] = {"tile": utile, "deviation": udev, "best_ms": ums, "fma_best_ms": ms}
-        state.update({"config": atc._config_to_dict(best), "deviation": dev, "best_ms": ms,
+        state.update({"config": H.config_dict(best), "deviation": dev, "best_ms": ms,
                       "second_ms": timed[1][2] if len(timed) > 1 else None,
                       "candidates": len(configs), "accepted": len(results), "benched": len(contenders),
                       "excluded": excluded, "unrun": unrun,
-                      "timings": [{"config": atc._config_to_dict(c), "deviation": d, "ms": m} for c, d, m in timed]})
+                      "timings": [{"config": H.config_dict(c), "deviation": d, "ms": m} for c, d, m in timed]})
         tuner.cache[key] = best
         state["best_config"] = best
         state["launches"] = 1
         state["tolerance"] = float(tolerance)
-        poison()
-        return tuner.fn.run(*args, **{**kwargs, **best.all_kwargs()})
+        return launch.final(best)
 
     # The wrappers decide the kernel's dtypes and flags (PROMOTE_B, IEEE_PRECISION,
     # a conv's output dtype) from the hardware profile and the component's compute
@@ -2538,41 +1247,6 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             "could_not_run": state["unrun"], "timings": state["timings"],
             **({"unit": state["unit"]} if state.get("unit") else {})}
 
-
-
-def _fused_moe_unit_runs(tuner, args, kwargs) -> List[Tuple[Dict[str, Any], Any]]:
-    """(tile, run) for each `matrix_unit.mm` tile of the profile for a `fused_moe_kernel` launch on experts of the
-    unit's operand dtype: the routing the launch's alignment holds, read back and aligned again at the tile's rows by
-    the library's own `moe_align_block_size`, each run writing the launch's output through `invoke_fused_moe_m8n8k4`
-    (the route `nbxtensor.ops.moe_fused`'s grouped passes take when the certificate names the unit). Empty for any other launch."""
-    if getattr(getattr(tuner, "base_fn", None), "__name__", None) != "fused_moe_kernel":
-        return []
-    from nbxtensor.ops import moe_wrappers as MW
-    from nbxtensor.tensor import NBXTensor
-    from nbxtensor.ops.moe_wrappers import moe_align_block_size, MOE_BLOCK_M as _BLOCK_SIZE_M
-    from nbxtensor.memory.allocator import DeviceAllocator
-    named = dict(zip(tuner.arg_names, args))
-    a = named["a_ptr"]
-    tiles = MW.fused_moe_unit_tiles(a)
-    if not tiles:
-        return []
-    nv, n_exp = int(named["num_valid_tokens"]), int(named["NUM_EXPERTS"])
-    sids = np.asarray(named["sorted_token_ids_ptr"].numpy()).ravel()
-    eids = np.asarray(named["expert_ids_ptr"].numpy()).ravel()
-    npad = int(np.asarray(named["num_tokens_post_padded_ptr"].numpy()).ravel()[0])
-    route = np.zeros(nv, dtype=np.int64)
-    for b in range(npad // _BLOCK_SIZE_M):
-        pairs = sids[b * _BLOCK_SIZE_M:(b + 1) * _BLOCK_SIZE_M]
-        route[pairs[pairs < nv]] = int(eids[b])
-    route_t = NBXTensor.from_numpy(route)
-    out = []
-    for tile in tiles:
-        s_, e_, n_ = moe_align_block_size(route_t, tile["block_m"], n_exp, DeviceAllocator.get_device())
-        out.append((tile, (lambda t=tile, s_=s_, e_=e_, n_=n_: MW.invoke_fused_moe_m8n8k4(
-            a, named["expert_ptrs_ptr"], named["c_ptr"], named["topk_weights_ptr"], s_, e_, n_, int(named["N"]),
-            int(named["K"]), int(named["stride_bk"]), int(named["stride_bn"]), int(kwargs["top_k"]), t,
-            mul_routed_weight=bool(kwargs["MUL_ROUTED_WEIGHT"]), topk_divide=bool(kwargs.get("TOPK_DIVIDE", True))))))
-    return out
 
 
 def _bind_hardware_profile() -> str:
@@ -2737,7 +1411,7 @@ def oversize_for_class(exc: BaseException):
     16 GB run never forms that key — Prism tiles the decode long before it — so no certified
     entry is owed for it and reporting it beside genuine failures buries both. Named, counted
     apart, and left for the census to stop recording (2026-09-22)."""
-    if isinstance(exc, KeyTooLargeForClass):
+    if isinstance(exc, H.KeyTooLargeForClass):
         return (exc.asked, exc.card)
     m = _OVERSIZE.search(str(exc))
     if not m:
@@ -3042,7 +1716,7 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                         entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
                                             reproven_from=stored_label, **common)
                         summary["reproven"] = summary.get("reproven", 0) + 1
-                    except (UnreachableCensusKey, KeyTooLargeForClass, WitnessDrift):
+                    except (UnreachableCensusKey, H.KeyTooLargeForClass, WitnessDrift):
                         raise                         # a drift is a refusal for the retry pass, never a sweep
                     except Exception as exc:          # the stored configuration fails the oracle under
                         log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: the stored "

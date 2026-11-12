@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
+from nbxtensor.ops import autotune_harness as H
 from nbxtensor.ops import autotune_cache as atc
 
 FLOOR_MIB = 457
@@ -104,7 +105,7 @@ def test_a_key_priced_over_the_budget_is_refused_by_name_before_any_draw(tuners)
         def __getattr__(self, name):
             raise AssertionError(f"a value was drawn ({name}) for a key refused by its price")
     key = MEASURED[1][1]                                       # 8 886 MiB measured
-    with pytest.raises(AC.KeyTooLargeForClass) as e:
+    with pytest.raises(H.KeyTooLargeForClass) as e:
         AC.synthesize(DW, tuners[DW], key, _NoDraw(), budget_bytes=8000 * 2 ** 20, floor_bytes=FLOOR_MIB * 2 ** 20)
     msg = str(e.value)
     for word in ("oracle", "draws", "budget", "8000"):

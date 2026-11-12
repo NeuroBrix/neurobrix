@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.kernels import autotune_certify as A
+from nbxtensor.ops.oracles import fp64 as F
 from nbxtensor.ops.autotune_bucket import class_floor
 
 EW = "nbxtensor.ops.elementwise_launch.ew_launch_kernel"
@@ -67,7 +68,7 @@ def test_a_windowed_oracle_keeps_only_its_windows_rows_on_the_host():
     rng = np.random.default_rng(0)
     x = rng.standard_normal((4096, 64)).astype(np.float32)
     wins = [(0, 7), (2000, 2007), (4089, 4096)]
-    hw = A._HostWindows(x, wins)
+    hw = F.HostWindows(x, wins)
     for r0, r1 in wins:
         assert np.array_equal(hw[r0:r1, :], x[r0:r1, :])
     assert hw.shape == x.shape

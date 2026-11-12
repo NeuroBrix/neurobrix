@@ -16,6 +16,8 @@ import numpy as np
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
+from nbxtensor.ops import autotune_harness as H
+from nbxtensor.ops.oracles import fp64 as F
 
 QUAL = "nbxtensor.ops.fused_moe.fused_moe_kernel"
 
@@ -38,16 +40,16 @@ def test_the_macs_key_is_priced_and_its_oracle_windowed():
     assert pr["draws"] >= 327680 * 2048 * 2 + 128 * 768 * 2048 * 2    # the activations and the experts, as drawn
 
 
-@pytest.mark.parametrize("cap", [AC.ORACLE_MAX_MACS, 3 * 64 * 96 * 128])
+@pytest.mark.parametrize("cap", [F.ORACLE_MAX_MACS, 3 * 64 * 96 * 128])
 def test_the_price_bounds_what_the_oracle_allocates(monkeypatch, cap):
-    monkeypatch.setattr(AC, "ORACLE_MAX_MACS", cap)
+    monkeypatch.setattr(F, "ORACLE_MAX_MACS", cap)
     N, K, nv, E = 96, 128, 4096, 8
     rng = np.random.default_rng(0)
-    x = AC._arr(rng, (nv, K), "fp16")
-    ws = [AC._arr(rng, (N, K), "fp16") for _ in range(E)]
-    score = AC._arr(rng, (nv,), "fp16")
+    x = H.draw(rng, (nv, K), "fp16")
+    ws = [H.draw(rng, (N, K), "fp16") for _ in range(E)]
+    score = H.draw(rng, (nv,), "fp16")
     route = rng.integers(0, E, size=nv).astype(np.int64)
-    build = AC._moe_oracle_fn(x, ws, score, route, True)
+    build = F.moe_oracle(x, ws, score, route, True)
     tracemalloc.start()
     tracemalloc.reset_peak()
     ref = build()
@@ -61,17 +63,17 @@ def test_the_price_bounds_what_the_oracle_allocates(monkeypatch, cap):
 def test_a_window_is_the_whole_computations_rows(monkeypatch):
     N, K, nv, E = 32, 48, 600, 5
     rng = np.random.default_rng(1)
-    x = AC._arr(rng, (nv, K), "fp16")
-    ws = [AC._arr(rng, (N, K), "fp16") for _ in range(E)]
-    score = AC._arr(rng, (nv,), "fp16")
+    x = H.draw(rng, (nv, K), "fp16")
+    ws = [H.draw(rng, (N, K), "fp16") for _ in range(E)]
+    score = H.draw(rng, (nv,), "fp16")
     route = rng.integers(0, E, size=nv).astype(np.int64)
-    whole = AC._moe_oracle_fn(x, ws, score, route, True)()
-    xs = AC._f64(x)
+    whole = F.moe_oracle(x, ws, score, route, True)()
+    xs = F.f64(x)
     for p in (0, 299, 599):
-        want = xs[p] @ AC._f64(ws[route[p]]).T * float(AC._f64(score)[p])
+        want = xs[p] @ F.f64(ws[route[p]]).T * float(F.f64(score)[p])
         np.testing.assert_allclose(whole[p], want, rtol=1e-12)
-    monkeypatch.setattr(AC, "ORACLE_MAX_MACS", 3 * 50 * N * K)
-    windowed = AC._moe_oracle_fn(x, ws, score, route, True)()
+    monkeypatch.setattr(F, "ORACLE_MAX_MACS", 3 * 50 * N * K)
+    windowed = F.moe_oracle(x, ws, score, route, True)()
     for (r0, r1), block in windowed.blocks:
         np.testing.assert_array_equal(block, whole[r0:r1])
 
@@ -82,7 +84,7 @@ def test_a_windowed_key_certifies_on_the_device(monkeypatch):
     if DeviceAllocator.device_count() < 1:
         pytest.skip("needs a device")
     AC._bind_hardware_profile()
-    monkeypatch.setattr(AC, "ORACLE_MAX_MACS", 3 * 64 * 96 * 128)
+    monkeypatch.setattr(F, "ORACLE_MAX_MACS", 3 * 64 * 96 * 128)
     key = _key(96, 128, 2048, 8, mul=True)
     entry = AC.certify_key(QUAL, _tuner(), key, 1e-2, np.random.default_rng(3), bench=lambda fn: (fn(), 1.0)[1])
     assert entry["excluded"] == [] and entry["proof"]["accepted"] >= 1, entry

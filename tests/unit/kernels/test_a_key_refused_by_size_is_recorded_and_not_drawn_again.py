@@ -19,6 +19,7 @@ import types
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
+from nbxtensor.ops import autotune_harness as H
 
 RMS = "neurobrix.kernels.ops.rms_norm.rms_norm_forward_kernel"
 KEY = (16252928, 128, True, False, "fp32", "fp32", "fp32")
@@ -26,12 +27,12 @@ CARD = 16 * 2**30
 
 
 def test_the_door_prices_in_and_out_against_the_capacity_prism_plans_against():
-    with pytest.raises(AC.KeyTooLargeForClass) as e:
-        AC._refuse_oversize(CARD, [((KEY[0], KEY[1]), "fp32"), ((KEY[0], KEY[1]), "fp32")], "rms_norm_forward_kernel")
+    with pytest.raises(H.KeyTooLargeForClass) as e:
+        AC._room(CARD).refuse([((KEY[0], KEY[1]), "fp32"), ((KEY[0], KEY[1]), "fp32")], "rms_norm_forward_kernel")
     assert e.value.asked == 2 * KEY[0] * KEY[1] * 4 and e.value.asked < CARD   # under the whole card ...
     assert e.value.usable < e.value.asked and e.value.card == CARD             # ... over what a plan holds
     assert AC.oversize_for_class(e.value) == (e.value.asked, CARD)
-    AC._refuse_oversize(CARD, [((1024, 128), "fp32"), ((1024, 128), "fp32")], "rms_norm_forward_kernel")   # fits
+    AC._room(CARD).refuse([((1024, 128), "fp32"), ((1024, 128), "fp32")], "rms_norm_forward_kernel")   # fits
 
 
 def test_the_register_round_trips_and_refuses_a_line_it_cannot_read(tmp_path):
@@ -57,7 +58,7 @@ def _loop(monkeypatch, tmp_path, memory_mb, calls):
 
     def certify_key(qual, tuner, key, tol, rng, card_bytes=None, **k):
         calls.append(key)
-        AC._refuse_oversize(card_bytes, [((key[0], key[1]), "fp32"), ((key[0], key[1]), "fp32")], "rms")
+        AC._room(card_bytes).refuse([((key[0], key[1]), "fp32"), ((key[0], key[1]), "fp32")], "rms")
         raise AssertionError("drawn")
 
     monkeypatch.setattr(AC, "certify_key", certify_key)

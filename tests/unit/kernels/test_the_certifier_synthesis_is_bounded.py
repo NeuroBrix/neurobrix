@@ -19,6 +19,8 @@ from nbxtensor.dtype import convert as CV
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
+from nbxtensor.ops import autotune_harness as H
+from nbxtensor.ops.oracles import fp64 as F
 import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 
 
@@ -45,7 +47,7 @@ def fp16_out(monkeypatch):
 def test_a_key_larger_than_the_card_is_refused_before_any_draw(fp16_out, without_matrix_unit):
     qual = "nbxtensor.ops.matmul.matmul_kernel"
     key = (1 << 20, 4096, 4096, True, False, "fp16", "fp16", "fp16")     # 8 GiB + 32 MiB + 8 GiB
-    with pytest.raises(AC.KeyTooLargeForClass) as e:
+    with pytest.raises(H.KeyTooLargeForClass) as e:
         AC.synthesize(qual, _Tuner(), key, _NoDraw(), card_bytes=16 * 2**30)
     assert e.value.asked > 16 * 2**30 and e.value.card == 16 * 2**30
     assert AC.oversize_for_class(e.value) == (e.value.asked, 16 * 2**30)
@@ -60,10 +62,10 @@ def test_a_key_that_fits_is_drawn(fp16_out):
 
 def test_bf16_operands_are_exactly_representable_and_rounded_to_nearest_even():
     # carried as their bits since 2026-10-05 (test_the_certifier_holds_a_key_at_the_kernels_width)
-    a = AC._arr(np.random.default_rng(1), (257, 129), "bf16")
-    assert a._nbx_dtype == "bf16" and a.dtype == np.uint16
+    a = H.draw(np.random.default_rng(1), (257, 129), "bf16")
+    assert a.key_dtype == "bf16" and a.dtype == np.uint16
     ref = np.random.default_rng(1).standard_normal((257, 129), dtype=np.float32) * np.float32(0.1)
-    assert np.array_equal(CV.bf16_bits_to_f32(CV.f32_to_bf16_bits(ref)), AC.values(a))
+    assert np.array_equal(CV.bf16_bits_to_f32(CV.f32_to_bf16_bits(ref)), F.values(a))
 
 
 @pytest.mark.parametrize("dt,ceiling", [("fp32", 1.15), ("fp16", 1.15), ("bf16", 1.15)])
@@ -71,7 +73,7 @@ def test_the_host_peak_is_a_small_multiple_of_the_operand(dt, ceiling):
     # the operand at its own width plus one bounded chunk (a 1 MB float32 draw)
     shape = (4096, 4096)
     tracemalloc.start()
-    a = AC._arr(np.random.default_rng(2), shape, dt)
+    a = H.draw(np.random.default_rng(2), shape, dt)
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert peak <= ceiling * a.nbytes, f"{dt}: peak {peak} for {a.nbytes} operand bytes"
@@ -104,7 +106,7 @@ def test_on_unified_memory_the_host_copies_count(fp16_out, without_matrix_unit):
     device = 2 * ((1 << 18) * 4096 * 2 + 4096 * 4096)                     # A, B, the output at fp16
     peak = AC.price_key(qual, _Tuner(), key)["peak"]
     assert peak > device + 2 * ((1 << 18) * 4096 + 4096 * 4096)           # the host draws are in it
-    with pytest.raises(AC.KeyTooLargeForClass) as e:
+    with pytest.raises(H.KeyTooLargeForClass) as e:
         AC.synthesize(qual, _Tuner(), key, _NoDraw(), card_bytes=peak - 1, unified=True)
     assert e.value.asked == peak
 
@@ -115,7 +117,7 @@ def test_a_discrete_card_keeps_its_device_bound(fp16_out, monkeypatch, without_m
     key = (1 << 18, 4096, 4096, True, False, "fp16", "fp16", "fp16")
     elems = (1 << 18) * 4096 * 2 + 4096 * 4096
     seen = {}
-    monkeypatch.setattr(AC, "_arr", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("drawn")))
+    monkeypatch.setattr(H, "draw", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("drawn")))
     with pytest.raises(RuntimeError, match="drawn"):
         AC.synthesize(qual, _Tuner(), key, np.random.default_rng(0), card_bytes=elems * 6)
 
