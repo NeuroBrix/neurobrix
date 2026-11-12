@@ -87,7 +87,7 @@ def _mm(named: Dict[str, Any], rows: Optional[tuple] = None) -> Optional[np.ndar
     """The fp64 reference for `mm`/`addmm`, optionally on a ROW WINDOW only.
 
     `rows=(r0, r1)` computes `a[r0:r1] @ b` instead of the whole product. That is the rack's
-    row-windowed oracle technique (autotune_certify.RowWindowedOracle), brought to the screen
+    row-windowed oracle technique (oracles.fp64.RowWindowedOracle), brought to the screen
     so a shape over the screening budget is verified on named windows instead of not at all.
     A whole fp64 reference for a 4 194 304 x 540 output is 18 GB; three row windows of it are
     a few megabytes, and the per-element comparison is identical on them."""

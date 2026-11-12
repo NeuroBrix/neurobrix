@@ -1215,6 +1215,8 @@ def math_attention_cost(q, k, v, mask=None, is_causal=False, native_bf16=None, f
     # `_math_attention` on q [B, H, Tq, D], k [B, Hk, Tk, D], v [B, Hk, Tk, Dv] and an optional additive `mask` (`_cost.Spec`s
 def chunked_math_attention_cost(q, k, v, chunk_rows: int, mask=None, is_causal=False, native_bf16=None, force_accum=None, contract_half=None, unit=None)
     # `_math_attention_chunked`
+def flash_route_heads(tq: int, tk: int, hd: int, q: str, k: str, v: str) -> int
+    # the fewest heads (a power of two, batch 1) with which the wrapper's route takes the flash at these lengths
 ```
 
 `nbxtensor.ops.autotune_settings`
@@ -2724,6 +2726,42 @@ def deviation_against(out_tensor, oracle) -> float   # read off the device only 
 def oracle_deviation(out, oracle) -> float   # max |out - ref| / max |ref|; inf when finiteness or shapes differ
 ```
 
+### `nbxtensor.ops.autotune_harness` — the kernel-level harness of a certification
+
+A key's operands drawn at the kernel's width, the launch that forms it, its reference; every candidate configuration
+launched on a poisoned output, measured and timed. The caller keeps which keys, the tolerance, the timing protocol, the
+memory budget and the files.
+
+```python
+NP_DTYPES: Dict[str, np.dtype]               # the array a key's dtype is drawn into (bf16 as uint16 bits)
+INTEGRAL: Set[str]                           # the dtypes drawn as zeros and ones (a mask, an index)
+class Synth(np.ndarray)                      # an operand tagged with its dtype name (`key_dtype`)
+class ArgSpec(shape, dtype_name)             # an operand known by shape and dtype only
+def draw(rng, shape, dtype_name, scale=0.1) -> Synth   # at the kernel's width through a 1 MB chunk; unknown dtype refused
+def spec(rng, shape, dtype_name, scale=0.1) -> ArgSpec
+def upload(a) -> NBXTensor                   # the tensor the kernel receives, at the dtype the key names
+class KeyTooLargeForClass(asked, card, what, usable=None)   # refused before any draw
+class Room(card=None, usable=None)           # .refuse(specs, what), .row_shape(rows, feat, in_dt, out_dt, what),
+                                             # .ew_count(top, dt, what); Room() unbounded
+def shortest_row(feat) -> Optional[int]      # the shortest row forming the padded-row class, or None
+def gemm_rows(key, dts, unit_keyed=False) -> int   # the row count a GEMM key is drawn at
+def key_operands(qual, tuner, key) -> Optional[dict]   # the operands synthesize draws: family, inputs, out, geometry
+def synthesize(qual, tuner, key, rng, room=None, values=True, filed_key=None, out_dt=None)
+    # (call, lazy oracle_fn, output argument name), or None for a kernel with no synthesis
+def launch_oracle(qual, tuner, meta, out_tensor) -> Optional[RowWindowedOracle]   # the reference of the launch seen
+class LaunchUnderTest(tuner, args, kwargs, out_name, label)
+    # .sweep(configs, oracle, tolerance) -> (accepted, excluded, unrun); .sweep_units(runs, oracle, tolerance, bench,
+    # excluded, unrun) -> [(tile, deviation, ms)]; .time(cfg, bench); .final(cfg); .poison(); .launch(cfg)
+def launch_and_measure(tuner, args, kwargs, cfg, out, oracle) -> (ret, deviation)
+def unit_runs(tuner, args, kwargs) -> [(tile, run)]          # the matrix unit's candidates (GEMM and fused MoE)
+def fused_moe_unit_runs(tuner, args, kwargs) -> [(tile, run)]
+def time_launch(fn, warmup, rep) -> float    # launcher.do_bench
+def witness_ms(M, N, K, dtype, warmup, rep) -> float   # a fixed matmul, fixed inputs, the sweep's timer
+def candidate_configs(tuner, kwargs) -> list # the autotuner's candidates after Triton's own pruning
+def stored_config(d)                         # a recorded configuration back as a Triton config
+def config_dict(cfg) -> dict                 # a Triton config as a certified directory records it
+```
+
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
 
 `nbxtensor.backend.launcher_contract`
@@ -3173,6 +3211,8 @@ def record_screen_exclusions(entries) -> int   # persist the configs the screen 
 def screen_exclusions() -> Dict[str, Dict]     # everything the screen has refused on this machine
 def seed_late(at) -> int                  # a tuner imported after the first seed: its stored settings, once; the count
 def qual_of(at) -> Optional[str]          # a loaded tuner's qualified name `module.attr`
+def config_to_dict(cfg) -> Dict           # a Triton config as the store and a certified directory record it
+def config_from_dict(d)                   # ... and back
 ```
 
 ### `nbxtensor.ops.autotune_bucket` — the autotune keys' size classes, from the profile's ladders

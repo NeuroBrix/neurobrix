@@ -171,7 +171,7 @@ def _announce_first_sweep(tuned):
             # never the autotuner's sweep behind a skipped lookup (the certified-only door, 2026-11-03)
             if _confirm:
                 from nbxtensor.ops import autotune_certified as _cert
-                qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
+                qual = _atc.qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
                 raise _cert.KeyNotCertified(f"CERTIFIED-ONLY: the launch key of {qual} cannot be formed "
                                             f"({type(exc).__name__}: {exc}) — nothing to look up, never a sweep") from exc
             key = None
@@ -182,7 +182,7 @@ def _announce_first_sweep(tuned):
             _census.record(tuned, key)     # every launch offers its key; the observer of this call
         if key is not None and key not in cache:
             from nbxtensor.ops import autotune_certified as _cert
-            qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
+            qual = _atc.qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
             try:
                 # the card this launch executes on: its tensor's device, read in
                 # the Prism profile — an entry serves only the memory class it
@@ -223,7 +223,7 @@ def _announce_first_sweep(tuned):
                 # cache. Refused, never captured.
                 raise RuntimeError(
                     "census shadow: the autotuner cache grew during a shadow run — a kernel "
-                    f"defined before kernels/census.py installed ({_atc._qual_of(tuned)!r}); "
+                    f"defined before kernels/census.py installed ({_atc.qual_of(tuned)!r}); "
                     "nothing is captured. Install the census before the engine imports.")
             if key is not None:
                 try:                       # the bench this call just ran: best, second-best, margin

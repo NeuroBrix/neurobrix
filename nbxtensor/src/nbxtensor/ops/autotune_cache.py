@@ -162,17 +162,23 @@ def _autotuners() -> Iterator[Tuple[str, object]]:
                 yield f"{mod_name}.{attr}", obj
 
 
-def _config_to_dict(cfg) -> Dict:
+def config_to_dict(cfg) -> Dict:
+    """A Triton config as the sweep store and a certified directory record it."""
     return {"kwargs": dict(cfg.kwargs), "num_warps": cfg.num_warps,
             "num_stages": cfg.num_stages, "num_ctas": cfg.num_ctas,
             "maxnreg": cfg.maxnreg}
 
 
-def _config_from_dict(d):
+def config_from_dict(d):
+    """A recorded configuration (`config_to_dict`) back as a Triton config."""
     import triton
     return triton.Config(dict(d["kwargs"]), num_warps=d["num_warps"],
                          num_stages=d["num_stages"], num_ctas=d["num_ctas"],
                          maxnreg=d.get("maxnreg"))
+
+
+#: the names the engine's certifier still reads (it switches to the public ones next)
+_config_to_dict, _config_from_dict = config_to_dict, config_from_dict
 
 
 def _exclusions_path() -> Optional[str]:
@@ -280,7 +286,7 @@ def capture() -> int:
             if is_unmeasured(at, key):
                 skipped_unmeasured += 1
                 continue
-            rec = _config_to_dict(cfg)
+            rec = config_to_dict(cfg)
             if (id(at), key) in _TIMINGS:
                 rec["timing"] = _TIMINGS[(id(at), key)]
             adjudicator = verified.get((short, repr(key)))
@@ -412,7 +418,7 @@ def _seed_tuner(qual: str, at, stored: Dict[str, Dict]) -> int:
             continue
         if key not in at.cache:
             try:
-                at.cache[key] = _config_from_dict(d)
+                at.cache[key] = config_from_dict(d)
                 seeded += 1
             except Exception:
                 continue

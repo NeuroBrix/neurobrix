@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels.autotune_certify import _INTEGRAL, _NP, _arr
+from nbxtensor.ops.autotune_harness import INTEGRAL as _INTEGRAL, NP_DTYPES as _NP, draw as _arr
 
 
 @pytest.mark.parametrize("name, want", [("uint8", np.uint8), ("int8", np.int8), ("int32", np.int32),
@@ -47,7 +47,7 @@ def test_a_dtype_the_table_does_not_know_is_refused_not_defaulted():
 
 
 def test_bf16_still_takes_its_exact_path():
-    from neurobrix.kernels.autotune_certify import values
+    from nbxtensor.ops.oracles.fp64 import values
     a = _arr(np.random.default_rng(37), (8,), "bf16")
     assert np.asarray(a).dtype == np.uint16           # numpy has no bfloat16: its bits
     assert values(a).dtype == np.float32              # and its numbers, exactly

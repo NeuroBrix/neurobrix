@@ -373,6 +373,23 @@ def _sdpa_math_max_chunks() -> int:
         return 0
 
 
+def flash_route_heads(tq: int, tk: int, hd: int, q: str, k: str, v: str) -> int:
+    """The fewest heads (a power of two, at batch 1) with which the attention wrapper's own route
+    (`launch_keys.sdpa_route` at this device's scores budget) takes the flash for these lengths, head dim and dtype
+    names: below the budget the attention takes the math route and never reaches the flash, so a flash autotune key
+    (which holds the lengths and the head dim, not the heads) is formed only from this many heads up."""
+    nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
+    budget = _sdpa_math_scores_budget_bytes_for(None)
+    rows, chunks = _sdpa_math_min_chunk_rows(), _sdpa_math_max_chunks()
+    unit = _lk.unit_flash_takes(hd, nbx[q], nbx[k], nbx[v])
+    h = 1
+    while _lk.sdpa_route(1, h, tq, tk, hd, hd, budget, rows, chunks, unit_flash=unit)[0] != "flash":
+        h *= 2
+        if h > (1 << 16):
+            raise ValueError(f"no head count takes the flash route at ({tq}, {tk}, {hd}) — a census defect")
+    return h
+
+
 def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None, return_lse=False):
     """Math-decomposed attention — deterministic for any head_dim.
 

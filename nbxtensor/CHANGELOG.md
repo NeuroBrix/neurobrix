@@ -21,10 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call alone, cached otherwise (public; it was private).
 - `ExpertSlotStore.decodes_on_card(layer)`, `on_routed(layer, routed, host)`, `on_enqueued(layer, routed)`: what the
   fused op asks and tells a store, answered by default; a subclass decides more.
+- `ops.autotune_harness`: the kernel-level harness of a certification — a key's operands drawn at the kernel's width
+  (`draw`, `Synth`, `upload`, `NP_DTYPES`), the size a key is drawn at (`Room`, `shortest_row`, `gemm_rows`), the
+  operands it draws (`key_operands`), the wrapper run on them with its lazy float64 reference (`synthesize`, every
+  autotuned kernel family), the reference of the launch the autotuner sees (`launch_oracle`), every candidate launched
+  on a poisoned output, measured and timed (`LaunchUnderTest`, `launch_and_measure`), the matrix unit's candidates
+  (`unit_runs`, `fused_moe_unit_runs`), the regime witness (`witness_ms`, `time_launch`) and the configurations
+  (`candidate_configs`, `stored_config`, `config_dict`). Moved from the NeuroBrix engine's certifier, which keeps which
+  keys, the tolerance, the timing protocol, the memory budget and the certified files.
 - `ops.oracles.fp64`: the kernel families' float64 references for a certification (products, MoE, attention, softmax,
   GEMV, row and group norms, row reductions, convolutions), whole under `ORACLE_MAX_MACS` and on windows of the output
   above it (`row_windows`, `conv_windows`, `RowWindowedOracle`, `WindowedOracle`, `HostWindows`), and a kernel's output
   measured against one (`deviation_against`, `oracle_deviation`, `host_values`). Moved from the engine's certifier.
+- `ops.attention_wrappers.flash_route_heads`: the fewest heads with which the attention wrapper's route takes the flash.
+- `ops.autotune_cache.config_to_dict`, `config_from_dict`: a Triton config as the sweep store and a certified directory
+  record it, and back (formerly private).
 - `NBXTensor.from_numpy_as(arr, dtype, device)` and `NBXTensor.new_tensor(data)`: a host array's values placed at a
   dtype (a float64 array narrowed to float32 on the host first, since a backend without float64 misreads it), and
   torch's `new_tensor` (a tensor's own dtype and card). Moved from the NeuroBrix engine's computed-buffer placement.

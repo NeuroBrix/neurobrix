@@ -162,7 +162,7 @@ def test_a_runtime_exclusion_that_contradicts_a_certification_is_reported(root, 
     from nbxtensor.ops import autotune_cache as atc
     _write(root, {C.key_repr(KEY): _entry()})
     t = _Tuner()
-    monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
+    monkeypatch.setattr(atc, "qual_of", lambda tuner: KERNEL)
     monkeypatch.setattr(atc, "key_of", lambda tuner, args, kwargs: KEY)
     recorded = []
     monkeypatch.setattr(atc, "record_screen_exclusions", lambda entries: recorded.extend(entries) or len(entries))
@@ -182,7 +182,7 @@ def test_a_runtime_exclusion_that_contradicts_a_certification_is_reported(root, 
 def test_a_config_the_directory_did_not_certify_is_no_contradiction(root, monkeypatch, engine_log):
     from nbxtensor.ops import autotune_cache as atc
     _write(root, {C.key_repr(KEY): _entry()})
-    monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
+    monkeypatch.setattr(atc, "qual_of", lambda tuner: KERNEL)
     monkeypatch.setattr(atc, "key_of", lambda tuner, args, kwargs: KEY)
 
     class Ex:
@@ -206,7 +206,7 @@ def test_a_contradiction_is_reported_even_with_the_apply_switch_off(root, engine
     from nbxtensor.ops import autotune_cache as atc
     _write(root, {C.key_repr(KEY): _entry()})
     monkeypatch.setenv("NBX_AUTOTUNE_CERTIFIED", "off")
-    monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
+    monkeypatch.setattr(atc, "qual_of", lambda tuner: KERNEL)
     monkeypatch.setattr(atc, "key_of", lambda tuner, args, kwargs: KEY)
     monkeypatch.setattr(atc, "record_screen_exclusions", lambda entries: len(entries))
 

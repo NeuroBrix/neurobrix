@@ -63,7 +63,7 @@ _REQUIRED = {
 #: end, and `synthesize` built an fp16 bias for a uint8 key. The wrapper then computed
 #: an fp16 key — correctly — and the certifier reported the census key UNREACHABLE.
 #: A real miss on MiniCPM-o was read for a day as "the engine cannot produce this key".
-#: Same shape as `_NP` in autotune_certify.py, which did not know an integer dtype and
+#: Same shape as `autotune_harness.NP_DTYPES` (once `_NP` in the certifier), which did not know an integer dtype and
 #: made it float32 in silence: the same bug written twice is a missing brick.
 _DTYPES = ("fp16", "bf16", "fp32", "fp64",
            "int1", "int8", "int16", "int32", "int64",
@@ -200,7 +200,7 @@ def output_dtype(tuner, key: tuple) -> str:
 #: Key positions that are TENSOR EXTENTS or divisors — every one of them must be at least 1
 #: for the key to name a launch that can exist. A padding may be 0 and is not listed; a
 #: negative value is impossible anywhere. The positions mirror what the certifier unpacks to
-#: synthesise a shape (`autotune_certify._synth`), and a test pins the two together: a key
+#: synthesise a shape (`autotune_harness.synthesize`), and a test pins the two together: a key
 #: whose extent is 0 can be neither synthesised nor launched, and the served directory holds
 #: one already (`conv2d_forward_kernel.fp32`, batch_dim 0) from a census that recorded a
 #: shadow's degenerate arithmetic (2026-09-22).
@@ -819,7 +819,7 @@ def unit_choice(tuner, args, kwargs) -> Optional[Tuple[str, Optional[Dict[str, i
     from nbxtensor.ops import autotune_cache as _atc
     qual = _UNIT_QUALS.get(id(tuner))
     if qual is None:
-        qual = _UNIT_QUALS[id(tuner)] = _atc._qual_of(tuner)     # once per kernel: a GEMM asks at every launch
+        qual = _UNIT_QUALS[id(tuner)] = _atc.qual_of(tuner)     # once per kernel: a GEMM asks at every launch
     if qual is None:
         return None
     key = _atc.key_of(tuner, args, kwargs)
@@ -1582,8 +1582,8 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
     measurements) — silently trusting either would be the actual failure."""
     if not dropped:
         return []
-    from nbxtensor.ops.autotune_cache import key_of, _qual_of
-    qual = _qual_of(tuner)
+    from nbxtensor.ops.autotune_cache import key_of, qual_of
+    qual = qual_of(tuner)
     if qual is None:
         return []
     try:

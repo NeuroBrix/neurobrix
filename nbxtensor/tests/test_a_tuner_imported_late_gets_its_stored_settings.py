@@ -29,7 +29,7 @@ def test_a_late_tuner_is_seeded_once_with_its_members_only(monkeypatch):
     t = _tuner()
     monkeypatch.setattr(A, "_autotuners", lambda: iter([("nbxtensor.ops.late.kernel", t)]))
     monkeypatch.setattr(A, "_stored", lambda: STORED)
-    monkeypatch.setattr(A, "_config_from_dict", lambda d: ("cfg", d["kwargs"]["BLOCK"]))
+    monkeypatch.setattr(A, "config_from_dict", lambda d: ("cfg", d["kwargs"]["BLOCK"]))
     monkeypatch.setattr(A, "_SEEDED_TUNERS", set())
     assert A.seed_late(t) == 1
     assert t.cache == {(128, "fp16"): ("cfg", 64)}

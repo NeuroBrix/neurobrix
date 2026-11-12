@@ -13,7 +13,7 @@ UNREACHABLE, "the engine cannot produce this key".
 It could. MiniCPM-o forms that key on every run and misses on it. A real miss was read for a
 day as an engine limitation, because a lookup table skipped a name instead of refusing it.
 
-This is the SAME SHAPE as `_NP` in `autotune_certify.py`, which did not know any integer dtype
+This is the SAME SHAPE as `NP_DTYPES` in `nbxtensor.ops.autotune_harness` (`_NP` in the engine's certifier until 2026-11-12), which did not know any integer dtype
 and turned a uint8 attention mask into float32 in silence — fixed on 2026-09-22 without
 noticing that a second table had the same hole. The same bug written twice is a missing brick.
 
@@ -26,7 +26,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.ops.autotune_certified import _DTYPES, key_dtypes
-from neurobrix.kernels.autotune_certify import _NP, _arr
+from nbxtensor.ops.autotune_harness import NP_DTYPES as _NP, draw as _arr
 
 #: The key MiniCPM-o forms, verbatim from its run record.
 MINICPM_KEY = (64, 1024, 128, True, False, True, "fp16", "fp16", "fp16", "uint8")
