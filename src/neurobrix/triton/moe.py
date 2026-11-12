@@ -24,6 +24,10 @@ _log = logging.getLogger(__name__)
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the environ on the per-MoE-op hot path).
 # Empty/unset: no dump at all.
 _MOE_DIAG_ENV = os.environ.get("NBX_MOE_DIAG", "")
+# The two kill switches of the one-token int4 band and the memory log, read at import too (the Mac's reread of lot 3):
+# NBX_MOE_VEC=0 refuses the band, NBX_MOEV_DSPLIT=0 its split down projection, NBX_Z3_TRITON_DIAG=1 logs the memory.
+_INT4_BAND, _SPLIT_DOWN = (os.environ.get(name, "1") != "0" for name in ("NBX_MOE_VEC", "NBX_MOEV_DSPLIT"))
+_LOG_MEMORY = os.environ.get("NBX_Z3_TRITON_DIAG") == "1"
 
 
 def _dump_for(cache_key: str):
@@ -66,7 +70,5 @@ def execute_moe_fused(
         gate_scores, hidden_states, gate_weights, up_weights, down_weights, top_k, num_experts,
         norm_topk_prob=norm_topk_prob, topk_indices=topk_indices, topk_weights=topk_weights,
         weights_per_call=weights_per_call, store=expert_store, layer=expert_layer,
-        int4_band=os.environ.get("NBX_MOE_VEC", "1") != "0",
-        split_down=os.environ.get("NBX_MOEV_DSPLIT", "1") != "0",
-        dump=_dump_for(cache_key), label=cache_key,
-        log_memory=os.environ.get("NBX_Z3_TRITON_DIAG") == "1")
+        int4_band=_INT4_BAND, split_down=_SPLIT_DOWN,
+        dump=_dump_for(cache_key), label=cache_key, log_memory=_LOG_MEMORY)
