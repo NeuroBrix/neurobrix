@@ -70,6 +70,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
 - The slot store reads the card's clock at the size of the word it reads into, no byte count written in the code.
+- `NBXTensor.from_numpy_as(arr, dtype, device)` and `NBXTensor.new_tensor(data)`: a host array's values placed at a
+  dtype (a float64 array narrowed to float32 on the host first, since a backend without float64 misreads it), and
+  torch's `new_tensor` (a tensor's own dtype and card). Moved from the NeuroBrix engine's computed-buffer placement.
+- `io.constants.archived_storage`, `io.constants.constant_array`: a graph constant's stored bytes (the archive
+  `torch.save` writes) read and decoded to the dtype it is bound in, without a tensor library. Moved from the engine's
+  constant loader.
+- `io.safetensors.bf16_abs_maxima`: the largest magnitude of every bfloat16 tensor of a safetensors file, from its
+  stored bytes. Moved from the engine's float16-safety scan.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

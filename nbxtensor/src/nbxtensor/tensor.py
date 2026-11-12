@@ -889,6 +889,30 @@ class NBXTensor:
                          owns_data=True, device_idx=dev_idx)
 
     @staticmethod
+    def from_numpy_as(arr, dtype, device=None) -> 'NBXTensor':
+        """The VALUES of a numpy array as a tensor of `dtype` (an NBXDtype or a name), placed as `from_numpy` places
+        it. A float64 array is narrowed to float32 on the host first unless `dtype` is float64: a backend without
+        float64 (Metal) misreads a float64 element rather than casting it. Float64 -> float32 -> bfloat16 on the host
+        gives the bits of a single float64 -> bfloat16 rounding (measured 2026-09-28 on Sana 4K's sincos grids at
+        three sizes: 0 of 41 287 680 elements differ)."""
+        import numpy as np
+        want = dtype if isinstance(dtype, NBXDtype) else parse_dtype(str(dtype).replace("torch.", ""))
+        arr = np.asarray(arr)
+        if arr.dtype == np.float64 and want != NBXDtype.float64:
+            arr = arr.astype(np.float32)
+        out = NBXTensor.from_numpy(np.ascontiguousarray(arr), device=device)
+        return out.to(want) if out.nbx_dtype != want else out
+
+    def new_tensor(self, data) -> 'NBXTensor':
+        """torch's `Tensor.new_tensor`: `data` (a numpy array, or what `np.asarray` reads) as a new tensor of this
+        tensor's dtype on this tensor's card; the current device is left as it was."""
+        current = DeviceAllocator.get_device()
+        out = NBXTensor.from_numpy_as(data, self._dtype, device=self._device_idx)
+        if current != self._device_idx:
+            DeviceAllocator.set_device(current)
+        return out
+
+    @staticmethod
     def from_raw(ptr: int, shape: Tuple[int, ...], dtype: NBXDtype,
                  device: str = 'cuda', owns_data: bool = False,
                  device_idx: int = 0, base=None) -> 'NBXTensor':

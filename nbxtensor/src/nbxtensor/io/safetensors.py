@@ -20,11 +20,24 @@ import numpy as np
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.dtype.convert import bf16_bits_to_f16, f32_to_bf16_bits
-from nbxtensor.shape import contiguous_strides
+from nbxtensor.dtype.convert import bf16_abs_max, bf16_bits_to_f16, f32_to_bf16_bits
+from nbxtensor.shape import contiguous_strides, numel
 from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena
 
 PAGE = mmap.PAGESIZE      # os.sysconf does not exist on Windows (its import stopped every plan there)
+
+
+def bf16_abs_maxima(path, header: dict, data_start: int):
+    """(key, element count, largest magnitude) of every bfloat16 tensor of the safetensors file at `path`, read as its
+    stored 16-bit patterns through a read-only map — no tensor is built, no tensor library opens the file. `header` and
+    `data_start`: the file's header and the offset its data starts at. A caller compares the magnitude to a narrower
+    dtype's `finite_max` to know whether the weights fit it."""
+    raw = np.memmap(path, dtype=np.uint8, mode="r")
+    for key, entry in header.items():
+        if key == "__metadata__" or entry.get("dtype") != "BF16":
+            continue
+        begin, end = entry["data_offsets"]
+        yield key, numel(entry["shape"]), bf16_abs_max(raw[data_start + begin:data_start + end].view(np.uint16))
 
 
 def spans(n: int, unit: int, align: int, workers: int):

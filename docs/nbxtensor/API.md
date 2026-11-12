@@ -2663,6 +2663,20 @@ def place_in_arena(raw, shape: tuple, nbx_dtype: NBXDtype, np_dtype, target_dtyp
 def half_in_place(ptr: int, count: int, device_idx: int)
     # the loader's raw bf16 buffer at `ptr` rewritten in place as float16 by the library's one device conversion
     # (ops.wrappers.bf16_to_fp16_gpu with `out=` the same buffer)
+def bf16_abs_maxima(path, header: dict, data_start: int)
+    # (key, element count, largest magnitude) of every bfloat16 tensor of a safetensors file, read from its stored
+    # 16-bit patterns through a read-only map; no tensor built (Prism's float16-safety scan)
+```
+
+### `nbxtensor.io.constants` — a graph constant's stored bytes as a host array, without a tensor library
+
+```python
+def archived_storage(blob: bytes) -> bytes | None
+    # the first storage (`archive/data/` member) of the archive `torch.save` writes; None when it holds none
+def constant_array(raw: bytes, stored: str, shape, compute: str, stores_fp64: bool) -> (np.ndarray, NBXDtype | None)
+    # the stored bytes as the array of the dtype `dtype.operands.constant_load_dtype` binds the constant in (bfloat16
+    # widened exactly or narrowed to float16; float64 held as the store holds it), and the dtype its bits are when numpy
+    # cannot name it (bfloat16 kept as uint16 bits: pass it to `NBXTensor.from_numpy(dtype=)`)
 ```
 
 `io = (workers, executor)` is the application's pool (DESIGN rule 14: its size is the profile's).
@@ -2735,6 +2749,8 @@ nbxtensor.empty(shape, dtype: DType, device: Device) -> Tensor
 nbxtensor.zeros(shape, dtype, device);  nbxtensor.ones(...);  nbxtensor.full(shape, value: float, dtype, device)
 nbxtensor.empty_like(t, dtype: DType | None = None, device: Device | None = None)   # None: t's own
 nbxtensor.from_numpy(a: np.ndarray, device: Device, dtype: DType | None = None)      # dtype given: a's bytes reinterpreted, sizes checked (bf16 from uint16 bits)
+NBXTensor.from_numpy_as(a, dtype, device=None)   # a's VALUES at `dtype`; float64 narrowed to float32 on the host unless dtype is float64 (Metal misreads float64)
+t.new_tensor(data)                                 # torch's new_tensor: data's values at t's dtype on t's card; the current device unchanged
 nbxtensor.to_numpy(t) -> np.ndarray      # bfloat16 comes back as uint16 bits; widen with convert.bf16_bits_to_f32
 nbxtensor.from_dlpack(obj) -> Tensor     # any producer; the producer's library imports itself
 nbxtensor.from_pointer(ptr: int, shape, strides, dtype, device, owner: object | None) -> Tensor   # NBXTensor.from_raw; `owner` keeps the memory alive

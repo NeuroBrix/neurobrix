@@ -9727,13 +9727,10 @@ class PrismSolver:
                 self._bf16_fp16_safe_cache = result
                 return result
 
-        # Full scan: each bfloat16 weight read as its 16-bit patterns straight from the shard (the header gives its
-        # bytes), its largest magnitude by nbxtensor's one conversion module, held to float16's finite maximum
-        # from the one dtype table — no tensor library opens the file.
-        import numpy as np
-        from nbxtensor.dtype.convert import bf16_abs_max
+        # Full scan: each bfloat16 weight's largest magnitude read by nbxtensor from the shard's stored bytes (no tensor
+        # library opens the file), held to float16's finite maximum from the one dtype table.
         from nbxtensor.dtype.itemsize import finite_max
-        from nbxtensor.shape import numel
+        from nbxtensor.io.safetensors import bf16_abs_maxima
         from neurobrix.nbx.weight_presence import read_safetensors_header
 
         FP16_MAX = finite_max("float16")
@@ -9744,15 +9741,8 @@ class PrismSolver:
             if not weights_path.exists():
                 continue
             for shard in sorted(weights_path.glob("*.safetensors")):
-                header, data_start = read_safetensors_header(str(shard))
-                raw = np.memmap(shard, dtype=np.uint8, mode="r")
-                for key, entry in header.items():
-                    if key == "__metadata__" or entry.get("dtype") != "BF16":
-                        continue
-                    begin, end = entry["data_offsets"]
-                    bits = raw[data_start + begin:data_start + end].view(np.uint16)
-                    total_params += numel(entry["shape"])
-                    abs_max = bf16_abs_max(bits)
+                for key, n, abs_max in bf16_abs_maxima(shard, *read_safetensors_header(str(shard))):
+                    total_params += n
                     if abs_max > FP16_MAX:
                         # Cache negative result to disk
                         with open(safety_cache_file, 'w') as cf:

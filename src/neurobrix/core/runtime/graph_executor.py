@@ -119,28 +119,6 @@ class ExecutionStats:
         )
 
 
-def computed_array_to_container(t, device, dtype_name: str):
-    """A computed-at-runtime array (a sincos or interpolated positional embedding, a traced buffer)
-    placed in the Triton branch's container at the component's compute dtype. No torch (R33)."""
-    import numpy as np
-    from nbxtensor.tensor import NBXTensor
-    from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype as _nbx_dtype
-    from nbxtensor.memory.allocator import DeviceAllocator
-    dev_idx = (int(device.split(':')[1]) if isinstance(device, str) and ':' in device else 0)
-    DeviceAllocator.set_device(dev_idx)
-    want = _nbx_dtype(dtype_name)
-    if t.dtype == np.float64 and want != NBXDtype.float64:
-        # A formula gives float64; the device receives it at the compute dtype. The cast to
-        # float32 happens HERE, on the host, because a float64 element on a backend without
-        # float64 (Metal) is misread, not cast (`NBXTensor.to` refuses it by name). Measured
-        # 2026-09-28 on the real Sana 4K sincos grids at 3072x4096, 2048x2560 and 1024x1024:
-        # float64 -> float32 -> bf16 on the host gives the same bits as the ATen branch's single
-        # float64 -> bf16 rounding, 0 of 41 287 680 elements differing.
-        t = t.astype(np.float32)
-    out = NBXTensor.from_numpy(np.ascontiguousarray(t))
-    return out.to(want) if out.nbx_dtype != want else out
-
-
 def _call_named(op_uid, fn, args, kwargs):
     """An op the triton-sequential loop runs OUTSIDE the dispatcher — an op_uid or op_type
     interceptor (Prism's tiled convs, the KV cache's attention) — is named for every key it forms
@@ -187,10 +165,9 @@ def _save_inputs_if_asked(component: str, inputs: Dict[str, Any], mode: str) -> 
             elif hasattr(t, "numpy"):
                 host = np.asarray(t.numpy())
                 if host.dtype.kind == "V" and host.dtype.itemsize == 2:
-                    bits = np.ascontiguousarray(host).view(np.uint16)
-                    np.save(os.path.join(out, f"{component}.{mode}.{safe}.bf16bits.npy"), bits)
-                    np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"),
-                            (bits.astype(np.uint32) << 16).view(np.float32).reshape(host.shape))
+                    from nbxtensor.dtype.convert import bf16_bits, bf16_bits_to_f32
+                    np.save(os.path.join(out, f"{component}.{mode}.{safe}.bf16bits.npy"), bf16_bits(host))
+                    np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"), bf16_bits_to_f32(host))
                 else:
                     np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"), host)
             elif isinstance(t, np.ndarray):
@@ -778,21 +755,18 @@ class GraphExecutor:
             def _maybe_to_nbx(t):
                 import numpy as np
                 triton = self.mode in ("triton", "triton_sequential")
-                if isinstance(t, np.ndarray):
-                    if not triton:
+                if not triton:
+                    if isinstance(t, np.ndarray):
                         import torch
                         return torch.from_numpy(t).to(dtype=self._placement_torch_dtype(), device=self.device)
-                    return computed_array_to_container(t, self.device, str(self.dtype).replace("torch.", ""))
-                if not triton or not is_torch_tensor(t):
                     return t
                 from nbxtensor.tensor import NBXTensor
-                from nbxtensor.memory.allocator import DeviceAllocator
-                dev_idx = (int(self.device.split(':')[1])
-                           if isinstance(self.device, str) and ':' in self.device
-                           else 0)
-                DeviceAllocator.set_device(dev_idx)
-                arr = np.ascontiguousarray(t.detach().cpu().numpy())
-                return NBXTensor.from_numpy(arr)
+                from nbxtensor.memory.device_transfer import parse_device_idx
+                if isinstance(t, np.ndarray):        # at the compute dtype; a float64 formula narrowed on the host
+                    return NBXTensor.from_numpy_as(t, str(self.dtype), device=parse_device_idx(self.device))
+                if not is_torch_tensor(t):
+                    return t
+                return NBXTensor.from_numpy(t.detach().cpu().numpy(), device=parse_device_idx(self.device))
             self._maybe_to_nbx = _maybe_to_nbx
 
         if self._runtime_height is None or self._runtime_width is None:
@@ -2898,27 +2872,19 @@ class GraphExecutor:
 
     def _load_constant_triton(self, b64_data: str, weight_name: str,
                                tdata: dict):
-        """Load base64 constant via ZIP parse + numpy (triton mode). Zero torch."""
-        import base64, io, zipfile
-        import numpy as np
+        """Load a base64 constant (the archive `torch.save` writes) through the library's torch-free reader."""
+        import base64
         from nbxtensor.tensor import NBXTensor
-        from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
-        from nbxtensor.memory.allocator import DeviceAllocator
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
         from nbxtensor.dtype import itemsize as _isz
+        from nbxtensor.io.constants import archived_storage, constant_array
+        from nbxtensor.memory.device_transfer import parse_device_idx
 
         shape = tuple(tdata.get("shape", []))
         dtype_str = tdata.get("dtype", "float32").replace("torch.", "")
-        device_idx = int(self.device.split(':')[1]) if ':' in str(self.device) else 0
-        compute_dtype = parse_dtype(self.dtype)
-
-        # Extract raw bytes from torch.save ZIP archive
-        raw_zip = base64.b64decode(b64_data)
-        with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
-            data_files = [n for n in zf.namelist()
-                          if n.startswith("archive/data/")]
-            if not data_files:
-                return
-            tensor_bytes = zf.read(data_files[0])
+        tensor_bytes = archived_storage(base64.b64decode(b64_data))
+        if tensor_bytes is None:
+            return
 
         # Shape vs bytes reconciliation. Some graphs declare the FULL shape
         # of a seq-dependent buffer (e.g. DeepSeek RoPE cos/sin_cached:
@@ -2980,67 +2946,12 @@ class GraphExecutor:
                     f"{trace_seq_len} reconciles.")
             shape = tuple(fixed)
 
-        # Parse raw bytes based on dtype
-        if dtype_str == "bfloat16":
-            raw_u16 = np.frombuffer(tensor_bytes, dtype=np.uint16).reshape(shape)
-            # bf16 is the top 16 bits of an fp32, so widening is a shift and
-            # it is EXACT. Doing it is not optional: numpy has no bfloat16, so
-            # the bits arrive as uint16 and every consumer downstream reads
-            # them as whatever the tensor claims to be.
-            #
-            # Handing the raw uint16 to a float32 engine is what this used to
-            # do for every compute dtype except fp16, and it reads each PAIR of
-            # bf16 values as one float. Measured 2026-09-07 on TinyLlama: the
-            # rotary cos table, whose first row is all 1.0, arrived as
-            # 0x3f803f80 = 1.0019378 — two bf16 ones packed into one fp32 —
-            # with NaNs further in and half the table missing. Every position
-            # was then rotated by the wrong angle and the model answered a
-            # different question. The fp16 path had the conversion; the others
-            # did not, and on this machine the engine computes in fp32.
-            fp32 = np.zeros(raw_u16.shape, dtype=np.float32)
-            fp32.view(np.uint32).flat[:] = raw_u16.flat[:].astype(np.uint32) << 16
-            if compute_dtype == NBXDtype.float16:
-                arr = np.ascontiguousarray(fp32.astype(np.float16))
-            elif compute_dtype == NBXDtype.bfloat16:
-                # Staying in bf16: the bits are already right, and the tensor
-                # is TAGGED bf16 below so they are read as bf16 and not as the
-                # uint16 they travel in.
-                arr = np.ascontiguousarray(raw_u16)
-            else:
-                arr = np.ascontiguousarray(fp32)
-        else:
-            # numpy names every dense dtype of the table but bfloat16 (above); one it cannot name
-            # (float8) is refused by numpy itself, never read as float32 bytes.
-            np_dt = np.dtype(dtype_str)
-            if np_dt.itemsize != dtype_bytes:
-                raise RuntimeError(f"Constant '{weight_name}': numpy's {dtype_str} is {np_dt.itemsize} "
-                                   f"bytes, config/dtypes.yml says {dtype_bytes}")
-            arr = np.frombuffer(tensor_bytes, dtype=np_dt).reshape(shape)
-            arr = np.ascontiguousarray(arr)
-
-        # fp64/complex128 constants are held as the branch holds them (`constant_load_dtype`,
-        # through `triton.dtype.storage_dtype`, the one Triton narrowing, which
-        # TritonSequence._parse_dtype and Prism's pricing read too): fp32/complex64 where its
-        # kernels are fp32-max. Loading the constant already-held makes the graph's explicit
-        # fp64/complex128 _to_copy an identity, avoiding a fragile complex128→complex64 kernel
-        # cast. e.g. the Wan rotary-embedding freqs constant (complex128 [seq, head_dim/2]).
-        if arr.dtype.kind in "fc":
-            from nbxtensor.dtype.operands import constant_load_dtype
-            held = constant_load_dtype(arr.dtype.name, self.dtype, self._triton_stores_fp64())
-            if held != arr.dtype.name:
-                arr = arr.astype(np.dtype(held))
-
-        DeviceAllocator.set_device(device_idx)
-        # bf16 bits travel in a uint16 container numpy cannot label: the
-        # dtype is DECLARED to from_numpy, never assigned afterwards — a
-        # post-construction retag keeps the element size of the dtype the
-        # tensor was built with, and the tensor then declares twice the
-        # bytes it owns (see NBXTensor.from_numpy).
-        _bits_are = (NBXDtype.bfloat16
-                     if dtype_str == "bfloat16" and compute_dtype == NBXDtype.bfloat16
-                     else None)
-        _const = NBXTensor.from_numpy(arr, dtype=_bits_are)
-        self._weights[weight_name] = _const
+        # bf16 decoded to the compute dtype, fp64/complex128 held as the branch holds them (fp32/complex64 where its
+        # kernels are fp32-max: the graph's explicit fp64 _to_copy is then an identity); bf16 bits kept as bf16 are
+        # DECLARED to from_numpy (they travel as uint16), never retagged afterwards.
+        arr, bits_are = constant_array(tensor_bytes, dtype_str, shape, parse_dtype(self.dtype).name,
+                                       self._triton_stores_fp64())
+        self._weights[weight_name] = NBXTensor.from_numpy(arr, dtype=bits_are, device=parse_device_idx(self.device))
 
     # =========================================================================
     # Execution: run() and helpers
