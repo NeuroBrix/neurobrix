@@ -62,7 +62,8 @@ def replace_chunks(path: Path, model: str, records) -> None:
     import tempfile
     cp = chunks_path(path)
     with locked(path):
-        recs = {k: v for k, v in read_chunks(path).items() if k[0] != model}
+        old = read_chunks(path) if cp.exists() else {}      # the writer creating the record file
+        recs = {k: v for k, v in old.items() if k[0] != model}
         for r in records:
             recs[(model, r["mode"])] = r
         fd, tmp = tempfile.mkstemp(dir=str(cp.parent), prefix=cp.name, suffix=".tmp")
