@@ -1,6 +1,6 @@
-"""The census shadow's benign value-read keys off the dtype NAME, not value.
+"""The shadow's benign value-read keys off the dtype NAME, not value.
 
-In a census shadow (`kernels/census.py`) no VALUE means anything: `install()`
+In a shadow (`nbxtensor.memory.shadow`) no VALUE means anything: `install_shadow()`
 replaces `NBXTensor.item` so a guard's `all(isfinite(x))` reads healthy (True)
 and an integer token id reads 0. The dtype was inspected as
 `str(self._dtype)`, but NBXDtype is an IntEnum, so `str(<NBXDtype.bool_: 9>)`
@@ -12,13 +12,13 @@ is "9" — "bool" never matched. Two silent failures followed:
   - an integer read answered 0.0 (float), not 0 (int), where a token index
     is expected.
 
-Reading `dtype.name` fixes both. Model-free: the extracted helper
-`_shadow_item_value` is driven with each NBXDtype directly (no shadow install,
-which refuses when a device is visible).
+Reading `dtype.name` fixes both. Model-free: the helper `_item_value` is
+driven with each NBXDtype directly (no shadow install, which refuses when a
+device is visible). Moved from the engine's census with the shadow.
 """
 from __future__ import annotations
 
-from neurobrix.kernels.census import _shadow_item_value
+from nbxtensor.memory.shadow import _item_value as _shadow_item_value
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 
 

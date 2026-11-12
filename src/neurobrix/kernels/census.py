@@ -27,7 +27,6 @@ from __future__ import annotations
 import os
 import threading
 from typing import List, Any, Dict, Optional, Set
-import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 import logging
 _log = logging.getLogger(__name__)
 
@@ -221,53 +220,6 @@ def active() -> bool:
 # The shadow mode: installed once per process by the CLI when NBX_CENSUS=1.
 # --------------------------------------------------------------------------------------------
 
-def _noop(*_a, **_k):
-    return None
-
-
-def _dtype_name(d) -> str:
-    """A dtype read by its NAME, never by `str()` of it.
-
-    `NBXDtype` is an `IntEnum`, and what `str()` gives for one changed under us: Python 3.10
-    renders `NBXDtype.bool_`, Python 3.11 renders `9`. A shadow that matched on `"bool" in
-    str(dtype)` therefore works on this rack and fails on the Mac's interpreter, where every
-    diffusion shadow's `all(isfinite(x))` guard read falsy and the loop's NaN gate ended the
-    run at step 1 with no post-loop key harvested (the Mac measured PixArt-XL 16 -> 33 keys
-    once it read the name, 2026-09-21). Measured here on 3.10.12: the old form matched, which
-    is exactly why nothing on this rack ever said so."""
-    return str(getattr(d, "name", d)).lower()
-
-
-def shadow_run(*_a, **_k):
-    """What stands behind an autotuned kernel's `run` in the shadow: nothing."""
-    return None
-
-
-def _shadow_item_value(dtype):
-    """The benign scalar a value-read (`.item()`) answers in shadow mode.
-
-    In a census shadow no VALUE means anything — a `.item()` is only ever a
-    guard or a token/size index. A guard's `all(isfinite(x))` (a bool tensor)
-    must read healthy, or a loop's step-boundary NaN gate refuses the shadow
-    (Sana at step 1, and PixArt/CogVideoX once Prism stopped mis-placing on the
-    host). An integer read answers ONE, not zero (main's rationale, 9ea81cd2):
-    a read that is a SIZE — a duration, a frame count, a length derived from
-    data — shaped an empty tensor at zero (Kokoro's index_select divided by
-    zero, Allegro's group norm met (0,…)), while a token id 1 runs the same
-    shapes as 0. Anything else answers 0.0.
-
-    Read the dtype by NAME. NBXDtype is an IntEnum, so `str(<NBXDtype.bool_: 9>)`
-    is "9", not "bool_": the previous `"bool" in str(dtype)` never matched, so
-    every diffusion shadow died at step 1 on a finite gate reading falsy, and
-    every integer read answered 0.0 (float) instead of an int. Same defect class
-    as the input-synth dtype read (ac10eddf). This is the fallback for a value
-    with no host-born `_shadow_host`."""
-    name = _dtype_name(dtype)
-    if "bool" in name:
-        return True                     # a guard's `all(isfinite(x))`: healthy
-    return 1 if "int" in name else 0.0
-
-
 def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     """The weights a component would load, as metadata-only tensors: the graph's param
     and buffer shapes, each in the dtype the loader would give it under the component's
@@ -319,162 +271,16 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     """
     if _ACTIVE["census"]:
         return
-    from nbxtensor import tensor as _nt
-    import nbxtensor.memory.allocator as _nbx_allocator
     from nbxtensor.memory import shadow as _shadow
-    from nbxtensor.backend import launcher as _launcher
-    DA = _nbx_allocator.DeviceAllocator
-    # THE DOOR: a shadow is proven unable to touch a card only when no card can be seen.
-    # With a device visible, a path this module does not cover would succeed on real
-    # hardware in silence; behind the door it fails loudly (error 100). Refused at entry,
-    # with the command that satisfies it. `--allow-visible-devices` does not exist: the
-    # census has no honest use for a card.
-    visible = DA.device_count()
-    if visible > 0:
+    # THE DOOR: the library's shadow refuses while a device is visible (a path it does not cover would succeed on real
+    # hardware in silence). `--allow-visible-devices` does not exist: the census has no honest use for a card.
+    try:
+        _shadow.install_shadow(int(os.environ.get("NBX_CENSUS_DEVICES", "1") or 1))
+    except _shadow.DevicesVisible as e:
         raise RuntimeError(
-            f"census shadow refused: {visible} device(s) visible. Run it with no card in "
-            "sight — CUDA_VISIBLE_DEVICES= NBX_CENSUS=1 NBX_CENSUS_DEVICES=<the profile's "
-            "count> neurobrix run ... --hardware <profile>")
+            f"census shadow refused: {e}. Run it with no card in sight — CUDA_VISIBLE_DEVICES= NBX_CENSUS=1 "
+            "NBX_CENSUS_DEVICES=<the profile's count> neurobrix run ... --hardware <profile>") from None
     _ACTIVE["census"] = True
-    n_dev = int(os.environ.get("NBX_CENSUS_DEVICES", "1") or 1)
-
-    # The DIRECT device operations are the shadow's (an interceptor installed later, a replay recording, still stands
-    # in front of them as it does in a real run).
-    DA.malloc_direct = staticmethod(_shadow.malloc)
-    for name in ("free_direct", "memset_direct", "memcpy_direct", "memcpy_async", "sync_direct",
-                 "set_device", "ensure_triton_device", "empty_cache_pool"):
-        if hasattr(DA, name):
-            setattr(DA, name, staticmethod(_noop))
-    DA.device_count = staticmethod(lambda: n_dev)
-    # The whole driver surface answers without a driver: syncs, streams, events, peer
-    # access, host-pinned memory, device queries. A shadow that reaches one of these
-    # through a path not listed here fails LOUDLY (error 100, no device) — never silently.
-    _cur = {"dev": 0}
-    DA.set_device = staticmethod(lambda device_id: _cur.__setitem__("dev", int(device_id)))
-    DA.get_device = staticmethod(lambda: _cur["dev"])
-    for name in ("device_synchronize", "stream_synchronize", "event_synchronize",
-                 "record_event", "stream_wait_event", "destroy_stream", "destroy_event",
-                 "reset_peak_memory", "print_alloc_stats", "_maybe_init_pool"):
-        if hasattr(DA, name):
-            setattr(DA, name, staticmethod(_noop))
-    _handles = {"n": 0}
-    def _handle(*_a, **_k):
-        _handles["n"] += 1
-        return _handles["n"]
-    for name in ("create_stream", "create_event"):
-        if hasattr(DA, name):
-            setattr(DA, name, staticmethod(_handle))
-    for name, value in (("clear_last_error", 0), ("event_elapsed_ms", 0.0),
-                        ("can_access_peer", False), ("ensure_peer_access", False),
-                        ("enable_peer_access", False), ("most_free_device", 0),
-                        ("device_free_bytes", -1), ("device_total_bytes", -1),
-                        ("mem_get_info", (0, 0)), ("visible_device_memory", []),
-                        ("holds", False), ("empty_cache_pool", 0), ("_pool_flush", 0)):
-        if hasattr(DA, name):
-            setattr(DA, name, staticmethod(lambda *a, _v=value, **k: _v))
-    if hasattr(DA, "malloc_host_pinned"):
-        DA.malloc_host_pinned = staticmethod(_shadow.malloc)
-    if hasattr(DA, "free_host_pinned"):
-        DA.free_host_pinned = staticmethod(_noop)
-    if hasattr(DA, "free_memory_mb"):
-        # The plan is solved against the profile's own capacity: a census carries the machine's
-        # plan, not the room's ambient (the ladder still rounds it onto its rungs).
-        DA.free_memory_mb = staticmethod(lambda index=0: None)
-
-    # Every launch is skipped: the launcher's entry answers None, and each autotuned
-    # kernel's `run` — wrapped at its definition by `_configs._announce_first_sweep`,
-    # AFTER this install — keeps the wrapper and runs `shadow_run` behind it. The key is
-    # recorded by that ONE seam, the same door the live record uses; a shadow that never
-    # reaches it records nothing, and says so by an empty file. Install before the
-    # engine imports (the CLI does, in main()): a kernel defined earlier keeps its bench.
-    _launcher.launch = lambda kernel, grid, *a, **k: None
-
-    # Value reads answer ZERO — float or int — and a bool reads TRUE. Shapes are what the
-    # census is made of; a value read is a guard or a token: a guard's `all(isfinite(.))`
-    # must read healthy (Sana's loop refused the shadow at step 1 on a bool that read 0),
-    # and a token id 0 runs the same shapes as any other — UNVERIFIED for a model whose
-    # end-of-sequence id is 0: its decode would stop at step 1 and every later decode-step
-    # key would be lost in silence. What verifies it: a census of such a model against its
-    # replay set (none in the catalogue today; TinyLlama's eos is 2).
-    T = _nt.NBXTensor
-
-    # A value born on the HOST is known to the shadow: `from_numpy` keeps the array it was
-    # given beside the tensor, and every host read answers from it. The flows compose their
-    # requests from such tensors (a frame count, a token id list, a timestep table); a shadow
-    # answering ones there built Wan 2.2's image encoder for a negative frame count
-    # (2026-09-21). Values computed on the device stay unknown and answer as below.
-    _from_numpy = T.from_numpy
-    # The host copies live in a table keyed by the shadow allocation's pointer: the tensor
-    # class carries no spare attribute (a copy hung on the instance was silently dropped, and
-    # every grid read answered ones — the VLM census refused on `grid_thw // 2 = 0`, 2026-09-21).
-    _HOST_VALUES: Dict[int, Any] = {}
-
-    def _host_of(t):
-        try:
-            return _HOST_VALUES.get(int(t.data_ptr()))
-        except Exception:  # noqa: BLE001
-            return None
-
-    # Only SMALL host values are kept: the ones a flow reads back as values (a grid, a token id
-    # list, a frame count, a timestep table). A large array (weights, features) is never read
-    # by value — keeping every one made a chatterbox shadow hold 17 GB of host memory and a dozen
-    # shadows filled the swap (2026-09-21 23:45).
-    _HOST_VALUE_CAP_BYTES = 1 << 20
-
-    def _from_numpy_shadow(arr, dtype=None, device=None):
-        t = _from_numpy(arr, dtype, device)
-        try:
-            import numpy as np
-            a = np.asarray(arr)
-            if a.nbytes <= _HOST_VALUE_CAP_BYTES:
-                _HOST_VALUES[int(t.data_ptr())] = np.array(a, copy=True)
-        except Exception:  # noqa: BLE001 — a value without a pointer is a device value
-            pass
-        return t
-    T.from_numpy = staticmethod(_from_numpy_shadow)
-
-    def _item(self):
-        # A host-born value answers with its REAL value; otherwise the benign
-        # read keyed on the dtype NAME via `_shadow_item_value` — NBXDtype is an
-        # IntEnum, so `str(self._dtype)` is a number and `"int"/"bool" in
-        # str(...)` never matched, leaving the fallback answering 0.0 for every
-        # dtype (the CogVideoX/Sana finite-gate and integer-read failures).
-        h = _host_of(self)
-        if h is not None and h.size == 1:
-            v = h.reshape(-1)[0]
-            return bool(v) if "bool" in str(h.dtype) else (int(v) if "int" in str(h.dtype) else float(v))
-        return _shadow_item_value(self._dtype)
-
-    def _numpy(self):
-        import numpy as np
-        h = _host_of(self)
-        if h is not None and h.size == int(np.prod(self._shape)):
-            return h.reshape(tuple(self._shape))
-        # Host reads of an integer tensor answer ONES for the same reason `_item` does: a
-        # zero read as a count shaped an empty tensor (Allegro-TI2V's group norm met batch 0
-        # after a frame count read 0, 2026-09-21). Float reads stay zero.
-        import numpy as np
-        if "int" in _dtype_name(self._dtype):
-            return np.ones(tuple(self._shape), dtype=np.int64)
-        return np.zeros(tuple(self._shape), dtype=np.float32)
-
-    def _tolist(self):
-        h = _host_of(self)
-        if h is not None and h.size == __import__("numpy").prod(self._shape):
-            return h.reshape(tuple(self._shape)).tolist()
-        import numpy as np
-        return np.ones(tuple(self._shape), dtype=np.int64).tolist()
-
-    T.item = _item
-    T.numpy = _numpy
-
-    # A host copy of a strided view reads its bytes (`NBXTensor._contiguous_cpu`, numpy over the pointer): in a shadow a
-    # value parked on the host is a shadow address, never memory to read — a piece sliced along a token axis takes its
-    # slice of a host-parked value so, and mochi-1-preview's 8 GB census died there (segmentation fault, 2026-10-28).
-    # The shadow answers the copy as it answers every value: a fresh host tensor of the shape and dtype, unread.
-    T._contiguous_cpu = lambda self: T.empty_cpu(self._shape, self._dtype, pinned=self._pinned)
-    if hasattr(T, "tolist"):
-        T.tolist = _tolist
 
     # A diffusion scheduler binds its step index to the TIMESTEP'S VALUE (`_init_step_index`
     # reads `timestep.item()` and takes the nearest table entry); with every value read at
@@ -507,7 +313,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
             # 16 GB profile, 2026-09-21).
             dev_s = str(getattr(self, "device", "") or "")
             if not dev_s.startswith(("cuda", "hip", "mps")):
-                self.device = f"cuda:{_cur['dev']}"
+                self.device = f"cuda:{_shadow.shadow_device()}"
             self._weights = _shadow_params_for(self, nbx_path, component)
             return self._weights
         GE._load_weights_triton = _load_weights_triton
@@ -524,6 +330,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         # logits — chatterbox, 2026-09-21): token 0, the same shapes as any other.
         import numpy as _np
         return _np.zeros((num_samples,), dtype=_np.int64)
+    _noop = lambda *_a, **_k: None  # noqa: E731
     for _name, _rep in (("device_sync", _noop), ("device_empty_cache", _noop), ("device_seed", _noop),
                         ("device_multinomial", _multinomial_zero)):
         _orig = getattr(_du, _name, None)

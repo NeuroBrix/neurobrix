@@ -32,7 +32,8 @@ def _config_dir(name: str):
 
 class _CensusObserver:
     """The engine's census (`neurobrix.kernels.census`) as the library's launch observer, resolved at call time: the
-    census installs itself before any kernel is defined, and a test that replaces it is the one consulted."""
+    census installs itself before any kernel is defined, and a test that replaces it is the one consulted. What stands
+    behind a dry launch is the library's shadow (`nbxtensor.memory.shadow.shadow_launch`)."""
 
     @staticmethod
     def active() -> bool:
@@ -44,7 +45,7 @@ class _CensusObserver:
 
     @staticmethod
     def shadow_run(*args, **kwargs):
-        return importlib.import_module("neurobrix.kernels.census").shadow_run(*args, **kwargs)
+        return importlib.import_module("nbxtensor.memory.shadow").shadow_launch(*args, **kwargs)
 
 
 def install() -> None:

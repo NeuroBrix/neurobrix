@@ -1,4 +1,4 @@
-"""In a census shadow a value parked on the host is a shadow address, never memory: a piece sliced along a token axis
+"""In a shadow (`nbxtensor.memory.shadow`) a value parked on the host is a shadow address, never memory: a piece sliced along a token axis
 takes its slice of such a value with a host `contiguous()` (`NBXTensor._contiguous_cpu`, numpy over the pointer), and
 mochi-1-preview's census at the 8 GB rung died there with a segmentation fault (2026-10-28). The shadow answers the copy
 unread, as every value read.
@@ -9,8 +9,8 @@ import subprocess
 import sys
 
 SCRIPT = r"""
-from neurobrix.kernels import census
-census.install()
+from nbxtensor.memory import shadow
+shadow.install_shadow()
 from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor; from nbxtensor.memory.allocator import DeviceAllocator
 ptr = DeviceAllocator.malloc_host_pinned(4 * 6 * 4)
 host = NBXTensor(ptr, (4, 6), (6, 1), NBXDtype.float32, "cpu", 0, pinned=True)
@@ -23,6 +23,6 @@ print("ok")
 
 
 def test_a_host_copy_of_a_shadow_value_is_answered_unread():
-    env = dict(os.environ, NBX_CENSUS="1", CUDA_VISIBLE_DEVICES="")
+    env = dict(os.environ, NBX_CENSUS="1", CUDA_VISIBLE_DEVICES="")    # NBX_CENSUS: the Metal backend's door
     r = subprocess.run([sys.executable, "-c", SCRIPT], env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0 and "ok" in r.stdout, (r.returncode, r.stderr[-800:])

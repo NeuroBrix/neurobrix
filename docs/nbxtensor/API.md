@@ -447,6 +447,14 @@ def malloc(nbytes: int, dev_idx: Optional[int]=None, pooled: bool=True)
     # `DeviceAllocator.malloc_direct` in a shadow, its signature kept whole (`pooled`
 def shadow_range(addr: int)
     # (base, nbytes) of the RECORDED shadow allocation containing `addr`, or None.
+def install_shadow(devices: int = 1) -> None
+    # Turn this process into a shadow of `devices` devices: no device memory, no launch, no value; idempotent; refused (`DevicesVisible`) while the driver sees a device
+def shadow_launch(*args, **kwargs) -> None
+    # What stands behind an autotuned kernel's `run` in a shadow: nothing (a launch observer's `shadow_run`)
+def shadow_device() -> int
+    # The device the shadow's `set_device` named last (0 before any)
+class DevicesVisible(RuntimeError)
+    # `install_shadow` was asked with a device in sight
 ```
 
 `nbxtensor.memory.slab`

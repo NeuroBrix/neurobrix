@@ -5,7 +5,7 @@ value-read answers by matching `"bool" in str(dtype)`, so on 3.11 a guard's
 step 1, and no post-loop key was harvested — the Mac measured PixArt-XL going 16 -> 33 keys
 once the name was read instead (2026-09-21). On this rack's 3.10.12 the old form matched,
 which is precisely why nothing here ever reported it: a census that silently harvests fewer
-keys looks exactly like a census.
+keys looks exactly like a census. (Moved from the engine's census with the shadow.)
 
 What this test would do if the code were wrong: it hands the reader a dtype whose `str()` is
 a bare number — the 3.11 rendering — and a real `NBXDtype`; matching on `str()` returns the
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import enum
 
-from neurobrix.kernels.census import _dtype_name
+from nbxtensor.memory.shadow import _dtype_name
 
 
 class _Renders_As_A_Number(enum.IntEnum):
