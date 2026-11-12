@@ -59,7 +59,7 @@ post-launch wait disappears or stops waiting.
 
 That declaration falls the day launches stop waiting for their kernel (speed work will want it). From then on a fence
 is mandatory: triton-ext numbers each committed command buffer (`fence()`) and reports the highest completed without
-waiting (`completed_fence()`), pages are released past it (`MetalStateFence`), and the device files state
+waiting (`completed_fence()`), pages are released past it (`memory.pages.MetalStateFence`), and the device files state
 `async_release: true`. Those two calls are not in triton-ext today; they are written as an upstream change, not yet
 proposed.
 

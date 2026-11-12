@@ -7,7 +7,7 @@ for the kernel after it (`_nbx_queue_drain()` / `_native().synchronize()`, nbxte
 no kernel is running when the host or that queue touches a page. The test that holds the declaration launches a kernel
 long enough to be caught running and reads its output from the host at the instant the launch returns: complete, or
 the declaration is false. Seen red with the post-launch synchronize() made a no-op (0 of 4096 values written). The day
-the launch stops waiting, the backend's fence (triton/state_fence.py, docs/nbxtensor/BACKENDS.md) becomes mandatory.
+the launch stops waiting, the backend's fence (nbxtensor.memory.pages.MetalStateFence, docs/nbxtensor/BACKENDS.md) becomes mandatory.
 
 Compiled branch: through MPS events (core/state/mps_fence.py). A backend without a fence is refused by name.
 """
@@ -90,13 +90,7 @@ def test_a_triton_launch_on_metal_returns_only_once_its_kernel_completed():
     assert int((got == 2.0).sum()) == _N, (
         f"{int((got == 2.0).sum())} of {_N} values written when the launch returned: the kernel was still running, so "
         f"memory.async_release: false on Apple is false — keep the post-launch wait, or release pages past the "
-        f"backend's fence (triton/state_fence.py)")
-
-
-def test_a_backend_without_a_fence_is_refused_by_name():
-    from neurobrix.triton.state_fence import MetalStateFence
-    with pytest.raises(RuntimeError, match="ZERO FALLBACK: the Apple backend has no fence"):
-        MetalStateFence(object())
+        f"backend's fence (nbxtensor.memory.pages.MetalStateFence)")
 
 
 def test_the_compiled_branch_frees_a_page_past_its_mps_event():

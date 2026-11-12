@@ -144,6 +144,8 @@ class PagePool
     # fixed pages of `tokens_per_page` positions: grants, reference counts, the fenced release queue
 class PageTable
     # one sequence's pages in order (fork, copy-on-write `writable`, `reserve`, `slots`, `free`)
+class MetalStateFence
+    # the Metal kernels' release fence (record, completed, drain(pool)) over the Apple backend handed in; one without fence() / completed_fence() refused by name
 ```
 
 `nbxtensor.memory.kv_session` — a serving session's cache between turns (pure bookkeeping)

@@ -106,6 +106,33 @@ class PagePool:
         return len(back)
 
 
+class MetalStateFence:
+    """The release fence of the Triton kernels' command queue on Metal, the day launches stop waiting for their kernel
+    (docs/nbxtensor/BACKENDS.md, "Releasing state pages on Metal"). Not in use today: the Apple device files declare
+    `memory.async_release: false`, every launch waiting for its kernel. The Apple backend module, handed in, numbers
+    each committed command buffer (`fence()`) and reports the highest completed without waiting
+    (`completed_fence()`); one without those calls is refused by name."""
+
+    def __init__(self, native):
+        if not hasattr(native, "completed_fence"):
+            raise RuntimeError(
+                "ZERO FALLBACK: the Apple backend has no fence (fence / completed_fence): state pages cannot be released "
+                "asynchronously on Metal without one — docs/nbxtensor/BACKENDS.md, 'Releasing state pages on Metal'")
+        self._native = native
+
+    def record(self) -> int:
+        """The fence past every kernel launched so far: what a page they read is released under."""
+        return int(self._native.fence())
+
+    def completed(self) -> int:
+        """The highest fence whose kernels have all completed, without waiting."""
+        return int(self._native.completed_fence())
+
+    def drain(self, pool: PagePool) -> int:
+        """Return to `pool` the pages whose fence has completed; how many came back."""
+        return pool.fence_completed(self.completed())
+
+
 class PageTable:
     """One sequence's pages: position i lives in page `pages[i // tokens_per_page]` at slot `i % tokens_per_page`."""
 

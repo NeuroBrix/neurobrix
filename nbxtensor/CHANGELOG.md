@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an attention reads put in the queries' order (the recorded layout first, the shape only without one, the square
   case refused by name), and keys or values repeated for grouped-query attention read back as their own heads. The
   engine's KV interceptor held both.
+- `memory.pages.MetalStateFence`: the release fence of the Triton kernels' queue on Metal (`record`, `completed`,
+  `drain(pool)`), for the day launches stop waiting for their kernel; not in use today. It was the engine's
+  `triton/state_fence.py`, which nothing called.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

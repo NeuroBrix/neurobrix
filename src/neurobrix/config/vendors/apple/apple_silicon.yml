@@ -105,7 +105,7 @@ memory:
   # A released page returns to the pool at once. Triton: every launch waits for its kernel and drains the allocator's
   # queue first (nbxtensor/backend/triton_ext_driver.py), so no kernel runs when the host or that queue touches a page;
   # compiled: index_copy on the one MPS stream, in enqueue order. When launches stop waiting: true here and the fence
-  # (triton/state_fence.py, core/state/mps_fence.py; docs/nbxtensor/BACKENDS.md).
+  # (nbxtensor memory/pages.py MetalStateFence, core/state/mps_fence.py; docs/nbxtensor/BACKENDS.md).
   async_release: false
 
   # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,
