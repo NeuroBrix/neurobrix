@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first turn's time to first token and load time, and its rate and time per token were wrong.
 - **A long prompt to a Llama-tokenizer model is tokenized in linear time, with the same tokens.** TinyLlama's
   12 265-token prompt: 25.7 s -> 0.03 s (4 078 tokens: 3.0 s -> 0.01 s), on every platform, in `run` and `serve`.
+- **A model with thousands of added tokens no longer stalls on a long prompt, with the same tokens.** The text was
+  scanned for every added token at every character; orpheus (28 940 added tokens), a 34 880-character prompt:
+  43.6 s -> 0.02 s, in `run` and `serve`.
 
 ## [0.6.9] - 2026-11-12
 

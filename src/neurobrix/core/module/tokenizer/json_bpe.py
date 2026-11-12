@@ -802,21 +802,32 @@ class PyTokenizer:
         self._pretok = _PreTokenizer(data.get("pre_tokenizer"))
         self._decoder = _Decoder(data.get("decoder"))
 
-        # Added tokens (override vocab id mapping for their content)
+        # Added tokens (override vocab id mapping for their content), and the character trie the split walks: one node
+        # per prefix of an added token, the tokens whose content ends at a node listed under its "" key (no character
+        # is ""), in declaration order
         self._added: List[_AddedToken] = []
+        self._added_trie: dict = {}
+        self._special_ids: set = set()
+        self._added_content_to_id: Dict[str, int] = {}
         for entry in data.get("added_tokens", []):
-            at = _AddedToken(entry)
-            self._added.append(at)
-            self._vocab.setdefault(at.content, at.id)
-            self._id_to_tok.setdefault(at.id, at.content)
-        # longest-first so overlapping specials match greedily (Rust behavior)
-        self._added_sorted = sorted(self._added, key=lambda a: len(a.content), reverse=True)
-        self._special_ids = {a.id for a in self._added if a.special}
-        self._added_content_to_id = {a.content: a.id for a in self._added}
+            self._add_token(_AddedToken(entry))
 
         # Post-processor
         self._post = data.get("post_processor")
         self._post_special = self._collect_post_special()
+
+    def _add_token(self, at: _AddedToken) -> None:
+        self._added.append(at)
+        self._vocab.setdefault(at.content, at.id)
+        self._id_to_tok.setdefault(at.id, at.content)
+        if at.special:
+            self._special_ids.add(at.id)
+        self._added_content_to_id[at.content] = at.id
+        if at.content:     # an empty content never matches
+            node = self._added_trie
+            for ch in at.content:
+                node = node.setdefault(ch, {})
+            node.setdefault("", []).append(at)
 
     def register_added_token(self, entry: dict) -> bool:
         """Register an added token post-construction (idempotent).
@@ -829,15 +840,7 @@ class PyTokenizer:
         content = entry.get("content")
         if not content or content in self._added_content_to_id:
             return False
-        at = _AddedToken(entry)
-        self._added.append(at)
-        self._vocab.setdefault(at.content, at.id)
-        self._id_to_tok.setdefault(at.id, at.content)
-        self._added_sorted = sorted(
-            self._added, key=lambda a: len(a.content), reverse=True)
-        if at.special:
-            self._special_ids.add(at.id)
-        self._added_content_to_id[at.content] = at.id
+        self._add_token(_AddedToken(entry))
         return True
 
     # -- construction ------------------------------------------------------
@@ -901,24 +904,29 @@ class PyTokenizer:
     def _split_added(self, text: str) -> List[Tuple[str, Optional[_AddedToken]]]:
         """Split ``text`` into alternating (plain, None) and ("", AddedToken)
         segments, matching added tokens verbatim, longest-first, left-to-right,
-        honoring lstrip/rstrip whitespace consumption."""
-        if not self._added_sorted:
+        honoring lstrip/rstrip whitespace consumption.
+
+        The tokens that start at a position are found by walking the added tokens' character trie from it: the cost
+        is the longest added token's length, not the number of added tokens (orpheus declares 28 940). The reference
+        (tokenizers v0.23.3, tokenizer/added_vocabulary.rs, `find_matches`) runs one leftmost-longest Aho-Corasick
+        automaton; the engine's rules differ from it on two points, kept as they were: a `single_word` token that
+        fails its boundary check gives way to the next shorter token at the same position (the reference discards
+        the match and resumes after it), and `normalized` tokens are matched on the raw text (the reference matches
+        them in a second pass on the normalized text)."""
+        if not self._added_trie:
             return [(text, None)]
         out: List[Tuple[str, Optional[_AddedToken]]] = []
         i = 0
         n = len(text)
         buf_start = 0
         while i < n:
-            matched = None
-            for at in self._added_sorted:
-                c = at.content
-                if not c:
-                    continue
-                if text.startswith(c, i):
-                    if at.single_word and not self._is_word_boundary(text, i, i + len(c)):
-                        continue
-                    matched = at
-                    break
+            node, j, ends = self._added_trie, i, []     # (end, the tokens ending there) for each prefix walked
+            while j < n and text[j] in node:
+                node, j = node[text[j]], j + 1
+                ends.append((j, node.get("", ())))
+            # the longest first, the tokens of one content in declaration order: the per-token loop's stable sort
+            matched = next((at for end, ats in reversed(ends) for at in ats
+                            if not at.single_word or self._is_word_boundary(text, i, end)), None)
             if matched is not None:
                 start = i
                 end = i + len(matched.content)
