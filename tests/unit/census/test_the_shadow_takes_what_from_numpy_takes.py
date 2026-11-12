@@ -12,6 +12,7 @@ Run: python -m pytest tests/unit/census/test_the_shadow_takes_what_from_numpy_ta
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -28,5 +29,7 @@ assert shadow == real, (shadow, real)
 
 
 def test_the_installed_shadow_has_the_real_signature():
-    r = subprocess.run([sys.executable, "-c", PROBE], capture_output=True, text=True, timeout=300)
+    # the shadow refuses a process that sees a card (`census.install`): the probe runs with none in sight, as a census does
+    r = subprocess.run([sys.executable, "-c", PROBE], capture_output=True, text=True, timeout=300,
+                       env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
