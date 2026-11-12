@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-11-12
+
+A corrective version (nbxtensor stays 0.1.4).
+
+### Fixed
+
+- **A large mixture-of-experts model served on one 32 GB card no longer runs out of memory from its second request.**
+  deepseek-moe-16b-chat served with the Triton engine on one V100-32GB answered its first request, then ran out of
+  memory on the next ones and answered none of a conversation's turns: the plan held the model whole and granted the
+  served context and the engine's freeing queue the same memory. The served context is now sized beside that queue,
+  and a model that leaves no room for both keeps its experts in host memory behind a cache on the card, as on a 16 GB
+  card: the conversation answers every turn.
+
 ## [0.6.11] - 2026-11-12
 
 A corrective version (nbxtensor stays 0.1.4): 0.6.10's package left out its certified-settings tables.

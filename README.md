@@ -60,7 +60,7 @@ ready-made containers from the hub.
 ## Install and first run
 
 NeuroBrix needs Python 3.10 or newer. The current release is
-**0.6.11** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.11)).
+**0.6.12** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.12)).
 
 It has two engines. The **Triton engine** (`--triton`) runs on
 [nbxtensor](https://github.com/NeuroBrix/nbxtensor) and Triton and needs no PyTorch. The

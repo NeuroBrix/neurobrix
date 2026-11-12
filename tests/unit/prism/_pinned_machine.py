@@ -96,6 +96,17 @@ V100_16GB = {           # the rack's `default-ff6008b7`, one V100-SXM2-16GB, 202
 }
 
 
+V100_32GB = {           # the rack's `default-5ca6057c`, one V100-SXM2-32GB (cards 2 and 3), 2026-11-12
+    "id": "scenario-v100-32gb", "vendor": "dell", "preferred_dtype": "float16",
+    "cpu": dict(V100_16GB["cpu"]),
+    "devices": [{"index": 0, "brand": "nvidia", "model": "Tesla V100-SXM2-32GB", "memory_mb": 32768,
+                 "runtime_total_mb": 32501, "runtime_context_mb": 306,   # the profile's measured runtime facts
+                 "compute_capability": "7.0", "supports_dtypes": ["float32", "float16"],
+                 "architecture": "volta", "pcie_version": "3.0"}],
+    "interconnect": {"groups": []},
+    "pcie_fallback": {"version": "3.0", "lanes": 16, "bandwidth_gbps": 32},
+}
+
 def profile(spec: dict):
     """Load `spec` through the engine's own profile loader, from a file this call writes."""
     with tempfile.TemporaryDirectory() as d:
