@@ -5,7 +5,7 @@ its own that the engine imports. On 28/10 it was not: the dtype size had four
 readers, bf16 conversions lived in three files, a second allocator lived in
 replay.py, the view rule lived in the dispatcher, and Prism re-derived the
 allocator's behaviour with coefficients. `nbxtensor/tools/scatter_scan.py`
-finds those definitions; `docs/nbxtensor/migration_list.tsv` is their reviewed
+finds those definitions; `nbxtensor/docs/history/migration_list.tsv` is their reviewed
 list, each with its destination in the library.
 
 Two rules, the same as the R33 guard's, so the debt decreases by construction:
@@ -21,7 +21,7 @@ import importlib.util
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-LIST = REPO / "docs" / "nbxtensor" / "migration_list.tsv"
+LIST = REPO / "nbxtensor" / "docs" / "history" / "migration_list.tsv"
 SCAN = REPO / "nbxtensor" / "tools" / "scatter_scan.py"
 
 
@@ -54,7 +54,7 @@ def test_the_migration_list_names_nothing_that_already_moved():
     moved = sorted(set(_listed()) - _scan())
     assert not moved, (
         "These entries moved into nbxtensor — delete their lines from "
-        "docs/nbxtensor/migration_list.tsv: "
+        "nbxtensor/docs/history/migration_list.tsv: "
         + "; ".join(f"{p}:{s}" for p, s in moved))
 
 

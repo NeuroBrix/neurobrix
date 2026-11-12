@@ -1,9 +1,9 @@
-"""Every name nbxtensor exports is in docs/nbxtensor/API.md, and every README example runs (supervisor 16:42; DESIGN
+"""Every name nbxtensor exports is in nbxtensor/docs/API.md, and every README example runs (supervisor 16:42; DESIGN
 rule 10: the exported names are the API, everything else is `_private`).
 
 A public name is a top-level name without a leading underscore of a module whose path has no private part — or, where
 the module states `__all__`, exactly those names. Read with `ast`, never imported, so it runs on any machine.
-TODAY'S UNDOCUMENTED names are listed in docs/nbxtensor/api_undocumented.txt and the list SHRINKS ONLY: a new public
+TODAY'S UNDOCUMENTED names are listed in nbxtensor/docs/api_undocumented.txt and the list SHRINKS ONLY: a new public
 name must be in API.md; a listed name that is documented, made private or removed must leave the list. Most of them
 are internals to make private (rule 10), not to document. The README half is nbxtensor/tests/test_readme.py.
 """
@@ -15,8 +15,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "nbxtensor" / "src" / "nbxtensor"
-API = REPO / "docs" / "nbxtensor" / "API.md"
-LISTED = REPO / "docs" / "nbxtensor" / "api_undocumented.txt"
+API = REPO / "nbxtensor" / "docs" / "API.md"
+LISTED = REPO / "nbxtensor" / "docs" / "api_undocumented.txt"
 
 
 def public_names(lib: Path = LIB) -> list:
@@ -48,13 +48,13 @@ def _listed() -> set:
 
 def test_no_new_public_name_without_its_api_entry():
     new = sorted(undocumented(API.read_text()) - _listed())
-    assert not new, ("public names absent from docs/nbxtensor/API.md — document them there, or make them private "
+    assert not new, ("public names absent from nbxtensor/docs/API.md — document them there, or make them private "
                      "(a leading underscore, DESIGN rule 10):\n  " + "\n  ".join(new))
 
 
 def test_the_list_of_undocumented_names_only_shrinks():
     gone = sorted(_listed() - undocumented(API.read_text()))
-    assert not gone, ("documented, private or removed now — delete them from docs/nbxtensor/api_undocumented.txt:\n  "
+    assert not gone, ("documented, private or removed now — delete them from nbxtensor/docs/api_undocumented.txt:\n  "
                       + "\n  ".join(gone))
 
 

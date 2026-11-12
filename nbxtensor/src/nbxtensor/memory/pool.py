@@ -1,6 +1,6 @@
 """The caching pool of the device allocator: its segments, their blocks, the free index — and the same rules replayed
 as a pure function of an allocation sequence (`simulate`), which is how a planner prices what the allocator holds
-beyond the tensors alive (M3, docs/nbxtensor/COST.md section 2: the 1.3 factor it replaces).
+beyond the tensors alive (M3, nbxtensor/docs/design/COST.md section 2: the 1.3 factor it replaces).
 
 Every driver allocation the pool takes is a SEGMENT made of BLOCKS chained in address order (the method of torch's
 caching allocator, S4a 2026-10-27), in one of two SIZE CLASSES: a request of at most `POOL_SMALL_BYTES` is served only

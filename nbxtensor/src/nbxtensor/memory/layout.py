@@ -1,7 +1,7 @@
 """Where tensors placed one after another in one block land, and how many bytes the block takes: the layout every arena
 of the library allocates (`memory_pool.ComponentArena`, `memory_pool.HostPinnedArena`, an expert store's slot arena),
 and the very figure a planner prices an arena at — one function, so the plan and the allocation cannot differ (M3,
-docs/nbxtensor/COST.md section 2). Pure arithmetic: no device, torch-free, numpy-free.
+nbxtensor/docs/design/COST.md section 2). Pure arithmetic: no device, torch-free, numpy-free.
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""The backend conformance suite (docs/nbxtensor/BACKENDS.md): what any nbxtensor backend must do, checked against a
+"""The backend conformance suite (nbxtensor/docs/BACKENDS.md): what any nbxtensor backend must do, checked against a
 numpy oracle — allocation and copies, one kernel of each family, views and strides, a README example. Parametrized by
 backend: the backend in force on this machine runs; the others are skipped with the reason. It imports the library
 only: a backend is proven without the application around it.

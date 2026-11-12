@@ -132,7 +132,7 @@ memory:
   # after it (_nbx_queue_drain() / _native().synchronize(), nbxtensor/backend/triton_ext_driver.py), so no kernel runs
   # when a page is touched; held by test_a_triton_launch_on_metal_returns_only_once_its_kernel_completed. Compiled
   # branch: every write is index_copy on the one MPS stream, in enqueue order. When launches stop waiting: true here and
-  # the fence (nbxtensor memory/pages.py MetalStateFence, core/state/mps_fence.py; docs/nbxtensor/BACKENDS.md).
+  # the fence (nbxtensor memory/pages.py MetalStateFence, core/state/mps_fence.py; nbxtensor/docs/BACKENDS.md).
   async_release: false
   # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,
   # kernels/nbx_tensor.DeviceAllocator._pool_fit_slack; Prism's piece-change price reads the same value).

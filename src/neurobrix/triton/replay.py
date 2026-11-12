@@ -6,7 +6,7 @@ cache is written; there is no plan serialiser and no loader). Measured on an
 M4 Pro, 120 tokens, byte-identical output: **+7.6% at a short prompt, 8.0x at
 ~480 tokens of context**. The cost is context-dependent; a single number
 misstates it. Full record and the reasoning:
-docs/reference/replay-recording-in-a-one-shot-request.md
+nbxtensor/docs/replay-recording-in-a-one-shot-request.md
 
 Removes the per-launch Python band (wrapper dtype protocol, arg
 resolvers, allocation, autotune lookup, triton's Python launcher —

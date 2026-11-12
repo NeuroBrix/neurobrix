@@ -1306,7 +1306,7 @@ def im2col_wrapper(x, kernel_size, dilation, padding, stride):
 
 
 # ---------------------------------------------------------------------------
-# The cost each convolution path declares (M3, docs/nbxtensor/COST.md): what it allocates, in its order, read from the
+# The cost each convolution path declares (M3, nbxtensor/docs/design/COST.md): what it allocates, in its order, read from the
 # same decisions the wrappers take (`launch_keys.conv_dtypes`, `conv2d_route`, `matrix_unit_conv_operands`, the strided read
 # rule) — a planner prices the convolution by it instead of re-deriving it. Operands are `_cost.Spec`s; a returned
 # buffer is the op's output.

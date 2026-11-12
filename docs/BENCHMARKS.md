@@ -13,7 +13,7 @@ time is set mostly by the storage the files come from, so it is given apart, in 
 ## Method
 
 - **One code, two engines.** Every model runs from the same container with the same request on both NeuroBrix engines: the
-  **PyTorch engine** (`compiled`: ATen, cuDNN, cuBLAS) and the **Triton engine** (NeuroBrix's own kernels, no PyTorch at
+  **PyTorch engine** (`compiled`: ATen, cuDNN, cuBLAS) and the **Triton engine** (on nbxtensor's kernels, no PyTorch at
   run time). The ratio below is PyTorch time / Triton time: above 1, the Triton engine is faster.
 - **Through the entry point**, exactly as a user runs it: `python -m neurobrix run --model <model> <request>`; the PyTorch
   engine is the default when PyTorch is installed, `--triton` selects the Triton engine. Every command is listed below.

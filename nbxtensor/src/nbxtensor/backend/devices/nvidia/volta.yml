@@ -1,4 +1,4 @@
-# The library's half of nvidia/volta.yml: the keys nbxtensor reads (docs/nbxtensor/device_keys.txt),
+# The library's half of nvidia/volta.yml: the keys nbxtensor reads (nbxtensor/docs/device_keys.txt),
 # moved with their sources by tools/split_vendor_files.py. NeuroBrix's half stays in
 # src/neurobrix/config/vendors/nvidia/volta.yml; the engine reads the two merged.
 
@@ -63,7 +63,7 @@ flash:
 
 # The matrix unit this arch HAS and Triton 3.8 does not generate: below sm_80 `tl.dot` lowers to scalar FMA
 # (triton-lang/triton#5066). Declared here, the kernels built for that unit run instead
-# (kernels/ops/mma_m8n8k4.py; method in docs/reference/tensor-cores-through-linear-layouts.md):
+# (kernels/ops/mma_m8n8k4.py; method in nbxtensor/docs/tensor-cores-through-linear-layouts.md):
 # mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 (PTX ISA, sm_70; fragment from CUTLASS mma_traits_sm70.hpp).
 # The flash tiles are MEASURED on V100-SXM2 at 1290 MHz, per head dim, the best of six (64|128 query rows x 32|64
 # keys per step x 4|8 warps) at T 79 200 D 96, T 32 760 D 128, T 16 384 D 64 (2026-10-07, flash_tiles4): D 64 at

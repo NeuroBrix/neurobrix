@@ -1,11 +1,11 @@
-"""The device-file template a new backend starts from (docs/nbxtensor/device_file_template.yml, BACKENDS.md section 4)
-names every key a library reader reads (docs/nbxtensor/device_keys.txt): a key the census gains is a key the template
+"""The device-file template a new backend starts from (nbxtensor/docs/device_file_template.yml, BACKENDS.md section 4)
+names every key a library reader reads (nbxtensor/docs/device_keys.txt): a key the census gains is a key the template
 gains, so a new device is never written without one the kernels will ask."""
 from pathlib import Path
 
 import yaml
 
-DOCS = Path(__file__).resolve().parents[3] / "docs" / "nbxtensor"
+DOCS = Path(__file__).resolve().parents[3] / "nbxtensor" / "docs"
 
 
 def test_every_census_key_is_in_the_template():

@@ -1,4 +1,4 @@
-"""Prism's walk of a component replayed as the Triton allocator serves it (M3, docs/nbxtensor/COST.md section 2): its
+"""Prism's walk of a component replayed as the Triton allocator serves it (M3, nbxtensor/docs/design/COST.md section 2): its
 allocations and frees, the hot loop's deferred queue holding each dead graph tensor until the queue reaches its cliff
 or its count, through the allocator's pool (`nbxtensor.memory.pool.simulate`) — `ActivationProfile.held_peak_bytes`,
 what `--explain-plan` states beside each component. Measured 2026-10-29: Kokoro's decoder walks a 34 MB live peak and

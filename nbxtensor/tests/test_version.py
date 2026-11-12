@@ -1,5 +1,5 @@
 """The library carries one version number: `nbxtensor/pyproject.toml` and `nbxtensor.__version__` state the same, and
-it follows the numbering of docs/nbxtensor/DESIGN.md section 7 — plain MAJOR.MINOR.PATCH, no pre-release label.
+it follows the numbering of nbxtensor/docs/design/DESIGN.md section 7 — plain MAJOR.MINOR.PATCH, no pre-release label.
 
 What this test would do if the code were wrong: a version bumped in one place only (red), a label such as "0.0.1a1"
 or "0.0.1.dev0" (red)."""

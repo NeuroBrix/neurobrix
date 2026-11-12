@@ -7,7 +7,7 @@ serial stream (`backend/metal_dispatch.py`), so a later one runs after the kerne
 writes through a copy that flushes that stream first. (Until 2026-11-12 it was true because every launch waited for
 the device; that wait is gone.) The test that holds the declaration rewrites from the host, at once, a page a kernel
 long enough to be caught running is still reading: the kernel must read the old contents, or the declaration is false
-and the backend's fence (nbxtensor.memory.pages.MetalStateFence, docs/nbxtensor/BACKENDS.md) becomes mandatory.
+and the backend's fence (nbxtensor.memory.pages.MetalStateFence, nbxtensor/docs/BACKENDS.md) becomes mandatory.
 
 Compiled branch: through MPS events (core/state/mps_fence.py). A backend without a fence is refused by name.
 """

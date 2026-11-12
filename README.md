@@ -80,8 +80,8 @@ If NeuroBrix runs a model for you, a ⭐ helps other people find it.
   denoising, encoder-decoder, and others).
 - **Two independent compute branches over the same container.** The default branch runs
   the graph through PyTorch (ATen, with cuDNN and cuBLAS on NVIDIA GPUs). The Triton branch
-  (`--triton`) runs the same graph through NeuroBrix's own Triton kernels and its own tensor
-  type instead of PyTorch's operator library. The branches share the container and the
+  (`--triton`) runs the same graph through nbxtensor, NeuroBrix's tensor library (its Triton kernels
+  and its tensor type), instead of PyTorch's operator library. The branches share the container and the
   placement plan, not compute code, so one can be checked against the other.
 - **Placement is computed, not configured.** NeuroBrix detects the machine's devices and
   memory and plans where each component runs: on one GPU, across several GPUs, streamed
@@ -382,7 +382,7 @@ neurobrix upscale --model xinntao/Real-ESRGAN-RealESRGAN_x4plus --input photo.pn
 | Flag | Branch | Use |
 |---|---|---|
 | `--compiled` | PyTorch | Normal use; the default where PyTorch is installed. |
-| `--triton` | Triton | The engine's own Triton kernels instead of PyTorch's operator library; the default where PyTorch is not installed. |
+| `--triton` | Triton | nbxtensor's Triton kernels instead of PyTorch's operator library; the default where PyTorch is not installed. |
 | `--sequential` | PyTorch, one operation at a time | Debugging. |
 | `--triton-sequential` | Triton, one operation at a time | Debugging. |
 
@@ -409,7 +409,7 @@ scripting.
 
 ### Certify your GPU and share it
 
-The Triton engine's kernel settings are certified per launch key (the kernel, its shape class
+nbxtensor's kernel settings, which the Triton engine runs, are certified per launch key (the kernel, its shape class
 and dtypes) and per GPU class, against a float64 oracle, and shipped. A key your GPU class has
 no certificate for is swept at run time and kept on your machine; certifying it makes it
 permanent, and sharing it means nobody with your GPU sweeps it again. The four steps, with the
@@ -453,6 +453,7 @@ not filed as public issues.
   [GitLab](https://gitlab.com/neurobrix/neurobrix)
 - Model hub: [neurobrix.org/models](https://neurobrix.org/models)
 - Documentation: [docs.neurobrix.org](https://docs.neurobrix.org) and the [docs/](./docs) directory
+- The tensor library (nbxtensor) and its own documentation: [github.com/NeuroBrix/nbxtensor/tree/main/docs](https://github.com/NeuroBrix/nbxtensor/tree/main/docs)
 - Building applications and coding agents: [docs/BUILD_WITH_AGENTS.md](./docs/BUILD_WITH_AGENTS.md)
 - Roadmap: [docs/roadmap.md](./docs/roadmap.md)
 - Changes: [CHANGELOG.md](./CHANGELOG.md)

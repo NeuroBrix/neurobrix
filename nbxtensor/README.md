@@ -106,17 +106,17 @@ the keys (`pip install neurobrix`), with these commands (run as written on a cle
    every class certified is a class nobody autotunes again.
 
 
-**Links:** [API reference](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/API.md) ·
+**Links:** [API reference](https://github.com/NeuroBrix/nbxtensor/blob/main/docs/API.md) ·
 [release notes](https://github.com/NeuroBrix/nbxtensor/blob/main/CHANGELOG.md) ·
 [NeuroBrix](https://github.com/NeuroBrix/neurobrix), the inference engine whose Triton engine is nbxtensor's first
 client; nbxtensor's source lives in its `nbxtensor/` directory and is exported here.
 
 ## Status
 
-Every area below is in the library, and every public name is documented in [`docs/nbxtensor/API.md`](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/API.md) (the list of
+Every area below is in the library, and every public name is documented in [`docs/API.md`](https://github.com/NeuroBrix/nbxtensor/blob/main/docs/API.md) (the list of
 undocumented names is empty and a test keeps it so). This README documents what is in the library TODAY; every example below is executed by
 `nbxtensor/tests/test_readme.py`, so an example that stops working fails a test. The target API is
-`docs/nbxtensor/API.md`.
+`docs/API.md`.
 
 | area | in the library | what it holds |
 |---|---|---|
@@ -422,7 +422,7 @@ memory.set_limit(None)           # the physical card again
 
 Some services are still passed through `nbxtensor.host` while the boundary is cleaned before 0.0.1 (the device
 description, the operand decisions of the matrix unit and attention, and where a backend build may live).
-`docs/nbxtensor/API.md` section 11 lists each one, its fate (generic in the library, or back in the application) and
+`docs/API.md` section 11 lists each one, its fate (generic in the library, or back in the application) and
 its state.
 
 An application may also watch every kernel launch without running it — a dry run, to list the kernel keys a model
@@ -475,7 +475,7 @@ tuning screens, every value with its source.
 
 ## Backends
 
-CUDA (NVIDIA), HIP (AMD), Level Zero (Intel) and Apple Metal through triton-ext; what a new backend provides is [`docs/nbxtensor/BACKENDS.md`](https://github.com/NeuroBrix/neurobrix/blob/main/docs/nbxtensor/BACKENDS.md), and
+CUDA (NVIDIA), HIP (AMD), Level Zero (Intel) and Apple Metal through triton-ext; what a new backend provides is [`docs/BACKENDS.md`](https://github.com/NeuroBrix/nbxtensor/blob/main/docs/BACKENDS.md), and
 `tests/nbxtensor_backend_conformance` is what it must pass. The backend in force is public API:
 `nbxtensor.backend.runtime.gpu_backend()` names it ("cuda", "hip", "xpu", "metal"), `gpu_runtime()` is its runtime,
 `backend_table()` its entry points, `device_memory()` its memory primitives, and `set_device(tensor)` binds the

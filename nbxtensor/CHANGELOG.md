@@ -99,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocator's out-of-memory reclaimer while the batch lives. The engine's two hot loops held this queue themselves.
 
 ## [0.1.4] - 2026-11-12
+- The library's documentation lives in its own `docs/` (the API reference, the backends' contract, the device keys;
+  `docs/design/` the allocator, cost and design notes; `docs/history/` the inventory and the migration record) and
+  the three tensor reference pages (tensor cores through linear layouts, the certified-autotune method, recording a
+  replay in a one-shot request) with the Triton CPU install page. The README links them in this repository.
 
 ### Added
 - `ops.oracles.attention_fp64`: the attention family's float64 reference on query-row windows (moved from the

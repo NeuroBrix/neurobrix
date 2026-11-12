@@ -108,7 +108,7 @@ class PagePool:
 
 class MetalStateFence:
     """The release fence of the Triton kernels' command queue on Metal, the day launches stop waiting for their kernel
-    (docs/nbxtensor/BACKENDS.md, "Releasing state pages on Metal"). Not in use today: the Apple device files declare
+    (nbxtensor/docs/BACKENDS.md, "Releasing state pages on Metal"). Not in use today: the Apple device files declare
     `memory.async_release: false`, every launch waiting for its kernel. The Apple backend module, handed in, numbers
     each committed command buffer (`fence()`) and reports the highest completed without waiting
     (`completed_fence()`); one without those calls is refused by name."""
@@ -117,7 +117,7 @@ class MetalStateFence:
         if not hasattr(native, "completed_fence"):
             raise RuntimeError(
                 "ZERO FALLBACK: the Apple backend has no fence (fence / completed_fence): state pages cannot be released "
-                "asynchronously on Metal without one — docs/nbxtensor/BACKENDS.md, 'Releasing state pages on Metal'")
+                "asynchronously on Metal without one — nbxtensor/docs/BACKENDS.md, 'Releasing state pages on Metal'")
         self._native = native
 
     def record(self) -> int:

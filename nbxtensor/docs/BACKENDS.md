@@ -115,7 +115,7 @@ The facts the kernels are tiled by — shared memory and registers per block, wa
 dispatch limits, the autotune's screen tolerances and buckets, and the identification a device is found by
 (`compute_capability`, `compute_capability_matches`, `architecture`) — are one YAML file per device,
 `backend/devices/<vendor>/<name>.yml`, read by `backend/device_files.py`. The keys a file must hold are the device-key
-census, `docs/nbxtensor/device_keys.txt`. Each value carries its source in a comment: a vendor's specification, or a
+census, `nbxtensor/docs/device_keys.txt`. Each value carries its source in a comment: a vendor's specification, or a
 measurement on the device (never a neighbouring part's value).
 
 What the driver can answer is asked of it at start instead (`max_shared_memory_per_block`, Metal's
@@ -158,7 +158,7 @@ the conformance suite (`tests/nbxtensor_backend_conformance`).
 When a card is present and its runtime or Triton backend is missing, the refusal names what to install, with the
 vendor's commands (`backend.install_help`; `python -m nbxtensor doctor` prints the same).
 
-A new device starts from `docs/nbxtensor/device_file_template.yml`: every key the library reads, empty, each to be
+A new device starts from `nbxtensor/docs/device_file_template.yml`: every key the library reads, empty, each to be
 filled from the device's own source.
 
 ## What exists, what is written, what is not supported

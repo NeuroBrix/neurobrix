@@ -3,7 +3,7 @@
 Triton >= 3.3 lowers `tl.dot` to scalar FMA below sm_80 (triton-lang/triton#5066), so an arch whose profile
 declares `matrix_unit.shape: m8n8k4` gets its tensor cores from here: our own Gluon kernels issue
 `mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32` through `inline_asm_elementwise`, with the operands placed in
-registers by linear layouts. Method and proofs: docs/reference/tensor-cores-through-linear-layouts.md.
+registers by linear layouts. Method and proofs: nbxtensor/docs/tensor-cores-through-linear-layouts.md.
 
 The fragment (CUTLASS cute/atom/mma_traits_sm70.hpp, SM70_8x8x4_F32F16F16F32_TN): lane = a0 + 2 a1 + 4 q0 + 8 q1
 + 16 b, thread t = a0 + 2 a1 + 4 b of quadpair q holds A row t and B column t (k = 0..3), and accumulator

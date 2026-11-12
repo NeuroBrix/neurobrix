@@ -857,7 +857,7 @@ def _resolve_driver() -> Driver:
     # Any other backend has no launch driver here yet: refused by name, never handed the CUDA one (an AMD card failed
     # inside libcuda at its first launch, 2026-10-30). A new backend implements the driver interface (BACKENDS.md).
     raise RuntimeError(f"nbxtensor launcher: no launch driver for the {name!r} backend — the library launches on cuda, "
-                       f"hip, xpu and metal; a backend implements the launcher's Driver interface (docs/nbxtensor/BACKENDS.md)")
+                       f"hip, xpu and metal; a backend implements the launcher's Driver interface (nbxtensor/docs/BACKENDS.md)")
 
 
 def _unsupported(kind):

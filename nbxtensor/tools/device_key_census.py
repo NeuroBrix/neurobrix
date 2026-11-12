@@ -11,7 +11,7 @@ Three passes, unioned:
 - dynamic: the keys the library actually read while a test run went through it (`device_key_trace.py`).
 
     python3 nbxtensor/tools/device_key_census.py --vendors src/neurobrix/config/vendors --trace <trace file> \\
-        --out docs/nbxtensor/device_keys.txt
+        --out nbxtensor/docs/device_keys.txt
 """
 from __future__ import annotations
 

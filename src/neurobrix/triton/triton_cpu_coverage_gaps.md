@@ -21,7 +21,7 @@ and escalate.
 | [triton-cpu #229](https://github.com/triton-lang/triton-cpu/issues/229) | AVX512-BF16 matmul performance / tuning | bf16 matmul perf (correctness OK, slow) | accepted — perf-only, no gate |
 | [triton-cpu #58](https://github.com/triton-lang/triton-cpu/issues/58) | Round-to-zero fp32 conversion not supported | very narrow surface, no NeuroBrix path hits it today | none |
 | [triton-cpu #144](https://github.com/triton-lang/triton-cpu/issues/144) | `LLVM Translation failed for builtin.unrealized_conversion_cast` on mixed precision | regressions on mixed-precision ops adjacent to #147 | covered by `TRITON_CPU_FP16_UPSTREAM_BLOCKED` |
-| [triton-cpu #233](https://github.com/triton-lang/triton-cpu/issues/233) | torch 2.6+ build incompatibility on the build path | install gate only (manifest in `docs/triton_cpu_install.md`) | none — install-time |
+| [triton-cpu #233](https://github.com/triton-lang/triton-cpu/issues/233) | torch 2.6+ build incompatibility on the build path | install gate only (manifest in `nbxtensor/docs/triton_cpu_install.md`) | none — install-time |
 
 ## Supported NeuroBrix paths on triton-cpu today
 
@@ -61,7 +61,7 @@ When a new triton-cpu release lands:
    - Edit `cpu_backend.py` and flip
      `TRITON_CPU_FP16_UPSTREAM_BLOCKED = False` and (if #222 also
      closed) `TRITON_CPU_MASKED_BLOCKPTR_GEMM_BLOCKED = False`.
-   - Re-pin the minimum triton-cpu version in `docs/triton_cpu_install.md`.
+   - Re-pin the minimum triton-cpu version in `nbxtensor/docs/triton_cpu_install.md`.
    - Close `P-TRITON-CPU-FP16-UPSTREAM-FOLLOWUP`.
 4. If failing, leave markers in place and update the "Active blockers"
    table above with the new upstream issue ID if the failure mode

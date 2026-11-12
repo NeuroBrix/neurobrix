@@ -7,7 +7,7 @@ cost. NeuroBrix's Triton engine is its first client; it imports this package
 and never re-implements what lives here.
 
 What is in the library today, area by area, is the README's status table;
-the versions are numbered as `docs/nbxtensor/DESIGN.md` section 7 says (the
+the versions are numbered as `nbxtensor/docs/design/DESIGN.md` section 7 says (the
 first publication is 0.0.1, each fix after it increments, the Rust rewrite is
 2.0.0).
 """

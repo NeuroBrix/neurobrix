@@ -5,7 +5,7 @@ kernels do. Everything here is plain data (R-NBXT 11): an operand is a `Spec(sha
 `Cost` of `Buffer`s with integer lifetimes, byte counts and flop counts. The declarations read the same layout rules
 the ops execute (`nbxtensor.shape`) and the same widths (`nbxtensor.dtype`).
 
-Prototype scope (docs/nbxtensor/COST.md): the element-wise, reduction and normalisation families, mirroring today's
+Prototype scope (nbxtensor/docs/design/COST.md): the element-wise, reduction and normalisation families, mirroring today's
 wrappers (NeuroBrix `kernels/wrappers.py`) line by line, each declaration citing the allocation it mirrors. Where a
 wrapper takes a decision the library does not hold yet (the binary ops' result dtype, the DtypeEngine's output
 dtype), the caller passes it in; when the wrappers move into the library (M2/M3), `cost` reads the same function the

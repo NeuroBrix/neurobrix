@@ -1609,7 +1609,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
 
 
 # ---------------------------------------------------------------------------
-# The cost the math attention declares (M3, docs/nbxtensor/COST.md): its buffers in its order, read from the decisions
+# The cost the math attention declares (M3, nbxtensor/docs/design/COST.md): its buffers in its order, read from the decisions
 # it takes (the GEMM family's `linalg_wrappers.bmm_cost`, the element-wise and softmax declarations of `_cost`). A
 # causal bias is the wrapper's cache (`_get_causal_bias`, built once per shape and kept): not this call's.
 # ---------------------------------------------------------------------------

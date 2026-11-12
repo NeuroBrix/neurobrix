@@ -8,7 +8,7 @@ judged against an fp64 oracle computed in-test AND against the FMA path the oper
 cases are shapes of the census (fp32 x fp16 and fp32 x fp32 addmm, fp32 baddbmm) and the range edges (beyond fp16's
 65504, far below its smallest normal, rows of 1e6 next to rows of 1e-6, elements over 24 decades, zero rows), the
 error judged per row against that row's own magnitude. Removing the lo term fails every case (seen failing:
-docs/reference/tensor-cores-through-linear-layouts.md). Skipped where the profile declares no split.
+nbxtensor/docs/tensor-cores-through-linear-layouts.md). Skipped where the profile declares no split.
 
   PYTHONPATH=src python3 -m pytest tests/unit/kernels/test_gemm_fp32_split.py -v
 """

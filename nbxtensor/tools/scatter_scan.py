@@ -16,7 +16,7 @@ semantics, plus the whole modules the design moves into the library.
     python3 nbxtensor/tools/scatter_scan.py            # markdown table
     python3 nbxtensor/tools/scatter_scan.py --tsv      # the migration list format
 
-The migration list (docs/nbxtensor/migration_list.tsv) is the committed output
+The migration list (nbxtensor/docs/history/migration_list.tsv) is the committed output
 of `--tsv`, reviewed by hand. The guard test compares the two: a definition
 found but not listed fails (the scatter grew), a definition listed but no
 longer found fails (it moved: delete its line).
@@ -79,7 +79,7 @@ SEMANTIC = re.compile(
     re.IGNORECASE,
 )
 
-# Whole modules the design moves into the library (docs/nbxtensor/DESIGN.md §3).
+# Whole modules the design moves into the library (nbxtensor/docs/design/DESIGN.md §3).
 MODULES_TO_LIBRARY = {
     "kernels/nbx_tensor.py": "tensor + memory + backend (split in M2)",
     "kernels/metal_device.py": "memory/metal + backend/metal",

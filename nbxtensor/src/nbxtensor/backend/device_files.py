@@ -3,7 +3,7 @@
 
 What a kernel reads of a device lives here: its identification (`compute_capability`, `compute_capability_matches`,
 `architecture`), the tiles, the shared memory and registers, the warp size, the matrix unit, the dispatch limits, the
-autotune's screen tolerances and buckets. The list is the device-key census (`docs/nbxtensor/device_keys.txt`).
+autotune's screen tolerances and buckets. The list is the device-key census (`nbxtensor/docs/device_keys.txt`).
 
 An application may keep its own facts about the same devices in its own files (NeuroBrix: Prism's budgets and measured
 rates, in `config/vendors/<vendor>/<name>.yml`) and give the library their directory (`nbxtensor.host`,

@@ -1,4 +1,4 @@
-"""A vendor file is split once, on the device-key census (docs/nbxtensor/device_keys.txt; tools/split_vendor_files.py):
+"""A vendor file is split once, on the device-key census (nbxtensor/docs/device_keys.txt; tools/split_vendor_files.py):
 every key the library reads lives in the library's device file, the engine's vendor file keeps the rest, and no key
 is in both. Checked for every vendor the library already describes — a vendor not yet split names itself here."""
 from pathlib import Path
@@ -9,7 +9,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "nbxtensor" / "src" / "nbxtensor" / "backend" / "devices"
 ENG = REPO / "src" / "neurobrix" / "config" / "vendors"
-KEYS = set((REPO / "docs" / "nbxtensor" / "device_keys.txt").read_text().split())
+KEYS = set((REPO / "nbxtensor" / "docs" / "device_keys.txt").read_text().split())
 SPLIT = sorted(p.name for p in LIB.iterdir() if p.is_dir())
 
 

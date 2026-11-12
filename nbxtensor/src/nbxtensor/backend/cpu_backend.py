@@ -136,7 +136,7 @@ def ensure_triton_cpu_or_raise() -> None:
         "(prerequisites: LLVM, CMake, Ninja, C++17 compiler. "
         "Expect ~30 min build + ~15 GB peak disk.)\n"
         "\n"
-        "See docs/triton_cpu_install.md for full instructions and "
+        "See nbxtensor/docs/triton_cpu_install.md for full instructions and "
         "verification command.\n"
         "\n"
         "Alternative (no extra install required): run with --compiled. "
@@ -163,5 +163,5 @@ def get_install_instructions() -> str:
     message so it cannot drift between sites."""
     return (
         "pip install triton-cpu   "
-        "(see docs/triton_cpu_install.md for build-from-source)"
+        "(see nbxtensor/docs/triton_cpu_install.md for build-from-source)"
     )
