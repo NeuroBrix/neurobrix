@@ -54,6 +54,21 @@ assert c.shape == (256, 128) and np.allclose(c.numpy().astype(np.float32), ref, 
   buffer before the first run, and every kernel declares its cost (outputs, workspace, scratch, bytes moved, flops) so a
   planner prices a model before running it. Capture and replay of a repeated sequence of launches, verified byte-equal.
 
+## The home of every tensor mechanism
+
+**nbxtensor is the ecosystem's torch** (owner rule, 2026-11-12). Everything that touches tensors or follows torch's
+logic (tensors, devices, memory, arenas, copies, compute kernels, replay, the tensor side of the experts store) lives in
+nbxtensor, never in the engine. nbxtensor is a library with its own role: it replaces torch, and the engine is one of
+its users, like any other. The engine keeps policy: Prism, model families, flows, the CLI, serving, which expert sits in
+which slot and how many slots Prism grants. Every project of the ecosystem is separate (the engine, nbxtensor,
+NBXGrammar, NBX Code, the container builder, the hub), and a function is filed in the project it belongs to. Engine code
+that does tensor work is a defect as severe as a wrong answer: its fix ships at once, never held back to be grouped into
+a release. The PyTorch engine computes with torch, its own library; that is not a breach.
+
+For a contributor: a tensor helper is never added to the engine "for now"; the library is improved instead. A tensor
+operation, a copy, a memory fact or a kernel the engine needs and nbxtensor lacks is added to nbxtensor, with its test,
+and the engine calls it. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Certify your own hardware
 
 A kernel setting is certified per launch key (the kernel, its shape class and dtypes) and per GPU class. The keys a GPU

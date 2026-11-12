@@ -105,6 +105,26 @@ Every contribution must respect the three ZERO principles:
 | **ZERO FALLBACK** | If data is missing, the system must crash with a clear error. Never provide silent defaults. |
 | **ZERO SEMANTIC** | The runtime must never contain domain knowledge. It does not know what "an image" or "a token" is. |
 
+### Tensor work lives in nbxtensor
+
+**nbxtensor is the ecosystem's torch** (owner rule, 2026-11-12). Everything that touches tensors or follows torch's
+logic (tensors, devices, memory, arenas, copies, compute kernels, replay, the tensor side of the experts store) lives in
+nbxtensor, never in the engine. nbxtensor is a library with its own role: it replaces torch, and the engine is one of
+its users, like any other. The engine keeps policy: Prism, model families, flows, the CLI, serving, which expert sits in
+which slot and how many slots Prism grants. Every project of the ecosystem is separate (the engine, nbxtensor,
+NBXGrammar, NBX Code, the container builder, the hub), and a function is filed in the project it belongs to. Engine code
+that does tensor work is a defect as severe as a wrong answer: its fix ships at once, never held back to be grouped into
+a release. The PyTorch engine computes with torch, its own library; that is not a breach.
+
+For a contributor: a tensor helper is never added to the engine "for now"; the library is improved instead. A tensor
+operation, a copy, a memory fact or a kernel the engine needs and nbxtensor lacks is added to nbxtensor, with its test,
+and the engine calls it.
+
+The brick ratchet enforces it: `tests/unit/brick_ratchet/test_the_brick_ratchet_refuses_what_gets_worse.py`
+(`tools/brick_ratchet.py`, its patterns in `tools/brick_ratchet.json` under `tensor_logic`) counts the tensor mechanisms
+each engine file holds. A file's count only goes down, a file with none gains none, and the engine's core imports none
+of the library's tensor mechanics directly. `python tools/brick_ratchet.py --tensor-hits` lists them.
+
 ### Code Hygiene
 
 - **Delete unused code immediately.** No dead functions, no unused imports, no orphan files.
