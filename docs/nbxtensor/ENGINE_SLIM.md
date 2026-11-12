@@ -378,6 +378,14 @@ Code lines measured: 83 465 (main 27edb57e) to 83 035, -430; the engine's tensor
 | nbxtensor ops/moe_fused.py | +341 (library) | the op |
 | nbxtensor ops/moe_wrappers.py, memory/expert_slots.py | +51, +4 (library) | the int4 band's launches; the store's three default answers |
 
+0.6.11 (2026-11-12): a census file the package should carry is never read as an empty table — 0.6.10 shipped
+without its census tables and Prism planned as if no model had a certified chunk, in silence. Policy, so in the
+engine: which census a hardware has (`census_table.census_declared`, read from the certified directory the package
+ships), the named refusal of a missing file (`_required`), and Prism's three cases (no census for this hardware or
+memory class: said; a certified hardware with no census file at all: a broken install, refused by name). 83 465 to
+83 479, +14 (measured): kernels/census_table.py +9, core/prism/prefill_chunk.py +5. On main (after the fused-MoE move): 82 831 to 82 845,
++14 (measured).
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

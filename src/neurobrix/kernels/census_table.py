@@ -64,10 +64,28 @@ def dtypes_of(key_repr_text: str) -> str:
     return ",".join(x for x in tup if isinstance(x, str))
 
 
-def read(path: Path) -> List[Dict]:
-    """Every row of a table file; a missing file is an empty table, an unreadable line an error."""
+def _required(path: Path) -> Path:
+    """`path`, or FileNotFoundError naming it — never read as an empty table (0.6.10 shipped without its tables and
+    Prism planned as if no model had a chunk record, in silence)."""
     if not path.exists():
-        return []
+        raise FileNotFoundError(f"census file missing: {path} — the package carries every census table of the "
+                                 f"hardware it names; a missing one is a broken install (reinstall neurobrix) or a "
+                                 f"census not taken yet (python tools/derived_census.py table)")
+    return path
+
+
+def census_declared(vendor: str, profile: str) -> bool:
+    """Whether this hardware has a census at all, read from what the package ships whatever its census files: a
+    certified directory (`config/autotune/<vendor>/<profile>/`) is certified FROM a census, so its hardware has one.
+    A profile without one is a fact, said by the caller; a declared one with a census file missing is a broken install
+    (FileNotFoundError). Read from the census directory itself, 0.6.10's wheel — shipped without its census files,
+    hence without that directory — would again have read as "no census for this hardware"."""
+    return (ROOT.parent / "autotune" / vendor / profile).is_dir()
+
+
+def read(path: Path) -> List[Dict]:
+    """Every row of a table file; a missing file is FileNotFoundError, an unreadable line an error."""
+    _required(path)
     rows = []
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
@@ -176,7 +194,7 @@ def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int
                           f"knowledge that the model forms none (no keyless op placed); its rows in {path.name} "
                           f"are kept")
     with locked(path):
-        old = read(path)
+        old = read(path) if path.exists() else []          # the writer creating the table's first rows
         kept = [r for r in old if r["model"] not in {model, *former}]
         write(path, kept + rows)
     return len(old) - len(kept), len(rows)
@@ -211,10 +229,8 @@ def chunks_path(path: Path) -> Path:
 
 
 def read_chunks(path: Path) -> Dict[Tuple[str, str], Dict]:
-    """{(model, mode): its chunk record} of the table at `path`; a missing file is none."""
-    cp = chunks_path(path)
-    if not cp.exists():
-        return {}
+    """{(model, mode): its chunk record} of the table at `path`; a missing file is FileNotFoundError."""
+    cp = _required(chunks_path(path))
     out = {}
     for n, line in enumerate(cp.read_text(encoding="utf-8").splitlines(), 1):
         if line.strip():
@@ -227,10 +243,8 @@ def read_chunks(path: Path) -> Dict[Tuple[str, str], Dict]:
 
 
 def read_inputs(path: Path) -> Dict[str, Dict]:
-    """{model: its input record} of the table at `path`; a missing record file is none."""
-    ip = inputs_path(path)
-    if not ip.exists():
-        return {}
+    """{model: its input record} of the table at `path`; a missing record file is FileNotFoundError."""
+    ip = _required(inputs_path(path))
     out = {}
     for n, line in enumerate(ip.read_text(encoding="utf-8").splitlines(), 1):
         if line.strip():
@@ -249,7 +263,7 @@ def replace_inputs(path: Path, model: str, record: Dict) -> None:
         raise ValueError(f"replace_inputs({model!r}) was handed the record of {record.get('model')!r}")
     ip = inputs_path(path)
     with locked(path):
-        recs = read_inputs(path)
+        recs = read_inputs(path) if ip.exists() else {}    # the writer creating the record file
         recs[model] = record
         fd, tmp = tempfile.mkstemp(dir=str(ip.parent), prefix=ip.name, suffix=".tmp")
         try:
@@ -299,6 +313,9 @@ def census_row(kernel_qual: str, key: tuple, memory_gb: Optional[int]) -> str:
     if memory_gb is None:
         return f"the card's memory class is unknown, so no {prof[0]}/{prof[1]} census table can be named"
     line = census_table.key_line(kernel_qual, key_repr(tuple(key)))
+    if not census_table.table_path(prof[0], prof[1], memory_gb).exists():
+        return (f"there is no census table {census_table.table_path(prof[0], prof[1], memory_gb)} — take the census "
+                f"for this profile and memory class first")
     try:
         path, rows = census_table.rows_for(kernel_qual, key_repr(tuple(key)), prof[0], prof[1], memory_gb)
     except Exception as exc:  # noqa: BLE001 — said: an unreadable table is not an absent row

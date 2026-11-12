@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-11-12
+
+A corrective version (nbxtensor stays 0.1.4): 0.6.10's package left out its certified-settings tables.
+
+### Fixed
+
+- **The package carries its census tables again.** 0.6.10's wheel and source archive left out every census table, chunk
+  record and refused-settings register (the `.jsonl` files): on an installed engine, a served session never found the
+  certified prefill chunk of its model and planned as if none existed, without a word. They ship again, and a release
+  now fails when any file the engine tracks is missing from the built packages.
+- **A missing census file is an error naming it**, never an empty table: a certified machine whose census files are
+  absent is told its install is broken (reinstall neurobrix); a machine or memory class that has no census is said so.
+
 ## [0.6.10] - 2026-11-12
 
 The library takes back what is its own: nbxtensor 0.1.4 now holds the engine's replay, its mixture-of-experts store and
@@ -6759,7 +6772,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.10...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.11...main
+[0.6.11]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.10...v0.6.11
 [0.6.10]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.9...v0.6.10
 [0.6.9]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/NeuroBrix/neurobrix/compare/v0.6.7...v0.6.8

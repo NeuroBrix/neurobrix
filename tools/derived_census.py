@@ -3232,7 +3232,7 @@ def table(a) -> int:
                            "knowledge that the model forms none")
         if refused:
             worst = 1
-            kept = sorted({r.get("tool") for r in T.read(path) if r["model"] == model} - {None})
+            kept = sorted({r.get("tool") for r in (T.read(path) if path.exists() else []) if r["model"] == model} - {None})
             print(f"[derived table] {model}: NOT written — the derivation cannot place it completely; the "
                   f"table KEEPS its existing rows for this model (tool {', '.join(kept) or 'none: no rows'}):")
             for line in refused[:30]:
