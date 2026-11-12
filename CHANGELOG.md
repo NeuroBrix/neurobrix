@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A served mixture-of-experts model answers a conversation's later turns right.** When its experts stream from host
+  memory (one card too small to hold them all, e.g. Qwen3-Coder-30B-A3B on one V100-32GB), a turn that brought more
+  than one new token could read some layers' experts from slots the previous answer had refilled with others: from
+  about the third request of a session the answers came back empty, cut short or wrong. The server now sees every
+  change the decode made to the card's experts before a turn is read. Measured on a five-turn conversation: the
+  answers are byte-identical to the same server run without its fast decode path.
 - **A chat template renders the prompt its model was trained on.** The engine's template renderer wrote every
   `tojson` value HTML-escaped (`if a < b` for `if a < b`, `é` for `é`) and with its keys sorted, so a
   request's tool schemas and past calls reached the model reordered and escaped. A template that passes

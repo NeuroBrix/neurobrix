@@ -116,7 +116,8 @@ class NBXExpertStore:
         self._host_tabs = None
         self._host_layers = set()
         self._dev_valid = False       # the card's map reflects the slots' contents
-        self._host_dirty = False      # the card's residency moved the slots since the host's last call
+        self._host_dirty = False      # the card's residency moved the slots since the host's last call (a direct step)
+        self._clock_seen = 0          # the card's clock when the host last wrote the map (`_card_moved_slots`)
         self.device_decode = True
         self._copy = None             # the miss copy's (block, warps), read once from the profile (`_copy_launch`)
 
@@ -160,13 +161,29 @@ class NBXExpertStore:
         for dst, src in ((self._slot_of, slot_of), (self._owner, owner), (self._stamp, stamp),
                          (self._clock, np.array([n], dtype=np.int64))):
             DA.memcpy(dst.data_ptr(), src.ctypes.data, src.nbytes, 1)
+        self._clock_seen = n
         self._dev_valid = True
+
+    def _card_moved_slots(self) -> bool:
+        """Whether the card's residency assigned slots since the host last wrote its map: the card's own clock moved
+        (`expert_slot_assign_kernel` advances it at every call). A REPLAYED decode step runs no Python, so `_host_dirty`
+        (set by a direct step) never sees it: on a served Qwen3-Coder-30B-A3B the host then prefilled a turn through
+        slots the replayed decode had refilled with other experts, and wrote that stale map back to the card — the
+        session's answers went wrong from the second repeated turn on (2026-11-12)."""
+        if not self._dev_valid:
+            return False
+        import numpy as np
+        now = np.zeros(1, dtype=np.int64)
+        DA.set_device(self.device_idx)
+        DA.sync_device()                  # the replayed steps' assignments land before the clock is read
+        DA.memcpy(now.ctypes.data, self._clock.data_ptr(), 8, 2)
+        return int(now[0]) != self._clock_seen
 
     def _host_takes_over(self) -> None:
         """The host residency resumes after the card's: what the card put in the slots is not in the host's map, so
         the host starts from empty slots (its next calls miss and copy), and the card's map is rebuilt from the host's
         at its next call."""
-        if self._host_dirty:
+        if self._host_dirty or self._card_moved_slots():
             self.residency.reset()
             self._host_dirty = False
         self._dev_valid = False

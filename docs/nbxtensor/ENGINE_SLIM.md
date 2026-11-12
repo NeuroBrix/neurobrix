@@ -270,6 +270,13 @@ reasoning's end and the answer, read by rendering one past turn (`turn.reasoning
 written by the grammar in place of a fixed "\n\n" (GLM-4.7-Flash writes nothing there). Policy. 86 091 to 86 109, +18:
 serving/openai_api/turn.py +8, core/state/constraint.py +6, routes.py +2, constraint_policy.py +2 (measured).
 
+The experts store's hand-off reads the card's clock (2026-11-12, a wrong answer at a user): before the host residency
+takes the slots back from the card's, it reads whether the card assigned slots since the host last wrote its map (the
+card's clock, which every slot assignment advances) — a replayed decode step runs no Python, so the host's own flag
+missed it and a served MoE's next prompt read slots refilled with other experts. A correctness fix inside the engine's
+store (triton/expert_store.py, +11: `_card_moved_slots` and the clock it compares); whether the store itself belongs in
+the library is the store's own question, not this fix's. 86 109 to 86 120, +11 (measured).
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
