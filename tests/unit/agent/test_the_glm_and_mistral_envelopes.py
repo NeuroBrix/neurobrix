@@ -108,6 +108,22 @@ def test_glm_markers_spelled_in_bytes_where_the_tokenizer_has_no_single_id():
     assert _walk(d, GLM_CALL, markers={}), "each marker its text, when it is not one id"
 
 
+class _GlmWithOtherInnerMarkers(GlmToolCallParser):
+    inner_markers = ("<k>", "</k>", "<v>", "</v>")
+
+
+def test_the_glm_envelope_writes_the_inner_markers_its_parser_carries():
+    """The envelope reads GLM's key/value markers from the parser, never from its own copy: a parser carrying other
+    markers gets an envelope written with them, for a string, an integer and an enum value alike."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {
+        "city": {"type": "string"}, "days": {"type": "integer"}, "unit": {"enum": ["c", "f"]}},
+        "required": ["city", "days", "unit"]}}}]
+    call = "<tool_call>f{0}city{1}{2}Paris{3}{0}days{1}{2}2{3}{0}unit{1}{2}c{3}</tool_call>"
+    d = envelope(_GlmWithOtherInnerMarkers(), tools, spelled)
+    assert _walk(d, call.format("<k>", "</k>", "<v>", "</v>"), markers={}), "the parser's markers"
+    assert not _walk(d, call.format(*GlmToolCallParser.inner_markers), markers={}), "not GLM's own"
+
+
 def test_a_tool_with_no_required_argument_is_its_name_and_the_close():
     tools = [{"type": "function", "function": {"name": "now", "parameters": {"type": "object", "properties": {}}}}]
     for enc, markers in ((encode, MARKERS), (spelled, {})):

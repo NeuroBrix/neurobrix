@@ -103,21 +103,22 @@ def _bare_choice(options, what: str) -> Dict[str, Any]:
     return {"choice": out}
 
 
-def _glm_arguments(params, encode, close_call) -> List[Dict[str, Any]]:
-    """`<arg_key>K</arg_key><arg_value>V</arg_value>` for each required parameter in its declared order, then the
-    call's close: a string free text up to `</arg_value>`, an enum or a const one of its values bare, anything else
-    the schema's JSON (GLM's template writes `v | tojson if v is not string else v`)."""
+def _glm_arguments(params, inner, encode, close_call) -> List[Dict[str, Any]]:
+    """For each required parameter in its declared order, its key then its value, each between its pair of the
+    parser's `inner` markers (key open, key close, value open, value close), then the call's close: a string free
+    text up to the value's close, an enum or a const one of its values bare, anything else the schema's JSON (GLM's
+    template writes `v | tojson if v is not string else v`)."""
     if not params:
         return [close_call]
-    (name, sch), rest = params[0], _glm_arguments(params[1:], encode, close_call)
-    head = [marker("<arg_key>", encode), {"lit": name}, marker("</arg_key>", encode), marker("<arg_value>", encode)]
-    end = marker("</arg_value>", encode)
+    (name, sch), rest = params[0], _glm_arguments(params[1:], inner, encode, close_call)
+    key_open, key_close, value_open, end = (marker(m, encode) for m in inner)
+    head = [key_open, {"lit": name}, key_close, value_open]
     if {"enum", "const"} & set(sch):
         values = [sch["const"]] if "const" in sch else list(sch["enum"])
         return head + [_bare_choice([(_raw(v), end, rest) for v in values], f"parameter {name!r}")]
     if sch.get("type") == "string":
         _free_text(name, sch, "glm")
-        return head + [reasoning_close("</arg_value>", encode)] + rest
+        return head + [reasoning_close(inner[-1], encode)] + rest
     return head + [{"schema": sch}, end] + rest
 
 
@@ -127,7 +128,7 @@ def _glm(parser, names, chosen, encode, rep) -> Dict[str, Any]:
     for n, t in zip(names, chosen):
         p = _params(t)
         props, required = p.get("properties") or {}, set(p.get("required") or [])
-        parts = _glm_arguments([(k, props[k]) for k in props if k in required], encode, close)
+        parts = _glm_arguments([(k, props[k]) for k in props if k in required], parser.inner_markers, encode, close)
         options.append((n, parts[0], parts[1:]))
     return {"repeat": {"seq": [marker(parser.start_marker, encode), _bare_choice(options, "tool names")]}, **rep}
 
