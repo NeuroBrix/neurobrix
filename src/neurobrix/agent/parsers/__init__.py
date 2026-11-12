@@ -9,16 +9,20 @@ the DIALECT MARKERS in the template decide (R15).
 from typing import Optional
 
 from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
+from neurobrix.agent.parsers.glm import GlmToolCallParser
 from neurobrix.agent.parsers.jsonfmt import JsonToolCallParser
 from neurobrix.agent.parsers.jsonlist import JsonListToolCallParser
+from neurobrix.agent.parsers.mistral import MistralArgsToolCallParser
 from neurobrix.agent.parsers.xml import XmlToolCallParser
 
 __all__ = [
     "ParseResult",
     "ToolCall",
     "ToolCallParser",
+    "GlmToolCallParser",
     "XmlToolCallParser",
     "JsonToolCallParser",
+    "MistralArgsToolCallParser",
     "JsonListToolCallParser",
     "select_parser",
 ]
@@ -32,10 +36,14 @@ def select_parser(template_text: str) -> Optional[ToolCallParser]:
     """
     if not template_text:
         return None
+    if GlmToolCallParser.inner_markers[0] in template_text:     # before <tool_call>: GLM's template holds both
+        return GlmToolCallParser()
     if "<function=" in template_text:
         return XmlToolCallParser()
     if "<tool_call>" in template_text:
         return JsonToolCallParser()
+    if MistralArgsToolCallParser.start_marker in template_text and MistralArgsToolCallParser.inner_markers[0] in template_text:
+        return MistralArgsToolCallParser()
     if JsonListToolCallParser.start_marker in template_text:
         return JsonListToolCallParser()
     return None

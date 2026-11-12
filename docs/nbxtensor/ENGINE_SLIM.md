@@ -248,6 +248,23 @@ The served prefill chunk on an engine without certified times (core/prism/solver
 
 A run touches only its plan's cards (2026-11-10): core/device_utils.py `plan_devices` / `sync_plan` (+19, policy: WHICH devices a run synchronizes; the synchronization itself is the runtime's), the call sites net -1: 141 282 to 141 300.
 
+## Two more tool-call dialects, GLM's and Mistral's (2026-11-12): policy
+
+The next coding models' templates (GLM-4.7-Flash, Devstral Small 2) write calls in two forms no parser read
+(docs/design/tool-call-dialects.md): their parsers, their selection by the template's markers, the markers inside a
+block that the decode keeps, and their forced-call envelopes. Policy only: which format the template declares and how
+a call reads back, nothing about tensors. The branch's first commit, the chat-template environment (b7d960e92,
+core/module/tokenizer/chat_template.py), left the engine at 85 953, one line under the header's 85 954. Code lines
+measured: 85 953 (b7d960e92) to 86 091, +138.
+
+| file | lines | what it holds |
+|---|---|---|
+| agent/parsers/glm.py | +39 | `<tool_call>NAME<arg_key>K</arg_key><arg_value>V</arg_value>…</tool_call>`, values as written; a broken block or a stray marker malformed, never prose |
+| agent/parsers/mistral.py | +40 | `[TOOL_CALLS]NAME[ARGS]{…}` per call to the end of the turn; one broken call makes the whole block malformed |
+| agent/envelope.py | +48 | the two envelopes; a bare literal before a marker token refused by name when it is a prefix of another; the xml string check shared |
+| agent/parsers/__init__.py, agent/parsers/base.py | +8, +3 | the selection (`<arg_key>` before `<tool_call>`; `[TOOL_CALLS]` with `[ARGS]`); `inner_markers` and `kept_markers()` |
+| serving/engine.py, serving/openai_api/turn.py | 0, 0 | both decodes keep `kept_markers()` in place of the list each assembled |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

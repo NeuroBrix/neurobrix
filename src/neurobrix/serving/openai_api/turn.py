@@ -75,7 +75,7 @@ class TurnReader:
         self._reasoning = reasoning
         keep = []
         if parser is not None:
-            keep += [*parser.openings(), parser.end_marker or ""]
+            keep += list(parser.kept_markers())
         if reasoning is not None:
             keep += list(reasoning)
         self._decoder = MarkerDecoder(tokenizer, keep)

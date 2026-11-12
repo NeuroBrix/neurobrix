@@ -44,9 +44,16 @@ class ToolCallParser:
     #: Every text that opens a block (a dialect whose model writes its marker two ways); `start_marker` first.
     start_markers: tuple = ()
     end_marker = None
+    #: The markers inside a block (a dialect that separates a name from its arguments with a marker: Mistral's
+    #: `[ARGS]`, a special token in its tokenizer). A decode that skipped them would join the name to its arguments.
+    inner_markers: tuple = ()
 
     def openings(self) -> tuple:
         return tuple(self.start_markers) or (self.start_marker,)
+
+    def kept_markers(self) -> tuple:
+        """Every marker the parser reads, which a decode must keep even where the tokenizer calls it special."""
+        return (*self.openings(), *((self.end_marker,) if self.end_marker else ()), *self.inner_markers)
 
     def parse(self, text: str) -> ParseResult:
         raise NotImplementedError

@@ -431,8 +431,12 @@ Errors are always the OpenAI error object: `{"error": {"message", "type", "param
 
 The server parses the answer. The tool-call format is the one the model's chat template declares, read from the
 template's markers: `<tool_call>{"name", "arguments"}</tool_call>` (JSON), `<tool_call><function=…><parameter=…>`
-(XML; each value is read with its JSON-schema type from your `tools`), and a marker token followed by a JSON list
-(`<|tool_call|>[...]`). A template that declares none refuses `tools` by name. Calls come back as
+(XML; each value is read with its JSON-schema type from your `tools`), `<tool_call>NAME<arg_key>…</arg_key><arg_value>…
+</arg_value></tool_call>` (key and value pairs, GLM's form; each value read with its type, as in XML),
+`[TOOL_CALLS]NAME[ARGS]{…}` (Mistral's form, one per call), and a marker token followed by a JSON list
+(`<|tool_call|>[...]`). A template that declares none refuses `tools` by name. In the two forms that write a tool's
+name bare before a marker token, a forced call (`tool_choice: "required"` or a named function) refuses, by name, two
+tools whose names begin the same way (`read` and `read_file`): they cannot be told apart before the marker. Calls come back as
 `message.tool_calls` with `finish_reason: "tool_calls"`; a block that opened like a call but does not parse is kept in
 `content`, never dropped. When the template declares thinking markers (`<think>` … `</think>`), the reasoning is in
 `reasoning_content` and `content` holds the answer only. Send the history back as OpenAI messages (an assistant's
