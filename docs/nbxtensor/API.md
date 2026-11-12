@@ -473,6 +473,21 @@ def inplace_min_bytes()
     # The output size from which an add or an element-wise unary writes into its dead input.
 ```
 
+### `nbxtensor.ops.axis_slices` — one axis read and written a slice at a time (the stitch of a run in slices)
+
+```python
+def take_slice(x, axis: int, total: int, inner: int | None, start: int, length: int)
+    # rows [start, start+length) of `axis` split as the view (P, total, inner), contiguous; only the slice is copied
+def take_slice_cyclic(x, axis, total, inner, start, length)   # the same, rows taken modulo `total`
+def put_slice(full, part, axis, total, inner, start, length) -> None   # a slice's output written into the whole
+def whole_shape(part_shape, axis, total, length) -> tuple[int, ...]
+def own(x, dtype=None)                  # a copy the next run cannot overwrite, in `dtype` when given
+def accumulate(acc, part, dtype)        # partials summed in the accumulator dtype (acc None at the first slice)
+def store(acc, dtype)                   # the sum stored once in the output's dtype
+```
+
+Written over the methods a tensor shares with torch's: an NBXTensor, or the tensor of an engine whose library is torch.
+
 ### `nbxtensor.ops.token_bitmask` — a token bitmask applied to a decode step's logits (constrained decoding)
 
 ```python

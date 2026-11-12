@@ -76,16 +76,17 @@ def _run_sliced(torch, x, ws, margin, total, count, ax):
     import torch.nn.functional as F
     f = lambda v: F.conv2d(F.conv2d(F.interpolate(F.silu(F.conv2d(v, ws[0], padding=1)), scale_factor=2,
                                                   mode="nearest"), ws[1], padding=1), ws[2], padding=1)
-    lay_in, lay_out = ax.layout["input::x"], ax.layout["t::y"]
+    from nbxtensor.ops import axis_slices as AX
+    a_in, a_out = ax.layout["input::x"].axis, ax.layout["t::y"].axis
     out = None
     for start, length in CR.chunk_extents(total, count):
         a = max(0, start - margin)
         n = min(total, start + length + margin) - a
-        part = f(CR.take_slice(x, lay_in, total, 1, a, n))
-        part = CR.take_slice(part, lay_out, n, 2, start - a, length)
+        part = f(AX.take_slice(x, a_in, total, 1, a, n))
+        part = AX.take_slice(part, a_out, n, 2, start - a, length)
         if out is None:
-            out = part.new_empty(CR.whole_shape(part.shape, lay_out, total, length))
-        CR.put_slice(out, part, lay_out, total, 2, start, length)
+            out = part.new_empty(AX.whole_shape(part.shape, a_out, total, length))
+        AX.put_slice(out, part, a_out, total, 2, start, length)
     return out, f(x)
 
 

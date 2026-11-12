@@ -33,13 +33,13 @@ import textwrap
 from pathlib import Path
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
-from neurobrix.core.prism import chunked_region as CR
+from nbxtensor.ops import axis_slices as AX
 from nbxtensor.tensor import NBXTensor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import derived_census as D  # noqa: E402
 
-STITCH = (CR.take_slice, CR.put_slice, CR.own, CR.accumulate, CR.store)
+STITCH = (AX.take_slice, AX.put_slice, AX.own, AX.accumulate, AX.store)
 
 # The ATen kind each tensor method of the stitch dispatches in the compiled engine.
 ATEN_OF = {"reshape": "aten::reshape", "narrow": "aten::narrow", "contiguous": "aten::clone",

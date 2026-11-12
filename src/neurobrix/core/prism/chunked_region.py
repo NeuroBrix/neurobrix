@@ -1311,10 +1311,6 @@ def pass_graph(graph: Dict[str, Any], cp: ChunkPass) -> Dict[str, Any]:
             "symbolic_context": graph.get("symbolic_context")}
 
 
-# Runtime helpers: duck-typed over torch.Tensor and NBXTensor (view, reshape, narrow, contiguous,
-# new_empty, copy_) — no import of either (R33).
-
-
 def sliced_reads(plan: "RegionPlan", ops: Dict[str, Any]) -> Set[str]:
     """The stretch's inputs it reads ONLY in slices: they carry the axis (a layout), are no output of it, and no pass
     that runs whole reads them. With the values between pieces parked on the host, such an input stays there and
@@ -1333,85 +1329,6 @@ def sliced_reads(plan: "RegionPlan", ops: Dict[str, Any]) -> Set[str]:
             made.update(op.get("output_tensor_ids") or [])
     outs = set(plan.outputs)
     return {t for t in plan.inputs if t in plan.layouts and t not in outs and t not in whole}
-
-
-def take_slice(x: Any, lay: Layout, total: int, inner: Optional[int], start: int, length: int) -> Any:
-    """The slice [start, start+length) of the axis of a WHOLE tensor `x`, contiguous. A broadcast
-    (`inner` None) is constant along the axis: its first extent at `length` is the slice —
-    contiguous too, as every input an executor is fed (priced in `_region_peak`)."""
-    shape = tuple(int(d) for d in x.shape)
-    a = lay.axis
-    if inner is None:
-        n = shape[a] // total * length
-        return x.narrow(a, 0, n).contiguous()
-    p = shape[a] // (total * inner)
-    if p * total * inner != shape[a]:
-        raise RuntimeError(f"chunked region: extent {shape[a]} on axis {a} is not P*{total}*{inner}")
-    pre, post = shape[:a], shape[a + 1:]
-    # the axis split as a VIEW (`unflatten`, both engines' tensors): only the slice is copied, never the whole input
-    v = x.unflatten(a, (p, total, inner)).narrow(a + 1, start, length).contiguous()
-    return v.reshape(*pre, p * length * inner, *post)
-
-
-def take_slice_cyclic(x: Any, lay: Layout, total: int, inner: Optional[int], start: int, length: int) -> Any:
-    """`take_slice` of the rows [start, start + length) taken modulo the axis' extent: a read that runs off either
-    end continues from the other (a cyclic stretch's margin, `slice_reads`)."""
-    if 0 <= start and start + length <= total:
-        return take_slice(x, lay, total, inner, start, length)
-    if inner is None:                       # a broadcast is the same along the axis
-        return take_slice(x, lay, total, inner, 0, length)
-    pieces, at, left = [], start % total, length
-    while left > 0:
-        n = min(left, total - at)
-        pieces.append((take_slice(x, lay, total, inner, at, n), n))
-        left -= n
-        at = 0
-    first, n0 = pieces[0]
-    whole = first.new_empty(whole_shape(first.shape, lay, length, n0))
-    off = 0
-    for part, n in pieces:
-        put_slice(whole, part, lay, length, inner, off, n)
-        off += n
-    return whole
-
-
-def put_slice(full: Any, part: Any, lay: Layout, total: int, inner: int, start: int, length: int) -> None:
-    """Write a slice's output into the whole output (allocated contiguous)."""
-    shape = tuple(int(d) for d in full.shape)
-    a = lay.axis
-    p = shape[a] // (total * inner)
-    pre, post = shape[:a], shape[a + 1:]
-    dst = full.view(*pre, p, total, inner, *post).narrow(a + 1, start, length)
-    dst.copy_(part.reshape(*pre, p, length, inner, *post))
-
-
-def whole_shape(part_shape: Sequence[int], lay: Layout, total: int, length: int) -> Tuple[int, ...]:
-    s = [int(d) for d in part_shape]
-    s[lay.axis] = s[lay.axis] // length * total
-    return tuple(s)
-
-
-def own(x: Any, dtype: Any = None) -> Any:
-    """A copy the next run of the same executor cannot overwrite (an arena slot is reused), in
-    `dtype` when given (`copy_` converts on the store, in both engines)."""
-    shape = tuple(int(d) for d in x.shape)
-    o = x.new_empty(shape) if dtype is None else x.new_empty(shape, dtype=dtype)
-    o.copy_(x)
-    return o
-
-
-def accumulate(acc: Any, part: Any, dtype: Any) -> Any:
-    """The running sum of a contraction's partials over the slices: `part` added to `acc` (None at
-    the first slice) in `dtype` — the accumulator the executor's DtypeEngine names
-    (`accumulation_dtype`), never the pass dtype the partial arrives in."""
-    if acc is None:
-        return own(part, dtype)
-    return acc + (part if part.dtype == dtype else part.to(dtype))
-
-
-def store(acc: Any, dtype: Any) -> Any:
-    """A contraction's sum stored once in `dtype`, the dtype its own output was given."""
-    return acc if acc.dtype == dtype else own(acc, dtype)
 
 
 def dim_source(info: Any) -> Optional[Tuple[str, int]]:

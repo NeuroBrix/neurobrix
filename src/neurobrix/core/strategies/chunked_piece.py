@@ -13,9 +13,9 @@ it needs, run once per slice of the axis. A pass's inputs that carry the axis ar
 axis is summed over the slices and fed whole to the later passes. The weights are loaded ONCE per
 run, on the piece's own executor, and every pass borrows them (`GraphExecutor._borrow`).
 
-Both engines: the slicing is `reshape` / `narrow` / `contiguous` / `new_empty` / `copy_` / `+` on
-whatever tensor type the engine hands out — torch.Tensor in compiled, NBXTensor in the Triton
-modes. No import of either (R33), no conversion between them. A contraction's partials are summed
+Both engines: the slicing is the library's (`nbxtensor.ops.axis_slices`), on whatever tensor type the
+engine hands out — torch.Tensor in compiled, NBXTensor in the Triton modes; no conversion between
+them. A contraction's partials are summed
 in the dtype the pass executor's DtypeEngine names (`accumulation_dtype`) and stored once in the
 dtype the op's own output was given. None of these launches an autotuned kernel: the stitch holds
 no key of the census (tests/unit/prism/test_the_stitch_launches_no_autotuned_kernel.py).
@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
+from nbxtensor.ops.axis_slices import accumulate, own, put_slice, store, take_slice, take_slice_cyclic, whole_shape
 from neurobrix.core.prism.chunked_region import (
-    TokenAxis, accumulate, dim_source, slice_reads, own, plan_region, put_slice, region_carriers, take_slice_cyclic,
-    sliced_reads, store, take_slice, whole_shape)
+    TokenAxis, dim_source, slice_reads, plan_region, region_carriers, sliced_reads)
 from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
 from neurobrix.core.strategies.value_parking import to_device
 from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
@@ -346,7 +346,7 @@ class ChunkedPiece:
                 lay = plan.layouts.get(tid)
                 if cp.chunked and lay is not None and tid in sliced_in:
                     v = (take_slice_cyclic if plan.cyclic else take_slice)(
-                        v, lay, total, inner[tid], in_start, in_len)
+                        v, lay.axis, total, inner[tid], in_start, in_len)
                 # an input kept on the host (`sliced_input_names`) comes to the pass's device a slice at a time
                 sub_feed[n] = to_device(v, getattr(ex, "device", None))
             out = ex.run(sub_feed, *args, **kwargs) or {}
@@ -370,10 +370,10 @@ class ChunkedPiece:
                     done[tid] = own(part)
                 elif cp.chunked and lay is not None:
                     if m:      # keep the slice's own rows: the margin's rows read padding, not the image
-                        part = take_slice(part, lay, in_len, inner[tid], start - in_start, length)
+                        part = take_slice(part, lay.axis, in_len, inner[tid], start - in_start, length)
                     if start == 0:
-                        done[tid] = part.new_empty(whole_shape(part.shape, lay, total, length))
-                    put_slice(done[tid], part, lay, total, inner[tid], start, length)
+                        done[tid] = part.new_empty(whole_shape(part.shape, lay.axis, total, length))
+                    put_slice(done[tid], part, lay.axis, total, inner[tid], start, length)
                 else:
                     done[tid] = own(part)
         for tid in cp.targets:

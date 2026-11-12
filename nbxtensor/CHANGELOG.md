@@ -76,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `io.constants.archived_storage`, `io.constants.constant_array`: a graph constant's stored bytes (the archive
   `torch.save` writes) read and decoded to the dtype it is bound in, without a tensor library. Moved from the engine's
   constant loader.
+- `ops.axis_slices` (`take_slice`, `take_slice_cyclic`, `put_slice`, `whole_shape`, `own`, `accumulate`, `store`): an
+  axis read and written a slice at a time as views, and a contraction's partials summed in an accumulator dtype — the
+  stitch of a computation run in slices. Moved from the NeuroBrix engine's chunked region.
 - `io.safetensors.bf16_abs_maxima`: the largest magnitude of every bfloat16 tensor of a safetensors file, from its
   stored bytes. Moved from the engine's float16-safety scan.
 

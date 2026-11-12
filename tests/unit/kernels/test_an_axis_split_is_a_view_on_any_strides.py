@@ -6,8 +6,6 @@ input contiguous first — 3 x 2 304 MB beside the qkv on every pass, unpriced. 
 Injection (seen red, then restored green, 2026-10-22): `take_slice` back to `x.reshape(...)` -> the peak cell red."""
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -18,7 +16,7 @@ if not torch.cuda.is_available():
 from nbxtensor.tensor import NBXTensor  # noqa: E402
 from nbxtensor.memory.allocator import DeviceAllocator as DA
 from neurobrix.kernels.torch_interop import nbx_to_torch  # noqa: E402
-from neurobrix.core.prism import chunked_region as CR  # noqa: E402
+from nbxtensor.ops.axis_slices import take_slice  # noqa: E402
 
 
 def _strided():
@@ -39,14 +37,13 @@ def test_unflatten_is_a_view_equal_to_torchs():
 def test_a_slice_of_a_strided_input_copies_the_slice_only():
     big = NBXTensor.from_numpy(np.random.default_rng(0).standard_normal((64, 512, 96)).astype(np.float32)).to("cuda")
     x = big.transpose(1, 2)                                      # (64, 96, 512): the token axis 2, strided
-    lay = SimpleNamespace(axis=2)                                # take_slice reads the layout's axis
     total, inner, start, length = 512, 1, 128, 64
-    CR.take_slice(x, lay, total, inner, start, length)           # warm
+    take_slice(x, 2, total, inner, start, length)           # warm
     dev = DA.get_device()
     DA._pool_flush(dev)
     base = DA._cuda_live_bytes.get(dev, 0)
     DA._cuda_peak_bytes[dev] = base
-    got = CR.take_slice(x, lay, total, inner, start, length)
+    got = take_slice(x, 2, total, inner, start, length)
     peak = DA._cuda_peak_bytes.get(dev, 0) - base
     slice_bytes = 64 * 96 * 64 * 4
     ref = nbx_to_torch(x.contiguous()).cpu()[:, :, start:start + length]
