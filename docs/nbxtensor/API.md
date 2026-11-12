@@ -2688,6 +2688,42 @@ def attention_fp64(q, k, v, scale, windows, mask=None, widen=np.asarray) -> List
     # softmax(q k^T * scale + mask) v in float64 on the given query-row windows; K and V widened once, BLAS products
 ```
 
+### `nbxtensor.ops.oracles.fp64` — the kernel families' float64 references for a certification, and the deviation
+
+Whole while a reference costs at most `ORACLE_MAX_MACS` multiply-adds (bytes of float64 for a row-wise family), on
+windows of the output above it (first, middle and last rows; a convolution's corners and centre). Each `*_oracle`
+returns a LAZY callable: an array, or a windowed oracle whose `describe` names its windows.
+
+```python
+ORACLE_MAX_MACS = 2_000_000_000              # read at call time
+ROW_F64_ARRAYS = 3                           # the float64 arrays a row-wise reference holds per element
+def values(a) -> np.ndarray                  # an operand's numbers (a bf16 operand's bits decoded exactly)
+def f64(a) -> np.ndarray                     # values(a) in float64
+def row_windows(m, n, k, cap=None) -> Optional[List[(r0, r1)]]   # None when whole; else first / middle / last rows
+def conv_windows(n, oh, ow, ci_g, co, kh, kw) -> Optional[List[(batch, r0, r1, c0, c1)]]
+def gemv_rows(n, k) -> int                   # the matrix rows the GEMV reference widens at once
+class Exact(ref)                             # an integer reference met exactly (deviation 0 or inf)
+class WindowedOracle(blocks, oh, ow, n)      # a convolution's windows: .slices(out), .device_slices(t), .describe
+class RowWindowedOracle(blocks, m)           # row windows of [..., M, N]: .slices(out), .device_slices(t), .describe
+class HostWindows(x, wins)                   # only the rows of a host draw a row-windowed reference reads
+def oracle_rows(x)                           # x itself when read whole, else HostWindows of its windows
+def conv_out_hw(h, w, kh, kw, stride, padding, dilation) -> (oh, ow)
+def conv2d_oracle(x, w, stride, padding, dilation, groups, window=None) -> np.ndarray
+def matmul_oracle(a, b, bias=None)           # (..., M, K) @ (..., K, N) (+ bias)
+def moe_oracle(x, ws, score, route, mul)     # each (token, expert) pair's row times its expert's [N, K] weights
+def attention_oracle(q, k, v, mask, scale)   # softmax(q k^T * scale + mask) v on query-row windows
+def softmax_oracle(x, log)                   # a row softmax / log-softmax
+def gemv_oracle(mat, vec, bias=None)
+def rownorm_oracle(x, w, b, layer)           # layer norm (eps 1e-5) or RMS norm (eps 1e-6)
+def row_reduce_oracle(x, red)                # "mean" / "sum" / "amax" over rows
+def groupnorm_oracle(x, w, b)                # one channel per group, eps 1e-5
+def conv_oracle(x, wt, stride, padding, dilation, groups)
+def host_values(t) -> np.ndarray             # a kernel's output as numbers (bf16 decoded)
+def materialise(piece)                       # a device cut made contiguous before it crosses
+def deviation_against(out_tensor, oracle) -> float   # read off the device only where the oracle measures
+def oracle_deviation(out, oracle) -> float   # max |out - ref| / max |ref|; inf when finiteness or shapes differ
+```
+
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
 
 `nbxtensor.backend.launcher_contract`

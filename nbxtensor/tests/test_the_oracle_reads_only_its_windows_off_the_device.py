@@ -25,8 +25,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neurobrix.kernels.autotune_certify import (RowWindowedOracle, WindowedOracle,
-                                                deviation_against, oracle_deviation)
+from nbxtensor.ops.oracles.fp64 import RowWindowedOracle, WindowedOracle, deviation_against, oracle_deviation
 
 
 def _conv_case():
