@@ -1,7 +1,7 @@
 """The fused MoE's combine — a sum over top_k of [tokens, top_k, hidden] — is keyed at the EXPERT WEIGHTS' dtype.
 
-`triton/moe.execute_moe_fused` casts the hidden states to the gate weights' dtype before its passes, and reads the
-weights by name, so a calibration island that hands the op fp32 hidden states never widens them. deepseek-moe-16b-chat:
+The fused MoE op (`nbxtensor.ops.moe_fused.fused_moe`) casts the hidden states to the gate weights' dtype before its
+passes, and reads the weights by name, so a calibration island that hands the op fp32 hidden states never widens them. deepseek-moe-16b-chat:
 its island gave the hidden states fp32, the run summed fp16 (43 008 x 8, fp16 in, fp32 out) and the census, keyed at the
 hidden states' dtype, had written fp32 — the c1restlot gate's triton cell stopped on the missing key (2026-10-23).
 

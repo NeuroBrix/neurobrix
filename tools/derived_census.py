@@ -1277,10 +1277,10 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches += LK.row_reduce_launches("sum", _prod(v_s) // max(1, feat), feat, dt(ins[0]))
                 v_s[rd] = 1
         elif kind == "custom::moe_fused":
-            # the fused MoE layer (`triton/moe.execute_moe_fused`): its router's top-k weights renormalised by a sum
+            # the fused MoE layer (`nbxtensor.ops.moe_fused.fused_moe`): its router's top-k weights renormalised by a sum
             # over top_k (fp32, unless the graph hands the weights in — a blend) and the experts' outputs combined by
-            # a sum over top_k of [tokens, top_k, hidden] in the EXPERT WEIGHTS' dtype: `execute_moe_fused` casts the
-            # hidden states to the weights' dtype before its passes (`_fused_moe_pass`, `_expert_store_grouped_pass`),
+            # a sum over top_k of [tokens, top_k, hidden] in the EXPERT WEIGHTS' dtype: `fused_moe` casts the
+            # hidden states to the weights' dtype before its passes (`_three_passes`, `_store_grouped`),
             # and the weights are read by name, never cast by an island — deepseek-moe-16b-chat's island handed its
             # hidden states in fp32, the combine ran fp16 and the census had keyed it fp32 (the c1restlot gate, 2026-10-23)
             a_ = o.get("attributes") or {}
