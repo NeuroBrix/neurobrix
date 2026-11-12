@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokenizer, and every word stayed in its cache for the life of the process; the cache is now bounded as the reference
   library's (words under 256 bytes, at most 10 000). TinyLlama, 50 distinct 32 276-character prompts: 30.9 MiB held
   -> 0.0 MiB, the same tokens.
+- **A driver error at start-up on a machine with several cards is said at once.** When the driver failed to answer
+  which cards can read each other's memory, the run went on as if none could and failed later, at the first hand-off
+  between two cards, with a copy error that named nothing. It now stops where the driver failed, naming the call, the
+  card and the driver's status.
 
 ## [0.6.9] - 2026-11-12
 

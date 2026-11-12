@@ -52,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's
   first autotuned launch gets the machine's stored settings too (the certified directory first), once — they were
   seeded only into the modules already imported, so every new process measured the late ones again.
+- **A driver error while a card's expandable pool asks which cards reach it is refused by name.** `memory.vmm.Vmm`
+  builds the access grant of its chunks from the driver's answers (`cuDeviceGetCount`, `cuDeviceGet`,
+  `cuDeviceCanAccessPeer`); a call that failed was read as "no peer" and the grant silently named the owning card
+  alone, so a later card-to-card copy failed far from its cause. The failing call, its device and its status are now
+  the error. A driver that answers "not a peer" is unchanged.
 
 ## [0.1.3] - 2026-11-11
 
@@ -338,7 +343,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **CDNA3's shared memory per block is 64 KB**, not 160 KB (the device file had CDNA4's figure; Triton 3.8's AMD target features state 64 KB for gfx942): an autotune config needing more is no longer kept for an MI300.
-
 
 ## [0.0.1] - 2026-11-05
 
