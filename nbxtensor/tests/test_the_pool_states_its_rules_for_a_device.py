@@ -43,3 +43,10 @@ def test_the_slack_is_the_file_s_and_never_negative(described):
 def test_the_shipped_files_answer_as_the_planner_read_them():
     # nvidia/volta caps at half the card (its file); a 32 GiB card parks at most 16 GiB
     assert pool.parked_cap_bytes("nvidia", "volta", 32 << 30) == 16 << 30
+
+
+def test_the_application_s_door_answers_the_same(described, monkeypatch):
+    import nbxtensor.memory as memory
+    monkeypatch.setenv("NBX_ALLOC_POOL", "0")
+    assert memory.pool_enabled() is False
+    assert memory.pool_parked_cap_bytes("v", "capped", 8 << 30) == 2 << 30 and memory.pool_fit_slack("v", "capped") == 1.0

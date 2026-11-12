@@ -54,7 +54,7 @@ from neurobrix.core.config import get_prism_defaults
 from nbxtensor.dtype import itemsize as _itemsize
 from neurobrix.core.config.system import PRISM_DEFAULTS
 from nbxtensor.ops import tiling_sizes as _ts
-from nbxtensor.memory import pool as _alloc_pool
+from nbxtensor import memory as _nbx_memory
 
 if TYPE_CHECKING:
     from nbx import NBXContainer, ComponentData
@@ -2061,23 +2061,23 @@ class PrismSolver:
 
     def _parked_cap_mb(self, dev: "DeviceState", profile) -> Optional[float]:
         """What the Triton allocator's pool may keep PARKED on `dev` beside a new allocation, in MB (the pool's
-        answer, `nbxtensor.memory.pool.parked_cap_bytes`; `math.inf` unbounded), or None where a parked block never
+        answer, `nbxtensor.memory.pool_parked_cap_bytes`; `math.inf` unbounded), or None where a parked block never
         sits beside one: a discrete card's driver refuses what it cannot serve and the pool is flushed and the request
         retried, while a UNIFIED device serves the request beside it. So None on a discrete device, under the
-        compiled engine (no such pool), and with the pool off (`nbxtensor.memory.pool.enabled`)."""
+        compiled engine (no such pool), and with the pool off (`nbxtensor.memory.pool_enabled`)."""
         import math
-        if engine_of(getattr(self, "_mode", "compiled")) != "triton" or not _alloc_pool.enabled():
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton" or not _nbx_memory.pool_enabled():
             return None
         if not _device_is_unified(dev.device_string, profile):
             return None
-        cap = _alloc_pool.parked_cap_bytes(*_vendor_arch(dev.spec), float(dev.spec.memory_mb) * (1 << 20))
+        cap = _nbx_memory.pool_parked_cap_bytes(*_vendor_arch(dev.spec), float(dev.spec.memory_mb) * (1 << 20))
         return cap / (1 << 20) if cap else math.inf
 
     @staticmethod
     def _pool_fit_slack(dev: "DeviceState") -> float:
         """The most the Triton allocator's pool hands out beyond a request, as a fraction of it: the pool's answer
-        (`nbxtensor.memory.pool.fit_slack`)."""
-        return _alloc_pool.fit_slack(*_vendor_arch(dev.spec))
+        (`nbxtensor.memory.pool_fit_slack`)."""
+        return _nbx_memory.pool_fit_slack(*_vendor_arch(dev.spec))
 
     def _arena_door(self, container, strat_name: str, allocs, devices, component_memory) -> Optional[str]:
         """Why the plan `strat_name` proposes asks some device for one arena over its largest
@@ -2149,11 +2149,11 @@ class PrismSolver:
         `nbxtensor.memory.pool.simulate`) and the Triton hot loop's deferred queue (`drain_cliff`,
         `drain_count`: dead tensors are freed together when either is reached) — or None where the
         plan's engine has neither (the compiled engine). The parked cap is the pool's answer
-        (`nbxtensor.memory.pool.parked_cap_bytes`) for the profile's smallest device — the one the walk is budgeted
-        against — of the imposed rung where one is. The pool off (`nbxtensor.memory.pool.enabled`): no pool."""
+        (`nbxtensor.memory.pool_parked_cap_bytes`) for the profile's smallest device — the one the walk is budgeted
+        against — of the imposed rung where one is. The pool off (`nbxtensor.memory.pool_enabled`): no pool."""
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return None
-        if not _alloc_pool.enabled():
+        if not _nbx_memory.pool_enabled():
             return {"pooled": False}
         if profile is None or not getattr(profile, "devices", None):
             return {"parked_cap": 0}
@@ -2166,7 +2166,7 @@ class PrismSolver:
         if door is not None:
             total_mb = min(total_mb, float(door))
         from neurobrix.triton.sequence import _DEFERRED_DRAIN_COUNT_DEFAULT
-        return {"parked_cap": _alloc_pool.parked_cap_bytes(*_vendor_arch(spec), total_mb * (1 << 20)),
+        return {"parked_cap": _nbx_memory.pool_parked_cap_bytes(*_vendor_arch(spec), total_mb * (1 << 20)),
                 # the hot loop's deferred queue: dead tensors freed together at the cliff or the count (`DeferredFrees`)
                 "drain_cliff": int(deferred_drain_retained_bytes(memory)),
                 "drain_count": int(_DEFERRED_DRAIN_COUNT_DEFAULT)}

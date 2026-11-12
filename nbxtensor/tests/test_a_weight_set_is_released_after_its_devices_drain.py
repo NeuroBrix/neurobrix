@@ -85,3 +85,12 @@ def test_an_arena_is_cleared_after_its_devices_drain(monkeypatch):
     epoch = arena.epoch
     arena.release()
     assert order == [("sync", 2), ("clear",)] and arena[0] is None and arena[2] is None and arena.epoch == epoch + 1
+
+
+def test_the_application_s_door_answers_the_same(driver):
+    import nbxtensor.memory as memory
+    other = {"w": object()}
+    assert memory.release_weights(other) is False and "w" in other
+    first = _Arena()
+    held = {"_arenas": {0: first}}
+    assert memory.join_weights(held, {"_arenas": {0: _Arena()}})["_arenas"][0] is first

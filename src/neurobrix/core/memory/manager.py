@@ -46,7 +46,7 @@ class MemoryManager:
         """
         import sys
         if "nbxtensor.tensor" in sys.modules:       # the library's weights exist only once it is loaded
-            from nbxtensor.memory.memory_pool import release_weights
+            from nbxtensor.memory import release_weights
             if release_weights(weights_dict):
                 return
         devices = {str(v.device) for v in weights_dict.values()

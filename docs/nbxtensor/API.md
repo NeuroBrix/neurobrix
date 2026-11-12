@@ -126,6 +126,17 @@ def amp_fp32_output_dtype(compute_dtype, graph_dtype, safe, narrowed, traced=Non
 
 ### `nbxtensor.memory` — the names left: allocator, arenas, pools, transfers, layouts, OOM advice
 
+The application's door (`nbxtensor.memory` itself), each name answered by the module holding the mechanism:
+
+```python
+def set_limit(nbytes, device=None) -> None
+def release_weights(weights: dict) -> bool                     # memory_pool.release_weights
+def join_weights(held: dict, loaded: dict) -> dict             # memory_pool.join_weights
+def pool_enabled() -> bool                                      # pool.enabled
+def pool_parked_cap_bytes(vendor, architecture, total_bytes) -> int   # pool.parked_cap_bytes
+def pool_fit_slack(vendor, architecture) -> float              # pool.fit_slack
+```
+
 `nbxtensor.memory.allocator`
 
 ```python

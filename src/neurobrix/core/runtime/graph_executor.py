@@ -2381,10 +2381,9 @@ class GraphExecutor:
     def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
         """Load weights as NBXTensor (triton mode). Zero torch."""
         from neurobrix.triton.weight_loader import load_component_weights
-        from nbxtensor.memory.memory_pool import join_weights
+        from nbxtensor.memory import join_weights
         from nbxtensor.dtype.nbx_dtype import parse_dtype
         from nbxtensor.memory.allocator import DeviceAllocator
-        from nbxtensor.ops import wrappers as _w
 
         if ':' in str(self.device):
             device_idx = int(self.device.split(':')[1])
