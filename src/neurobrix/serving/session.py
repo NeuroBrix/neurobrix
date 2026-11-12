@@ -72,12 +72,9 @@ class ConversationSession:
 
     def check_fits(self, token_ids: List[int], max_tokens: int) -> None:
         """Refuse by name a turn whose conversation and generation budget pass the session's ceiling."""
-        need = len(token_ids) + int(max_tokens)
-        if need > self.kv.ceiling:
-            raise RuntimeError(
-                f"this conversation needs {need} positions ({len(token_ids)} of conversation + {int(max_tokens)} to "
-                f"generate) and the session holds at most {self.kv.ceiling} — {self.kv.source}. Start a new "
-                f"conversation (/new), or ask for fewer tokens.")
+        from neurobrix.core.runtime.prompt_length import refuse_past_reach
+        refuse_past_reach("this conversation needs", len(token_ids), int(max_tokens), "the session", self.kv.ceiling,
+                          self.kv.source + ". Start a new conversation (/new), or ask for fewer tokens")
 
     def clear(self) -> None:
         """Reset the conversation; the cache's positions are no longer the session's."""

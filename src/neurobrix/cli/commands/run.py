@@ -377,12 +377,11 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # input image or audio, whose own tokens the flow adds beside the prompt's). The decoder's sequence symbol is bound
     # to it — without it the symbol took the trace's extent and a 400-token prompt was priced as the trace's few tokens
     # (TinyLlama ~0.01 GiB planned, 652 MB held by the Triton arena, 2026-11-08). The same rule the derived census reads
-    # (`core/runtime/prompt_length.prompt_tokens`).
+    # (`core/runtime/prompt_length.prompt_tokens`); `run_prompt_tokens` refuses by name a prompt past the window.
     elif (_prompt is not None and "tokenizer" in (manifest.get("modules") or {}) and _topo_path.exists()
           and not getattr(args, "input_image", None) and not getattr(args, "audio", None)):
-        from neurobrix.core.runtime.prompt_length import generation_type, prompt_tokens
-        if str(generation_type(cache_path) or "").startswith("autoregressive"):
-            seq_len = prompt_tokens(cache_path, _prompt, cached_defaults)
+        from neurobrix.core.runtime.prompt_length import run_prompt_tokens
+        seq_len = run_prompt_tokens(cache_path, _prompt, cached_defaults, getattr(args, "max_tokens", None))
 
     # The flow's per-component bindings (CFG batch, a diffusion encoder's length, the denoiser's
     # text axis, a FLUX denoiser's packed inputs) — `core.prism.flow_bindings`, one for the plan

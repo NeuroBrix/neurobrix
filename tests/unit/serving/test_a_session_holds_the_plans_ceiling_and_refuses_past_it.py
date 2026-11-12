@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from nbxtensor.memory.kv_session import KVSession, held_ids
+from neurobrix.core.runtime.prompt_length import ContextLengthExceeded
 from neurobrix.serving.session import ConversationSession, play_turn, session_ceiling
 
 
@@ -56,7 +57,7 @@ def test_past_the_ceiling_the_turn_is_refused_by_name_and_nothing_is_summarised(
 
     play_turn(s, "x" * 10, 8, generate)
     before = [dict(m) for m in s.messages]
-    with pytest.raises(RuntimeError) as refused:
+    with pytest.raises(ContextLengthExceeded) as refused:
         play_turn(s, "y" * 30, 8, generate)
     msg = str(refused.value)
     assert "at most 40" in msg and "session_reach" in msg, msg

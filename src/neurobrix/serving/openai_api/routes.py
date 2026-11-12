@@ -378,7 +378,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
         reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
         grammar = _constrained(body, tokenizer, forced, tools, parser, named, reasoning if opens else None)
         extra = {"grammar": grammar} if grammar is not None else {}
-        from neurobrix.serving.engine import ContextLengthExceeded
+        from neurobrix.core.runtime.prompt_length import ContextLengthExceeded
         try:                               # past what a served session holds: refused before it runs (OpenAI's code)
             engine.check_context(messages, tools=tools, **decode)
         except ContextLengthExceeded as e:

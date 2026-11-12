@@ -45,9 +45,6 @@ def daemon_identity() -> Dict[str, Any]:
 
 
 
-class ContextLengthExceeded(RuntimeError):
-    """A request whose prompt and decode bound exceed what a served session holds (OpenAI: context_length_exceeded)."""
-
 class _ReadKeys(dict):
     """A request's params that remember which keys the handler looked at, so a
     key nobody read is refused instead of silently ignored: the accepted set
@@ -442,19 +439,18 @@ class InferenceEngine:
         """The positions a completion over `messages` needs (rendered prompt + its decode bound), refused BEFORE it runs
         when past the session's reach (ContextLengthExceeded: the OpenAI door's 400 context_length_exceeded)."""
         decode = self._decode_inputs(kwargs)
+        from neurobrix.core.runtime.prompt_length import refuse_past_reach
+        return refuse_past_reach("these messages need", len(self._rendered(messages, tools)), self._max_tokens(decode),
+                                 "a session", *self.session_reach())
+
+    def _rendered(self, messages: list, tools: Optional[list]) -> list:
+        """`messages` as a completion prefills them: the embedded chat template's ids, its tools contract when given."""
         tokenizer = self._executor.modules.get("tokenizer")
         if tokenizer is None:
             raise RuntimeError("ZERO FALLBACK: No tokenizer module in executor.")
-        template_kwargs: Dict[str, Any] = {"tokenize": True, "add_generation_prompt": True}
-        if tools:
-            template_kwargs["tools"] = tools
         from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output
-        rendered = len(_flatten_tokenizer_output(tokenizer.apply_chat_template(messages, **template_kwargs)))
-        need, (reach, source) = rendered + self._max_tokens(decode), self.session_reach()
-        if need > reach:
-            raise ContextLengthExceeded(f"these messages need {need} positions ({rendered} rendered + "
-                                        f"{need - rendered} to generate) and a session holds at most {reach} — {source}.")
-        return need
+        return [int(t) for t in _flatten_tokenizer_output(tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True, **({"tools": tools} if tools else {})))]
 
     def _max_tokens(self, decode: Dict[str, Any]) -> int:
         """A decode bound nobody declared truncates silently; the request wins, then the container, then a refusal."""
@@ -570,28 +566,15 @@ class InferenceEngine:
                 f"declares {supported or 'none'}."
             )
         decode = self._decode_inputs(kwargs)
-        tokenizer = self._executor.modules.get("tokenizer")
-        if tokenizer is None:
-            raise RuntimeError("ZERO FALLBACK: No tokenizer module in executor.")
-        template_kwargs: Dict[str, Any] = {
-            "tokenize": True,
-            "add_generation_prompt": True,
-        }
-        if tools:
-            template_kwargs["tools"] = tools
-        from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output
-        token_ids = [int(t) for t in _flatten_tokenizer_output(
-            tokenizer.apply_chat_template(messages, **template_kwargs))]
+        token_ids, tokenizer = self._rendered(messages, tools), self._executor.modules["tokenizer"]
+        from neurobrix.core.runtime.prompt_length import refuse_past_reach
         if self._agent_kv is None:
             from nbxtensor.memory.kv_session import KVSession
             ceiling, source = self.session_reach()
             self._agent_kv = KVSession(ceiling, source)
         max_tokens = self._max_tokens(decode)
-        if len(token_ids) + max_tokens > self._agent_kv.ceiling:
-            raise ContextLengthExceeded(
-                f"these messages need {len(token_ids) + max_tokens} positions ({len(token_ids)} rendered + "
-                f"{max_tokens} to generate) and a session holds at most {self._agent_kv.ceiling} — "
-                f"{self._agent_kv.source}.")
+        refuse_past_reach("these messages need", len(token_ids), max_tokens, "a session", self._agent_kv.ceiling,
+                          self._agent_kv.source)
         from neurobrix.core.state.constraint import constraint_for      # the request's grammar, its vocabulary kept
         constraint = constraint_for(grammar, tokenizer, self._pkg.defaults, self.__dict__.setdefault("_grammar_vocabs", {}))
         result = self._generate_from_token_ids(token_ids, decode, kv_session=self._agent_kv, constraint=constraint)

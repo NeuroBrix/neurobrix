@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`neurobrix run` refuses by name a prompt longer than the model's context**, before anything loads, with the
+  prompt's token count and the model's context, as `neurobrix serve` does. It used to fail in a GPU kernel (`--triton`)
+  or abort the process (`--compiled`).
+
 ## [0.6.9] - 2026-11-12
 
 A corrective version (nbxtensor stays 0.1.3): a served mixture-of-experts model answered later turns of a conversation

@@ -13,6 +13,20 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+class ContextLengthExceeded(ValueError):
+    """A prompt and its decode bound past what the model or a served session holds (OpenAI: context_length_exceeded)."""
+
+
+def refuse_past_reach(what: str, rendered: int, max_tokens: int, holder: str, reach: int, source: str) -> int:
+    """The positions `rendered` prompt tokens and `max_tokens` to generate need, refused by name BEFORE anything runs
+    when past `reach` — the ONE check of `neurobrix run`, a chat turn (served, or `run --turns`) and both serving doors
+    (a run's prompt past TinyLlama's 2048 reached the GPU while the served one was refused: the Mac, 2026-11-12)."""
+    if (need := rendered + max_tokens) > reach:
+        raise ContextLengthExceeded(f"{what} {need} positions ({rendered} rendered + {max_tokens} to generate) and "
+                                    f"{holder} holds at most {reach} — {source}.")
+    return need
+
+
 def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
     """Normalize tokenizer return into a flat List[int]."""
     if hasattr(token_ids, 'input_ids'):
@@ -99,3 +113,16 @@ def prompt_tokens(root: Path, prompt: str, defaults: Optional[Dict[str, Any]] = 
     return len(prompt_token_ids(container_tokenizer(root), prompt, defaults,
                                 generation_type(root) == "autoregressive_image",
                                 bool(defaults.get("chat_mode", False))))
+
+
+def run_prompt_tokens(root: Path, prompt: str, defaults: Dict[str, Any], asked: Optional[int]) -> Optional[int]:
+    """A run's prefill length for an autoregressive container (None for another flow), Prism's `seq_len`; a text prompt
+    and its decode bound (the request's, else the container's: the flow's rule) past the model's window are refused by
+    name here, before anything is planned or loaded — by the check the serving doors answer 400 with."""
+    gen = str(generation_type(root) or "")
+    seq_len = prompt_tokens(root, prompt, defaults) if gen.startswith("autoregressive") else None
+    if gen == "autoregressive_text" and (window := (defaults.get("lm_config") or {}).get("max_position_embeddings")):
+        from neurobrix.core.runtime_values import require_max_tokens
+        refuse_past_reach("this prompt needs", seq_len, int(asked or require_max_tokens(defaults)), "the model",
+                          int(window), "its context window; shorten the prompt or lower --max-tokens")
+    return seq_len

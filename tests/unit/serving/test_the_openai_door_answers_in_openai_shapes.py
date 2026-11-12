@@ -97,7 +97,7 @@ class FakeEngine:
     reach = 1 << 30                       # the positions a served session holds (InferenceEngine.session_reach)
 
     def check_context(self, messages, tools=None, **kw):
-        from neurobrix.serving.engine import ContextLengthExceeded
+        from neurobrix.core.runtime.prompt_length import ContextLengthExceeded
         need = sum(len(str(m.get("content", ""))) for m in messages) + (kw.get("max_tokens") or 64)
         if need > self.reach:
             raise ContextLengthExceeded(f"these messages need {need} positions and a session holds at most {self.reach}")
