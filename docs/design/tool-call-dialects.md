@@ -112,6 +112,12 @@ environment. Its `tojson` HTML-escapes and sorts keys, refuses `ensure_ascii=Fal
 unsandboxed. Templates now render in the vendor reference's environment (`core/module/tokenizer/chat_template.py`).
 Without that fix, GLM's second agent turn could not be rendered at all.
 
+**And the reasoning's gap (reasoning-separator).** `select_reasoning` finds GLM's `<think>` pair, and its prompt
+opens inside a reasoning, as Qwen3's does. But the grammar wrote a fixed "\n\n" between `</think>` and a forced
+answer, which is Qwen3's text: GLM's template writes nothing there (measured on the catalogue's six thinking
+templates and GLM's). The gap is now read from the template, by rendering one past turn with a reasoning and an
+answer. A template that shows no past reasoning is refused by name for a constrained answer after one.
+
 ## Tests (each seen red before green)
 
 - `test_parsers.py`. Per new dialect:

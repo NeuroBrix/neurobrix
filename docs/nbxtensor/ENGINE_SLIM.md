@@ -265,6 +265,11 @@ measured: 85 953 (b7d960e92) to 86 091, +138.
 | agent/parsers/__init__.py, agent/parsers/base.py | +8, +3 | the selection (`<arg_key>` before `<tool_call>`; `[TOOL_CALLS]` with `[ARGS]`); `inner_markers` and `kept_markers()` |
 | serving/engine.py, serving/openai_api/turn.py | 0, 0 | both decodes keep `kept_markers()` in place of the list each assembled |
 
+The reasoning's gap read from the template (2026-11-12, the same lot's GLM work): what a template writes between its
+reasoning's end and the answer, read by rendering one past turn (`turn.reasoning_gap`), carried by `Constrain` and
+written by the grammar in place of a fixed "\n\n" (GLM-4.7-Flash writes nothing there). Policy. 86 091 to 86 109, +18:
+serving/openai_api/turn.py +8, core/state/constraint.py +6, routes.py +2, constraint_policy.py +2 (measured).
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

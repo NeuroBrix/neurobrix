@@ -3,7 +3,8 @@
 Contract.
 - In: the request's own constraining fields — `response_format`; its tools and whether `tool_choice` forces a call
   (`required`, or a named function); `parallel_tool_calls`; the dialect parser its template declares; the reasoning's
-  close marker when the prompt opens inside a reasoning (else None).
+  close marker when the prompt opens inside a reasoning (else None), and what the template writes between that marker
+  and the answer (None when the template does not show it).
 - Out: a `Constrain` (the execution seam's own input type, core/state/constraint.py) — WHAT the decode must follow: a JSON schema, or a forced tool call (the dialect, the tools, the
   named function, one call or several), each optionally after the reasoning's end — or None: a request that
   constrains nothing pays nothing. Data in, data out: no tokenizer, no grammar, no token. The execution seam
@@ -42,7 +43,8 @@ def single_call_needs_a_forced_call(parallel_tool_calls: Any, forced: bool) -> N
                                 "or a named function (with auto the turn may also answer in prose)")
 
 
-def answer_constraint(response_format: Any, reasoning_end: Optional[str] = None) -> Optional[Constrain]:
+def answer_constraint(response_format: Any, reasoning_end: Optional[str] = None,
+                      reasoning_gap: Optional[str] = None) -> Optional[Constrain]:
     """What `response_format` asks of the answer: None for no format or text; the schema of a json_schema (after the
     reasoning's end when the prompt opens inside one); json_object has no schema to enforce and is refused."""
     if response_format is None or response_format == {"type": "text"}:
@@ -54,11 +56,12 @@ def answer_constraint(response_format: Any, reasoning_end: Optional[str] = None)
     if not isinstance(schema, dict):
         raise ConstraintRefused("invalid", "response_format",
                                 "response_format.json_schema.schema must be a JSON Schema object")
-    return Constrain(schema=schema, after_reasoning=reasoning_end or None)
+    return Constrain(schema=schema, after_reasoning=reasoning_end or None, reasoning_gap=reasoning_gap)
 
 
 def with_tools(answer: Optional[Constrain], forced: bool, tools: Optional[list], parser: Any, named: Optional[str],
-               parallel_tool_calls: Any, reasoning_end: Optional[str] = None) -> Optional[Constrain]:
+               parallel_tool_calls: Any, reasoning_end: Optional[str] = None,
+               reasoning_gap: Optional[str] = None) -> Optional[Constrain]:
     """The answer's constraint weighed against the tools: a forced call replaces nothing — a schema with it, or with
     tools the turn may call, is refused (the grammar would bind the calls too); a forced call alone is the constraint."""
     if forced:
@@ -66,7 +69,7 @@ def with_tools(answer: Optional[Constrain], forced: bool, tools: Optional[list],
             raise ConstraintRefused("unsupported", "response_format",
                                     "a json_schema answer and a forced tool call in one request")
         return Constrain(call=ForcedCall(parser, tools, named, parallel_tool_calls is not False),
-                         after_reasoning=reasoning_end or None)
+                         after_reasoning=reasoning_end or None, reasoning_gap=reasoning_gap)
     if answer is not None and tools:
         raise ConstraintRefused("unsupported", "response_format",
                                 "a json_schema answer and tools in one request: the grammar would "

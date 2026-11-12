@@ -47,7 +47,9 @@ class PieceTokenizer:
         return [self.pieces.index(text)] if text in self.pieces else [len(self.pieces) + i for i in range(len(text))]
 
     def apply_chat_template(self, messages, tokenize=True, add_generation_prompt=True, **kw):
-        text = "".join(f"<{m['role']}>{m['content']}" for m in messages) + "<assistant>" + self.opening
+        # a past reasoning written as Qwen3's templates write it: "<think>\n" + reasoning + "\n</think>\n\n" + answer
+        text = "".join(f"<{m['role']}>" + (f"<think>\n{m['reasoning_content']}\n</think>\n\n" if m.get("reasoning_content")
+                                          else "") + f"{m['content']}" for m in messages) + "<assistant>" + self.opening
         return list(range(len(text))) if tokenize else text
 
     opening = ""

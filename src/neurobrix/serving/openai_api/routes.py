@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from neurobrix.serving.openai_api import constraint_policy as policy, errors
-from neurobrix.serving.openai_api.turn import TurnReader, select_reasoning, typed_arguments
+from neurobrix.serving.openai_api.turn import TurnReader, reasoning_gap, select_reasoning, typed_arguments
 
 # -- what each endpoint reads -------------------------------------------------------------------------------
 #: Parameters read by each endpoint. A key outside its set is refused by name; a key of `_NEUTRAL` is accepted
@@ -106,13 +106,16 @@ def _decided(decide, *facts):
         raise _refusal(e) from e
 
 
-def _constrained(body, tokenizer, forced, tools, parser, named, reasoning_end):
+def _constrained(body, tokenizer, forced, tools, parser, named, reasoning):
     """The grammar a chat request's decode follows, or None: decided by the policy (constraint_policy), compiled by the
     execution seam. The answer's schema is compiled before the tools are weighed against it; a forced call's
-    envelope (the template's own, point 9a) after."""
-    want = _decided(policy.answer_constraint, body.get("response_format"), reasoning_end)
+    envelope (the template's own, point 9a) after. `reasoning`: the pair the prompt opens inside (None: none); the
+    answer then starts after its end and the text the template writes there (turn.reasoning_gap)."""
+    reasoning_end, gap = (reasoning[1], reasoning_gap(tokenizer, reasoning)) if reasoning else (None, None)
+    want = _decided(policy.answer_constraint, body.get("response_format"), reasoning_end, gap)
     grammar = _compiled(want, tokenizer, "answer")
-    call = _decided(policy.with_tools, want, forced, tools, parser, named, body.get("parallel_tool_calls"), reasoning_end)
+    call = _decided(policy.with_tools, want, forced, tools, parser, named, body.get("parallel_tool_calls"),
+                    reasoning_end, gap)
     return grammar if call is want else _compiled(call, tokenizer, "call")
 
 
@@ -373,7 +376,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
             opens = prompt.rstrip().endswith(reasoning[0])
         reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
-        grammar = _constrained(body, tokenizer, forced, tools, parser, named, reasoning[1] if opens else None)
+        grammar = _constrained(body, tokenizer, forced, tools, parser, named, reasoning if opens else None)
         extra = {"grammar": grammar} if grammar is not None else {}
         from neurobrix.serving.engine import ContextLengthExceeded
         try:                               # past what a served session holds: refused before it runs (OpenAI's code)

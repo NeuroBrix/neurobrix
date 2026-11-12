@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Devstral Small 2) now has its calls returned as `tool_calls`, streamed or not. Each format is read from the
   template's own markers, as before. A forced call (`tool_choice: "required"` or a named function) is written in the
   form the parser reads back. Mistral's `[ARGS]` is a special token in its tokenizer, and the decode keeps it. A call that does not read as one is kept in `content`, whole. Tested against each vendor's own
-  template: a call it writes reads back the same. The models themselves join the catalogue when they are captured.
+  template: a call it writes reads back the same. After a thinking model's reasoning, a forced call or a JSON answer
+  now starts with what the model's own template writes there (nothing for GLM-4.7-Flash; the two new lines of Qwen3's
+  templates, as before), read from the template, not fixed. The models themselves join the catalogue when they are captured.
 
 ### Fixed
 

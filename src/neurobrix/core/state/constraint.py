@@ -71,10 +71,12 @@ class ForcedCall:
 @dataclass(frozen=True)
 class Constrain:
     """What a decode must follow: `schema` (the answer is that JSON) or `call` (a forced tool call), after the
-    reasoning's close marker when `after_reasoning` names one."""
+    reasoning's close marker when `after_reasoning` names one, then `reasoning_gap`: what the template writes between
+    that marker and the answer (None: the template shows no past reasoning, so it is not known)."""
     schema: Optional[dict] = None
     call: Optional[ForcedCall] = None
     after_reasoning: Optional[str] = None
+    reasoning_gap: Optional[str] = None
 
 
 def compile_constraint(want, tokenizer):
@@ -92,7 +94,12 @@ def compile_constraint(want, tokenizer):
     body = ({"schema": want.schema} if want.call is None
             else envelope(want.call.parser, want.call.tools, encode, want.call.named, want.call.parallel))
     if want.after_reasoning:               # a prompt that opens in the reasoning: it closes first, then the answer
-        body = {"seq": [reasoning_close(want.after_reasoning, encode), {"lit": "\n\n"}, body]}
+        if want.reasoning_gap is None:
+            raise ValueError(f"the prompt opens inside a reasoning that ends at {want.after_reasoning!r}, and the chat "
+                             "template shows no past reasoning: what it writes between that end and the answer is not "
+                             "known, so the answer cannot be constrained after it")
+        gap = [{"lit": want.reasoning_gap}] if want.reasoning_gap else []      # the template's own text, maybe none
+        body = {"seq": [reasoning_close(want.after_reasoning, encode), *gap, body]}
     return compile_description(json.dumps(body))
 
 

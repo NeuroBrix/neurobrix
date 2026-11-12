@@ -41,6 +41,19 @@ def select_reasoning(template_text: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def reasoning_gap(tokenizer: Any, reasoning: Tuple[str, str]) -> Optional[str]:
+    """What the chat template writes between a reasoning's end marker and the answer, read from the template itself:
+    one past turn rendered with a reasoning and an answer ("\\n\\n" for Qwen3's templates, nothing for GLM-4.7-Flash's).
+    None when the template does not show that turn's reasoning before its answer (nothing to read)."""
+    said, answered = "reasoning-0f3b", "answer-0f3b"
+    messages = [{"role": "user", "content": "u"},
+                {"role": "assistant", "reasoning_content": said, "content": answered}]
+    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+    end = text.find(reasoning[1], text.find(said))
+    at = text.find(answered, end) if end >= 0 and said in text else -1
+    return text[end + len(reasoning[1]):at] if at >= 0 else None
+
+
 @dataclass
 class Delta:
     """What one step released: text on a channel, or one parsed tool call."""
