@@ -23,6 +23,11 @@ class Arena:
         # per source object so a re-bind of the same weights hands the same views back; dropped with the weights
         self.views = {}
 
+    @property
+    def slots(self) -> list:
+        """The slot list itself (no copy): a reader that pairs it with a snapshot at C speed (a replay's scan)."""
+        return self._slots
+
     def __getitem__(self, idx: int):
         return self._slots[idx]
 

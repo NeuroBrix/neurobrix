@@ -7,8 +7,8 @@ storage bytes, so the scrambled copy matched the view it came from and the plan 
 I2V conditioning came back scrambled, the 88-frame video a mosaic of tiles (2026-11-04; judged coherent on 2026-10-25,
 before the replay was the default).
 
-What this test would do if the code were wrong: a storage copy for the hand-over — red at the values; a storage hash
-for the verify — red at the hash of a view against its scrambled copy. One card."""
+What this test would do if the code were wrong: a storage hash for the verify — red at the hash of a view against its
+scrambled copy. One card. (The hand-over's copies are the library's: nbxtensor/tests/test_a_replayed_view_output_keeps_its_values.py.)"""
 import numpy as np
 import pytest
 
@@ -23,21 +23,6 @@ def _view():
     v = base.permute(1, 0, 2)                       # [3, 2, 4], not contiguous
     assert not v.is_contiguous()
     return base, v
-
-
-def test_a_view_is_handed_over_with_its_values_in_order():
-    base, v = _view()
-    want = np.arange(24, dtype=np.float32).reshape(2, 3, 4).transpose(1, 0, 2)
-    got = replay._heap_copy(v)
-    assert got.data_ptr() != base.data_ptr()
-    assert np.array_equal(got.to_cpu().numpy(), want)
-
-
-def test_a_view_is_copied_into_a_recorded_buffer_by_its_values():
-    _base, v = _view()
-    frozen = NBXTensor.empty((3, 2, 4), v.nbx_dtype, "cuda:0")
-    replay._copy_into(frozen, v)
-    assert np.array_equal(frozen.to_cpu().numpy(), np.arange(24, dtype=np.float32).reshape(2, 3, 4).transpose(1, 0, 2))
 
 
 def test_the_verify_hash_tells_a_view_from_its_scrambled_copy():

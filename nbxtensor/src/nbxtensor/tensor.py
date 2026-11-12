@@ -563,6 +563,11 @@ class NBXTensor:
         return 0  # default GPU 0
 
     @property
+    def device_idx(self) -> int:
+        """The card this tensor's memory is on (the allocator's device index)."""
+        return self._device_idx
+
+    @property
     def raw_device(self) -> str:
         return self._device
 

@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.triton import replay as R
+from nbxtensor.backend import frozen_plan as R
 
 
 class _Driver:

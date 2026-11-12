@@ -2501,6 +2501,21 @@ def zeros_kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
     # Fill output with zeros.
 ```
 
+### `nbxtensor.backend.frozen_plan` — a device step recorded once, replayed as direct launches or device graphs
+
+```python
+STATE                       # the recording interceptor (allocator copies/sets/syncs, launcher launches) -> STATE.records
+STATE.site_of(filename) -> bool   # the caller's predicate: which stack frame names where a recording broke
+_install_seams() -> None    # once: Triton's launch property, the allocator interceptor, NBXTensor.item's guard
+_arm_launch_recorder(on: bool) -> None
+KERNEL, MEMCPY, MEMSET, SETDEV, SYNC, H2D   # the action tags
+class FrozenPlan(records, slab, arena_list, input_slots, scan_limit=None, extra_scan=(), scan_slots=None)
+    .replay(arena) -> None  # rebound inputs copied in, the actions run (graphs or direct), arena restored, outputs fresh
+    .crosses_cards() -> bool
+_plan_of(state) / _drop_plan(plans, sig)    # a plan's resources, and their release (slabs retired, graph destroyed)
+_heap_copy(t) -> NBXTensor ; _copy_into(frozen, new) -> None   # the copies by logical values (views kept in order)
+```
+
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
 
 `nbxtensor.backend.launcher_contract`
