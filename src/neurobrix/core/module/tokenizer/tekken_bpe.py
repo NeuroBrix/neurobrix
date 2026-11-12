@@ -138,8 +138,6 @@ class PyTekken:
         self._eos_id = self._special_str_to_id.get("</s>", 2)
         self._pad_id = self._special_str_to_id.get("<pad>", 11)
 
-        self._cache: Dict[str, List[int]] = {}
-
     # ----- construction -----------------------------------------------------
 
     @classmethod

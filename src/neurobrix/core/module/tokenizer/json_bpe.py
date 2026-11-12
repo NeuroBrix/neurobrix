@@ -522,9 +522,9 @@ _BERT_RX = re.compile(r"\w+|[^\w\s]")
 # kept only when it is shorter than MAX_LENGTH bytes and the cache holds fewer than DEFAULT_CACHE_CAPACITY words; a full
 # cache keeps what it has. A tokenizer.json does not carry them: they are the reproduced library's, not the model's.
 #: the reference's MAX_LENGTH (bytes of the word's UTF-8)
-_CACHE_MAX_WORD_BYTES = 256
+CACHE_MAX_WORD_BYTES = 256
 #: the reference's DEFAULT_CACHE_CAPACITY (words)
-_CACHE_MAX_WORDS = 10_000
+CACHE_MAX_WORDS = 10_000
 
 
 class _BPE:
@@ -589,7 +589,7 @@ class _BPE:
                     heapq.heappush(heap, (self.ranks[(word[a], word[b])], a))
         word = [w for w in word if w is not None]
         # bounded as the reference's: a Llama-style text is one word, which an unbounded cache kept for the process's life
-        if len(self._cache) < _CACHE_MAX_WORDS and len(token.encode("utf-8")) < _CACHE_MAX_WORD_BYTES:
+        if len(self._cache) < CACHE_MAX_WORDS and len(token.encode("utf-8")) < CACHE_MAX_WORD_BYTES:
             self._cache[token] = word
         return word
 

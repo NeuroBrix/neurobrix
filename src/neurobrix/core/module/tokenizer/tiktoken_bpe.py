@@ -49,6 +49,7 @@ module across an 8000-string Unicode fuzz battery.
 """
 
 from typing import Dict, List, Optional, Sequence, Tuple
+from neurobrix.core.module.tokenizer.json_bpe import CACHE_MAX_WORD_BYTES, CACHE_MAX_WORDS
 import base64
 import json
 import re
@@ -417,7 +418,7 @@ class PyTiktoken:
             else:
                 result = [self._ranks[p]
                           for p in _byte_pair_merge(piece_bytes, self._ranks)]
-            self._cache[piece] = result
+            if len(self._cache) < CACHE_MAX_WORDS and len(piece_bytes) < CACHE_MAX_WORD_BYTES: self._cache[piece] = result
             ids.extend(result)
         return ids
 

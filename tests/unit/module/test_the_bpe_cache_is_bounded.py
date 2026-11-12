@@ -44,3 +44,16 @@ def test_the_cache_never_holds_more_than_ten_thousand_words():
     assert len(t._bpe._cache) == 10_000, f"the BPE cache holds {len(t._bpe._cache)} words after 10 050 distinct ones"
     assert t.encode(" ".join(words)).ids == ids        # a full cache: hits for the first 10 000, merges for the rest
     assert [t.encode(w).ids for w in words[-5:]] == [_tokenizer().encode(w).ids for w in words[-5:]]
+
+
+def test_the_tiktoken_cache_is_bounded_too():
+    """The tiktoken-format tokenizer cached every regex piece for the life of the process: a long piece is not kept
+    and the cache never passes its bound (the same bound as json_bpe's)."""
+    from neurobrix.core.module.tokenizer import tiktoken_bpe as tk
+    ranks = {bytes([b]): b for b in range(256)}
+    tok = tk.PyTiktoken(ranks, {}, r".+")
+    tok._encode_ordinary("x" * 300)
+    assert "x" * 300 not in tok._cache, "a 300-byte piece was kept in the tiktoken cache"
+    for i in range(10_050):
+        tok._encode_ordinary(f"w{i}")
+    assert len(tok._cache) <= 10_000, f"the tiktoken cache holds {len(tok._cache)} pieces after 10 050 distinct ones"
