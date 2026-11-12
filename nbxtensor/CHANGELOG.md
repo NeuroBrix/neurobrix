@@ -17,6 +17,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `kv_session.chunk_rows(..., rungs=)`: with `rungs` (ascending row counts) a prefill's last chunk is completed to
   the smallest rung that holds it instead of to the chunk's rows — a short turn is a short pass of a row count the
   caller knows in advance; a last chunk no rung holds is refused by name.
+- `ops.oracles.attention_fp64`: the attention family's float64 reference on query-row windows (moved from the
+  engine's certifier): K and V widened once, its products through BLAS — 10x faster on a long key range, same values.
+- `nbxtensor.backend.frozen_plan`: the frozen-plan replay — a device step recorded once (the allocator's copies, sets
+  and synchronisations and the launcher's launches, as actions) and replayed as direct launches or captured device
+  graphs: `STATE` (the recording interceptor; `site_of`, the caller's predicate naming where a recording broke),
+  `FrozenPlan`, `install_seams`, `arm_launch_recorder`, the action tags. Moved from the NeuroBrix engine, which
+  keeps only when a step is recorded, verified and replayed.
+- `frozen_plan.measure`, `room_for`, `slabs`, `record`, `retire`, `head_values`, `FrozenPlan.hand_out_outputs`,
+  `STATE.open_measurement`, `values_sha256`, `carved_from`: a step's slab measured, made room for, allocated and recorded into, a rejected plan
+  released — the mechanism of the replay's state machine, whose decisions stay the caller's.
+- `DeviceAllocator.give_back_cached(dev)`: a card's cached free memory (the expandable range's chunks, the pool's
+  blocks) back to the driver after its work ends.
+- `StepSlab.for_carved`, `DeviceAllocator.register_idle_reclaimer`: a decode step's slab sized in the library; an
+  application's idle-memory reclaimer registered through a public call. A recording that cannot read the current
+  device now breaks its plan by name instead of recording an action without its card.
+- `Arena.slots`: the slot list itself, for a reader pairing it with a snapshot.
+- `NBXTensor.device_idx`: the card a tensor's memory is on.
+- `NBXTensor.bits()`, `same_bits(other)`, `storage_root()`, `storage_address()` and `shares_storage(other)`: a
+  tensor read as the integers of its element width, a bit-for-bit comparison on the device (+0.0 and -0.0 differ, a
+  NaN equals itself), the allocation a view reads and whether two tensors view one allocation. The engine's invariant
+  state asks them before reusing or keeping a result; they lived in the engine until now.
+- `nbxtensor.inspection`: `host_values`, `non_finite`, `value_stats`, `last_position_row` and `digest` — a tensor's
+  values read on the host for a diagnostic (a non-finite scan, the record a per-op value dump keeps, the last
+  position's row, a digest of the bytes in row-major order). The engine's NaN scan, value dumps and op fingerprints
+  call them instead of their own device-to-host copies.
+- `memory.memory_pool.break_aliases(tensors, freed)`: before the tensors at `freed` (keys of a list or a dict) are
+  freed, every other entry viewing one of their allocations is replaced by its `contiguous()`. The engine's weight
+  eviction called its own two copies of it. Known limit, kept from them: a view that is already contiguous is its own
+  `contiguous()` and still reads the freed memory.
+- `NBXTensor.saturated(dtype)`: a one-element float32 or float64 tensor holding a finite value beyond a half dtype's
+  range comes back as a new tensor (same dtype, shape and card) holding the clamped value (`saturate_scalar`);
+  anything else is itself. The engine's `where` wrap called its own copy, which uploaded to the current card.
+- `memory.paged_kv.keys_seq_major(q, k, pre_transposed=None)` and `one_head_per_group(t, kv_heads, group)`: the keys
+  an attention reads put in the queries' order (the recorded layout first, the shape only without one, the square
+  case refused by name), and keys or values repeated for grouped-query attention read back as their own heads. The
+  engine's KV interceptor held both.
+- `memory.pages.MetalStateFence`: the release fence of the Triton kernels' queue on Metal (`record`, `completed`,
+  `drain(pool)`), for the day launches stop waiting for their kernel; not in use today. It was the engine's
+  `triton/state_fence.py`, which nothing called.
+
+### Fixed
+- `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's
+  first autotuned launch gets the machine's stored settings too (the certified directory first), once — they were
+  seeded only into the modules already imported, so every new process measured the late ones again.
 
 ## [0.1.3] - 2026-11-11
 

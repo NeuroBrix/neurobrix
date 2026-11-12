@@ -2504,6 +2504,40 @@ def zeros_kernel(output_ptr, n_elements, BLOCK_SIZE: tl.constexpr)
     # Fill output with zeros.
 ```
 
+### `nbxtensor.backend.frozen_plan` — a device step recorded once, replayed as direct launches or device graphs
+
+```python
+STATE                       # the recording interceptor (allocator copies/sets/syncs, launcher launches) -> STATE.records
+STATE.site_of(filename) -> bool   # the caller's predicate: which stack frame names where a recording broke
+install_seams() -> None    # once: Triton's launch property, the allocator interceptor, NBXTensor.item's guard
+arm_launch_recorder(on: bool) -> None
+KERNEL, MEMCPY, MEMSET, SETDEV, SYNC, H2D   # the action tags
+class FrozenPlan(records, slab, arena_list, input_slots, scan_limit=None, extra_scan=(), scan_slots=None)
+    .replay(arena) -> None  # rebound inputs copied in, the actions run (graphs or direct), arena restored, outputs fresh
+    .crosses_cards() -> bool
+plan_of(state) / drop_plan(plans, sig)    # a plan's resources, and their release (slabs retired, graph destroyed)
+heap_copy(t) -> NBXTensor ; copy_into(frozen, new) -> None   # the copies by logical values (views kept in order)
+FrozenPlan.hand_out_outputs(arena) -> None   # the plan's outputs handed to the arena as fresh heap copies
+STATE.open_measurement() -> None             # a fresh watermark window
+StepSlab.for_carved(carved_bytes, dev_idx) -> StepSlab   # a decode step's slab (margin: MARGIN_RATIO, MARGIN_BYTES)
+DeviceAllocator.register_idle_reclaimer(reclaim) -> None  # reclaim(dev) -> bytes, called on a refused malloc
+measure(run, device_idx) -> (slab_bytes, {other card: slab_bytes}, live_peak)   # run() under the watermark counter
+room_for(dev, slab_bytes, verify_bytes) -> (fits, free)   # cached memory given back, then whether both fit
+slabs(slab_bytes, device_idx, others) -> (SlabAllocator, {card: SlabAllocator})  # nothing held on a failure
+record(run, slab, others) -> (actions, exception or None, broken reason or None)  # run() recorded into the slabs
+retire(plan) -> None                         # a rejected plan's slabs and captured graph released
+head_values(t, nbytes=64) -> numpy float16   # a diagnostic's look at a buffer's first bytes
+values_sha256(t) -> str                      # sha256 of a tensor's shape and logical values (a verify's comparison)
+carved_from(t, slab) -> bool                 # whether t's memory starts inside the slab
+```
+
+### `nbxtensor.ops.oracles.attention_fp64` — the attention family's float64 reference
+
+```python
+def attention_fp64(q, k, v, scale, windows, mask=None, widen=np.asarray) -> List[((r0, r1), np.ndarray)]
+    # softmax(q k^T * scale + mask) v in float64 on the given query-row windows; K and V widened once, BLAS products
+```
+
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
 
 `nbxtensor.backend.launcher_contract`
