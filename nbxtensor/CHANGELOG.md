@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `ops.oracles.attention_fp64`: the attention family's float64 reference on query-row windows (moved from the
+  engine's certifier): K and V widened once, its products through BLAS — 10x faster on a long key range, same values.
 - `nbxtensor.backend.frozen_plan`: the frozen-plan replay — a device step recorded once (the allocator's copies, sets
   and synchronisations and the launcher's launches, as actions) and replayed as direct launches or captured device
   graphs: `STATE` (the recording interceptor; `site_of`, the caller's predicate naming where a recording broke),

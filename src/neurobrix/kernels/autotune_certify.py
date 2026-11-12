@@ -1030,26 +1030,14 @@ def _moe_oracle_fn(x, ws, score, route, mul):
 
 
 def _attention_oracle_fn(q, k, v, mask, scale):
-    """The fp64 oracle of softmax(q k^T * scale + mask) v over [B, H, Tq, D], on query-row windows above the cap
-    (a query row's cost: its Tk scores and their Tk x D products)."""
-    tq, hd = q.shape[-2], q.shape[-1]
-    tk = k.shape[-2]
-    # K and V read and widened ONCE, the window's two products through BLAS (`np.matmul` on the profile's threads):
-    # widened again in every window by a one-core `np.einsum`, a key over 262 144 cached positions took minutes of
-    # host time while its card waited (2026-11-12, the served chunks' certification of Qwen3-Coder-30B-A3B)
-    kt, vf = np.swapaxes(_f64(k), -1, -2), _f64(v)
-
-    def rows(r0, r1):
-        s = np.matmul(_f64(q[..., r0:r1, :]), kt) * scale
-        if mask is not None:
-            s = s + _f64(mask[..., r0:r1, :])
-        s = s - s.max(axis=-1, keepdims=True)
-        e = np.exp(s)
-        return np.matmul(e / e.sum(axis=-1, keepdims=True), vf)
+    """The fp64 oracle of softmax(q k^T * scale + mask) v over [B, H, Tq, D] (`nbxtensor.ops.oracles.attention_fp64`),
+    on query-row windows above the cap (a query row's cost: its Tk scores and their Tk x D products)."""
+    from nbxtensor.ops.oracles.attention_fp64 import attention_fp64
+    tq, hd, tk = q.shape[-2], q.shape[-1], k.shape[-2]
     wins = _row_windows(tq, hd, 2 * tk)
     if wins is None:
-        return lambda: rows(0, tq)
-    return lambda: RowWindowedOracle([((r0, r1), rows(r0, r1)) for (r0, r1) in wins], tq)
+        return lambda: attention_fp64(q, k, v, scale, [(0, tq)], mask, values)[0][1]
+    return lambda: RowWindowedOracle(attention_fp64(q, k, v, scale, wins, mask, values), tq)
 
 
 #: the full-size fp64 arrays the softmax oracle holds per element of its window (z, exp(z), the quotient)

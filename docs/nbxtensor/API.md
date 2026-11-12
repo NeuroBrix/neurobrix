@@ -2552,6 +2552,13 @@ values_sha256(t) -> str                      # sha256 of a tensor's shape and lo
 carved_from(t, slab) -> bool                 # whether t's memory starts inside the slab
 ```
 
+### `nbxtensor.ops.oracles.attention_fp64` — the attention family's float64 reference
+
+```python
+def attention_fp64(q, k, v, scale, windows, mask=None, widen=np.asarray) -> List[((r0, r1), np.ndarray)]
+    # softmax(q k^T * scale + mask) v in float64 on the given query-row windows; K and V widened once, BLAS products
+```
+
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
 
 `nbxtensor.backend.launcher_contract`
