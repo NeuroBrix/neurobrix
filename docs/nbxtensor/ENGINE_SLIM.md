@@ -299,6 +299,7 @@ the driver: `DeviceAllocator.give_back_cached`, where the engine reached three a
 recording run, the release of a plan rejected at its verify, and the diagnostic's buffer read moved into
 `frozen_plan` (`measure`, `room_for`, `slabs`, `record`, `retire`, `head_values`, `FrozenPlan.hand_out_outputs`);
 `maybe_run` keeps the state machine's decisions. 85 771 to 85 707, -64 (triton/replay.py 607 -> 543).
+
 ## The experts store's tensor side moves into nbxtensor (2026-11-12): the move, and what stays as policy
 
 The owner's line of 2026-11-12 11:05 ("nbxtensor is our torch": what touches tensors, device memory, arenas, copies,
