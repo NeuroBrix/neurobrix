@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A chat template renders the prompt its model was trained on.** The engine's template renderer wrote every
+  `tojson` value HTML-escaped (`if a < b` for `if a < b`, `é` for `é`) and with its keys sorted, so a
+  request's tool schemas and past calls reached the model reordered and escaped. A template that passes
+  `ensure_ascii=False` to `tojson` (GLM-4.7-Flash's, for a past call's number or list) stopped with a `TypeError`,
+  and `{% break %}` / `{% continue %}` were not tags. Templates now render in the environment their vendor's reference
+  uses: `tojson` as `json.dumps`, the keys in the order the request gave them, loop controls on. The renderer is now
+  sandboxed: a template is data inside a container, and it can no longer reach Python objects. Measured on the
+  catalogue's 17 chat templates over one conversation with tools: 8 render differently, and none fails; with no
+  tools, all 17 render byte-identically. The new environment with the old filter put back gives the old text
+  exactly, in all 34 renders, so the filter is the only difference.
+
 ## [0.6.8] - 2026-11-11
 
 A corrective version, with nbxtensor 0.1.3: wrong answers and stops on the paths a mixture-of-experts coding model

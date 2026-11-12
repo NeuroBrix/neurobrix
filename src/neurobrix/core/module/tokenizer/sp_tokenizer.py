@@ -835,35 +835,10 @@ class HFTokenizer:
                 "Cannot apply chat template to messages."
             )
 
-        try:
-            from jinja2 import Environment
-        except ImportError:
-            raise RuntimeError(
-                "ZERO FALLBACK: jinja2 required for chat template.\n"
-                "Install with: pip install jinja2"
-            )
-
-        # Render the Jinja2 template using Environment with HuggingFace-compatible settings.
-        # lstrip_blocks=True: strip leading whitespace before {% %} tags
-        # trim_blocks=True:   strip newline after {% %} tags
-        # Without these, every {% if %}/{% for %} emits spurious newlines that corrupt the prompt.
-        env = Environment(lstrip_blocks=True, trim_blocks=True)
-        # The two helpers transformers injects into every chat-template
-        # environment and a vendor template may call by name. Without them the
-        # render raises UndefinedError before the model runs — granite-3.1's
-        # template asks for today's date through `strftime_now` (measured
-        # 2026-09-20, all three modes: "'strftime_now' is undefined").
-        # `raise_exception` is the template's own refusal (a role it does not
-        # accept), surfaced as a TemplateError so it reads as the vendor's word.
-        from datetime import datetime as _dt
-        from jinja2.exceptions import TemplateError as _TemplateError
-
-        def _raise_exception(message):
-            raise _TemplateError(message)
-
-        env.globals["strftime_now"] = lambda fmt: _dt.now().strftime(fmt)
-        env.globals["raise_exception"] = _raise_exception
-        template = env.from_string(self._chat_template)
+        # The vendor's own rendering environment (chat_template.py): sandboxed, trim/lstrip blocks, loop controls,
+        # the reference's tojson, raise_exception and strftime_now.
+        from neurobrix.core.module.tokenizer.chat_template import environment
+        template = environment().from_string(self._chat_template)
         formatted = template.render(
             messages=messages,
             bos_token=self._bos_token,
