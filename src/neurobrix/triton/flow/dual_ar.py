@@ -20,7 +20,7 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
-from neurobrix.core.flow.shared_steps import _is_tensor   # dual_ar and tts_llm, the same
+from neurobrix.core.flow.shared_steps import _is_tensor, float32_host   # dual_ar and tts_llm, the same
 import logging
 _log = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         if input_ids is None:
             raise RuntimeError("ZERO FALLBACK: DualAR requires tokenized input_ids.")
 
-        input_ids_np = _to_numpy(input_ids).astype(np.int64)
+        input_ids_np = float32_host(input_ids).astype(np.int64)
         if input_ids_np.ndim > 1:
             input_ids_np = input_ids_np.squeeze(0)
 
@@ -173,8 +173,8 @@ class TritonDualAREngine(ComponentFlowHandler):
                 hidden = out.get("hidden_states") if isinstance(out, dict) else None
                 if logits is None or hidden is None:
                     raise RuntimeError("ZERO FALLBACK: slow model must output logits + hidden_states.")
-                logits_np = _to_numpy(logits)
-                hidden_np = _to_numpy(hidden)            # [1, clen, dim]
+                logits_np = float32_host(logits)
+                hidden_np = float32_host(hidden)            # [1, clen, dim]
                 slow_logits = logits_np[0, pos, :].astype(np.float64)
                 from neurobrix.triton.flow.decode_topk import log_topk
                 log_topk(slow_logits, len(slow_history))
@@ -204,7 +204,7 @@ class TritonDualAREngine(ComponentFlowHandler):
                     fout = fast_exec.run({"hidden": NBXTensor.from_numpy(hidden_pos),
                                           "codebook_context": NBXTensor.from_numpy(ctx_arr)})
                     flogits = fout.get("output") if isinstance(fout, dict) else fout
-                    flogits_np = _to_numpy(flogits)
+                    flogits_np = float32_host(flogits)
                     read_pos = len(ctx)
                     cb_logits = flogits_np[0, read_pos, :acoustic_cb_size]
                     from neurobrix.triton.flow.decode_topk import log_topk as _log_topk
@@ -283,7 +283,7 @@ class TritonDualAREngine(ComponentFlowHandler):
 
             _dump_z = _os_diag.environ.get("NBX_DUALAR_DUMP_Z", "")
             if _dump_z:
-                np.save(_dump_z, _to_numpy(z).astype(np.float32))
+                np.save(_dump_z, float32_host(z).astype(np.float32))
                 _log.debug(f"   [diag] dumped z {list(z.shape)} -> {_dump_z}")
 
             # Bind RVQ features to the decoder input (topology connects
@@ -385,7 +385,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         _log.debug(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
         waveform_chunks = []
 
-        actual_np = _to_numpy(actual_input)
+        actual_np = float32_host(actual_input)
 
         for chunk_start in range(0, actual_seq, graph_seq_len):
             chunk_end = min(chunk_start + graph_seq_len, actual_seq)
@@ -406,7 +406,7 @@ class TritonDualAREngine(ComponentFlowHandler):
                 out_tensor = None
 
             if out_tensor is not None:
-                out_np = _to_numpy(out_tensor)
+                out_np = float32_host(out_tensor)
                 if chunk_end - chunk_start < graph_seq_len and out_np.ndim >= 2:
                     ratio = (chunk_end - chunk_start) / graph_seq_len
                     trim_len = int(out_np.shape[-1] * ratio)
@@ -472,34 +472,3 @@ def _sample_token_np(
         probs = probs / probs.sum()
 
     return int(_draw.choice(len(probs), p=probs))
-
-
-def _to_numpy(tensor) -> np.ndarray:
-    """Convert any tensor to numpy.
-
-    For NBXTensor (Triton mode): upcasts bf16 to fp32 first (numpy has
-    no native bf16), then D2H memcpy into a host buffer. Zero torch.
-    """
-    if isinstance(tensor, np.ndarray):
-        return tensor
-    if isinstance(tensor, NBXTensor):
-        t = tensor.contiguous()
-        if t.dtype == NBXDtype.bfloat16:
-            t = t.to(NBXDtype.float32)
-        nb_to_np = {
-            NBXDtype.float32: np.float32,
-            NBXDtype.float16: np.float16,
-            NBXDtype.int32:   np.int32,
-            NBXDtype.int64:   np.int64,
-        }
-        np_dtype = nb_to_np.get(t.dtype)
-        if np_dtype is None:
-            t = t.to(NBXDtype.float32)
-            np_dtype = np.float32
-        arr = np.empty(t.shape, dtype=np_dtype)
-        DeviceAllocator.memcpy(arr.ctypes.data, t.data_ptr(),
-                               arr.nbytes, kind=2)
-        return arr
-    if hasattr(tensor, 'detach'):
-        return tensor.detach().cpu().numpy()
-    return np.array(tensor)

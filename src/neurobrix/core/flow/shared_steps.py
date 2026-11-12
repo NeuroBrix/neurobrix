@@ -370,3 +370,16 @@ def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
 def _is_tensor(val) -> bool:
     """Check if val is any tensor type."""
     return isinstance(val, NBXTensor) or (hasattr(val, 'shape') and hasattr(val, 'dtype'))
+
+
+# The Triton dual_ar and tts_llm handlers' host read: an NBXTensor is read as float32 through the library.
+def float32_host(value):
+    """`value` as a numpy array: an NBXTensor cast to float32 by the library then read with `numpy()`, a numpy array
+    as it is, an object with `detach` through `.detach().cpu().numpy()`, anything else through `np.array`."""
+    import numpy as np
+    if isinstance(value, NBXTensor):
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
+        return value.to(NBXDtype.float32).numpy()
+    if isinstance(value, np.ndarray):
+        return value
+    return value.detach().cpu().numpy() if hasattr(value, "detach") else np.array(value)

@@ -33,7 +33,7 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
-from neurobrix.core.flow.shared_steps import _is_tensor   # dual_ar and tts_llm, the same
+from neurobrix.core.flow.shared_steps import _is_tensor, float32_host   # dual_ar and tts_llm, the same
 import logging
 _log = logging.getLogger(__name__)
 
@@ -175,11 +175,11 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
             raise RuntimeError(f"ZERO FALLBACK: text_emb weight not found in {lm_name}.")
 
         # Convert aux weights to numpy for embedding lookups
-        text_emb_np = _to_numpy(text_emb_w).astype(np.float32)
-        speech_emb_np = _to_numpy(speech_emb_w).astype(np.float32)
-        text_pos_emb_np = _to_numpy(text_pos_emb_w).astype(np.float32) if text_pos_emb_w is not None else None
-        speech_pos_emb_np = _to_numpy(speech_pos_emb_w).astype(np.float32) if speech_pos_emb_w is not None else None
-        speech_head_np = _to_numpy(speech_head_w).astype(np.float32)
+        text_emb_np = float32_host(text_emb_w).astype(np.float32)
+        speech_emb_np = float32_host(speech_emb_w).astype(np.float32)
+        text_pos_emb_np = float32_host(text_pos_emb_w).astype(np.float32) if text_pos_emb_w is not None else None
+        speech_pos_emb_np = float32_host(speech_pos_emb_w).astype(np.float32) if speech_pos_emb_w is not None else None
+        speech_head_np = float32_host(speech_head_w).astype(np.float32)
 
         # -- CFG detection (DATA-DRIVEN, R30 mirror of core via the centralized
         #    engine). The t3_cfg backbone is traced batch=1, so CFG runs
@@ -279,7 +279,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
             out = _get_component_output(self.ctx, lm_name)
             if out is None:
                 return None
-            out_np = _to_numpy(out)
+            out_np = float32_host(out)
             last_hidden = out_np[:, -1:, :]  # [1, 1, dim]
             return last_hidden @ speech_head_np.T  # [1, 1, speech_vocab]
 
@@ -495,7 +495,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
 
         # Live reference speaker_emb overrides the default voice when present.
         if speaker_emb is not None:
-            spk_np = _to_numpy(speaker_emb).astype(np.float32).reshape(1, -1)
+            spk_np = float32_host(speaker_emb).astype(np.float32).reshape(1, -1)
         else:
             spk_np = conds["t3.speaker_emb"].astype(np.float32)
 
@@ -515,7 +515,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         self._ensure_weights_loaded(cond_name)
         output = cond_executor.run(comp_inputs)
         cond_emb = next(iter(output.values())) if isinstance(output, dict) else output
-        cond_out_np = _to_numpy(cond_emb).astype(np.float32)
+        cond_out_np = float32_host(cond_emb).astype(np.float32)
         if not self.ctx.persistent_mode:
             self._unload_component_weights(cond_name)
             release_flow_memory(self.ctx.primary_device)
@@ -751,7 +751,7 @@ def _sample_token_np(
 
 def _save_audio_np(audio_tensor, sample_rate: int) -> None:
     """Save audio tensor to WAV file (numpy path)."""
-    audio_np = _to_numpy(audio_tensor).astype(np.float32).squeeze()
+    audio_np = float32_host(audio_tensor).astype(np.float32).squeeze()
 
     # Normalize to [-1, 1]
     max_val = max(abs(audio_np.max()), abs(audio_np.min()))
@@ -773,40 +773,3 @@ def _save_audio_np(audio_tensor, sample_rate: int) -> None:
             wf.writeframes(struct.pack(f'<{len(audio_int16)}h', *audio_int16))
 
     _log.debug(f"   [Audio] Saved: {output_path} ({len(audio_np) / sample_rate:.1f}s @ {sample_rate}Hz)")
-
-
-def _to_numpy(tensor) -> np.ndarray:
-    """Convert any tensor to numpy.
-
-    For NBXTensor (Triton mode): upcasts fp16/bf16 to fp32 first (numpy
-    has no native bf16), then D2H memcpy into a host buffer, then wrap
-    as a numpy array. No torch import — this is the GPU→CPU boundary for
-    sparse aux-weight lookups done on host.
-    """
-    if isinstance(tensor, np.ndarray):
-        return tensor
-    if isinstance(tensor, NBXTensor):
-        import ctypes
-        t = tensor.contiguous()
-        # numpy has no bf16; fp16 we keep but the callers always .astype
-        # later. Upcast bf16 to fp32 on-device before the D2H.
-        if t.dtype == NBXDtype.bfloat16:
-            t = t.to(NBXDtype.float32)
-        nb_dtype_to_np = {
-            NBXDtype.float32: np.float32,
-            NBXDtype.float16: np.float16,
-            NBXDtype.int32:   np.int32,
-            NBXDtype.int64:   np.int64,
-        }
-        np_dtype = nb_dtype_to_np.get(t.dtype)
-        if np_dtype is None:
-            # Unknown dtype — force fp32.
-            t = t.to(NBXDtype.float32)
-            np_dtype = np.float32
-        arr = np.empty(t.shape, dtype=np_dtype)
-        DeviceAllocator.memcpy(
-            arr.ctypes.data, t.data_ptr(), arr.nbytes, kind=2)
-        return arr
-    if hasattr(tensor, 'detach'):
-        return tensor.detach().cpu().numpy()
-    return np.array(tensor)
