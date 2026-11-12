@@ -21,6 +21,7 @@ implement the same four calls behind the same `Driver` interface.
 """
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 
@@ -1107,11 +1108,9 @@ def _forward_debug(kernel, options: Dict[str, Any]) -> None:
         global _DEBUG_KNOB
         if _DEBUG_KNOB is None:
             _DEBUG_KNOB = False
-            try:
+            with contextlib.suppress(Exception):
                 from triton import knobs
                 _DEBUG_KNOB = bool(knobs.runtime.debug)
-            except Exception:
-                pass
         options["debug"] = bool(getattr(kernel, "debug", False)) or _DEBUG_KNOB
 
 
@@ -2068,11 +2067,9 @@ def screen_configs(tuner, configs, key, meta=None, record_key=None):
         return _screen_configs(tuner, configs, key, meta=meta,
                                record_key=record_key)
     finally:
-        try:
+        with contextlib.suppress(Exception):                # a sweep must not fail on cleanup
             from nbxtensor.memory.allocator import DeviceAllocator
             DeviceAllocator.empty_cache_pool()
-        except Exception:                              # noqa: BLE001
-            pass                                       # a sweep must not fail on cleanup
 
 
 def _screen_configs(tuner, configs, key, meta=None, record_key=None):
@@ -2485,17 +2482,10 @@ def install(force: Optional[bool] = None) -> bool:
 
 def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", budget_ms=None,
              size_repetitions_by="repetition", **_):
-    """Same contract as `triton.testing.do_bench` (milliseconds; quantiles or
-    a mean/min/max), with the L2 flush and the timing done through the
-    engine's runtime (`DeviceAllocator`: events on the legacy stream).
-
-    `size_repetitions_by`: "repetition" (the default: a run's first tuning of an uncertified key) sizes the count from
-    one whole repetition, flush and timing included, so `rep` is the time budget it is upstream; "kernel" sizes it from
-    the kernel's own time, the count a certification campaign has always used (offline, done once: its tables stay
-    comparable; the Orchestrateur, 2026-11-12)."""
+    """`triton.testing.do_bench`'s contract (ms; quantiles or mean/min/max), flush and timing through the runtime.
+    `size_repetitions_by`: "repetition" (a run's first tuning) or "kernel" (certification's count, kept comparable)."""
     if size_repetitions_by not in ("repetition", "kernel"):
         raise ValueError(f"size_repetitions_by={size_repetitions_by!r}: 'repetition' or 'kernel'")
-    import numpy as np
     from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -2507,55 +2497,42 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     # would measure the swap, and a gate counting a different number from the
     # one actually allocated is a gate about nothing.
     flush = NBXTensor.empty((_BENCH_FLUSH_BYTES // 4,), dtype=NBXDtype.float32, device="cuda")
-    # ONE probing launch before the four that finish the estimate. The
-    # estimate used to be five blind launches -- so a pathologically slow
-    # candidate (2.5 min a launch was measured on a bf16 matmul sweep) cost
-    # five launches, >12 minutes, before any number existed. After a single
-    # launch its time IS known, and a candidate whose one launch exceeds the
-    # budget cannot win the sweep anyway; benching it further buys nothing.
-    #
-    # For a candidate under budget the arithmetic is unchanged: one launch
-    # plus four launches, and t_est is the mean of the five -- the same
-    # estimator, split across two event pairs instead of one.
-    if budget_ms is None:
-        # Triton's `_bench -> self.do_bench(kernel_call, quantiles=...)` chain
-        # is not ours to re-sign, so the sweep wrapper PUBLISHES the budget and
-        # this end consults it -- explicit coupling, documented at both ends.
-        try:
-            from nbxtensor.ops.autotune_refusals import current_budget_ms
-            budget_ms = current_budget_ms()
-        except Exception:                              # noqa: BLE001
-            budget_ms = None
-    t_probe = _time_ms(fn, 1)
-    if budget_ms is not None and t_probe > budget_ms:
-        raise CandidateOverTimeBudget(t_probe, budget_ms)
-    try:
-        from nbxtensor.ops.autotune_refusals import note_candidate_time
-        note_candidate_time(t_probe)
-    except Exception:                                  # noqa: BLE001
-        pass
-    t_est = (t_probe + 4.0 * _time_ms(fn, 4)) / 5.0
-    n_warmup = max(1, int(warmup / max(t_est, 1e-3)))
-    for _i in range(n_warmup):
+    t_est = (_probe_within_budget(fn, budget_ms) + 4.0 * _time_ms(fn, 4)) / 5.0
+    for _i in range(max(1, int(warmup / max(t_est, 1e-3)))):
         fn()
-    # The repetitions are sized from what ONE costs, the flush and the timing included, so `rep` stays the time
-    # budget it is upstream. Sized from the kernel's time alone, a 0.01 ms kernel got 10 000 repetitions, each behind
-    # a 256 MB clear: a new user's first long request on Metal ran past 10 minutes (trial M of 0.6.13, 2026-11-12),
-    # once the launch stopped inflating that time.
-    import time as _wall
-    began = _wall.perf_counter()
-    DeviceAllocator.memset_cuda(flush.data_ptr(), 0, flush._nbytes)
-    times = [_time_ms(fn, 1)]
-    one_ms = 1000.0 * (_wall.perf_counter() - began)
-    per = one_ms if size_repetitions_by == "repetition" else 0.0
-    n_repeat = max(1, int(rep / max(per, t_est, 1e-3)))
-    for _i in range(n_repeat - 1):
-        DeviceAllocator.memset_cuda(flush.data_ptr(), 0, flush._nbytes)
-        times.append(_time_ms(fn, 1))
-    times = np.asarray(times, dtype=np.float64)
+    times = np.asarray(_timed_repetitions(fn, lambda: DeviceAllocator.memset_cuda(flush.data_ptr(), 0, flush._nbytes),
+                                          rep, t_est, size_repetitions_by), dtype=np.float64)
     if quantiles is not None:
         return [float(q) for q in np.quantile(times, quantiles)]
     return float(getattr(np, return_mode)(times)) if return_mode in ("mean", "min", "max", "median") else float(times.mean())
+
+
+def _probe_within_budget(fn, budget_ms):
+    """ONE probing launch (ms) before the four that finish the estimate: five blind ones cost >12 min on a 2.5-min bf16
+    candidate. The budget is the sweep wrapper's, PUBLISHED (Triton's `_bench` chain is not ours to re-sign)."""
+    from nbxtensor.ops import autotune_refusals as refusals
+    with contextlib.suppress(Exception):
+        budget_ms = refusals.current_budget_ms() if budget_ms is None else budget_ms
+    t_probe = _time_ms(fn, 1)
+    if budget_ms is not None and t_probe > budget_ms:
+        raise CandidateOverTimeBudget(t_probe, budget_ms)
+    with contextlib.suppress(Exception):
+        refusals.note_candidate_time(t_probe)
+    return t_probe
+
+
+def _timed_repetitions(fn, clear, rep, t_est, by):
+    """The timed repetitions behind the flush: by="repetition" sized from one whole repetition (`rep` a time budget; by
+    the kernel alone, 10 000 x 256 MB clears: trial M of 0.6.13 > 10 min), by="kernel" certification's count."""
+    import time
+    began = time.perf_counter()
+    clear()
+    times = [_time_ms(fn, 1)]
+    per = 1000.0 * (time.perf_counter() - began) if by == "repetition" else 0.0
+    for _i in range(max(1, int(rep / max(per, t_est, 1e-3))) - 1):
+        clear()
+        times.append(_time_ms(fn, 1))
+    return times
 
 
 class CandidateOverTimeBudget(Exception):
