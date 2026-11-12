@@ -421,8 +421,8 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     # shadows filled the swap (2026-09-21 23:45).
     _HOST_VALUE_CAP_BYTES = 1 << 20
 
-    def _from_numpy_shadow(arr, dtype=None):
-        t = _from_numpy(arr, dtype)
+    def _from_numpy_shadow(arr, dtype=None, device=None):
+        t = _from_numpy(arr, dtype, device)
         try:
             import numpy as np
             a = np.asarray(arr)
