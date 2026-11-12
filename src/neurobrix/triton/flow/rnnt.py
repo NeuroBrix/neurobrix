@@ -283,7 +283,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
                     )
                     g = dec_rnn_out[0]  # [1, D_dec]
                 enc_frame = enc_out[0:1, t, :]  # [1, D_enc]
-                logits = self._run_joint_np(enc_frame, g, joint_weights)
+                logits = self._run_joint(enc_frame, g, joint_weights)
                 if num_tdt_durations > 1:
                     token_logits = logits[:vocab_size + 1]
                     skip = durations[int(np.argmax(logits[vocab_size + 1:]))]
@@ -342,13 +342,20 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         )
         return out.numpy(), (h_n.numpy(), c_n.numpy())
 
-    def _run_joint_np(self, enc_frame, dec_frame, jw):
-        """Run joint network with NumPy: project enc + dec, add, relu, output linear."""
-        enc_proj = enc_frame @ jw["enc_weight"].T + jw["enc_bias"]
-        dec_proj = dec_frame @ jw["dec_weight"].T + jw["dec_bias"]
-        combined = np.maximum(enc_proj + dec_proj, 0)  # relu
-        logits = combined @ jw["out_weight"].T + jw["out_bias"]
-        return logits[0]
+    def _run_joint(self, enc_frame, dec_frame, jw):
+        """The joint network on the device through nbxtensor: enc and dec projected (linear), added, relu, the output
+        linear; the logits row read back. The weights are uploaded once."""
+        from nbxtensor.ops import elementwise_wrappers as E, linalg_wrappers as LW
+        from nbxtensor.tensor import NBXTensor
+        on = getattr(self, "_joint_nbx", None)
+        if on is None:
+            on = self._joint_nbx = {k: NBXTensor.from_numpy(np.ascontiguousarray(v, dtype=np.float32))
+                                    for k, v in jw.items()}
+        enc = LW.linear_wrapper(NBXTensor.from_numpy(np.ascontiguousarray(enc_frame, dtype=np.float32)),
+                                on["enc_weight"], on["enc_bias"])
+        dec = LW.linear_wrapper(NBXTensor.from_numpy(np.ascontiguousarray(dec_frame, dtype=np.float32)),
+                                on["dec_weight"], on["dec_bias"])
+        return LW.linear_wrapper(E.relu(E.add(enc, dec)), on["out_weight"], on["out_bias"]).numpy()[0]
 
     # -----------------------------------------------------------------
     # Weight extraction
