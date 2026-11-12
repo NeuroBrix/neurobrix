@@ -30,7 +30,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.runtime import invalidate_current_device_cache
-from neurobrix.core.prism.memory_budget import deferred_drain_policy
+from neurobrix.core.prism.memory_budget import DEFERRED_DRAIN_COUNT, deferred_drain_policy
 
 from nbxtensor.memory.arena import Arena
 from nbxtensor.memory.deferred_frees import DeferredFrees
@@ -97,10 +97,6 @@ def _parse_env_int(name: str, default: int) -> int:
         return default
 
 
-# Bytes/pressure thresholds are data-driven (core.prism.memory_budget.deferred_drain_policy);
-# the count safety-net stays a flat cap (guards pathological many-small-
-# tensor accumulation that never crosses the bytes budget).
-_DEFERRED_DRAIN_COUNT_DEFAULT = 512
 # The pressure-branch floor a NBX_DEFERRED_DRAIN_RESERVE override re-enables the branch at (a debug / A-B knob; the
 # run's own floor is the vendor file's, `core.prism.memory_budget.deferred_drain_policy`).
 _DEFERRED_DRAIN_FLOOR_DEFAULT = 268_435_456     # 256 MiB
@@ -139,7 +135,7 @@ def _resolve_drain_policy(planned_cliff: Optional[int] = None):
         if floor >= cliff:      # pressure branch was disabled — re-enable it
             floor = min(_DEFERRED_DRAIN_FLOOR_DEFAULT, cliff)
     count_limit = _parse_env_int(
-        "NBX_DEFERRED_DRAIN_COUNT", _DEFERRED_DRAIN_COUNT_DEFAULT)
+        "NBX_DEFERRED_DRAIN_COUNT", DEFERRED_DRAIN_COUNT)
     return cliff, floor, reserve, interval, count_limit
 
 

@@ -2161,15 +2161,14 @@ class PrismSolver:
         spec = min(profile.devices, key=lambda d: d.memory_mb)
         memory = (get_vendor_config(*_vendor_arch(spec)).get("memory", {}) or {})
         total_mb = float(spec.memory_mb)
-        from neurobrix.core.prism.memory_budget import _door_mb, deferred_drain_retained_bytes
-        door = _door_mb()
+        from neurobrix.core.prism.memory_budget import DEFERRED_DRAIN_COUNT, door_mb, deferred_drain_retained_bytes
+        door = door_mb()
         if door is not None:
             total_mb = min(total_mb, float(door))
-        from neurobrix.triton.sequence import _DEFERRED_DRAIN_COUNT_DEFAULT
         return {"parked_cap": _nbx_memory.pool_parked_cap_bytes(*_vendor_arch(spec), total_mb * (1 << 20)),
                 # the hot loop's deferred queue: dead tensors freed together at the cliff or the count (`DeferredFrees`)
                 "drain_cliff": int(deferred_drain_retained_bytes(memory)),
-                "drain_count": int(_DEFERRED_DRAIN_COUNT_DEFAULT)}
+                "drain_count": DEFERRED_DRAIN_COUNT}
 
     def _triton_arena_factor(self, on: Optional["DeviceState"] = None) -> float:
         """The Triton arena's hold over the walked activations while a component runs whole, as the vendor file of the

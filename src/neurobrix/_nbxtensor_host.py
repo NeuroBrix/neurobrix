@@ -60,7 +60,7 @@ def install() -> None:
     set_miss_explainer(_call("neurobrix.kernels.census_table", "census_row"))
     # A rung imposed on this process holds the Triton allocator to that card, through the library's public limit;
     # without one the library's default (the physical card) is already in force, and the allocator is not imported.
-    # (the variable is core.prism.memory_budget._door_mb's; read here first so a process without a rung imports neither
+    # (the variable is core.prism.memory_budget.door_mb's; read here first so a process without a rung imports neither
     # the engine's planner nor the allocator at `import neurobrix` — the agent package's purity, tests/unit/agent)
     if os.environ.get("NBX_PRISM_BUDGET_MB"):
         importlib.import_module("neurobrix.core.prism.memory_budget").apply_imposed_rung()

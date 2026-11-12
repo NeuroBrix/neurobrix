@@ -79,7 +79,8 @@ def rung_down_mb(mb: float) -> int:
     return rung
 
 
-def _door_mb() -> Optional[int]:
+def door_mb() -> Optional[int]:
+    """The rung imposed on this process in MB (`NBX_PRISM_BUDGET_MB`), None without one."""
     v = os.environ.get("NBX_PRISM_BUDGET_MB")
     return int(v) if v else None
 
@@ -90,7 +91,7 @@ def apply_imposed_rung() -> None:
     allocator holds to the card the plan was sized for; no rung, the limit lifted. Applied when the engine starts
     (`neurobrix._nbxtensor_host.install`); a caller that changes the variable later applies it again."""
     from nbxtensor.memory import set_limit
-    door = _door_mb()
+    door = door_mb()
     set_limit(None if door is None else int(door) << 20)
 
 
@@ -109,7 +110,7 @@ def budget_mb(r: DeviceReading) -> int:
     """What a plan may be budgeted against on this pool: the pool's declared capacity less the runtime's own context
     (a fact of the profile and of this process), or — host RAM and an unreadable device — the free reading rounded
     down onto the ladder."""
-    door = _door_mb()
+    door = door_mb()
     if door is not None:
         return door
     if sized_by_the_moment(r):
@@ -120,7 +121,7 @@ def budget_mb(r: DeviceReading) -> int:
 def tile_rung_mb(r: DeviceReading) -> int:
     """The rung a tiled component sizes its tile from: a device pool's own nominal rung (its declared capacity),
     a host's or an unreadable device's free rung."""
-    door = _door_mb()
+    door = door_mb()
     if door is not None:
         return door
     if sized_by_the_moment(r):
@@ -132,7 +133,7 @@ def execution_door(r: DeviceReading, planned_mb: float) -> Optional[str]:
     """The door the moment's reading keeps: a plan sized by the pool's facts that does not fit what is FREE now is
     refused by name — what holds the memory is said — never traded for a slower plan. None when the reading is no
     live one (a census shadow, an unreadable device) or the plan fits."""
-    if _door_mb() is not None or r.kind != "device" or not r.measured or planned_mb <= r.free_mb:
+    if door_mb() is not None or r.kind != "device" or not r.measured or planned_mb <= r.free_mb:
         return None
     holder = (f"{r.held_by_others_mb:.0f} MB held by other processes" if r.held_by_others_mb > 0
               else "a display on it" if r.display_active
@@ -144,7 +145,7 @@ def execution_door(r: DeviceReading, planned_mb: float) -> Optional[str]:
 
 
 def describe(r: DeviceReading) -> str:
-    door = _door_mb()
+    door = door_mb()
     if door is not None:
         return f"budget {door} MB by the NBX_PRISM_BUDGET_MB door"
     if sized_by_the_moment(r):
@@ -215,6 +216,9 @@ def host_budget_mb() -> int:
 #: The env door that pins the drain cliff (`triton/sequence.py::_resolve_drain_policy`), read here
 #: by the same name so the plan prices the cliff the run will hold.
 DEFERRED_DRAIN_DOOR = "NBX_DEFERRED_DRAIN_BYTES"
+#: The tensors the queue holds at most before it drains whatever its bytes (many small tensors that never reach the
+#: cliff): the hot loops' default (`NBX_DEFERRED_DRAIN_COUNT` overrides it) and the plan's price of the queue.
+DEFERRED_DRAIN_COUNT = 512
 
 
 def deferred_drain_policy_of(memory: dict) -> tuple:
