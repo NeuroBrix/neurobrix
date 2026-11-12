@@ -25,6 +25,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
+from neurobrix.core.prism.host_footprint import engine_of
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
 from neurobrix.core.prism.structure import names_accelerator
 from nbxtensor.backend.host_memory import MemoryState, memory_state
@@ -1147,7 +1148,6 @@ class PrismSolver:
         under that pass, a served VLM's streamed tower was cut beside nothing, though the head and
         the speech leg the request before left are loaded beside it."""
         from neurobrix.core.flow.base import resident_together
-        from neurobrix.core.prism.host_footprint import engine_of
         return resident_together(self._flow_topology(container), engine_of(getattr(self, "_mode", "compiled")),
                                  served=bool(getattr(self, "_serve_requested", False)))
 
@@ -1199,7 +1199,6 @@ class PrismSolver:
         whole placement read `_whole_usable_mb`, so the room is at least the profile's floor; a
         room under it (a forced strategy) is still the cliff the run gets — the plan's figure,
         stated in the plan, never a silent profile default. Compiled plans and host devices: None."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return
         from neurobrix.core.prism.memory_budget import planned_drain_cliff_bytes
@@ -1478,7 +1477,6 @@ class PrismSolver:
         placement) — under the engine this plan is for (`self._mode`). An index that cannot be read, or
         a routed expert it does not record, is refused too: the plan would accept what it cannot check."""
         from pathlib import Path as _P
-        from neurobrix.core.prism.host_footprint import engine_of
         from neurobrix.core.runtime.expert_files import held_dtype
         from nbxtensor.dtype.nbx_dtype import parse_dtype
         from neurobrix.nbx.weight_presence import read_weights_index
@@ -1573,7 +1571,6 @@ class PrismSolver:
         ONE figure for the whole plan: the smallest device's — every attention is priced at it and every component
         placed on such a device carries it (`_assign_attention_budgets`), so the engine cuts what Prism priced. The
         Triton engine runs its own attention kernels: None."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) != "compiled" or profile is None or not profile.devices:
             return None
         from neurobrix.core.prism.attention_scratch import vendor_memory, scores_budget, writes_full_scores
@@ -1590,7 +1587,6 @@ class PrismSolver:
         deterministic math route's fp32 scores and their softmax at the value's width, a chunked route one chunk of
         them, the flash route none. Unpriced, Wan2.2-I2V-A14B's cross-attention (q 2 x 40 x 4 680, k 512, under the V100's
         math budget) wrote its 731 MB of scores beside a piece cut to the card's edge and ran out of memory (2026-10-28)."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
             # one per profile and dtype: a temporal stream's search prices every chunk it tries through it, and each
             # build reads every device's vendor file
@@ -1668,7 +1664,6 @@ class PrismSolver:
         (core/prism/op_workspace.py `compiled_op_workspace`, read at the first op priced; an op the table does not name
         holds nothing; a `null` entry refuses the plan by name). None for the Triton engines — their ops are the kernels'
         wrappers, whose transients the price carries themselves (the pad, the conv3d folds) — and with no device."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if profile is None or not profile.devices:
             return None
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
@@ -1693,7 +1688,6 @@ class PrismSolver:
         plan may run on. `dtype`: the component's run dtype, the name a 2-byte width stands for. None with no device.
         It replaced `tiling_sizes.conv3d_one_shot_peak`, a formula of the wrapper written beside it that had drifted
         from it (the matrix unit's contiguous frames and dense result unpriced; the result counted twice) (M3)."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if profile is None or not profile.devices:
             return None
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
@@ -1835,7 +1829,6 @@ class PrismSolver:
         flight, held in the same pool as the device plan while it loads (`host_footprint.triton_load_copies_bytes`).
         Elsewhere — the compiled engine, a device whose growth is not measured — the whole-component fraction (0.92,
         its provenance never recorded) stands, said in the budget's note: it is what holds those terms there."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if spec is None or self._runtime_growth_fact(spec) is None:
             return float(rung_mb) * self.whole_component_fraction
         if not spec.has_unified_memory or engine_of(getattr(self, "_mode", "compiled")) != "triton":
@@ -1890,7 +1883,6 @@ class PrismSolver:
     def _drain_profile_memory(self, dev: "DeviceState") -> Optional[dict]:
         """`dev`'s vendor profile `memory:` section when the Triton engine runs on an accelerator,
         None otherwise (the compiled engine has no queue; a host device's queue is host memory)."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return None
         if str(getattr(dev, "device_string", "")).startswith("cpu"):
@@ -1911,7 +1903,6 @@ class PrismSolver:
         fact = self._runtime_growth_fact(spec)
         if fact is not None:
             return fact
-        from neurobrix.core.prism.host_footprint import engine_of
         if spec is None or getattr(spec, "architecture", None) is None or str(spec.get_device_string()).startswith("cpu"):
             return 0.0, ""
         engine = engine_of(getattr(self, "_mode", "compiled"))
@@ -1926,7 +1917,6 @@ class PrismSolver:
         Measured 2026-10-28 on V100-SXM2 (triton): the bytes no allocator holds went from the 312 MB context to
         1 223 MB in Wan2.2-I2V-A14B's run and 1 055 MB in Sana 4K's; their streamed pieces, cut to the card less the
         context alone, ran out of memory by that growth (lot gate 2026-10-28)."""
-        from neurobrix.core.prism.host_footprint import engine_of
         engine = engine_of(getattr(self, "_mode", "compiled"))
         brand = getattr(spec, "brand", None)
         arch = getattr(spec, "architecture", None)
@@ -1973,7 +1963,6 @@ class PrismSolver:
 
         The ARENA is the Triton engine's: the compiled engine loads each weight as its own tensor,
         so a component is never one allocation there and this bound does not apply (None)."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return None
         cap = getattr(getattr(dev, "spec", None), "max_allocation_mb", None)
@@ -2049,7 +2038,6 @@ class PrismSolver:
         on a discrete device, under the compiled engine (no arena, no such pool), and with the pool
         off (`NBX_ALLOC_POOL=0`, the allocator's own door)."""
         import math
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return None
         if os.environ.get("NBX_ALLOC_POOL", "1") == "0":
@@ -2147,7 +2135,6 @@ class PrismSolver:
         `memory.alloc_pool_parked_cap_fraction` of the device (of the imposed rung where one is,
         `DeviceAllocator._pool_parked_cap`), on the profile's smallest device — the one the walk is
         budgeted against. `NBX_ALLOC_POOL=0` (the allocator's own door): no pool."""
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return None
         if os.environ.get("NBX_ALLOC_POOL", "1") == "0":
@@ -5459,7 +5446,6 @@ class PrismSolver:
         installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
         base = 0.0
         try:
-            from neurobrix.core.prism.host_footprint import engine_of
             base = float(((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
                           if profile.cpu and getattr(self, "_mode", None) else 0) or 0)
         except Exception:  # noqa: BLE001 — no measured base: nothing subtracted, nothing invented
@@ -5559,7 +5545,6 @@ class PrismSolver:
                 # work adds once it starts — its modules, context, the libraries the first ops load: the
                 # profile's MEASURED cpu.runtime_base_mb for this engine — is not, and is taken off first. Read,
                 # not a factor (the Mac, 23:00: the 11 264 rung on 11 581 free left ~300 MB for it).
-                from neurobrix.core.prism.host_footprint import engine_of
                 _base = ((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
                          if profile.cpu and getattr(self, "_mode", None) else None) or 0
                 # The pool's FACTS size the plan (the owner, 2026-10-25 15:16): what the device recommends less the
@@ -7532,7 +7517,6 @@ class PrismSolver:
                              for s in shard_sizes.get(comp_name, {})}
                 return (largest.device_string, shard_map)
             self._tiling_decline(comp_name, f"its tile and weights still need {tiled_total_mb:,.0f} MB")
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             # The Triton branch below records this placement's overflow and its reasons per rung; the
             # compiled one goes to the host, and its refusal must still say why the card got no tile.
@@ -7569,7 +7553,6 @@ class PrismSolver:
         # fits the card neither whole (zero3, above) nor tiled (3.5, above) — the run would fail at it.
         # Declined, and recorded for the refusal (`_fail_error`), which names `--compiled`: Wan2.1-VACE
         # at 720x1280 fell to lazy_sequential with its transformer here (2026-09-29).
-        from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
             store = self.__dict__.setdefault("_host_device_overflow", {})
             prev = store.get("a component's host placement")
@@ -8105,7 +8088,6 @@ class PrismSolver:
             loads_per_run[_comp] = max(_n, 1)
         for _s, name, allocs, _d in ranked:
             try:
-                from neurobrix.core.prism.host_footprint import engine_of
                 resident = self._residency_priced(container, name, allocs, component_memory, plan_devices, profile)
                 out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
                                                   resident=resident,
@@ -8582,7 +8564,6 @@ class PrismSolver:
         this, the plan dropped every tiling of a cpu-placed component and said `cpu_streaming`
         "WILL run": Wan2.1-VACE at 720x1280 on a 16 GB card ran its encoder untiled on cuda:0 and
         died on a 57 GB convolution (2026-09-29)."""
-        from neurobrix.core.prism.host_footprint import engine_of
         tilings_by_rung = self.__dict__.setdefault("_host_device_tilings", {})
         overflow_by_rung = self.__dict__.setdefault("_host_device_overflow", {})
         card_by_rung = self.__dict__.setdefault("_host_device_card", {})
@@ -8783,7 +8764,6 @@ class PrismSolver:
         plan's own tiling view gives. Returns (bytes, the op the peak sits at)."""
         from neurobrix.core.prism.profiler import ActivationProfiler
         from neurobrix.core.prism.runtime_widths import TilingView
-        from neurobrix.core.prism.host_footprint import engine_of
         comp = next(c for c in (getattr(self, "_neural_components", None) or []) if c.name == comp_name)
         comp_dtype = (getattr(self, "_component_dtypes", None) or {}).get(comp_name) or self._target_dtype_str
         dtype_bytes = _itemsize.itemsize(comp_dtype)
@@ -9603,7 +9583,6 @@ class PrismSolver:
         `triton_stores_fp64` (`precision.stores_fp64.triton`, what `triton.dtype.storage_dtype`
         narrows by in `_load_constant_triton`); the DtypeEngine `device_supports_fp64` (what
         `DtypeEngine.storage_dtype` narrows by in `_load_constant_native`)."""
-        from neurobrix.core.prism.host_footprint import engine_of
         spec = dev.spec
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
             from neurobrix.triton.dtype import triton_stores_fp64
@@ -10263,7 +10242,6 @@ class PrismSolver:
         # own decline above says so), so on a discrete card too the last rung that can help is layer
         # streaming, and ITS decline is the bound — "the largest single component in host RAM" is a
         # rung the Triton engine does not offer (SANA-Video 672x1344x81 on the 16 GB V100, 2026-10-04).
-        from neurobrix.core.prism.host_footprint import engine_of
         _unified = any(getattr(getattr(d, "spec", None), "has_unified_memory", False) for d in devices)
         _triton = engine_of(getattr(self, "_mode", None) or "compiled") == "triton"
         if _unified or _triton:
