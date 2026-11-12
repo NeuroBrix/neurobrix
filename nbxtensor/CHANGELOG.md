@@ -82,10 +82,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   num_experts, n_gate, block_m, act_dev)`: a routed layer whose experts sit on several devices, computed where its
   weights are — one share per device of the layer's pointer tables, summed on the activations' device. The engine
   carried this op, with its device-to-host and card-to-card copies; it now hands over the tables its placement built.
+- `ops.moe_fused.fused_moe(gate_scores, hidden_states, gate_weights, up_weights, down_weights, top_k, num_experts,
+  ...)`: a whole mixture-of-experts layer in one call — the routing (top-k and renormalisation, or a blended routing
+  taken as given), host experts promoted for the call, the experts' pointer tables, and the path the call's shape and
+  placement take (the one-token SIMT bands, the grouped GEMMs, an expert store's slots in runs of experts, the layer
+  split over devices); it refuses by name, before any device, a backend that cannot read through a loaded pointer.
+  `StackedSlabPromotion` brings a host-resident stacked expert slab to the device once and whole. The NeuroBrix engine
+  carried both; it now keeps only its switches and what its diagnostics print.
+- `ops.moe_wrappers.moe_decode_vec_int4_pass(...)` and `MOE_INT4_GROUP`: one decode token through a routed layer of
+  int4-g128 experts (the `ops.moe_decode_vec` int4 kernels), its launch settings named constants of the module.
+- `memory.pointer_tables.tables_for_call(...)`: the pointer tables of one call — fresh for weights that live for the
+  call alone, cached otherwise (public; it was private).
+- `ExpertSlotStore.decodes_on_card(layer)`, `on_routed(layer, routed, host)`, `on_enqueued(layer, routed)`: what the
+  fused op asks and tells a store, answered by default; a subclass decides more.
 
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
 - The slot store reads the card's clock at the size of the word it reads into, no byte count written in the code.
+- The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,
+  _WARPS, _BND, _WARPS_D, _STAGES, read by the engine until now): they are the defaults those variables had.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

@@ -344,11 +344,11 @@ def build_ptr_tables(gate_weights, up_weights, down_weights):
     return tables
 
 
-def _tables_for_call(gate_weights, up_weights, down_weights, num_experts: int,
-                     per_call: bool, act_dev: int):
-    """The pointer tables of one call. Weights that live for this call only
-    (promoted from the host here or by the dispatcher) get a fresh table that
-    never enters the cache — their addresses are freed when the call returns,
+def tables_for_call(gate_weights, up_weights, down_weights, num_experts: int,
+                    per_call: bool, act_dev: int):
+    """The pointer tables of one call, the current device `act_dev` again on return. Weights that live for this call
+    only (`per_call`: promoted from the host by the call or its caller, or an expert store's slots) get a fresh table
+    that never enters the cache — their addresses are freed when the call returns,
     and a later allocation reusing them would meet a stale entry. Resident
     weights go through the fingerprinted LRU cache."""
     if per_call:

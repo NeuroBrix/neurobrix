@@ -57,7 +57,7 @@ def test_every_stage_is_its_key(monkeypatch, tokens, top_k, experts):
     from nbxtensor.ops import launch_keys as LK
     from neurobrix.kernels.autotune_certify import _bind_hardware_profile
     from nbxtensor.ops.moe_wrappers import moe_align_block_size
-    from neurobrix.triton.moe import _BLOCK_SIZE_M
+    from nbxtensor.ops.moe_wrappers import MOE_BLOCK_M as _BLOCK_SIZE_M
     _bind_hardware_profile()
     want = LK.moe_align_launches(tokens, top_k, experts, NBXDtype.float16)
     blocks = sorted({k[0] for q, k in want if q != LK.MOE_ALIGN[2]})
@@ -77,7 +77,7 @@ def test_a_cards_share_is_keyed_by_the_layers_pairs(monkeypatch):
     from nbxtensor.ops import launch_keys as LK
     from neurobrix.kernels.autotune_certify import _bind_hardware_profile
     from nbxtensor.ops.moe_wrappers import moe_align_block_size
-    from neurobrix.triton.moe import _BLOCK_SIZE_M
+    from nbxtensor.ops.moe_wrappers import MOE_BLOCK_M as _BLOCK_SIZE_M
     _bind_hardware_profile()
     tokens, top_k, experts = 300, 8, 64
     want = LK.moe_align_launches(tokens, top_k, experts, NBXDtype.float16)

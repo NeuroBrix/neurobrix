@@ -7,14 +7,19 @@ already made, or kept an alternative branch the served path never took: the flas
 a refused allocation (NBX_GC_ON_OOM, against the rule that a refused malloc is raised, never rescued). Three more set a
 constant the kernel's correctness or its indexing fixes: the matrix product's output split (NBX_MM_MAX_OUTPUT_ELEMS, an
 int32 element offset), Volta's flash Q tile (NBX_FLASH_BLOCK_M_VOLTA, 64: the measured floor of correctness) and the
-conv3d eager-free size (NBX_CONV3D_EAGER_FREE_BYTES). They are removed.
+conv3d eager-free size (NBX_CONV3D_EAGER_FREE_BYTES). They are removed. Six more came with the int4 MoE decode band
+when it moved out of the engine (2026-11-12): its tiles, warps and stages (NBX_MOEV_BN, NBX_MOEV_BK, NBX_MOEV_WARPS,
+NBX_MOEV_BND, NBX_MOEV_WARPS_D, NBX_MOEV_STAGES) are the module's named constants (`ops.moe_wrappers`); the band's two
+switches are arguments of the op, which its caller decides.
 What this test does if one comes back: red, naming the file that reads it."""
 import re
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "nbxtensor"
 REMOVED = ("NBX_FLASH_NUM_WARPS", "NBX_FLASH_NUM_STAGES", "NBX_DGEMV_ADAPT", "NBX_D128_DETOUR", "NBX_DEPTHWISE_DISABLE",
-           "NBX_GC_ON_OOM", "NBX_MM_MAX_OUTPUT_ELEMS", "NBX_FLASH_BLOCK_M_VOLTA", "NBX_CONV3D_EAGER_FREE_BYTES")
+           "NBX_GC_ON_OOM", "NBX_MM_MAX_OUTPUT_ELEMS", "NBX_FLASH_BLOCK_M_VOLTA", "NBX_CONV3D_EAGER_FREE_BYTES",
+           "NBX_MOEV_BN", "NBX_MOEV_BK", "NBX_MOEV_WARPS", "NBX_MOEV_BND", "NBX_MOEV_WARPS_D", "NBX_MOEV_STAGES",
+           "NBX_MOEV_DSPLIT", "NBX_MOE_VEC")
 
 
 def test_no_removed_switch_is_read():

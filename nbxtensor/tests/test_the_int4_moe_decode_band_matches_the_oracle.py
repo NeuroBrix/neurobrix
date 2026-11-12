@@ -1,9 +1,10 @@
-"""Day-one float64 oracle for the SIMT MoE decode band.
+"""Day-one float64 oracle for the SIMT MoE decode band of int4-g128 experts.
 
 Fourth member of the SIMT decode family. Tests the FULL band path
-(execute_moe_fused routing -> topk -> the three-kernel vec pass:
-gateup + down-split + fixed-order part reduce, ADOPTED 2026-08-25;
-NBX_MOEV_DSPLIT=0 = fused down combine kill path) against
+(`ops.moe_fused.fused_moe` routing -> topk -> the three-kernel vec pass
+`moe_wrappers.moe_decode_vec_int4_pass`: gateup + down-split + fixed-order
+part reduce, ADOPTED 2026-08-25; `split_down=False` = the fused down combine)
+against
 an INDEPENDENT float64 reference computed FROM THE PACKED BYTES
 (numpy nibble unpack + q*scale+qmin dequant + SwiGLU + router-weighted
 combine — the dequant-GEMV audit pattern: no NeuroBrix kernel in the
@@ -21,24 +22,24 @@ Five proofs (the family rule):
      GemLite/vLLM atomicAdd combine was refused).
   3. ROUTER-WEIGHT contract: scaling one expert's routing weight
      scales exactly its contribution.
-  4. COUNTED route activation three states (ADOPTED default): unset
-     and "1" reach the vec pass, "0" restores the grouped path; M>1
-     and non-quantized tables never route (the zoo guard — fp16 MoEs
-     keep the proven path).
+  4. COUNTED route activation (ADOPTED default): `int4_band` True
+     reaches the vec pass, False restores the grouped path; M>1 and
+     non-quantized tables never route (the zoo guard — fp16 MoEs keep
+     the proven path).
   5. M>1 keeps the grouped path (prefill unaffected by construction).
-  6. COUNTED down-path three states (ADOPTED default): unset and "1"
-     launch the split pair (down_split + part_reduce), "0" launches
-     the fused combine — the same activation-proof discipline as the
-     NBX_MOE_VEC contract.
+  6. COUNTED down path (ADOPTED default): `split_down` True launches
+     the split pair (down_split + part_reduce), False the fused combine
+     — the same activation-proof discipline as the band's own switch.
 
-Runnable two ways:
-  - pytest:  PYTHONPATH=src python3 -m pytest tests/unit/kernels/test_moe_decode_vec_oracle.py -v
-  - script:  PYTHONPATH=src python3 tests/unit/kernels/test_moe_decode_vec_oracle.py
+The two switches are the caller's (the NeuroBrix engine reads them from
+NBX_MOE_VEC and NBX_MOEV_DSPLIT); the band's launch settings are the
+module's named constants, never an environment variable.
+
+Device test: one card nobody else uses.
+  - pytest:  CUDA_VISIBLE_DEVICES=<free card> python -m pytest nbxtensor/tests/test_the_int4_moe_decode_band_matches_the_oracle.py -v
+  - script:  CUDA_VISIBLE_DEVICES=<free card> python nbxtensor/tests/test_the_int4_moe_decode_band_matches_the_oracle.py
 """
 from __future__ import annotations
-
-import ctypes
-import os as _os
 
 try:
     import pytest
@@ -56,7 +57,8 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.quant.quantized_tensor import QuantizedTensor
-from neurobrix.triton import moe as MOE
+from nbxtensor.ops import moe_fused as MOE
+from nbxtensor.ops import moe_wrappers as MW
 from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
 
 
@@ -65,7 +67,7 @@ from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
 # through the [E] int64 pointer table, and a backend that cannot read through a
 # pointer loaded from memory produces zeros there with nothing raised (measured
 # on triton-ext 2026-09-17; reproducer in plain Triton, no NeuroBrix). The
-# engine now REFUSES on such a backend rather than answering, so these tests
+# op now REFUSES on such a backend rather than answering, so these tests
 # cannot run and must not pretend to.
 #
 # Two of them used to PASS here, and that is the reason this gate is a skip and
@@ -76,11 +78,11 @@ from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
 # nothing.
 _CANNOT_ADDRESS_EXPERTS = not backend_loads_pointers_from_memory()
 _WHY = ("this backend cannot read through a pointer loaded from a tensor, so "
-        "the MoE band cannot address its experts and the engine refuses; "
+        "the MoE band cannot address its experts and the op refuses; "
         "see _BACKEND_LOADS_POINTERS_FROM_MEMORY")
 
-# The SECOND Metal door, and it is the engine's own. Every cell below builds int4-g128-asym
-# expert tables, and `triton/moe.py:190` refuses them on Metal by design:
+# The SECOND Metal door, and it is the library's own. Every cell below builds int4-g128-asym
+# expert tables, and `memory.pointer_tables.build_ptr_tables` refuses them on Metal by design:
 #
 #   ZERO FALLBACK: quantized (int4) expert tables are not proven on Metal — the pinned-table
 #   contract was measured for the dense bf16 grouped GEMM only. Adding the quantized path is
@@ -95,16 +97,16 @@ _WHY = ("this backend cannot read through a pointer loaded from a tensor, so "
 # This is a SKIP, not a fix: the capability is owed, recorded in owed-proofs. When the triplet
 # tables are proven on Metal the refusal goes and this door goes with it.
 def _metal_refuses_quantized_experts() -> bool:
-    # The SAME import the engine uses (`triton/moe.py` line 33), not a guess at where it
-    # lives: an import that misses defaults this door to False, the cells run, and they fail
-    # with the engine's refusal — which is the safe direction but hides why.
+    # The SAME import the table builder uses, not a guess at where it lives: an import that
+    # misses defaults this door to False, the cells run, and they fail with the builder's
+    # refusal — which is the safe direction but hides why.
     from nbxtensor.backend.runtime import gpu_backend
     return gpu_backend() == "metal"
 
 
 _QUANT_REFUSED = _metal_refuses_quantized_experts()
-_WHY_QUANT = ("the engine refuses int4 expert tables on Metal by design "
-              "(triton/moe.py: the pinned-table contract was measured for the dense bf16 "
+_WHY_QUANT = ("the table builder refuses int4 expert tables on Metal by design "
+              "(memory.pointer_tables: the pinned-table contract was measured for the dense bf16 "
               "grouped GEMM only) — a capability owed, not a defect in these cells")
 
 # fp16 scales/activations, fp32 accumulation, K<=2048 sums + SwiGLU +
@@ -123,12 +125,7 @@ def _has_gpu() -> bool:
 
 
 def _d2h_f(t):
-    n = t.numel()
-    sz = 2 if "16" in str(t.nbx_dtype) else 4
-    buf = (ctypes.c_char * (n * sz))()
-    DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(), n * sz, kind=2)
-    dt = np.float16 if sz == 2 else np.float32
-    return np.frombuffer(bytes(buf), dtype=dt).copy()
+    return np.asarray(t.numpy()).reshape(-1)
 
 
 def _mk_expert(rng, K, N, group=128):
@@ -188,20 +185,14 @@ def _build_band(seed=0, E=16, K=2048, N_gate=768, top_k=8):
     return (gates, ups, downs), (rg, ru, rd), xn, logits
 
 
-def _run_band(weights, xn, logits, top_k=8, arm="1"):
+def _run_band(weights, xn, logits, top_k=8, int4_band=True, split_down=True):
     gates, ups, downs = weights
-    if arm is not None:
-        _os.environ["NBX_MOE_VEC"] = arm
-    try:
-        h = NBXTensor.from_numpy(xn.reshape(1, -1))
-        gs = NBXTensor.from_numpy(logits)
-        out = MOE.execute_moe_fused(
-            gs, h, gates, ups, downs,
-            top_k=top_k, num_experts=len(gates),
-            norm_topk_prob=True, cache_key="oracle")
-        return _d2h_f(out).astype(np.float64).ravel()
-    finally:
-        _os.environ.pop("NBX_MOE_VEC", None)
+    h = NBXTensor.from_numpy(xn.reshape(1, -1))
+    gs = NBXTensor.from_numpy(logits)
+    out = MOE.fused_moe(
+        gs, h, gates, ups, downs, top_k, len(gates),
+        norm_topk_prob=True, int4_band=int4_band, split_down=split_down)
+    return _d2h_f(out).astype(np.float64).ravel()
 
 
 def _ref_routing(logits, top_k):
@@ -260,51 +251,46 @@ def test_moe_vec_router_weight_contract() -> None:
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 @pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_route_activation_and_guards() -> None:
-    """COUNTED: "1" reaches the vec pass; unset does NOT (under
-    judgment); M>1 does NOT (prefill guard). The fp16-expert zoo guard
-    is structural (tables.quantized False bypasses the branch) and is
-    exercised by every fp16-MoE gate row."""
+    """COUNTED: the band taken reaches the vec pass, twice; refused
+    (`int4_band=False`), it does NOT; M>1 does NOT (prefill guard). The
+    fp16-expert zoo guard is structural (tables.quantized False bypasses
+    the branch) and is exercised by every fp16-MoE gate row."""
     if not _has_gpu():
         pytest.skip("no GPU")
     calls = {"n": 0}
-    orig = MOE._moe_decode_vec_pass
+    orig = MW.moe_decode_vec_int4_pass
 
     def counting(*a, **k):
         calls["n"] += 1
         return orig(*a, **k)
 
-    MOE._moe_decode_vec_pass = counting
+    MW.moe_decode_vec_int4_pass = counting
     try:
         weights, _, xn, logits = _build_band(seed=9)
-        _run_band(weights, xn, logits, arm="1")
-        assert calls["n"] == 1, "armed env did not reach the vec pass"
-        _run_band(weights, xn, logits, arm=None)   # unset: ADOPTED default
-        assert calls["n"] == 2, "unset (adopted default) did not route to the vec pass"
-        _run_band(weights, xn, logits, arm="0")    # kill switch
-        assert calls["n"] == 2, "kill switch '0' did not restore the grouped path"
-        # M > 1: grouped path regardless of arming
+        _run_band(weights, xn, logits, int4_band=True)
+        assert calls["n"] == 1, "the band taken did not reach the vec pass"
+        _run_band(weights, xn, logits)             # the ADOPTED default
+        assert calls["n"] == 2, "the default did not route to the vec pass"
+        _run_band(weights, xn, logits, int4_band=False)
+        assert calls["n"] == 2, "int4_band=False did not restore the grouped path"
+        # M > 1: grouped path regardless of the switch
         h2 = NBXTensor.from_numpy(
             np.repeat(xn.reshape(1, -1), 2, axis=0))
         gs2 = NBXTensor.from_numpy(np.repeat(logits, 2, axis=0))
-        _os.environ["NBX_MOE_VEC"] = "1"
-        try:
-            MOE.execute_moe_fused(gs2, h2, *weights, top_k=8,
-                                  num_experts=len(weights[0]),
-                                  norm_topk_prob=True, cache_key="oracle2")
-        finally:
-            _os.environ.pop("NBX_MOE_VEC", None)
+        MOE.fused_moe(gs2, h2, *weights, 8, len(weights[0]),
+                      norm_topk_prob=True, int4_band=True)
         assert calls["n"] == 2, "M=2 routed to the M=1 vec pass"
     finally:
-        MOE._moe_decode_vec_pass = orig
+        MW.moe_decode_vec_int4_pass = orig
 
 
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 @pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_dsplit_three_state() -> None:
-    """COUNTED sub-path contract: unset (ADOPTED default) and "1"
-    launch the split pair (down_split + part_reduce); "0" launches the
-    fused combine kill path. Patches the kernels MODULE attributes —
-    the pass's function-local import re-reads them at every call."""
+    """COUNTED sub-path contract: the default and `split_down=True`
+    launch the split pair (down_split + part_reduce); False launches the
+    fused combine. Patches the kernels MODULE attributes — the pass's
+    function-local import re-reads them at every call."""
     if not _has_gpu():
         pytest.skip("no GPU")
     import nbxtensor.ops.moe_decode_vec as KOPS
@@ -326,23 +312,15 @@ def test_moe_vec_dsplit_three_state() -> None:
     KOPS.moe_down_combine_vec_kernel = _CountingLauncher(origs[2], "fused")
     try:
         weights, _, xn, logits = _build_band(seed=13)
-        _run_band(weights, xn, logits)  # unset: ADOPTED default
+        _run_band(weights, xn, logits)  # the ADOPTED default
         assert counts == {"split": 1, "reduce": 1, "fused": 0}, (
-            f"unset (adopted default) did not take the split pair: {counts}")
-        _os.environ["NBX_MOEV_DSPLIT"] = "0"
-        try:
-            _run_band(weights, xn, logits)
-        finally:
-            _os.environ.pop("NBX_MOEV_DSPLIT", None)
+            f"the default did not take the split pair: {counts}")
+        _run_band(weights, xn, logits, split_down=False)
         assert counts == {"split": 1, "reduce": 1, "fused": 1}, (
-            f"kill switch '0' did not restore the fused combine: {counts}")
-        _os.environ["NBX_MOEV_DSPLIT"] = "1"
-        try:
-            _run_band(weights, xn, logits)
-        finally:
-            _os.environ.pop("NBX_MOEV_DSPLIT", None)
+            f"split_down=False did not take the fused combine: {counts}")
+        _run_band(weights, xn, logits, split_down=True)
         assert counts == {"split": 2, "reduce": 2, "fused": 1}, (
-            f"explicit '1' did not take the split pair: {counts}")
+            f"split_down=True did not take the split pair: {counts}")
     finally:
         (KOPS.moe_down_split_vec_kernel, KOPS.moe_part_reduce_kernel,
          KOPS.moe_down_combine_vec_kernel) = origs
@@ -357,8 +335,8 @@ def test_moe_vec_agrees_with_grouped_path() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
     weights, _, xn, logits = _build_band(seed=11)
-    a = _run_band(weights, xn, logits, arm="1")
-    b = _run_band(weights, xn, logits, arm="0")
+    a = _run_band(weights, xn, logits, int4_band=True)
+    b = _run_band(weights, xn, logits, int4_band=False)
     rel = float(np.abs(a - b).max() / np.abs(b).max())
     assert rel <= 2e-3, f"vec vs grouped mutual rel {rel:.3e}"
 
@@ -373,7 +351,7 @@ if __name__ == "__main__":
     test_moe_vec_router_weight_contract()
     print("  OK router-weight contract")
     test_moe_vec_route_activation_and_guards()
-    print("  OK route activation + guards (unset, M>1)")
+    print("  OK route activation + guards (the switch, M>1)")
     test_moe_vec_dsplit_three_state()
     print("  OK down-path three states (split default, fused kill)")
     test_moe_vec_agrees_with_grouped_path()
@@ -401,6 +379,6 @@ def test_the_band_refuses_where_it_cannot_address_its_experts() -> None:
             f"the refusal must say WHY, got: {msg}")
         return
     raise AssertionError(
-        "execute_moe_fused returned instead of refusing on a backend that "
+        "fused_moe returned instead of refusing on a backend that "
         "cannot dereference a pointer loaded from memory — the answer it "
         "returned would be silently zero")

@@ -321,6 +321,8 @@ class TablePins
     # The holder of per-call pointer tables' pins for a cache of experts that outlives the call (an expert store): held until the holder ends them (`end`), one pin per new set of wraps
 def end_call_pins(tables: "PtrTables", holder: "TablePins" = None, sync: bool = False) -> None
     # End a per-call table's pins: the holder takes them when there is one; otherwise the call ends them, after a device sync when `sync`
+def tables_for_call(gate_weights, up_weights, down_weights, num_experts: int, per_call: bool, act_dev: int)
+    # The pointer tables of one call, `act_dev` current again on return: built fresh and never cached when the weights live for this call only (`per_call`), else through the fingerprinted LRU cache
 ```
 
 `nbxtensor.memory.expert_slots`
@@ -332,6 +334,7 @@ class ExpertSlotStore(residency, device_idx: int, like, in_place: bool = False)
     #   prefetch(layer, experts, host, protect) -> the number of experts copied ahead of their call into slots outside `protect`
     #   enable_device_decode(layer_index, n_experts): arms the residency ON THE CARD for one-token calls (slot map, owners, stamps, a clock)
     #   decode_on_card(layer, flat_indices, flat_scores, hidden, host, top_k, K, N_gate) -> [1, K]: slots assigned and misses copied by kernels, the half decode band read through the slots' table; no host decision
+    #   what the fused op (`ops.moe_fused.fused_moe`) asks and tells it, a subclass deciding more: decodes_on_card(layer) -> bool (armed, and `layer` in the card's map); on_routed(layer, routed, host) (the experts a call routes to, read back before its slots are acquired; nothing kept); on_enqueued(layer, routed) (a grouped call's launches enqueued; nothing done)
     #   slots, slot_bytes, device_bytes, bytes_in, table_pins, summary(), release()
 class HeldExperts(device_idx: int, layers)
     # Every expert of whole layers copied once into one arena on `device_idx` (`layers`: {layer key: [(gate, up, down) host triples]}): `.layers[key]` -> (gate, up, down) lists of device views, `.bytes`, `release()`
@@ -1997,8 +2000,21 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx, pai
     # Sort a layer's (token, expert) pairs by expert and pad each expert's run to `block_size`, ON the device (the three `moe_align` stages): (sorted_token_ids, expert_ids, num_tokens_post_padded); `pairs` is the layer's pair count when the ids are one device's share of it (the launch key's length class)
 def moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate, bf16)
     # One token through a routed layer of half-precision experts: gate/up with SwiGLU, the down partials weighted by the scores, their fixed-order sum; [1, K] -> [1, K]. `tables` carries the pointer tables and strides per device, indexed by what `flat_indices` holds (an expert's number, or its slot)
+def moe_decode_vec_int4_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate, split_down)
+    # One token through a routed layer of int4-g128 experts: gate/up with SwiGLU, then the down projection — `split_down`: the expert axis on the grid and the partials' fixed-order sum, else the fused down combine; [1, K] -> [1, K]. `tables`: the quantized pointer tables per device (`q_tables`). Launch settings: the module's named constants (hand-measured 2026-08-25, not certified)
 MOE_BLOCK_M
     # The row block the grouped kernel runs at: the block a caller aligns the routing by
+MOE_INT4_GROUP
+    # The quantization group the int4 one-token band reads (128): experts take the band only when their scales say so
+```
+
+`nbxtensor.ops.moe_fused`
+
+```python
+def fused_moe(gate_scores, hidden_states, gate_weights, up_weights, down_weights, top_k: int, num_experts: int, *, norm_topk_prob: bool = True, topk_indices=None, topk_weights=None, weights_per_call: bool = False, store=None, layer=None, int4_band: bool = True, split_down: bool = True, dump=None, label: str = "", log_memory: bool = False)
+    # One mixture-of-experts layer: [tokens, K] (or [B, S, K]) -> the routed SwiGLU sum, on the activations' device (current again on return). Routing: the router's logits (`gate_scores`, top-k then renormalised when `norm_topk_prob`), or a blended `topk_indices` + `topk_weights` pair taken verbatim. Experts: one weight per expert and projection (dense [N, K] / [K, N], or int4-g128 `QuantizedTensor`), on devices or on the host (promoted for the call); `weights_per_call` when the caller promoted them for this call; `store` an `ExpertSlotStore` serving `layer`. Path: the one-token SIMT band (int4 when `int4_band`, its down split when `split_down`; half precision), the grouped GEMMs on one device, the store's runs of experts, or the split-layer op. Refuses by name, before any device, missing activations, half a blended routing, no routing, and a backend that cannot read through a pointer loaded from memory. `dump(label, tensor)`: called with the intermediate values (and the placement and stride lines logged under `label`); `log_memory`: the device's live bytes logged around a host promotion
+class StackedSlabPromotion(fetch, device_idx: int)
+    # A fetch wrapper for a stacked expert slab reader: a host-resident slab brought to `device_idx` once and whole; `.per_call` True once one was (the call's weights then live for it alone)
 ```
 
 `nbxtensor.ops.moe_multi_device`

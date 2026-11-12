@@ -2017,7 +2017,7 @@ class TritonSequence(SequenceSteps):
 
     def _compile_moe_fused_op(self, op_uid: str, op_data: dict,
                               kill_slots: Tuple[int, ...]) -> CompiledOp:
-        """Compile fused MoE dispatch — delegates to triton/moe.py.
+        """Compile fused MoE dispatch — delegates to triton/moe.py (the library's `fused_moe`).
 
         TWO ROUTING BINDINGS, mirror of the compiled engine (R30):
         - single gate: `gate_scores_tid` → topk + optional normalization
@@ -2157,7 +2157,7 @@ class TritonSequence(SequenceSteps):
                 _hs = arena[_hs_slot]
                 if _hs is None:
                     raise RuntimeError(f"MoE fused: hidden_states is None ({op_uid})")
-                from .moe import StackedSlabPromotion as _Promote
+                from nbxtensor.ops.moe_fused import StackedSlabPromotion as _Promote
                 _promo = _Promote(_lut.get, _hs._device_idx)
                 _g, _u, _d = _ewl(_stacked_attrs, _promo)
                 _per_call = _promo.per_call

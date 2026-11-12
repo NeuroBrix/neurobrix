@@ -335,6 +335,49 @@ Code lines measured: 84 321 (main f816ec0fd, the replay's move landed) to 83 863
 | core/runtime/expert_residency.py | +2 | `resident()`: who sits where, least recently routed first — what the library's store reads in place of the residency's private map |
 | core/strategies/expert_store.py, kernels/autotune_certify.py | 0, 0 | the held blocks built from the library's `HeldExperts`; the certifier aligns through the library's launcher at the library's own row block |
 
+## The fused MoE call moves into nbxtensor (2026-11-12): the op, and the switches the engine keeps
+
+The rest of `triton/moe.py`, named as the next move above: the one-card fused MoE dispatch. Behaviour unchanged: the
+statements moved as they stood, cut into named functions where the library's limits ask it (36 code lines, depth 3),
+the private tensor fields read through their public accessors. A card-less harness ran the old `execute_moe_fused`
+(main 27edb57e) and the new entry over recording fakes on 24 paths (prefill dense, renormalised or not, on the unit
+tile, experts on another card, 3-D and fp32 activations, blended routings in int32 and int64, a split layer, the half
+and int4 one-token bands on the activations' card and on another, the int4 band's fused combine and its kill switch,
+an int4 prefill, zero3 host experts with and without the memory log, an expert store fitting, grouped, decoding on its
+card, on another card, recording its routing or not armed): every library call, device switch, transfer, allocation and
+store call identical, in order, on all 24; the `[MOE_DIAG]` lines identical on five of them.
+
+What moved (`nbxtensor.ops.moe_fused.fused_moe`): the refusal of a backend that cannot read through a loaded pointer,
+the routing (the router's top-k and its renormalisation, or a blended routing taken verbatim), the host experts
+promoted for the call and `StackedSlabPromotion`, the pointer tables of the call (`memory.pointer_tables.tables_for_call`,
+public now: it was the private name the engine reached), the one-token bands' choice and the int4 band's launches
+(`ops.moe_wrappers.moe_decode_vec_int4_pass`, its launch settings named module constants), the grouped GEMMs on one
+card, the store's runs of experts, the transfers between cards, and the per-call release.
+
+What stays, and why it is policy: the engine's two kill switches of the int4 band (NBX_MOE_VEC, NBX_MOEV_DSPLIT), read
+at each call and handed to the op as booleans; what a diagnostic prints (NBX_MOE_DIAG and its key filter, now reading
+the values through `nbxtensor.inspection.host_values`; NBX_Z3_TRITON_DIAG); and, in `NBXExpertStore`, what the engine
+does with a call's routing — the op asks and tells the store through three methods the library's `ExpertSlotStore`
+answers by default (`decodes_on_card`, `on_routed`, `on_enqueued`), and the engine's store answers them with its own
+decisions (no on-card decode while a routing is recorded; the host reader kept for the next layer's prefetch; the
+opt-in copy ahead, `prefetch_next` renamed `on_enqueued` since the op is its only caller). The one-token band's choice from the call's shape is no longer counted as policy (the paragraph
+above said so): it is a kernel choice from the shapes, dtypes and placement, as every wrapper makes.
+
+Removed, said: the six environment overrides of the int4 band's launch (NBX_MOEV_BN, _BK, _WARPS, _BND, _WARPS_D,
+_STAGES): their defaults are the library's named constants, and the library's test of environment switches now lists
+them. Open: those settings are hand-measured (2026-08-25), not certified — the int4 band's kernels have no census row.
+
+Code lines measured: 83 465 (main 27edb57e) to 83 035, -430; the engine's tensor-mechanism hits 321 to 275 (triton/moe.py
+46 to 0).
+
+| file | lines | what it holds now |
+|---|---|---|
+| triton/moe.py | -434 (476 to 42) | `execute_moe_fused`: the engine's switches read and its value dump attached, the library's op called |
+| triton/expert_store.py | +4 (31 to 35) | `NBXExpertStore` answers the op's three questions with its decisions |
+| triton/sequence.py, core/runtime/graph_executor.py | 0, 0 | `StackedSlabPromotion` imported from the library |
+| nbxtensor ops/moe_fused.py | +341 (library) | the op |
+| nbxtensor ops/moe_wrappers.py, memory/expert_slots.py | +51, +4 (library) | the int4 band's launches; the store's three default answers |
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
@@ -547,7 +590,6 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | duplicate | src/neurobrix/triton/samplers.py | __init__ | the Triton branch's twin of core/module/autoregressive/samplers.py, which imports torch at module level (R33) |
 | wrapper | src/neurobrix/kernels/autotune_certify.py | log | certify's default log when no caller gives one: an unbuffered print, so an hours-long run is read while it runs |
 | wrapper | src/neurobrix/triton/kv_cache.py | intercept(enable_gqa) | the SDPA signature the interceptor stands in for: a graph's call may carry the kwarg, and the interceptor must accept every argument of the op it replaces |
-| wrapper | src/neurobrix/triton/moe.py | _host_expert(_h) | the default argument binds the layer's host tables at definition — a closure capture, not a parameter a caller passes |
 | wrapper | src/neurobrix/triton/generator.py | from_config | the factory interface every generator shares (core/module/autoregressive's generators and samplers have it): the flows construct through it |
 | wrapper | src/neurobrix/triton/symbols.py | get | the symbol table's accessor (6 403 call sites): the bindings dict stays private, `is_bound` decides boundness |
 | wrapper | src/neurobrix/triton/session.py | use_branch | the session is the flows' handle; the KV wrapper behind it is the session's to replace |
