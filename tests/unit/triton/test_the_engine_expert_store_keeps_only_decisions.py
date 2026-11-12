@@ -78,11 +78,11 @@ def test_the_copy_ahead_is_opt_in_and_plans_through_the_residency(monkeypatch):
     s, calls = _store(monkeypatch, r)
     s.hosts = {"L1": "reader"}
     monkeypatch.delenv("NBX_EXPERT_PREFETCH", raising=False)
-    assert s.prefetch_next("L0", [0, 1]) == 0 and not [c for c in calls if c[0] == "prefetch"]
+    assert s.on_enqueued("L0", [0, 1]) == 0 and not [c for c in calls if c[0] == "prefetch"]
     monkeypatch.setenv("NBX_EXPERT_PREFETCH", "1")
-    assert s.prefetch_next("L0", [0, 1]) == 1
+    assert s.on_enqueued("L0", [0, 1]) == 1
     assert calls[-1] == ("prefetch", ("L1", [5], "reader", {("L0", 0), ("L0", 1)}))
-    assert s.prefetch_next("L1", [5]) == 0                # the last layer: nothing follows
+    assert s.on_enqueued("L1", [5]) == 0                # the last layer: nothing follows
 
 
 def test_the_record_is_written_before_the_slots_are_released(monkeypatch):

@@ -49,7 +49,8 @@ def _oracle(h, probs, gate, up, down):
 @pytest.mark.parametrize("routed", ["one_card", "in_table", "every_expert"])
 def test_each_card_reads_its_own_table(routed, needs_device, declared_profile):
     from nbxtensor.memory.allocator import DeviceAllocator
-    from neurobrix.triton.moe import _xfer, execute_moe_fused
+    from nbxtensor.memory.device_transfer import transfer_tensor
+    from neurobrix.triton.moe import execute_moe_fused
     if DeviceAllocator.device_count() < 2:
         pytest.skip("two cards are needed: one layer's experts on both")
     rng = np.random.default_rng(11)
@@ -68,7 +69,7 @@ def test_each_card_reads_its_own_table(routed, needs_device, declared_profile):
     other = next(d for d in range(DeviceAllocator.device_count()) if d != here)
 
     def on_cards(w):
-        return [NBXTensor.from_numpy(w[e]) if e % 2 == 0 or routed == "one_card" else _xfer(NBXTensor.from_numpy(w[e]), other)
+        return [NBXTensor.from_numpy(w[e]) if e % 2 == 0 or routed == "one_card" else transfer_tensor(NBXTensor.from_numpy(w[e]), other)
                 for e in range(E)]
     lists = [on_cards(w) for w in (gate, up, down)]
     DeviceAllocator.set_device(here)

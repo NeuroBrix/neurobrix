@@ -4060,7 +4060,7 @@ class GraphExecutor:
         return arg
 
     def _execute_moe_fused_triton_sequential(self, attrs: dict, store: dict):
-        """Execute MoE fused op in triton sequential mode — delegates to triton/moe.py."""
+        """Execute MoE fused op in triton sequential mode — delegates to triton/moe.py (the library's `fused_moe`)."""
         from neurobrix.triton.moe import execute_moe_fused
 
         from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
@@ -4073,7 +4073,7 @@ class GraphExecutor:
         blended = idx_tid is not None and w_tid is not None
 
         if attrs.get("stacked_experts"):
-            from neurobrix.triton.moe import StackedSlabPromotion
+            from nbxtensor.ops.moe_fused import StackedSlabPromotion
             hidden = store.get(attrs["hidden_states_tid"])
             if hidden is None:
                 raise RuntimeError("MoE fused (triton-sequential): hidden_states is None "

@@ -1,6 +1,9 @@
 """The triton dispatchers promote a host-resident stacked expert slab ONCE and WHOLE, and tell `execute_moe_fused` its
 weights live for this call (see the test's own text below). The table builder's refusal of a projection mixing two
-layouts, which stood here, is the library's test: `nbxtensor/tests/test_the_moe_table_refuses_experts_of_two_layouts.py`.
+layouts, which stood here, is the library's test: `nbxtensor/tests/test_the_moe_table_refuses_experts_of_two_layouts.py`;
+so is the rule that a per-call table never enters the pointer-table cache, and the promotion itself
+(`nbxtensor/tests/test_a_promoted_slab_crosses_once_and_its_table_is_never_cached.py`). What stays here is the
+engine's: the views it cuts from a promoted slab, and the flag both of its dispatchers hand on.
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ _nbx_allocator.DeviceAllocator.set_device = staticmethod(lambda *a, **k: None)
 _nbx_allocator.DeviceAllocator.ensure_triton_device = staticmethod(lambda *a, **k: None)
 _nbx_allocator.DeviceAllocator.free_cuda = staticmethod(lambda *a, **k: None)
 import neurobrix.triton.moe as M
-import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
+from nbxtensor.ops.moe_fused import StackedSlabPromotion
 from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
 E, H, F = 4, 6, 3
 src = np.arange(E * H * 2 * F, dtype=np.float16).reshape(E, H, 2 * F)
@@ -47,31 +50,18 @@ attrs = {"num_experts": E, "top_k": 2, "norm_topk_prob": True,
 
 # 1. the promotion: whole slabs, once each, and it says so
 slab, out = host((E, H, 2 * F)), host((E, F, H))
-promo = M.StackedSlabPromotion({"in": slab, "out": out}.get, 0)
+promo = StackedSlabPromotion({"in": slab, "out": out}.get, 0)
 g, u, d = expert_weight_lists(attrs, promo)
 assert promo.per_call, "a promoted slab must mark the call's weights per-call"
 assert all(v._device == "cuda" for v in g + u + d), "a view stayed on the host"
 assert calls == [slab.nbytes(), out.nbytes()], ("one whole transfer per slab", calls)
 assert (g[1]._strides, g[1].shape) == ((1, 2 * F), (F, H)), (g[1]._strides, g[1].shape)
-resident = M.StackedSlabPromotion({"in": g[0]._base, "out": d[0]._base}.get, 0)
+resident = StackedSlabPromotion({"in": g[0]._base, "out": d[0]._base}.get, 0)
 expert_weight_lists(attrs, resident)
 assert not resident.per_call, "resident slabs are not per-call"
 print("PROMOTED OK")
 
-# 2. the table rule: per-call weights never enter (nor read) the pointer-table cache
-built = []
-PT.build_ptr_tables = lambda *a: built.append(1) or object()
-ws = [NBXTensor.empty((F, H), "float16", 0) for _ in range(E)]
-fp = PT._ptr_cache_fingerprint(ws, ws, ws, E)
-t1 = PT._tables_for_call(ws, ws, ws, E, True, 0)
-assert PT._ptr_cache_get(fp) is None, "a per-call table entered the cache"
-t2 = PT._tables_for_call(ws, ws, ws, E, False, 0)
-assert PT._ptr_cache_get(fp) is t2 and len(built) == 2, "a resident table is cached"
-t3 = PT._tables_for_call(ws, ws, ws, E, True, 0)
-assert t3 is not t2 and len(built) == 3, "a per-call call must not be served a cached table"
-print("TABLES OK")
-
-# 3. both triton dispatchers hand execute_moe_fused the flag
+# 2. both triton dispatchers hand execute_moe_fused the flag
 seen = []
 def fake_exec(**kw):
     seen.append(kw.get("weights_per_call")); return None
@@ -96,11 +86,9 @@ print("DISPATCH OK"); sys.stdout.flush(); os._exit(0)
 def test_a_host_slab_is_promoted_whole_once_and_its_call_is_per_call():
     """The triton dispatchers promote a host-resident stacked slab ONCE and WHOLE
     before cutting the per-expert views, and TELL execute_moe_fused the weights
-    live for this call (`weights_per_call`), so its zero3 rule holds: a per-call
-    address never enters — nor is served from — the pointer-table cache (a reused
-    address meeting a stale table reads zeros on Metal, in silence). Wrong code —
-    per-view promotion, a dropped flag in either dispatcher, a per-call table
-    cached — fails a named assertion. No card: host memory stands in for the
+    live for this call (`weights_per_call`), so the op's zero3 rule holds (the
+    library's test holds the rule itself). Wrong code — per-view promotion, a
+    dropped flag in either dispatcher — fails a named assertion. No card: host memory stands in for the
     device allocator in a subprocess."""
     import os
     import subprocess
@@ -111,5 +99,5 @@ def test_a_host_slab_is_promoted_whole_once_and_its_call_is_per_call():
     r = subprocess.run([sys.executable, "-c", _PROMOTE], env=env, capture_output=True, text=True,
                        timeout=600)
     assert r.returncode == 0, (r.stdout[-1500:], r.stderr[-2500:])
-    for line in ("PROMOTED OK", "TABLES OK", "DISPATCH OK"):
+    for line in ("PROMOTED OK", "DISPATCH OK"):
         assert line in r.stdout, (line, r.stdout[-1500:])

@@ -7,8 +7,9 @@ The slots themselves — the device arena, its views, the host-to-card copies an
 and its clock, the kernels' launches — are nbxtensor's (`nbxtensor.memory.expert_slots.ExpertSlotStore`; the blocks
 another card holds whole: `HeldExperts`). The engine keeps what is a decision: WHICH expert sits in WHICH slot (the
 residency handed to the store), how many slots and on which card (Prism's plan, `core/strategies/expert_store.py`),
-whether the next layer's predicted experts are copied ahead (`prefetch_next`, opt-in), and the recording of the
-decode's routing for Prism's reuse curve (`trace`).
+whether the next layer's predicted experts are copied ahead (`on_enqueued`, opt-in), and the recording of the
+decode's routing for Prism's reuse curve (`trace`). The library's fused op (`nbxtensor.ops.moe_fused`) asks and tells
+the store through `decodes_on_card`, `on_routed` and `on_enqueued`, which this store answers with those decisions.
 """
 from __future__ import annotations
 
@@ -29,14 +30,20 @@ class NBXExpertStore(ExpertSlotStore):
             self.trace.note(layer, routed)      # the routing reuse curve (core/runtime/routing_reuse.py)
         return super()._acquire(layer, routed, n_experts, host)
 
-    # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
-    def prefetch_next(self, layer, routed) -> int:
-        """Copy ahead, on the store's stream, the experts the previous token routed to at the layer that
-        follows `layer`, into slots the call at `layer` does not hold; 0 when nothing can be planned
-        or unless NBX_EXPERT_PREFETCH=1 asks for it (opt-in since 2026-10-19: 21 % right at decode on Ming,
-        +23 % time on the Triton engine). Called once the call's kernels are
-        enqueued: the stream is blocking against the legacy stream, so copies issued after the launch
-        run behind it and ahead of the next layer's."""
+    def decodes_on_card(self, layer) -> bool:
+        return self.trace is None and super().decodes_on_card(layer)    # a recorded routing is read on the host
+
+    def on_routed(self, layer, routed, host) -> None:
+        self.hosts[layer] = host    # the next layer's prefetch reads it (step 3)
+
+    # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store's `prefetch_next`) ──
+    def on_enqueued(self, layer, routed) -> int:
+        """The fused op's call at `layer` has its launches enqueued: copy ahead, on the store's stream, the
+        experts the previous token routed to at the layer that follows `layer`, into slots the call at `layer`
+        does not hold; 0 when nothing can be planned or unless NBX_EXPERT_PREFETCH=1 asks for it (opt-in since
+        2026-10-19: 21 % right at decode on Ming, +23 % time on the Triton engine). The stream is blocking
+        against the legacy stream, so copies issued after the launch run behind it and ahead of the next
+        layer's."""
         if os.environ.get("NBX_EXPERT_PREFETCH") != "1" or self.in_place:
             return 0
         nxt = self.residency.next_layer(layer)

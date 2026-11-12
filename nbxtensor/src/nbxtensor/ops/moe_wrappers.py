@@ -434,3 +434,77 @@ def moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_scor
         tables.down_stride_bk[dev], tables.down_stride_bn[dev], top_k, W_BF16=bool(bf16))
     moe_part_reduce_kernel[lambda META: (triton.cdiv(K, META["BLOCK_N"]),)](part, out32, K, TOP_K=top_k)
     return out32.to(dt).reshape(1, K)
+
+
+#: the quantization group the int4 one-token band's kernels read (their GROUP): a layer's experts take the band only
+#: when their scales say they were quantized in groups of this many
+MOE_INT4_GROUP = 128
+_INT4_PACK = 8              # int4 values in one int32 word (the kernels' PACK)
+# The int4 band's launch, adopted 2026-08-25 on a V100 (locked 1290 MHz, interleaved n=5): BLOCK_N 32 for the gate/up
+# tile (71 us a call against 87.5 at 64; 16, BLOCK_K 256, 2 or 8 warps all slower), BLOCK_K 128, 4 warps, one stage; the
+# down projection at the gate/up tile and warps. Hand-measured, never certified: these kernels have no census row (an
+# open point, 2026-11-12). They were the defaults of six environment overrides in the engine (NBX_MOEV_BN, _BK,
+# _WARPS, _BND, _WARPS_D, _STAGES), removed when the band moved here: no environment changes a kernel's launch.
+_INT4_BAND_BLOCK_N = 32
+_INT4_BAND_BLOCK_K = 128
+_INT4_BAND_WARPS = 4
+_INT4_BAND_DOWN_BLOCK_N = _INT4_BAND_BLOCK_N
+_INT4_BAND_DOWN_WARPS = _INT4_BAND_WARPS
+_INT4_BAND_STAGES = 1
+
+
+def moe_decode_vec_int4_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate, split_down):
+    """The SIMT decode band for int4-g128 experts (`moe_decode_vec` int4 kernels): gateup with SwiGLU, then the down
+    projection — `split_down`: the expert axis on the grid writing router-weighted partials and their fixed-order sum
+    (adopted 2026-08-25); else the first pass's fused down combine. hidden [1, K] -> [1, K] in hidden's dtype;
+    `flat_indices` [top_k] int64, `flat_scores` [top_k]; `tables` carries the quantized pointer tables per device
+    (`q_tables`). The kernels are imported at each call, so a caller counting their launches sees them."""
+    from nbxtensor.ops.moe_decode_vec import (
+        moe_gateup_vec_kernel, moe_down_combine_vec_kernel, moe_down_split_vec_kernel, moe_part_reduce_kernel)
+
+    dt = hidden_states.nbx_dtype
+    x = hidden_states.reshape(K)
+    h = NBXTensor.empty((top_k, N_gate), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    out32 = NBXTensor.empty((K,), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    set_device(h)
+    _int4_gateup(moe_gateup_vec_kernel, x, flat_indices, tables, dev, h, (top_k, K, N_gate))
+    if split_down:
+        part = NBXTensor.empty((top_k, K), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+        _int4_down(moe_down_split_vec_kernel, (top_k, triton.cdiv(K, _INT4_BAND_DOWN_BLOCK_N)), {},
+                   (h, flat_indices, flat_scores), tables, dev, part, (N_gate, K))
+        moe_part_reduce_kernel[lambda META: (triton.cdiv(K, META['BLOCK_N']),)](part, out32, K, TOP_K=top_k)
+        return out32.to(dt).reshape(1, K)
+    _int4_down(moe_down_combine_vec_kernel, (triton.cdiv(K, _INT4_BAND_DOWN_BLOCK_N),), {"TOP_K": top_k},
+               (h, flat_indices, flat_scores), tables, dev, out32, (N_gate, K))
+    return out32.to(dt).reshape(1, K)
+
+
+def _int4_gateup(kernel, x, flat_indices, tables, dev, h, dims):
+    top_k, K, N_gate = dims
+    g_sc, g_mn, sg, sn = tables.q_tables["gate"][dev]
+    u_sc, u_mn, _, _ = tables.q_tables["up"][dev]
+    kernel[(top_k, triton.cdiv(N_gate, _INT4_BAND_BLOCK_N))](
+        x, flat_indices,
+        tables.gate_ptrs[dev], g_sc, g_mn,
+        tables.up_ptrs[dev], u_sc, u_mn,
+        h, K, N_gate,
+        tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
+        sg, sn,
+        BLOCK_N=_INT4_BAND_BLOCK_N, BLOCK_K=_INT4_BAND_BLOCK_K, GROUP=MOE_INT4_GROUP, PACK=_INT4_PACK,
+        num_warps=_INT4_BAND_WARPS, num_stages=_INT4_BAND_STAGES)
+
+
+def _int4_down(kernel, grid, top_k_arg, inputs, tables, dev, out, dims):
+    """The down projection's launch: the split kernel (grid (top_k, cdiv(K, BLOCK_N)), its partials into `out`) or the
+    fused combine (grid (cdiv(K, BLOCK_N),), `TOP_K` given, the sum into `out`)."""
+    N_gate, K = dims
+    h, flat_indices, flat_scores = inputs
+    d_sc, d_mn, dsg, dsn = tables.q_tables["down"][dev]
+    kernel[grid](
+        h, flat_indices, flat_scores,
+        tables.down_ptrs[dev], d_sc, d_mn,
+        out, N_gate, K,
+        tables.down_stride_bk[dev], tables.down_stride_bn[dev],
+        dsg, dsn,
+        **top_k_arg, BLOCK_N=_INT4_BAND_DOWN_BLOCK_N, BLOCK_K=_INT4_BAND_BLOCK_K, GROUP=MOE_INT4_GROUP,
+        PACK=_INT4_PACK, num_warps=_INT4_BAND_DOWN_WARPS, num_stages=_INT4_BAND_STAGES)

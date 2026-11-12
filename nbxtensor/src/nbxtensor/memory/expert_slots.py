@@ -187,6 +187,19 @@ class ExpertSlotStore:
             self._host_dirty = False
         self._dev_valid = False
 
+    # ── what a fused call (`ops.moe_fused.fused_moe`) asks and tells the store; a subclass decides more ──
+    def decodes_on_card(self, layer) -> bool:
+        """Whether a one-token call at `layer` runs the residency on the card (`decode_on_card`): armed, and `layer`
+        one of the card's map."""
+        return self.device_decode and layer in self.layer_index
+
+    def on_routed(self, layer, routed, host: Callable[[int], Tuple]) -> None:
+        """A call at `layer` read back the experts it routes to (`routed`, sorted) before its slots are acquired;
+        `host(e)` gives expert e's host triple. The store keeps nothing of it."""
+
+    def on_enqueued(self, layer, routed) -> None:
+        """A grouped call at `layer` has its launches enqueued, its slots acquired for `routed`. Nothing here."""
+
     def decode_on_card(self, layer, flat_indices, flat_scores, hidden, host, top_k: int, K: int, N_gate: int):
         """One token through a store-served layer with the residency on the card: assign the routed experts' slots
         (misses evicting the least recently used), copy the misses from page-locked host memory, run the half decode

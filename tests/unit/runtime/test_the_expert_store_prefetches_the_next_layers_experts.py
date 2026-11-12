@@ -167,7 +167,7 @@ def test_the_triton_store_serves_a_prefetched_expert_with_the_hosts_bytes(monkey
         store.acquire("L0", [2, 3], 8, host["L0"].__getitem__)          # evicts L0's 0, 1
         store.acquire("L0", [4, 5], 8, host["L0"].__getitem__)          # evicts L1's 6, 7
         assert store.residency.slot_of("L1", 6) is None and store.residency.slot_of("L1", 7) is None
-        n = store.prefetch_next("L0", [4, 5])                            # L1's prediction {6, 7}: copied ahead
+        n = store.on_enqueued("L0", [4, 5])                            # L1's prediction {6, 7}: copied ahead
         assert n == 2 and store.residency.prefetched == 2
         g, u, d = store.acquire("L1", [6, 7], 8, host["L1"].__getitem__)
         assert store.residency.prefetch_used == 2, store.residency.summary()
@@ -178,7 +178,7 @@ def test_the_triton_store_serves_a_prefetched_expert_with_the_hosts_bytes(monkey
         monkeypatch.setenv("NBX_EXPERT_PREFETCH", "0")
         store.acquire("L0", [0, 1], 8, host["L0"].__getitem__)          # evicts L0's 2, 3; L1's 6, 7 stay
         store.acquire("L0", [2, 3], 8, host["L0"].__getitem__)          # evicts L1's 6, 7
-        assert store.prefetch_next("L0", [2, 3]) == 0 and store.residency.prefetched == 2
+        assert store.on_enqueued("L0", [2, 3]) == 0 and store.residency.prefetched == 2
     finally:
         store.release()
         gc.collect()
