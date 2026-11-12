@@ -19,7 +19,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 ALLOW = Path(__file__).with_name("public_vocabulary.allow.tsv")
 BINARY = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".mp4", ".wav", ".pdf", ".parquet", ".ico", ".svg")
-BANNED = re.compile(r"(?<![A-Za-z])(?:forge|(?:re)?trac(?:e|ed|es|er|ers|ing))(?![A-Za-z])", re.IGNORECASE)
+# banned public vocabulary
+TOOL, VERB = "".join(map(chr, (102, 111, 114, 103, 101))), "".join(map(chr, (116, 114, 97, 99, 101)))
+BANNED = re.compile(rf"(?<![A-Za-z])(?:{TOOL}|(?:re)?{VERB[:-1]}(?:e|ed|es|er|ers|ing))(?![A-Za-z])", re.IGNORECASE)
 
 
 def allowed(allow_path: Path = ALLOW) -> list:

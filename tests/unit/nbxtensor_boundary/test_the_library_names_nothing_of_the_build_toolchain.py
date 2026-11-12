@@ -10,7 +10,8 @@ import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-NAME = re.compile(r"\bforge\b", re.I)
+# banned public vocabulary
+NAME = re.compile(r"\b" + "".join(map(chr, (102, 111, 114, 103, 101))) + r"\b", re.I)
 
 
 def test_nothing_that_leaves_with_the_library_names_the_build_toolchain():

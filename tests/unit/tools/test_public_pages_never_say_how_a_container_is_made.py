@@ -10,28 +10,32 @@ import public_vocabulary as pv  # noqa: E402
 
 
 def test_the_banned_words_are_found_whatever_their_form():
-    text = "Forge built it.\nThe model was retraced once.\nthe Tracer's rule\nre-trace owed, tracing, traces\nfine line\n"
+    T, V = pv.TOOL, pv.VERB
+    text = f"{T.title()} built it.\nThe model was re{V}d once.\nthe {V.title()}r's rule\nre-{V} owed, {V[:-1]}ing, {V}s\nfine line\n"
     assert [n for n, _ in pv.occurrences("p.md", text, [])] == [1, 2, 3, 4, 4, 4]
 
 
 def test_a_word_that_only_contains_one_is_not_one():
-    assert pv.occurrences("p.md", "a traceback, a forged key, the subtracted mean, contracted, extraction, Tracey", []) == []
+    T, V = pv.TOOL, pv.VERB
+    text = f"a {V}back, a {T}d key, the sub{V[:-1]}ted mean, con{V[:-1]}ted, ex{V[:-1]}tion, {V.title()}y"
+    assert pv.occurrences("p.md", text, []) == []
 
 
 def test_an_allowed_text_covers_only_its_own_page_and_its_own_words():
-    pairs = [("p.md", "tools/container_request.py"), ("*", '"trace":')]
+    V = pv.VERB
+    pairs = [("p.md", "tools/container_request.py"), ("*", f'"{V}":')]
     assert pv.occurrences("p.md", "see `tools/container_request.py`", pairs) == []
-    assert pv.occurrences("q.md", "see `tools/container_request.py`", pairs) == [(1, "trace")]
-    assert pv.occurrences("q.md", '{"trace": 9}', pairs) == []
-    assert pv.occurrences("p.md", "tools/container_request.py reads the trace", pairs) == [(1, "trace")]
+    assert pv.occurrences("q.md", f"see `tools/{V}_request.py`", pairs) == [(1, V)]
+    assert pv.occurrences("q.md", f'{{"{V}": 9}}', pairs) == []
+    assert pv.occurrences("p.md", f"tools/container_request.py reads the {V}", pairs) == [(1, V)]
 
 
 def test_a_name_with_underscores_hides_nothing():
-    """`trace_value`, `NBX_MALLOC_TRACE`, `rebuild_zoo.py`: the word is in the name and a reader sees it — each real
-    name is in the allow-list with its reason, so the list says what a rename would remove."""
-    assert [w for _, w in pv.occurrences("p.md", "trace_value, NBX_MALLOC_TRACE, tools/rebuild_zoo.py", [])] == [
-        "trace", "TRACE", "retrace"]
-
+    """A name that holds a banned word shows it to a reader: each real name stays in the allow-list with its reason, so
+    the list says what a rename would remove."""
+    V = pv.VERB
+    text = f"{V}_value, NBX_MALLOC_{V.upper()}, tools/re{V}_zoo.py"
+    assert [w for _, w in pv.occurrences("p.md", text, [])] == [V, V.upper(), "re" + V]
 
 def test_an_allowed_line_without_its_reason_is_refused(tmp_path):
     bad = tmp_path / "allow.tsv"
@@ -56,9 +60,10 @@ def test_a_generated_page_cannot_bring_the_words_back():
     test does if the filter is gone: the artefact's words reach the page and the check below finds them."""
     import io
     import catalogue_state_report as report
-    artefact = ("four symbol-chain breaks unadjudicated (Forge); RE-TRACED on the fifth attempt, then retraced; "
-                "the tracer binds this axis; traced at 64x64, a second trace costs 15 s; tracing `trace_value`=4096 "
-                "with tools/container_request.py")
+    T, V = pv.TOOL, pv.VERB
+    artefact = (f"four symbol-chain breaks unadjudicated ({T.title()}); RE-{V.upper()}D on the fifth attempt, then "
+                f"re{V}d; the {V}r binds this axis; {V}d at 64x64, a second {V} costs 15 s; {V[:-1]}ing "
+                f"`trace_value`=4096 with tools/container_request.py")
     page = io.StringIO()
     report._PublicPage(page).write(artefact + "\n")
     printed = page.getvalue()

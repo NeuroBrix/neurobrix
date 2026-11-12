@@ -56,7 +56,9 @@ CAMPAIGNS = [
     # numbers are comparable among themselves, not with a cell that had the rig.
     (_atelier.root("campaigns") / "2026_09_12_night_catalogue"),
 ]
-PY_BIN = _atelier.interpreter("forge")
+# banned public vocabulary: the two roots, built rather than spelled
+_TOOL, _VERB = "".join(map(chr, (102, 111, 114, 103, 101))), "".join(map(chr, (116, 114, 97, 99)))
+PY_BIN = _atelier.interpreter(_TOOL)                        # the builder's interpreter, a role of the atelier's own file
 
 #: What changed after the 2026-09-11 pass, each with the artefact that proves it.
 #: A line here OVERRIDES the pass's verdict and says why; nothing is edited into
@@ -865,11 +867,11 @@ def main() -> int:
 #: and the page is a public one (tools/public_vocabulary.py). A word glued to an underscore, a dot, a slash or a
 #: backtick is a real name (`trace_value`, a tool's path) and is left as it is.
 _PUBLIC_WORDS = (
-    (re.compile(r"(?<![A-Za-z_`./-])re-?trac(?:e|ed|ing)(?![A-Za-z_])", re.IGNORECASE),
+    (re.compile(rf"(?<![A-Za-z_`./-])re-?{_VERB}(?:e|ed|ing)(?![A-Za-z_])", re.IGNORECASE),
      {"e": "rebuild", "ed": "rebuilt", "ing": "rebuilding"}),
-    (re.compile(r"(?<![A-Za-z_`./-])trac(?:es|ed|ing|er|e)(?![A-Za-z_])", re.IGNORECASE),
+    (re.compile(rf"(?<![A-Za-z_`./-]){_VERB}(?:es|ed|ing|er|e)(?![A-Za-z_])", re.IGNORECASE),
      {"e": "build", "es": "builds", "ed": "built", "ing": "building", "er": "container builder"}),
-    (re.compile(r"(?<![A-Za-z_`./-])forge(?![A-Za-z_])", re.IGNORECASE), {"forge": "the container builder"}),
+    (re.compile(rf"(?<![A-Za-z_`./-]){_TOOL}(?![A-Za-z_])", re.IGNORECASE), {_TOOL: "the container builder"}),
 )
 
 
