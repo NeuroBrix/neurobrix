@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-131 entries, 124 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 124 carry a site. Two
+132 entries, 125 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 124 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3860,3 +3860,26 @@ process or a reset pool), each component alone, before any fit (the supervisor, 
 
 **The lesson, in one line.** A delta inside a shared pool measures the neighbours as much as the subject; isolate the
 subject before you fit it.
+
+### 125 — the serve cell judged three identical requests; a served MoE whose later turns came back empty passed it
+
+**Instrument**: `tools/gate_serve_cell.py`, the gate's SERVE cell since 2026-11-11: one daemon, three identical streamed
+chat requests, RED when one fails or the third is more than 1.5x slower than the first. It was built after two defects
+of the served mixture-of-experts path that only a daemon's later requests could see, and it caught them.
+
+**What it said**: GREEN on the published 0.6.8 (Qwen3-Coder-30B-A3B, one 32 GB card): three right texts at the first's
+speed. On the same server a conversation — each request adding the last answer and a new user turn — answered turns
+1-2 right and 3-5 EMPTY (2026-11-12, measured; the same requests with the decode replay off answered all five right).
+
+**Why it is blind**: three identical requests continue the cached conversation by ONE row each (the session matches all
+but the last position). The defect lived only where a turn brings more than one new row after a decode the replay ran:
+the experts store's host residency took the card's slots back without seeing what a replayed step had moved. An agent's
+every turn after the first is such a turn; the cell's requests never were.
+
+**Repair.** The cell now holds a five-turn conversation after its three requests, then the same conversation on a
+second daemon whose replay is off (`tools/serve_without_replay.py`), and is RED when a turn answers nothing or not the
+oracle's text. Seen failing on the deliberate injection: the tree before the fix (317d5af35), RED "turn 3 of the
+conversation answered nothing with the replay"; GREEN on the 0.6.9 freeze (b98af9fc3), the five turns read.
+
+**The lesson, in one line.** A cell that repeats one request tests the path a repeat takes; the user's path is the
+conversation, so the cell must be one.
