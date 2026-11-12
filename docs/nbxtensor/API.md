@@ -488,6 +488,20 @@ def store(acc, dtype)                   # the sum stored once in the output's dt
 
 Written over the methods a tensor shares with torch's: an NBXTensor, or the tensor of an engine whose library is torch.
 
+### `nbxtensor.ops.tiles` — a tensor computed tile by tile: windows read, results crossfaded
+
+```python
+def crossfade_ramp(n: int, before: int, after: int) -> np.ndarray
+    # float32 weights along one axis: 1 inside, (i + 0.5) / overlap across each overlap (two tiles sum to 1)
+def tile_window(x, starts, sizes)
+    # the NBXTensor tile at `starts` on the trailing axes, its two trailing axes edge-replicated up to `sizes`, contiguous
+class TileBlend(like, out_shape, weight_shape, axes)   # axes: (axis, every tile's output start, a tile's length)
+    add(result, index)    # one tile's result crossfaded into the whole at its position index along each axis
+    result()              # the weighted sum divided by the summed weights
+```
+
+The caller decides where the tiles sit; `TileBlend` calls only methods a tensor shares with torch's.
+
 ### `nbxtensor.ops.token_bitmask` — a token bitmask applied to a decode step's logits (constrained decoding)
 
 ```python

@@ -425,10 +425,7 @@ class TilingEngine:
         # decode at reduced H, W). Under temporal tiling the first tile's
         # T_out covers t_scale * t_tile only; the accumulator's temporal
         # extent is the full t_scale * T.
-        first_t = t_positions[0]
-        first_h, first_w = h_positions[0], w_positions[0]
-        first_tile = self._extract_tile(input_tensor, first_h, first_w, first_t)
-        first_result = execute_fn(first_tile)
+        first_result = execute_fn(self._extract_tile(input_tensor, h_positions[0], w_positions[0], t_positions[0]))
 
         # Output accumulators. lead_dims = first_result minus its trailing
         # (h, w); spatial replaced by the full output (out_h, out_w). Weight
@@ -465,155 +462,27 @@ class TilingEngine:
         else:
             out_shape = [*lead_dims, out_h, out_w]
             weight_shape = [lead_dims[0], 1, *lead_dims[2:], out_h, out_w]
-        out_ndim = len(out_shape)
 
-        # Mode-polymorphic accumulators: NBXTensor on the triton path
-        # (R33: no torch), torch.zeros on the compiled path (byte-identical).
-        # The accumulator MUST live on the device where the tiles actually
-        # compute — the tiled component's device, i.e. first_result.device —
-        # NOT the input tensor's device. Under component_placement the input
-        # can sit on a different GPU than the tiled component (CogVideoX:
-        # transformer on cuda:0, VAE on cuda:2), so allocating on
-        # input_tensor.device then mixed cuda:0 + cuda:2 in the accumulate add.
-        # For single-device placement the two devices coincide -> no-op.
-        # One engine's zeros, decided from the tile's own result (the feather weights below read the same tensor),
-        # one helper for this brick and the vendor tilings (`vendor_tiling._zeros`).
-        from neurobrix.core.module.vendor_tiling import _zeros as _zeros_like
-        output = _zeros_like(first_result, out_shape)
-        weight = _zeros_like(first_result, weight_shape)
-
-        if down:
-            rh = ts // sf
-            rw = ts // sf
-            rt = self.t_tile // self.t_scale if temporal else None
-        else:
-            rh = ts * sf
-            rw = ts * sf
-            rt = self.t_tile * self.t_scale if temporal else None
-
-        import numpy as np
-
-        def _out(p: int, axis: str) -> int:
-            """An input-space start as an output-space start on this axis."""
-            if axis == "t":
-                return p // self.t_scale if down else p * self.t_scale
-            return p // sf if down else p * sf
-
-        def _overlaps(p: int, positions: list, length: int, axis: str):
-            """(before, after): output extents this tile shares with its neighbours."""
-            i = positions.index(p)
-            o = _out(p, axis)
-            before = (_out(positions[i - 1], axis) + length - o) if i > 0 else 0
-            after = (o + length - _out(positions[i + 1], axis)) if i + 1 < len(positions) else 0
-            return max(0, before), max(0, after)
-
-        def _ramp(n: int, before: int, after: int):
-            """1 inside, a linear ramp across each shared overlap: (i + 0.5) / overlap, so the
-            two tiles' weights sum to exactly 1 at every overlapped pixel (a crossfade)."""
-            r = np.ones(n, dtype=np.float32)
-            if before > 0:
-                k = min(before, n)
-                r[:k] = np.minimum(r[:k], (np.arange(k, dtype=np.float32) + 0.5) / before)
-            if after > 0:
-                k = min(after, n)
-                r[n - k:] = np.minimum(r[n - k:], (np.arange(k, 0, -1, dtype=np.float32) - 0.5) / after)
-            return r
-
-        def _feather(osl, ty: int, tx: int, tt=None):
-            """The tile's blend weight over its placed extent `osl`, as the result's type."""
-            shape = [1] * out_ndim
-            factors = [(-2, _overlaps(ty, h_positions, rh, "s")), (-1, _overlaps(tx, w_positions, rw, "s"))]
-            if tt is not None:
-                factors.append((self.t_axis_out if down else 2, _overlaps(tt, t_positions, rt, "t")))
-            for axis, _ in factors:
-                shape[axis] = osl[axis].stop - osl[axis].start
-            arr = np.ones(shape, dtype=np.float32)
-            for axis, (before, after) in factors:
-                along = [1] * out_ndim
-                along[axis] = shape[axis]
-                arr = arr * _ramp(shape[axis], before, after).reshape(along)
-            arr = np.ascontiguousarray(arr)
-            if _is_nbx_tensor(first_result):
-                from nbxtensor.tensor import NBXTensor
-                return NBXTensor.from_numpy(arr).to(first_result.dtype)
-            import torch
-            return torch.from_numpy(arr).to(device=first_result.device, dtype=first_result.dtype)
-
-        def _accumulate(res, ty: int, tx: int, tt=None) -> None:
-            # Explicit per-rank slice (NBXTensor-safe); the read-add-write
-            # form works for both torch and NBXTensor (avoids relying on
-            # NBXTensor.__iadd__). weight's size-1 channel axis is selected
-            # by slice(None) and broadcasts on the final divide.
-            if down:
-                # D2-ENCODER placement: the tile at input position p lands
-                # at latent position p // ratio — exact because positions,
-                # tile and stride live on the ratio lattice (ctor snap).
-                oy = ty // sf
-                ox = tx // sf
-            else:
-                oy = ty * sf
-                ox = tx * sf
-            arh = min(rh, out_h - oy)
-            arw = min(rw, out_w - ox)
-            if tt is not None and down:
-                # Temporal placement, downscale: latent frame = tt // ratio
-                # at the output's temporal axis (t_axis_out — encoders may
-                # permute the latent layout off axis 2).
-                ot = tt // self.t_scale
-                art = min(rt, out_t - ot)
-                osl_l = [slice(None)] * out_ndim
-                osl_l[self.t_axis_out] = slice(ot, ot + art)
-                osl_l[-2] = slice(oy, oy + arh)
-                osl_l[-1] = slice(ox, ox + arw)
-                rsl_l = [slice(None)] * out_ndim
-                rsl_l[self.t_axis_out] = slice(0, art)
-                rsl_l[-2] = slice(0, arh)
-                rsl_l[-1] = slice(0, arw)
-                osl = tuple(osl_l)
-                rsl = tuple(rsl_l)
-            elif tt is not None:
-                # Temporal placement: linear map — tile at input frame tt
-                # lands at output frame tt * t_scale (same law as spatial).
-                ot = tt * self.t_scale
-                art = min(rt, out_t - ot)
-                osl = ((slice(None), slice(None), slice(ot, ot + art))
-                       + (slice(oy, oy + arh), slice(ox, ox + arw)))
-                rsl = ((slice(None), slice(None), slice(0, art))
-                       + (slice(0, arh), slice(0, arw)))
-            else:
-                osl = (slice(None),) * (out_ndim - 2) + (slice(oy, oy + arh), slice(ox, ox + arw))
-                rsl = (slice(None),) * (out_ndim - 2) + (slice(0, arh), slice(0, arw))
-            # Feathered, not boxed: each tile weighs 1 in its interior and ramps down across
-            # the overlap it shares with a neighbour — a symmetric crossfade. It is NOT the
-            # vendors' formula (diffusers' blend_h / blend_v ramp the previous tile's tail by
-            # i / blend_extent into the next tile's head and crop each tile to the stride), so a
-            # tile-level comparison with a vendor tiled decode keeps a residual by construction.
-            # A box weight switched the average abruptly wherever the tile count changed — a
-            # line at every tile stride: CogVideoX-2b's 64-px and Wan2.1-T2V's 96-px grids, both
-            # engines (2026-09-27). The temporal axis is tiled only for a LINEAR temporal map
-            # (Prism's gate): a causal decoder, whose first frame is special, is never cut in time.
-            w = _feather(osl, ty, tx, tt)
-            output[osl] = output[osl] + res[rsl] * w
-            weight[osl] = weight[osl] + w
-
-        _accumulate(first_result, first_h, first_w, first_t)
-
-        # Process remaining tiles
-        tile_count = 1
-        for t in t_positions:
-            for y in h_positions:
-                for x in w_positions:
-                    if t == first_t and y == first_h and x == first_w:
-                        continue  # Already processed
-                    tile = self._extract_tile(input_tensor, y, x, t)
-                    result = execute_fn(tile)
-                    _accumulate(result, y, x, t)
+        # The blend's accumulators live where the tiles compute (first_result's device, not the input's: under
+        # component_placement the two can differ). Each tiled axis: every tile's output start, a tile's output length.
+        def _out(p: int, scale: int) -> int:
+            return p // scale if down else p * scale
+        axes = [(-2, [_out(p, sf) for p in h_positions], _out(ts, sf)),
+                (-1, [_out(p, sf) for p in w_positions], _out(ts, sf))]
+        if temporal:     # tiled in time only for a LINEAR temporal map (Prism's gate): a causal decoder never is
+            axes.append((self.t_axis_out if down else 2, [_out(p, self.t_scale) for p in t_positions],
+                         _out(self.t_tile, self.t_scale)))
+        from nbxtensor.ops.tiles import TileBlend
+        blend = TileBlend(first_result, out_shape, weight_shape, axes)
+        tile_count = 0
+        for it, t in enumerate(t_positions):
+            for iy, y in enumerate(h_positions):
+                for ix, x in enumerate(w_positions):
+                    result = first_result if tile_count == 0 else execute_fn(self._extract_tile(input_tensor, y, x, t))
+                    blend.add(result, (iy, ix, it) if temporal else (iy, ix))
                     tile_count += 1
-
-        logger.debug(f"[TilingEngine] Processed {tile_count} tiles, output shape {output.shape}")
-
-        # Divide by weight — where tiles overlap, average the predictions
-        return output / weight
+        logger.debug(f"[TilingEngine] Processed {tile_count} tiles, output shape {tuple(out_shape)}")
+        return blend.result()
 
     def _compute_tile_positions(self, height: int, width: int) -> Tuple[List[int], List[int]]:
         """
@@ -668,64 +537,20 @@ class TilingEngine:
             Tile tensor [B, C, tile_size, tile_size] (+ leading T slice for 5D)
         """
         ts = self.tile_size
-        ndim = input_tensor.dim()
-        # Trailing two dims are H, W for both 4D NCHW and 5D NCDHW.
-        height, width = input_tensor.shape[-2], input_tensor.shape[-1]
-
-        y_end = min(y + ts, height)
-        x_end = min(x + ts, width)
-        # Explicit per-rank slice tuple (NBXTensor-safe; equals
-        # [:, :, y:y_end, x:x_end] for 4D and carries the extra T axis for 5D).
-        if t is not None:
-            t_end = min(t + self.t_tile, input_tensor.shape[2])
-            sl = (slice(None), slice(None), slice(t, t_end),
-                  slice(y, y_end), slice(x, x_end))
-        else:
-            sl = (slice(None),) * (ndim - 2) + (slice(y, y_end), slice(x, x_end))
-        tile = input_tensor[sl]
-
-        # Pad to full trace_size if at edge (pads the trailing H, W). Mode-
-        # polymorphic: NBXTensor → pad_wrapper (Triton-pure replicate),
-        # torch → F.pad.
-        actual_h = y_end - y
-        actual_w = x_end - x
-        if actual_h < ts or actual_w < ts:
-            pad_h = ts - actual_h
-            pad_w = ts - actual_w
-            if _is_nbx_tensor(input_tensor):
-                from nbxtensor.ops.shape_wrappers import pad_wrapper
-                tile = pad_wrapper(tile, [0, pad_w, 0, pad_h], mode='replicate')
-            else:
-                import torch
-                # `replicate` takes 2 pad values per padded dim and REQUIRES one pair per
-                # spatial dim of the input rank: 4 for a 4-D NCHW tile, 6 for a 5-D NCDHW
-                # one. Passing 4 for a 5-D video tile raises NotImplementedError from
-                # torch — so a video edge-tile in COMPILED mode crashed here. The triton
-                # path never reached it because it takes `pad_wrapper` above, which is why
-                # this survived: the mode that exercises video tiling is not the mode with
-                # the bug. The temporal axis is never padded (t_positions guarantees
-                # t + t_tile <= T by construction), so its pair is (0, 0).
-                pads = ((0, pad_w, 0, pad_h, 0, 0) if tile.dim() == 5
-                        else (0, pad_w, 0, pad_h))
-                tile = torch.nn.functional.pad(tile, pads, mode='replicate')
-
-        # A TILE IS A SLICE, AND A SLICE IS NOT CONTIGUOUS.
-        #
-        # `input_tensor[sl]` above strides across the parent's rows: an interior 32-wide
-        # tile of a 64-wide image comes back with strides (16384, 4096, 64, 1), row stride
-        # 64 for a 32-wide tile. Handed to a flat-indexed wrapper that assumes packed
-        # memory, it resolves to the WRONG ADDRESSES and produces silent garbage — the
-        # Sana 4Kpx conv::55 incident, 94 % of elements past 1.0 absolute, and the rule
-        # `.claude/rules/kernels-and-triton.md` states in its own words: "Audit every
-        # `x[:, :, ...]` and add `.contiguous()`; it short-circuits at zero cost when
-        # already contiguous."
-        #
-        # The asymmetry is what makes it a GRID rather than a uniform mess: an EDGE tile
-        # goes through the pad above and comes back contiguous and correct, while every
-        # INTERIOR tile did not. Tile interiors wrong, tile seams clean.
-        #
-        # Mode-polymorphic and R33-safe: NBXTensor carries its OWN `contiguous()` (it is
-        # not torch's method), which is how `kernels/wrappers.py` has always done this.
+        starts, sizes = ((t, y, x), (self.t_tile, ts, ts)) if t is not None else ((y, x), (ts, ts))
+        if _is_nbx_tensor(input_tensor):
+            from nbxtensor.ops.tiles import tile_window
+            return tile_window(input_tensor, starts, sizes)
+        # The PyTorch engine's own tile, the same window: sliced, edge-replicated on H, W (`replicate` takes one pad
+        # pair per spatial dim of the rank: 6 values for a 5-D tile, time never padded), made contiguous (a slice
+        # strides across its parent's rows; see `nbxtensor.ops.tiles.tile_window`).
+        import torch
+        lead = input_tensor.dim() - len(starts)
+        tile = input_tensor[(slice(None),) * lead + tuple(slice(s, s + n) for s, n in zip(starts, sizes))]
+        pad_h, pad_w = ts - tile.shape[-2], ts - tile.shape[-1]
+        if pad_h or pad_w:
+            pads = (0, pad_w, 0, pad_h, 0, 0) if tile.dim() == 5 else (0, pad_w, 0, pad_h)
+            tile = torch.nn.functional.pad(tile, pads, mode='replicate')
         return tile.contiguous()
 
     def __repr__(self) -> str:

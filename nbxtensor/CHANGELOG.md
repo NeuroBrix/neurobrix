@@ -76,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `io.constants.archived_storage`, `io.constants.constant_array`: a graph constant's stored bytes (the archive
   `torch.save` writes) read and decoded to the dtype it is bound in, without a tensor library. Moved from the engine's
   constant loader.
+- `ops.tiles` (`crossfade_ramp`, `tile_window`, `TileBlend`): a tensor computed tile by tile — a tile read as a
+  contiguous edge-replicated window, results crossfaded across their overlaps and divided once. Moved from the
+  NeuroBrix engine's TilingEngine, which keeps where the tiles sit.
 - `ops.axis_slices` (`take_slice`, `take_slice_cyclic`, `put_slice`, `whole_shape`, `own`, `accumulate`, `store`): an
   axis read and written a slice at a time as views, and a contraction's partials summed in an accumulator dtype — the
   stitch of a computation run in slices. Moved from the NeuroBrix engine's chunked region.
