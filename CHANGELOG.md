@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The voice says every number and name it is given.** Kokoro-82M dropped a number written in digits ("a graphics card
+  from 2017" was spoken "...from a...") and mangled brand names. Numbers, years, versions, decimals, ordinals,
+  percentages, currencies, units and known names are now written out before the voice reads them; a character it cannot
+  say is refused by name.
+
 ## [0.6.13] - 2026-11-12
 
 With nbxtensor 0.1.5: the Triton engine on Apple GPUs several times faster, and the engine's remaining tensor work moved
