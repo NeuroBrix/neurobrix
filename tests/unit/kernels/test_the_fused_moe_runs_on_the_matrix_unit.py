@@ -41,7 +41,7 @@ def test_parity_with_the_oracle(T, top_k, E, K, N, mul, divide, tile):
     from nbxtensor.ops._configs import matrix_unit
     from nbxtensor.ops.matmul_m8n8k4 import mm_layouts
     from nbxtensor.ops.fused_moe_m8n8k4 import fused_moe_m8n8k4_kernel
-    from neurobrix.triton.moe import moe_align_block_size
+    from nbxtensor.ops.moe_wrappers import moe_align_block_size
     from nbxtensor.memory.allocator import DeviceAllocator
     row = matrix_unit()["mm"][tile]
     BM, BN, BK, WM, WN = (int(row[k]) for k in ("block_m", "block_n", "block_k", "warps_m", "warps_n"))

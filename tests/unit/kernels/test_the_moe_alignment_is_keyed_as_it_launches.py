@@ -1,4 +1,4 @@
-"""The MoE alignment's three stages (`ops/moe_align.py`, launched by `triton/moe.moe_align_block_size`) run their
+"""The MoE alignment's three stages (`ops/moe_align.py`, launched by `nbxtensor.ops.moe_wrappers.moe_align_block_size`) run their
 certified configuration: the key each forms at the launch (`autotune_cache.key_of`, the launcher's own) IS the key
 `launch_keys.moe_align_launches` computes for the layer — the function the derived census calls — at the FMA kernel's
 block and at a unit tile's rows, and a card's share of a layer split across cards is keyed by the layer's pairs; and
@@ -56,7 +56,8 @@ def test_every_stage_is_its_key(monkeypatch, tokens, top_k, experts):
     from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.ops import launch_keys as LK
     from neurobrix.kernels.autotune_certify import _bind_hardware_profile
-    from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+    from nbxtensor.ops.moe_wrappers import moe_align_block_size
+    from neurobrix.triton.moe import _BLOCK_SIZE_M
     _bind_hardware_profile()
     want = LK.moe_align_launches(tokens, top_k, experts, NBXDtype.float16)
     blocks = sorted({k[0] for q, k in want if q != LK.MOE_ALIGN[2]})
@@ -75,7 +76,8 @@ def test_a_cards_share_is_keyed_by_the_layers_pairs(monkeypatch):
     from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.ops import launch_keys as LK
     from neurobrix.kernels.autotune_certify import _bind_hardware_profile
-    from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+    from nbxtensor.ops.moe_wrappers import moe_align_block_size
+    from neurobrix.triton.moe import _BLOCK_SIZE_M
     _bind_hardware_profile()
     tokens, top_k, experts = 300, 8, 64
     want = LK.moe_align_launches(tokens, top_k, experts, NBXDtype.float16)

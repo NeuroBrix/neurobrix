@@ -96,7 +96,7 @@ def capture_fused_moe(rng, out):
     from nbxtensor.ops.fused_moe import (fused_moe_kernel, fused_moe_wna16_kernel,
                                                  fused_moe_fp32b_kernel)
     from nbxtensor.ops.dequant_gemv import dequant_int4_kernel
-    from neurobrix.triton.moe import moe_align_block_size
+    from nbxtensor.ops.moe_wrappers import moe_align_block_size
     from tests.unit.kernels.test_fused_moe_wna16_parity import (_quantize, _ptr_table, GROUP, PACK,
                                                                 BLOCK_M, BLOCK_N, BLOCK_K, GROUP_M, WARPS)
     for M, K, N, E, top_k, routed in ((1, 2048, 768, 8, 2, False), (5, 768, 2048, 8, 2, True)):

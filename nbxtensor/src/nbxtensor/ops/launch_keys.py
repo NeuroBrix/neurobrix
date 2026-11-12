@@ -984,7 +984,7 @@ def moe_align_classes(experts: int, pairs: int) -> Tuple[int, int]:
 
 
 def moe_align_launches(tokens: int, top_k: int, experts: int, w: NBXDtype) -> List[Launch]:
-    """The three alignment stages a fused MoE layer launches (`triton/moe.moe_align_block_size`), the routing ids
+    """The three alignment stages a fused MoE layer launches (`moe_wrappers.moe_align_block_size`), the routing ids
     int64: at the FMA kernel's block (`moe_wrappers._MOE_BM`) and, on a matrix unit that takes the experts' dtype,
     at every unit tile's rows (`fused_moe_unit_tiles` — the layer aligns again at the tile its certificate chose,
     one of these)."""
@@ -1005,7 +1005,7 @@ def moe_align_launches(tokens: int, top_k: int, experts: int, w: NBXDtype) -> Li
 
 
 def moe_decode_vec_half_launches(top_k: int, hidden: int, inter: int, w: NBXDtype) -> List[Launch]:
-    """A one-token MoE layer on half-precision experts held on one card (`triton/moe._moe_decode_vec_half_pass`): the
+    """A one-token MoE layer on half-precision experts held on one card (`moe_wrappers.moe_decode_vec_half_pass`): the
     gateup with SwiGLU [hidden -> inter], the down projection's router-weighted partials [inter -> hidden], their
     fixed-order sum. The routed expert ids int64, the tables int64, the partials fp32; the activation and the router
     weights in the experts' dtype `w`."""

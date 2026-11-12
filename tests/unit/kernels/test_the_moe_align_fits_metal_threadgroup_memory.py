@@ -31,7 +31,7 @@ def _host_align(ids, bs, E):
 
 @pytest.mark.parametrize("E,top_k,tokens,bs", [(8, 2, 5, 16), (40, 8, 37, 16), (128, 8, 37, 16), (128, 8, 300, 64), (128, 2, 5, 16)])
 def test_the_device_align_sorts_as_the_host_sort(E, top_k, tokens, bs):
-    from neurobrix.triton.moe import moe_align_block_size
+    from nbxtensor.ops.moe_wrappers import moe_align_block_size
     ids = np.random.default_rng(E + tokens).integers(0, E, size=tokens * top_k).astype(np.int64)
     s, x, t = moe_align_block_size(NBXTensor.from_numpy(ids), bs, E, 0)
     want_s, want_x, want_t = _host_align(ids, bs, E)

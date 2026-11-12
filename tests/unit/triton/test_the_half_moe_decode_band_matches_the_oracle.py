@@ -47,12 +47,13 @@ def test_the_half_band_is_the_routed_swiglu_sum(dtype, monkeypatch):
     half = lambda a: dev(a, nbx)                                        # noqa: E731
     rounded = lambda ws: [half(w).to(NBXDtype.float32).numpy() for w in ws]  # noqa: E731
     used = []
-    real = moe._moe_decode_vec_half_pass
+    import nbxtensor.ops.moe_wrappers as band
+    real = band.moe_decode_vec_half_pass
 
     def spy(*a, **k):
         used.append(True)
         return real(*a, **k)
-    monkeypatch.setattr(moe, "_moe_decode_vec_half_pass", spy)
+    monkeypatch.setattr(band, "moe_decode_vec_half_pass", spy)
     out = moe.execute_moe_fused(
         None, half(x), [half(g) for g in gates], [half(u) for u in ups], [half(d) for d in downs],
         top_k=top_k, num_experts=E, cache_key=f"half_band_{dtype}",
