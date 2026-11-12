@@ -53,7 +53,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.memory.slab import SlabAllocator, SlabInterceptor, StepSlab
+from nbxtensor.memory.slab import StepSlab
 import logging
 _log = logging.getLogger(__name__)
 
@@ -163,6 +163,7 @@ def _store_slab_size(seq, sig: tuple, nbytes: int) -> None:
 # The replay MECHANISM is the library's (`nbxtensor.backend.frozen_plan`, moved 2026-11-12: the owner's red line): the
 # recording interceptor, the launch recorder and its seams, the frozen plan and its copies. What stays here is the
 # engine's policy: when a sequence measures, records, verifies and replays, its signature, its plans' lifetimes.
+from nbxtensor.backend import frozen_plan as FP  # noqa: E402
 from nbxtensor.backend.frozen_plan import (  # noqa: E402
     FrozenPlan, STATE, H2D as _H2D, KERNEL as _KERNEL, MEMCPY as _MEMCPY, MEMSET as _MEMSET, SETDEV as _SETDEV,
     SYNC as _SYNC, arm_launch_recorder as _arm_launch_recorder, copy_into as _copy_into, drop_plan as _drop_plan,
@@ -714,19 +715,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                             if slot is not None else None
                         if frozen is None:
                             continue
-                        import ctypes as _c
-                        import numpy as _np
-                        nb = min(frozen._nbytes, 64)
-                        rb = (_c.c_char * nb)()
-                        DeviceAllocator.memcpy(_c.addressof(rb),
-                                               frozen.data_ptr(), nb, 2)
-                        fro = _np.frombuffer(bytes(rb), dtype=_np.float16)
-                        cur = seq._arena[slot]
-                        rb2 = (_c.c_char * nb)()
-                        DeviceAllocator.memcpy(_c.addressof(rb2),
-                                               cur.data_ptr(), nb, 2)
-                        nor = _np.frombuffer(bytes(rb2),
-                                             dtype=_np.float16)
+                        fro, nor = FP.head_values(frozen), FP.head_values(seq._arena[slot])
                         _log.debug(f"[Replay][VERIFY_EVERY] out[:8] "
                                    f"replayed(frozen)={fro[:8].tolist()} "
                                    f"normal={nor[:8].tolist()}")
@@ -789,17 +778,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             _log.debug("%s", PLAN_MATCHED_LINE.format(launches=plan.launches))
             _mem_diag("post-verify")
         else:
-            plan.slab.retire()
-            for _o in plan.other_slabs.values():
-                _o.retire()
-            if plan.graph is not None:
-                # The verify pass may have captured the CUDA graph —
-                # release exec/graph/staging/stream with the rejected
-                # plan (gardien 2026-08-17: the drop leaked them).
-                try:
-                    plan.graph.destroy()
-                finally:
-                    plan.graph = None
+            FP.retire(plan)
             plans[sig] = "UNREPLAYABLE"
             _log.debug("[Replay] plan REJECTED at verify (outputs differ "
                        "from the normal path) — normal path keeps this "
@@ -819,28 +798,13 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             plans[sig] = ("MEASURED", int(cached), 1)
             seq._run_single_device(skip_kills, None)
             return True
-        # MEASURE pass: normal run under the watermark counter.
-        STATE.measuring = True
-        STATE.live = 0
-        STATE.high_water = 0
-        STATE.measured = {}
-        STATE.live_by_dev, STATE.high_water_by_dev = {}, {}
-        STATE.events_by_dev, STATE._key_of_ptr = {}, {}
-        try:
-            seq._run_single_device(skip_kills, None)
-        finally:
-            STATE.measuring = False
-        # the slab is what the recording's first fit reaches over the measured run's allocations and frees
-        # (`first_fit_extent`) — never less than the live peak, and never the sum the shortfall retry used to add
-        from nbxtensor.memory.slab import first_fit_extent
-        extent = {d: first_fit_extent(ev) for d, ev in STATE.events_by_dev.items()}
-        own = max(STATE.high_water, extent.get(seq.device_idx, 0))
+        # MEASURE pass: normal run under the watermark counter (the library's `measure`).
+        own, other_cards, peak = FP.measure(lambda: seq._run_single_device(skip_kills, None), seq.device_idx)
         plans[sig] = ("MEASURED", own, 1)
-        seq.__dict__.setdefault("_replay_live_peak", {})[sig] = int(STATE.high_water)   # what the verify pass holds
+        seq.__dict__.setdefault("_replay_live_peak", {})[sig] = peak   # what the verify pass holds
         # every OTHER card the run allocated on gets its own slab at recording (a held expert's card, S3): served from
         # the sequence's card's slab, its tensors had addresses on the wrong card (an illegal access at replay)
-        seq.__dict__.setdefault("_replay_dev_hw", {})[sig] = {
-            d: max(b, extent.get(d, 0)) for d, b in STATE.high_water_by_dev.items() if d != seq.device_idx and b > 0}
+        seq.__dict__.setdefault("_replay_dev_hw", {})[sig] = other_cards
         _mem_diag("post-measure")
         return True
 
@@ -855,13 +819,9 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     # never an out-of-memory (Allegro-TI2V's encoder tile, 2026-11-04: the measured run's 9.9 GB stayed cached under a
     # 12.7 GB slab, and the verify pass beside them, with the pipeline's resident weights, overran a 32 GB card).
     _dev = seq.device_idx if seq.device_idx is not None else DeviceAllocator.get_device()
-    DeviceAllocator.device_synchronize(_dev)
-    if DeviceAllocator._range_vmm(_dev) is not None:
-        DeviceAllocator._range_reclaim(_dev, None)
-    DeviceAllocator._pool_flush(_dev)
     _verify = int((seq.__dict__.get("_replay_live_peak") or {}).get(sig, slab_bytes))
-    _free, _ = DeviceAllocator.mem_get_info(_dev)
-    if slab_bytes + _verify > _free:
+    _fits, _free = FP.room_for(_dev, slab_bytes, _verify)
+    if not _fits:
         comp = str((getattr(seq, "dag", None) or {}).get("component_name", "?"))
         _log.debug(f"[Replay] {comp}: not recorded — its slab ({slab_bytes / 2**20:.0f} MB) and the verify pass beside it "
                    f"({_verify / 2**20:.0f} MB) need more than the {_free / 2**20:.0f} MB free on device {_dev}; the normal "
@@ -869,43 +829,17 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         plans[sig] = "UNREPLAYABLE"
         return False
     try:
-        slab = SlabAllocator(slab_bytes, seq.device_idx)
+        slab, others = FP.slabs(slab_bytes, seq.device_idx, seq.__dict__.get("_replay_dev_hw", {}).get(sig) or {})
     except Exception as e:
-        _log.debug(f"[Replay] slab alloc failed ({slab_bytes/1e6:.0f} MB): "
+        _log.debug(f"[Replay] slab alloc failed ({slab_bytes/1e6:.0f} MB, or on another card): "
                    f"{e} — bucket keeps the normal path")
         plans[sig] = "UNREPLAYABLE"
         return False
-
-    try:
-        others = {d: SlabAllocator(int(b), d)
-                  for d, b in (seq.__dict__.get("_replay_dev_hw", {}).get(sig) or {}).items()}
-    except Exception as e:
-        _log.debug(f"[Replay] slab alloc failed on another card: {e} — bucket keeps the normal path")
-        slab.retire()
-        plans[sig] = "UNREPLAYABLE"
-        return False
     _marks = [o.replay_host_mark() for o in owners]
-    STATE.recording = True
-    _arm_launch_recorder(True)
-    STATE.records = []
-    STATE.broken = None
-    STATE.slab = slab
-    STATE.slabs = dict(others)
-    failed: Optional[BaseException] = None
-    try:
-        seq._run_single_device(skip_kills, None)
-    except BaseException as e:  # noqa: BLE001 — recording must not corrupt user runs
-        failed = e
-    finally:
-        STATE.recording = False
-        _arm_launch_recorder(False)
-        STATE.slab = None
-        STATE.slabs = {}
-        records = STATE.records
-        STATE.records = []
+    records, failed, broken = FP.record(lambda: seq._run_single_device(skip_kills, None), slab, others)
 
-    if failed is not None or STATE.broken is not None:
-        reason = STATE.broken or f"exception: {failed}"
+    if failed is not None or broken is not None:
+        reason = broken or f"exception: {failed}"
         shortfall = slab.shortfall
         # The run's outputs were carved from the slab and the caller keeps them: handed over as heap copies (as a
         # frozen plan's are), so the retired slab is freed once the run's own tensors die, not held beside the rest of
@@ -957,11 +891,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     # by subsequent replays). Hand the caller fresh heap copies NOW
     # (freeze happens inside this run, before gather_outputs); the
     # slab-backed originals stay plan-internal via the snapshot.
-    for slot in plan.output_slots:
-        frozen = plan.arena_snapshot[slot]
-        if frozen is None:
-            continue
-        seq._arena[slot] = _heap_copy(frozen)
+    plan.hand_out_outputs(seq._arena)
     _store_slab_size(seq, sig, slab.size)
     # E2-full: the recording pass just warmed the sanctioned autotuners
     # for every shape in this graph — persist the selected configs into

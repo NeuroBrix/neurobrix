@@ -614,6 +614,15 @@ class DeviceAllocator:
         DeviceAllocator._pool_cap_bytes[dev] = cap
         return cap
 
+    @classmethod
+    def give_back_cached(cls, dev: int) -> None:
+        """After the card's work ends, its cached free memory back to the driver: the expandable range's free chunks
+        (when the card has one) and the pool's free blocks."""
+        cls.device_synchronize(dev)
+        if cls._range_vmm(dev) is not None:
+            cls._range_reclaim(dev, None)
+        cls._pool_flush(dev)
+
     @staticmethod
     def _pool_flush(dev: Optional[int] = None) -> int:
         """Return every wholly free segment to the driver (a segment still holding a live block stays). Returns the

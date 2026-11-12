@@ -68,6 +68,15 @@ class _State(SlabInterceptor):
         # its own files); none set, the reason carries no site
         self.site_of = lambda filename: False
 
+    def open_measurement(self) -> None:
+        """A fresh watermark window: every counter of the measured run at zero."""
+        self.measuring = True
+        self.live = 0
+        self.high_water = 0
+        self.measured = {}
+        self.live_by_dev, self.high_water_by_dev = {}, {}
+        self.events_by_dev, self._key_of_ptr = {}, {}
+
     def note_device(self) -> None:
         """Emit a device action when the current card differs from the last.
 
@@ -380,7 +389,7 @@ class FrozenPlan:
         else:
             self._direct_actions()
         arena.restore_from(self.arena_snapshot)
-        self._fresh_outputs(arena)
+        self.hand_out_outputs(arena)
 
     def _scan_bound(self, arena) -> int:
         """The weight/input slots (or a segment's own) rebound since the recording: their values copied into the
@@ -522,7 +531,7 @@ class FrozenPlan:
                 self.graph = None
         self._direct_actions()
 
-    def _fresh_outputs(self, arena) -> None:
+    def hand_out_outputs(self, arena) -> None:
         # Contract clause 2 (inter-replay overwrite), enforced HERE so
         # no flow needs to cooperate: callers may legally retain output
         # objects across calls (VibeVoice chunk accumulation appends by
@@ -634,3 +643,90 @@ def _copy_slot(slot, frozen: NBXTensor, new: NBXTensor) -> None:
             f"{getattr(new, '_device_idx', '?')} frozen_ptr="
             f"{frozen.data_ptr():#x} new_ptr={new.data_ptr():#x}"
         ) from e
+
+
+# --- A step's slab: measured, made room for, allocated, recorded into (the caller decides when) -----------------------
+
+
+def measure(run, device_idx) -> Tuple[int, Dict[int, int], int]:
+    """Run `run()` under the watermark counter: (the slab this card's recording needs — what the recording's first fit
+    reaches over the measured run's allocations and frees, never less than the live peak —, {another card the run
+    allocated on: its slab}, the live peak the verify pass holds)."""
+    STATE.open_measurement()
+    try:
+        run()
+    finally:
+        STATE.measuring = False
+    from nbxtensor.memory.slab import first_fit_extent
+    extent = {d: first_fit_extent(ev) for d, ev in STATE.events_by_dev.items()}
+    own = max(STATE.high_water, extent.get(device_idx, 0))
+    others = {d: max(b, extent.get(d, 0)) for d, b in STATE.high_water_by_dev.items() if d != device_idx and b > 0}
+    return own, others, int(STATE.high_water)
+
+
+def room_for(dev: int, slab_bytes: int, verify_bytes: int) -> Tuple[bool, int]:
+    """Give the card's cached blocks back to the driver (the pool's and the expandable range's free chunks), then
+    whether a slab of `slab_bytes` and a verify pass of `verify_bytes` beside it fit what it has free: (fits, free)."""
+    DeviceAllocator.give_back_cached(dev)
+    free, _ = DeviceAllocator.mem_get_info(dev)
+    return slab_bytes + verify_bytes <= free, free
+
+
+def slabs(slab_bytes: int, device_idx, others: Dict[int, int]) -> Tuple[SlabAllocator, Dict[int, SlabAllocator]]:
+    """The recording's slab on its card and one on each other card it allocates on; nothing held on a failure."""
+    slab = SlabAllocator(slab_bytes, device_idx)
+    try:
+        return slab, {d: SlabAllocator(int(b), d) for d, b in (others or {}).items()}
+    except Exception:
+        slab.retire()
+        raise
+
+
+def record(run, slab: SlabAllocator, others: Dict[int, SlabAllocator]):
+    """Run `run()` recorded into `slab` (and `others`): (the actions, the exception it raised or None, why the
+    recording broke or None). Nothing of the recording state outlives the call."""
+    STATE.recording = True
+    arm_launch_recorder(True)
+    STATE.records = []
+    STATE.broken = None
+    STATE.slab = slab
+    STATE.slabs = dict(others)
+    failed: Optional[BaseException] = None
+    try:
+        run()
+    except BaseException as e:  # noqa: BLE001 — recording must not corrupt user runs
+        failed = e
+    finally:
+        STATE.recording = False
+        arm_launch_recorder(False)
+        STATE.slab = None
+        STATE.slabs = {}
+        records = STATE.records
+        STATE.records = []
+    return records, failed, STATE.broken
+
+
+def retire(plan: "FrozenPlan") -> None:
+    """Release a plan's slabs and its captured graph (a plan rejected at its verify)."""
+    plan.slab.retire()
+    for _o in plan.other_slabs.values():
+        _o.retire()
+    if plan.graph is not None:
+        # The verify pass may have captured the CUDA graph —
+        # release exec/graph/staging/stream with the rejected
+        # plan (gardien 2026-08-17: the drop leaked them).
+        try:
+            plan.graph.destroy()
+        finally:
+            plan.graph = None
+
+
+def head_values(t: NBXTensor, nbytes: int = 64):
+    """The first `nbytes` of `t`'s memory read to the host as float16 values (a diagnostic's look)."""
+    import ctypes as _c
+    import numpy as _np
+    nb = min(t.nbytes(), nbytes)
+    rb = (_c.c_char * nb)()
+    DeviceAllocator.memcpy(_c.addressof(rb), t.data_ptr(), nb, 2)
+    return _np.frombuffer(bytes(rb), dtype=_np.float16)
+

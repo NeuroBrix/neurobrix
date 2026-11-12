@@ -294,6 +294,12 @@ of its plans, which frame names a broken recording (`STATE.site_of`). The librar
 | triton/replay.py | -354 (961 -> 607) | the moved mechanism out; one import of the library's names |
 | nbxtensor backend/frozen_plan.py | +396 (library) | the recording, the seams, the plan, the copies |
 
+Then the step's slab (same day): the measured run's watermark window, the room made on the card (cached memory back to
+the driver: `DeviceAllocator.give_back_cached`, where the engine reached three allocator privates), the slabs, the
+recording run, the release of a plan rejected at its verify, and the diagnostic's buffer read moved into
+`frozen_plan` (`measure`, `room_for`, `slabs`, `record`, `retire`, `head_values`, `FrozenPlan.hand_out_outputs`);
+`maybe_run` keeps the state machine's decisions. 85 771 to 85 707, -64 (triton/replay.py 607 -> 543).
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:

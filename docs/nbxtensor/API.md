@@ -2514,6 +2514,14 @@ class FrozenPlan(records, slab, arena_list, input_slots, scan_limit=None, extra_
     .crosses_cards() -> bool
 plan_of(state) / drop_plan(plans, sig)    # a plan's resources, and their release (slabs retired, graph destroyed)
 heap_copy(t) -> NBXTensor ; copy_into(frozen, new) -> None   # the copies by logical values (views kept in order)
+FrozenPlan.hand_out_outputs(arena) -> None   # the plan's outputs handed to the arena as fresh heap copies
+STATE.open_measurement() -> None             # a fresh watermark window
+measure(run, device_idx) -> (slab_bytes, {other card: slab_bytes}, live_peak)   # run() under the watermark counter
+room_for(dev, slab_bytes, verify_bytes) -> (fits, free)   # cached memory given back, then whether both fit
+slabs(slab_bytes, device_idx, others) -> (SlabAllocator, {card: SlabAllocator})  # nothing held on a failure
+record(run, slab, others) -> (actions, exception or None, broken reason or None)  # run() recorded into the slabs
+retire(plan) -> None                         # a rejected plan's slabs and captured graph released
+head_values(t, nbytes=64) -> numpy float16   # a diagnostic's look at a buffer's first bytes
 ```
 
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
