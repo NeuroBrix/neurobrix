@@ -579,7 +579,7 @@ class InferenceEngine:
         constraint = constraint_for(grammar, tokenizer, self._pkg.defaults, self.__dict__.setdefault("_grammar_vocabs", {}))
         result = self._generate_from_token_ids(token_ids, decode, kv_session=self._agent_kv, constraint=constraint)
         generated = result.get("token_ids") or []
-        from neurobrix.agent.parsers import select_parser
+        from neurobrix.serving.tool_calls.parsers import select_parser
         from neurobrix.serving.text_stream import MarkerDecoder
         parser = select_parser(self.chat_template_text())
         keep = list(parser.kept_markers()) if parser is not None else []

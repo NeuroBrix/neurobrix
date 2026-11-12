@@ -13,7 +13,7 @@ block fails to read, the whole block is malformed and nothing of it is taken.
 import json
 import re
 
-from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
+from neurobrix.serving.tool_calls.parsers.base import ParseResult, ToolCall, ToolCallParser
 
 _OPEN = "[TOOL_CALLS]"
 _ARGS = "[ARGS]"

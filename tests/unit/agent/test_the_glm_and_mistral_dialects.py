@@ -16,7 +16,7 @@ import pytest
 
 pytest.importorskip("jinja2")
 
-from neurobrix.agent.parsers import (  # noqa: E402
+from neurobrix.serving.tool_calls.parsers import (  # noqa: E402
     GlmToolCallParser, JsonToolCallParser, MistralArgsToolCallParser, XmlToolCallParser, select_parser)
 from neurobrix.core.module.tokenizer.chat_template import environment  # noqa: E402
 from neurobrix.serving.openai_api.turn import TurnReader, typed_arguments  # noqa: E402

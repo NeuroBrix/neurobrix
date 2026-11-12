@@ -19,9 +19,9 @@ pytest.importorskip("jinja2")
 from tests.unit.grammar_engine import load  # noqa: E402
 
 nbxgrammar = load()
-from neurobrix.agent.parsers import GlmToolCallParser, JsonToolCallParser  # noqa: E402
+from neurobrix.serving.tool_calls.parsers import GlmToolCallParser, JsonToolCallParser  # noqa: E402
 from neurobrix.core.module.tokenizer.sp_tokenizer import HFTokenizer  # noqa: E402
-from neurobrix.core.state.constraint import Constrain, ForcedCall, compile_constraint  # noqa: E402
+from neurobrix.serving.openai_api.constraint_policy import Constrain, ForcedCall, compile_constraint  # noqa: E402
 from neurobrix.serving.openai_api.turn import reasoning_gap  # noqa: E402
 
 GLM = (Path(__file__).parents[1] / "agent" / "data" / "templates" / "GLM-4.7-Flash.jinja").read_text()

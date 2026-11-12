@@ -10,7 +10,7 @@ Injections (each RED, then GREEN; see the commit message):
 """
 from __future__ import annotations
 
-from neurobrix.agent.parsers import JsonListToolCallParser, JsonToolCallParser, XmlToolCallParser, select_parser
+from neurobrix.serving.tool_calls.parsers import JsonListToolCallParser, JsonToolCallParser, XmlToolCallParser, select_parser
 from neurobrix.serving.openai_api.turn import TurnReader, select_reasoning, typed_arguments
 from neurobrix.serving.text_stream import MarkerDecoder
 

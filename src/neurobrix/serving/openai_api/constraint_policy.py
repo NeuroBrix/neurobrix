@@ -21,9 +21,10 @@ response format nor tools): the module lives under it, and moves up to serving/ 
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, List, Optional
 
-from neurobrix.core.state.constraint import Constrain, ForcedCall      # the execution seam's input: its own types
+from neurobrix.core.state import constraint as grammar      # the grammar engine's door (compile_*), the masks
 
 
 class ConstraintRefused(Exception):
@@ -75,3 +76,48 @@ def with_tools(answer: Optional[Constrain], forced: bool, tools: Optional[list],
                                 "a json_schema answer and tools in one request: the grammar would "
                                 "also bind the tool calls")
     return answer
+
+
+@dataclass(frozen=True)
+class ForcedCall:
+    """A tool call the turn must make: the template's dialect parser, the declared tools, the one function
+    `tool_choice` names (None: any of them), several calls allowed or one."""
+    parser: Any
+    tools: List[Any]
+    named: Optional[str]
+    parallel: bool
+
+
+@dataclass(frozen=True)
+class Constrain:
+    """What a decode must follow: `schema` (the answer is that JSON) or `call` (a forced tool call), after the
+    reasoning's close marker when `after_reasoning` names one, then `reasoning_gap`: what the template writes between
+    that marker and the answer (None: the template shows no past reasoning, so it is not known)."""
+    schema: Optional[dict] = None
+    call: Optional[ForcedCall] = None
+    after_reasoning: Optional[str] = None
+    reasoning_gap: Optional[str] = None
+
+
+def compile_constraint(want, tokenizer):
+    """The grammar of what a request's decode must follow (a `Constrain`: a JSON schema or a forced tool call, after
+    the reasoning's end when it names one — decided by the serving layer, serving/openai_api/constraint_policy.py),
+    compiled by our grammar engine; None for None. The tool-call envelope and the reasoning's close are written with the tokenizer's own encoding
+    (serving/tool_calls/envelope.py). ValueError naming what the engine cannot enforce; a refusal by name when it is not installed."""
+    import json
+    if want is None:
+        return None
+    if want.call is None and not want.after_reasoning:
+        return grammar.compile_json_schema(json.dumps(want.schema))
+    from neurobrix.serving.tool_calls.envelope import encoder, envelope, reasoning_close
+    encode = encoder(tokenizer)
+    body = ({"schema": want.schema} if want.call is None
+            else envelope(want.call.parser, want.call.tools, encode, want.call.named, want.call.parallel))
+    if want.after_reasoning:               # a prompt that opens in the reasoning: it closes first, then the answer
+        if want.reasoning_gap is None:
+            raise ValueError(f"the prompt opens inside a reasoning that ends at {want.after_reasoning!r}, and the chat "
+                             "template shows no past reasoning: what it writes between that end and the answer is not "
+                             "known, so the answer cannot be constrained after it")
+        gap = [{"lit": want.reasoning_gap}] if want.reasoning_gap else []      # the template's own text, maybe none
+        body = {"seq": [reasoning_close(want.after_reasoning, encode), *gap, body]}
+    return grammar.compile_description(json.dumps(body))

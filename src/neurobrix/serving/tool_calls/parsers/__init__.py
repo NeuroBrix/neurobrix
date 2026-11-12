@@ -8,12 +8,12 @@ the DIALECT MARKERS in the template decide (R15).
 
 from typing import Optional
 
-from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
-from neurobrix.agent.parsers.glm import GlmToolCallParser
-from neurobrix.agent.parsers.jsonfmt import JsonToolCallParser
-from neurobrix.agent.parsers.jsonlist import JsonListToolCallParser
-from neurobrix.agent.parsers.mistral import MistralArgsToolCallParser
-from neurobrix.agent.parsers.xml import XmlToolCallParser
+from neurobrix.serving.tool_calls.parsers.base import ParseResult, ToolCall, ToolCallParser
+from neurobrix.serving.tool_calls.parsers.glm import GlmToolCallParser
+from neurobrix.serving.tool_calls.parsers.jsonfmt import JsonToolCallParser
+from neurobrix.serving.tool_calls.parsers.jsonlist import JsonListToolCallParser
+from neurobrix.serving.tool_calls.parsers.mistral import MistralArgsToolCallParser
+from neurobrix.serving.tool_calls.parsers.xml import XmlToolCallParser
 
 __all__ = [
     "ParseResult",

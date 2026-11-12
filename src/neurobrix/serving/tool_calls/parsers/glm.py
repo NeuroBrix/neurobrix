@@ -13,7 +13,7 @@ never prose.
 """
 import re
 
-from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
+from neurobrix.serving.tool_calls.parsers.base import ParseResult, ToolCall, ToolCallParser
 
 _BLOCK_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
 _PAIR_RE = re.compile(r"\s*<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.DOTALL)

@@ -9,8 +9,8 @@ import pytest
 from tests.unit.grammar_engine import load  # noqa: E402
 
 nbxgrammar = load()
-from neurobrix.agent.envelope import envelope, reasoning_close  # noqa: E402
-from neurobrix.agent.parsers import JsonListToolCallParser, JsonToolCallParser, XmlToolCallParser  # noqa: E402
+from neurobrix.serving.tool_calls.envelope import envelope, reasoning_close  # noqa: E402
+from neurobrix.serving.tool_calls.parsers import JsonListToolCallParser, JsonToolCallParser, XmlToolCallParser  # noqa: E402
 
 MARKERS = {"<tool_call>": 1000, "</tool_call>": 1001, "<|tool_call|>": 1002, "</think>": 1004}
 EOS = 1003

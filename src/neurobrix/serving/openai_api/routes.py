@@ -87,7 +87,7 @@ _COMPILE_ANSWERS = {"answer": ("response_format", "response_format", "response_f
 def _compiled(want, tokenizer, kind: str):
     """The grammar of what the policy decided (core/state/constraint.compile_constraint): what the grammar engine
     cannot enforce answers 400 naming it; the engine absent on this machine is refused by name, never a 500."""
-    from neurobrix.core.state.constraint import compile_constraint
+    from neurobrix.serving.openai_api.constraint_policy import compile_constraint
     said, invalid_param, missing_param = _COMPILE_ANSWERS[kind]
     try:
         return compile_constraint(want, tokenizer)
@@ -362,7 +362,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
         messages = _template_messages(body.get("messages"))
         parser = None
         if tools:
-            from neurobrix.agent.parsers import select_parser
+            from neurobrix.serving.tool_calls.parsers import select_parser
             parser = select_parser(template)
             if parser is None:
                 raise errors.not_served("/v1/chat/completions with tools", model, served.family,

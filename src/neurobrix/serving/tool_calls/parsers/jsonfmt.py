@@ -12,7 +12,7 @@ Matches templates that instruct the model to emit:
 import json
 import re
 
-from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
+from neurobrix.serving.tool_calls.parsers.base import ParseResult, ToolCall, ToolCallParser
 
 _BLOCK_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
 

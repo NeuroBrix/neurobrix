@@ -12,8 +12,8 @@ import pytest
 from tests.unit.grammar_engine import load  # noqa: E402
 
 nbxgrammar = load()
-from neurobrix.agent.envelope import envelope  # noqa: E402
-from neurobrix.agent.parsers import GlmToolCallParser, MistralArgsToolCallParser  # noqa: E402
+from neurobrix.serving.tool_calls.envelope import envelope  # noqa: E402
+from neurobrix.serving.tool_calls.parsers import GlmToolCallParser, MistralArgsToolCallParser  # noqa: E402
 
 # the markers as one id each, as in the vendors' tokenizers (GLM: added tokens; Devstral: special tokens)
 MARKERS = {"<tool_call>": 1000, "</tool_call>": 1001, "<arg_key>": 1002, "</arg_key>": 1003, "<arg_value>": 1004,

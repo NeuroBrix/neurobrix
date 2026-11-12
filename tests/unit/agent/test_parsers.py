@@ -1,6 +1,6 @@
 """Parser dialect tests — XML and JSON tool-call formats + data-driven selection."""
 
-from neurobrix.agent.parsers import (
+from neurobrix.serving.tool_calls.parsers import (
     JsonToolCallParser,
     XmlToolCallParser,
     select_parser,

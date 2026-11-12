@@ -9,7 +9,7 @@ live in the CLI layer.
 from typing import Any, Callable, Dict, Optional
 
 from neurobrix.agent.loop import AgentLoop, AgentResult
-from neurobrix.agent.parsers import select_parser
+from neurobrix.serving.tool_calls.parsers import select_parser
 from neurobrix.agent.sandbox import Sandbox, SandboxPolicy, SandboxViolation
 from neurobrix.agent.session import AgentConfig, AgentSession
 from neurobrix.agent.tools import ToolRegistry, ToolSpec, default_toolset

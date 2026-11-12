@@ -18,7 +18,7 @@ whitespace (indentation, trailing newlines inside code) is preserved.
 
 import re
 
-from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
+from neurobrix.serving.tool_calls.parsers.base import ParseResult, ToolCall, ToolCallParser
 
 _INNER = ("<function=", "</function>", "<parameter=", "</parameter>")     # the envelope writes these same markers
 _BLOCK_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)

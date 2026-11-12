@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.agent.parsers import JsonToolCallParser, XmlToolCallParser
+from neurobrix.serving.tool_calls.parsers import JsonToolCallParser, XmlToolCallParser
 from neurobrix.serving.openai_api.turn import TurnReader
 from tests.unit.serving.test_an_assistant_turn_is_read_into_answer_reasoning_and_calls import PieceTokenizer, _run, _text
 

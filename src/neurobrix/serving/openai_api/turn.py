@@ -5,7 +5,7 @@ The decode loop hands token ids; this reader turns them into the three channels 
   * `reasoning_content` — the text between the thinking markers, when the chat template declares them (the template
     of a thinking model opens the generation prompt with the start marker, or the model writes it first);
   * `content` — the answer, and nothing else;
-  * `tool_calls` — the blocks of the template's tool-call dialect (neurobrix.agent.parsers), parsed when each closes
+  * `tool_calls` — the blocks of the template's tool-call dialect (neurobrix.serving.tool_calls.parsers), parsed when each closes
     (at the end of the turn for a dialect without a closing marker).
 
 Text is only released once it is STABLE: the decode of the ids so far and the decode one id earlier agree on it, and

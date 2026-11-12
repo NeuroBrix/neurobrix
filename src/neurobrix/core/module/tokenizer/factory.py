@@ -123,7 +123,7 @@ class TokenizerWrapper:
         """The chat template's raw text ('' when absent).
 
         The agent-mode gate is downstream: parser selection over this
-        text's dialect markers (neurobrix.agent.parsers.select_parser) —
+        text's dialect markers (neurobrix.serving.tool_calls.parsers.select_parser) —
         one predicate, no duplicate.
         """
         template = getattr(self._tokenizer, 'chat_template', None)

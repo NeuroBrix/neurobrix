@@ -17,7 +17,7 @@ one: either opening, the first that appears.
 
 import json
 
-from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
+from neurobrix.serving.tool_calls.parsers.base import ParseResult, ToolCall, ToolCallParser
 
 _MARKER = "<|tool_call|>"
 _MARKERS = (_MARKER, "<tool_call>")

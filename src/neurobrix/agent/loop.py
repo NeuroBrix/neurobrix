@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
-from neurobrix.agent.parsers.base import ToolCallParser
+from neurobrix.serving.tool_calls.parsers.base import ToolCallParser
 from neurobrix.agent.sandbox import SandboxViolation
 from neurobrix.agent.session import AgentConfig, AgentSession
 from neurobrix.agent.tools import ToolRegistry

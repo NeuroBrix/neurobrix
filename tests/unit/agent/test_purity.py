@@ -37,6 +37,8 @@ engine_leaks = sorted(
     m for m in added
     if m.startswith("neurobrix.")
     and not m.startswith("neurobrix.agent")
+    and not m.startswith("neurobrix.serving.tool_calls")   # the dialects' parsers (stdlib only), moved out of agent/
+    and m != "neurobrix.serving"
     and m != "neurobrix._nbxtensor_host"   # the package's own init: the tensor library's host services (stdlib only)
 )
 print(json.dumps({"third_party": third_party, "engine_leaks": engine_leaks}))
