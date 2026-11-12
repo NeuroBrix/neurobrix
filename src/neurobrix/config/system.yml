@@ -111,6 +111,19 @@ serving:
   # hands a child no inherited fd through subprocess, so the file remains there. A wait ends on
   # the file or on the child's exit, never on a deadline: a long load is not a failure.
   ready_poll_s: 0.5
+  # The rows a served session's plan prices ONE prefill pass at when no certified time chose its chunk
+  # (core/prism/prefill_chunk.py `served_untimed`), per GB of the decoder card's memory class: a turn that
+  # brings up to that many new positions is one unpadded pass; a longer one is cut into passes of that many
+  # rows (whole pages of the session's cache). Per GB because the rows cost memory, and what a card can give
+  # is its own (the Mac's review, 2026-11-12): 64 rows a GB is 2 048 rows on a 32 GB card, 1 024 on 16 GB.
+  # Measured 2026-11-12 on ONE class (Qwen3-Coder-30B-A3B, experts streamed, one V100-32GB, Triton): a pass
+  # costs about the same whatever its rows (128 rows 8.5 s, 1 124 rows 10.2 s: each pass streams most of the
+  # experts), so the PASSES are the cost — a 1 124-token first request took 51.6 s in 128-row passes against
+  # 10.2 s in one; and the rows cost memory only (the experts' cache the plan leaves: 19.5 GB at 128 priced
+  # rows, 19.2 at 1 024, 18.8 at 2 048, 17.9 at 4 096, 16.2 at 8 192). 2 048 holds an agent's first request
+  # (system prompt and tools: 1.1-1.9K tokens measured) in one pass for 0.7 GB of that cache. Other classes
+  # (16 GB, unified memory) take the same rows a GB until their own measurement says otherwise.
+  session_prefill_rows_per_card_gb: 64
   # The OpenAI-compatible HTTP door (`neurobrix serve --http`), docs/serving.md. Read only when the door is
   # opened; each is then required (a missing value is refused by name).
   # Where it listens by default: the loopback interface only — a non-loopback address needs an API key.

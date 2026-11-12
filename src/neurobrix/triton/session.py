@@ -96,7 +96,7 @@ class TritonLMSession:
         return pos_np
 
     def prefill(self, input_ids: NBXTensor, batch_size: int, start: int = 0, chunk: Optional[int] = None,
-                ids: Optional[List[int]] = None) -> NBXTensor:
+                ids: Optional[List[int]] = None, pads: bool = True) -> NBXTensor:
         """Run prefill pass, switch to decode mode, return hidden states.
 
         `start` > 0: the cache already holds the request's first `start` positions (a serving session's, matched by
@@ -104,7 +104,7 @@ class TritonLMSession:
         (KVCachePlan.prefill_chunk). Either one takes the chunked path (`_prefill_chunks`), which needs the request's
         host ids `ids`; neither keeps the one-pass prefill below, unchanged."""
         if start or chunk:
-            return self._prefill_chunks(ids, batch_size, int(start), chunk)
+            return self._prefill_chunks(ids, batch_size, int(start), chunk, pads)
         if self.kv_wrapper is not None:
             self.kv_wrapper.reset()
 
@@ -179,7 +179,7 @@ class TritonLMSession:
         return hidden
 
     def _prefill_chunks(self, ids: Optional[List[int]], batch_size: int, start: int,
-                        chunk: Optional[int]) -> NBXTensor:
+                        chunk: Optional[int], pads: bool = True) -> NBXTensor:
         """The prefill of positions [start, len(ids)) in chunks (docs/design/prism_kv.md §5bis): `chunk` rows each, the
         last completed with copies of its last real row (its token and position) whose K/V the next chunk or the
         decode overwrites — or, with no chunk planned, one chunk of the request's own rows. Every chunk attends over
@@ -206,7 +206,8 @@ class TritonLMSession:
             self.executor.enable_hidden_states_capture()
         from nbxtensor.memory.kv_session import chunk_rows
         rows_planned = int(chunk) if chunk else total - start
-        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position)
+        # `pads` False (the plan's `prefill_chunk_pads`): the last chunk runs its own rows, never copies of its last
+        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position, pads)
         outputs = None
         for s, real, chunk_ids, pos in plan:
             DeviceAllocator.set_device(self.device_idx)
@@ -226,9 +227,9 @@ class TritonLMSession:
             self._add_visual_stubs(run_inputs)
             self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
             outputs = self.executor.run(run_inputs, skip_kills=False)
-            if real < rows_planned:
+            if real < len(chunk_ids):
                 cache.truncate(s + real)
-        rows_run = rows_planned * len(plan)
+        rows_run, last_rows = sum(len(c[2]) for c in plan), len(plan[-1][2])
         self.prefilled_rows = total - start
         self.padded_rows = rows_run - (total - start)
         self.kv_wrapper.set_decode_mode()
@@ -241,11 +242,11 @@ class TritonLMSession:
             raise RuntimeError("Prefill could not extract hidden_states.")
         while hidden.ndim > 3:
             hidden = hidden.squeeze(0)
-        if int(hidden.shape[1]) != rows_planned:
+        if int(hidden.shape[1]) != last_rows:
             raise RuntimeError(f"ZERO FALLBACK: the last prefill chunk returned {int(hidden.shape[1])} rows of hidden "
-                               f"states for a chunk of {rows_planned}")
+                               f"states for a chunk of {last_rows}")
         real = plan[-1][1]
-        return hidden.narrow(1, 0, real) if real < rows_planned else hidden
+        return hidden.narrow(1, 0, real) if real < last_rows else hidden
 
     def decode_step(self, input_ids: NBXTensor,
                     inputs_embeds: Optional[NBXTensor] = None) -> NBXTensor:

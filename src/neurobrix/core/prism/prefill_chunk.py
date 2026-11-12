@@ -97,3 +97,34 @@ def chunk_record(cache_dir: Path, vendor: str, profile: str, memory_gb: int, mod
     if rec is None or rec.get("container") != T.container_sha(cache_dir):
         return None
     return rec
+
+
+#: the phrase by which a plan says a turn's last chunk is NOT completed to the chunk's rows (`KVCachePlan.
+#: prefill_chunk_pads` False): `served_untimed` builds its reason FROM this constant, and the solver reads it there
+UNPADDED = "a turn's last chunk runs its own rows"
+
+
+def served_rows(memory_class_gb: int) -> int:
+    """The rows a served session prices one prefill pass at when no certified time chose its chunk, on a decoder card
+    of `memory_class_gb`: `serving.session_prefill_rows_per_card_gb` of config/system.yml (its measurement is written
+    beside it there) times the class. Refused by name when the setting is missing."""
+    import yaml
+    from neurobrix.core.workspace import SYSTEM_YML
+    v = ((yaml.safe_load(SYSTEM_YML.read_text()) or {}).get("serving") or {}).get("session_prefill_rows_per_card_gb")
+    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+        raise RuntimeError(f"ZERO FALLBACK: a served session's prefill needs `serving.session_prefill_rows_per_card_gb` "
+                           f"in {SYSTEM_YML} (a positive number of rows), got {v!r}.")
+    return v * int(memory_class_gb)
+
+
+def served_untimed(why: str, page: int, reach: int, memory_class_gb: int) -> Tuple[int, str]:
+    """A SERVED turn's chunk when no certified time chooses one (`choose` returned None for `why`): the whole pages of
+    `served_rows(memory_class_gb)`, never more than the session's `reach` (at least one page), priced over the
+    session's keys (`served_prefill`) — never one pass of rows the plan did not price. Unchunked and priced at 128
+    rows, a served Qwen3-Coder-30B-A3B ran its 2 800- to 3 700-row agent turns in one pass and out of memory
+    (2026-11-12). Its last chunk is NOT padded (`UNPADDED`): a turn that fits the chunk is one pass of its own rows,
+    as before, now priced."""
+    C = max(1, min(served_rows(memory_class_gb), int(reach)) // int(page)) * int(page)
+    return C, (f"chunks of {C} rows: the rows a served turn's prefill is priced at on a {int(memory_class_gb)} GB card "
+               f"(serving.session_prefill_rows_per_card_gb, whole pages of {page}); {why.split(': ', 1)[-1]}, so no "
+               f"certified time chooses among them; {UNPADDED}")

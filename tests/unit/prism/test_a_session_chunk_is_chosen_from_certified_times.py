@@ -89,6 +89,7 @@ def test_the_plan_carries_the_chosen_chunk_and_its_reason(monkeypatch, tmp_path)
     kv = _plan(monkeypatch, tmp_path, "triton", served)
     assert kv.prefill_chunk == 128, (kv.prefill_chunk, kv.prefill_chunk_reason)
     assert kv.prefill_chunk_reason.startswith("C=128: the cheapest certified turn of 128 rows"), kv.prefill_chunk_reason
+    assert kv.prefill_chunk_pads is True          # a certified chunk's keys are the certified ones: its turns are padded
 
 
 def test_a_record_of_another_graph_is_none_and_said(monkeypatch, tmp_path):

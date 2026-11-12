@@ -111,19 +111,21 @@ def held_ids(prompt_ids: Sequence[int], generated: Sequence[int], cache_len: int
     return fed[:cache_len]
 
 
-def chunk_rows(ids: Sequence[int], start: int, rows: int, absolute: bool) -> List[Tuple[int, int, List[int], List[int]]]:
+def chunk_rows(ids: Sequence[int], start: int, rows: int, absolute: bool,
+               pads: bool = True) -> List[Tuple[int, int, List[int], List[int]]]:
     """The chunks a prefill of positions [start, len(ids)) runs, `rows` rows each: [(first position, real rows, the
-    chunk's ids, its positions)]. The last chunk is completed with copies of its last real row (its token and, for
-    `absolute` positions, its position) whose K/V the next chunk or the decode overwrites; `absolute` False gives each
-    chunk's own row indices (the in-graph positions are shifted by the chunk's first position)."""
+    chunk's ids, its positions)]. With `pads` the last chunk is completed with copies of its last real row (its token
+    and, for `absolute` positions, its position) whose K/V the next chunk or the decode overwrites; without, it holds
+    its own rows only (a turn that fits `rows` is one chunk of exactly its rows). `absolute` False gives each chunk's
+    own row indices (the in-graph positions are shifted by the chunk's first position)."""
     total, rows, out, s = len(ids), int(rows), [], int(start)
     if rows <= 0 or not 0 <= s < total:
         raise ValueError(f"chunk_rows: {rows} rows a chunk from position {s} of {total}")
     while s < total:
         real = min(rows, total - s)
-        pad = rows - real
+        pad = rows - real if pads else 0
         chunk = [int(t) for t in ids[s:s + real]] + [int(ids[s + real - 1])] * pad
-        pos = (list(range(s, s + real)) + [s + real - 1] * pad) if absolute else list(range(rows))
+        pos = (list(range(s, s + real)) + [s + real - 1] * pad) if absolute else list(range(real + pad))
         out.append((s, real, chunk, pos))
         s += real
     return out

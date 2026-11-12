@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `launch_keys.sdpa_math_scores_bound(budget_bytes, D)`: the scores bound under which the attention route takes the
+  math path, the figure `sdpa_route` decides on — so a memory price can find the dearest shape the math path takes.
+- `scaled_dot_product_attention_wrapper(..., scores_budget_bytes=)`: the math route's budget a caller's plan states for
+  one attention (0: never the math route, which writes the full scores); unset, the device's own, as before.
+- `PagedTritonKVCache.chunk_scores_budget`: the budget a prefill chunk's attention over the paged cache routes on, set
+  from the caller's plan and read by `chunk_attention` and the spilled chunk's attention (kept by `clone_empty`).
+- `kv_session.chunk_rows(..., pads=)`: with `pads=False` a prefill's last chunk holds its own rows instead of being
+  completed to the chunk's rows — a turn that fits the chunk is one chunk of exactly its rows.
+
 ## [0.1.3] - 2026-11-11
 
 ### Added

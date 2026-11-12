@@ -886,7 +886,7 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
                                           scale=None, k_pre_transposed=None,
-                                          return_lse=False, **kwargs):
+                                          return_lse=False, scores_budget_bytes=None, **kwargs):
     """aten::scaled_dot_product_attention via Triton Flash Attention.
 
     Args:
@@ -901,6 +901,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             and masked scores; -inf for a fully masked row), from the route that computes the attention — what a
             caller merging this attention with another over other keys needs (the KV spill's prefill chunk). The
             vector decode route, which keeps no per-row statistic past its splits' reduce, is not taken then.
+        scores_budget_bytes: the math route's scores budget this attention routes on, as a caller's plan states it
+            (0: never the math route — the flash or chunked one, which write no full scores); None: the executing
+            device's budget (`_sdpa_math_scores_budget_bytes_for`).
 
     Reference: Dao-AILab _flash_attn_forward signature and grid computation.
     """
@@ -1137,10 +1140,12 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # device's budget (a non-power-of-two head dim routes on `sdpa.non_pow2_head_scores_bytes`
     # when the arch declares no budget); over it, chunked when the rows fit the arch's ceiling; otherwise flash.
     _q_dev_idx = getattr(q, "_device_idx", None)
+    # `scores_budget_bytes`: the math route's budget a caller's PLAN states for this attention (a served prefill
+    # chunk's over the cached keys: core/prism, nbxtensor paged_kv.chunk_attention), else the executing device's
     _route, _chunk_rows = _lk.sdpa_route(
         batch, nheads, seqlen_q, seqlen_k, headdim, headdim_v,
-        _sdpa_math_scores_budget_bytes_for(_q_dev_idx), _sdpa_math_min_chunk_rows(),
-        _sdpa_math_max_chunks(), force_math=_use_math_forced,
+        _sdpa_math_scores_budget_bytes_for(_q_dev_idx) if scores_budget_bytes is None else int(scores_budget_bytes),
+        _sdpa_math_min_chunk_rows(), _sdpa_math_max_chunks(), force_math=_use_math_forced,
         unit_flash=_lk.unit_flash_takes(headdim, q._dtype if q_round is None else q_round, k._dtype, v._dtype))
     _use_math = {"math": True, "chunked": "chunked", "flash": False}[_route]
     if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1":
@@ -1255,7 +1260,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             scale=softmax_scale,
             # K was normalised above; saying so keeps the inner call from
             # re-reading a layout off a shape it can no longer interpret.
-            k_pre_transposed=False, return_lse=return_lse, **_kw)
+            k_pre_transposed=False, return_lse=return_lse, scores_budget_bytes=scores_budget_bytes, **_kw)
         if return_lse:                   # the zero-padded dims add nothing to a score: the inner LSE is this one
             out, lse = out
             return out.narrow(-1, 0, _dv).contiguous(), lse

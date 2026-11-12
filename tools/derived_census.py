@@ -1153,6 +1153,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             if decode_kv is not None and "uids" in decode_kv and uid not in decode_kv["uids"]:
                 decode_kv = None      # a cross-attention: K/V the encoder's, never the cache
             bias_dt = None
+            op_budget = sdpa_budget_bytes       # this attention's route budget: the device's, or the plan's below
             if decode_kv is not None and decode_kv.get("prefill") and decode_kv.get("continued"):
                 # A serving session's prefill chunk over its cache (triton/kv_cache.py `_prefill_over_pages`): the keys
                 # gathered as WHOLE PAGES (`continued`: their count, a whole number of pages) in Q's dtype, the graph's
@@ -1163,6 +1164,10 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 kd = vd = qd
                 mask_n = Tq * Tk
                 bias_dt = NBXDtype.float32
+                # the route budget the plan states for this attention (`KVCachePlan.chunk_scores_budget_bytes`,
+                # the cache's `chunk_scores_budget`, the wrapper's `scores_budget_bytes`); None: the device's
+                if decode_kv.get("scores_budget") is not None:
+                    op_budget = int(decode_kv["scores_budget"])
             elif decode_kv is not None and decode_kv.get("prefill"):
                 # A prefill through the KV interceptor (`intercept`, `_is_prefill`): the graph's
                 # mask is dropped for `is_causal` — the SDPA sees no mask at any length.
@@ -1189,7 +1194,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 _pt, _ = paged_cache_params(int(Hk), int(D), int(Dv), kd.name, (_in_force() or {}).get("memory"),
                                             1 << 62, _tiles)       # the cache's bytes bound only a refusal
                 return LK.paged_decode_launches(H, Hk, Tk, D, Dv, q_vec, kd, _pt)
-            route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks,
+            route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, op_budget, sdpa_min_rows, sdpa_max_chunks,
                                         unit_flash=LK.unit_flash_takes(D, qd, kd, vd))
             if route == "flash" and LK.flash_headdim_detour(D) != D:
                 # The wrapper's zero-pad detour: a power-of-two head dim >= 128 is padded by one
@@ -1197,7 +1202,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 # — on an arch with no scores budget, a non-power-of-two dim takes the math route
                 # under its 2 GiB bound (PixArt's VAE attention at 512 -> 513 on Apple, 2026-09-29).
                 D, Dv = LK.flash_headdim_detour(D), Dv + (LK.flash_headdim_detour(D) - D)
-                route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows,
+                route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, op_budget, sdpa_min_rows,
                                             sdpa_max_chunks, unit_flash=LK.unit_flash_takes(D, qd, kd, vd))
             if route == "flash":
                 # on the matrix unit: its certified tile's key; else the tl.dot flash's, where its tile is
@@ -2488,11 +2493,12 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
 SESSION_CHUNKS: dict = {}
 
 
-def _continued_at(model, mode, lm, cdtype, feed, n, keys_len, has_native_bf16, sdpa, unhandled):
+def _continued_at(model, mode, lm, cdtype, feed, n, keys_len, has_native_bf16, sdpa, unhandled, scores_budget=None):
     """The launches of a session chunk of `n` rows attending over `keys_len` cached keys gathered as whole pages
-    (`_op_launches`, decode_kv `continued`): the attention calls only, at the chunk's own input shapes."""
+    (`_op_launches`, decode_kv `continued`): the attention calls only, at the chunk's own input shapes, routed at the
+    budget the plan states for them (`scores_budget`, None: the device's)."""
     launches, _ = run_at_inputs(model, lm, cdtype, mode, dict(feed(n)), has_native_bf16, sdpa, unhandled,
-                                decode_kv={"prefill": True, "continued": int(keys_len)})
+                                decode_kv={"prefill": True, "continued": int(keys_len), "scores_budget": scores_budget})
     return frozenset(launches)
 
 
@@ -2525,7 +2531,7 @@ def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_
     def cont_at(n, j):
         if (n, j) not in cont:
             cont[(n, j)] = _continued_at(model, mode, lm, cdtype, feed, n, j * page, has_native_bf16, sdpa,
-                                         unhandled)
+                                         unhandled, kv.get("chunk_scores_budget_bytes"))
         return cont[(n, j)]
 
     def over_pages(n, j_lo):

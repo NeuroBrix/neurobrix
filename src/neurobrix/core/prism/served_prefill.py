@@ -15,8 +15,10 @@ Contract.
   plan's reach, `prefill_key_dtype`), so the reserve its attention over the whole cache spends — one figure,
   `price.session_chunk_attention_bytes`, which both engines' wrappers read from the plan's own chunk, reach and dtype
   — is in the price (`chunk_mask_bytes`); the plan the raise holds is the first one priced so.
-- Unchanged, the first plan and the caller's config, when the plan has no KV cache, no chunk, or a chunk chosen from
-  certified times (core/prism/prefill_chunk.py): that choice is not this module's.
+- Unchanged, the first plan and the caller's config, when the plan has no KV cache or no chunk. A chunk this module
+  does not raise (chosen from certified times, core/prism/prefill_chunk.py, or the rows the Triton engine prices):
+  the plan solved once more at that chunk over the cached keys, and that config — the chunk's choice is not this
+  module's, its price over the keys is.
 - Refuses nothing: a size no plan fits (the solve's RuntimeError) or that moves a resident ends the raise at the size
   before it.
 """
@@ -82,11 +84,16 @@ def raise_while_the_plan_holds(solve: Callable[[Any], Any], input_config) -> Tup
     """(plan, input config) of the largest priced rows at which the served plan holds — the module's contract."""
     plan = solve(input_config)
     kv = plan.kv_cache_plan
-    if kv is None or not kv.prefill_chunk or UNTIMED not in str(kv.prefill_chunk_reason):
+    if kv is None or not kv.prefill_chunk:
         return plan, input_config
+    keys, rows, held, cfg = int(kv.max_cache_len), int(kv.prefill_chunk), None, input_config
+    if UNTIMED not in str(kv.prefill_chunk_reason):
+        # a chunk not raised (certified, or the rows the Triton engine prices): the plan priced at it over the cached
+        # keys it attends, once — unpriced, a served chunk's attention over a long session was never in the plan
+        priced = dataclasses.replace(input_config, seq_len=rows, prefill_keys=keys, prefill_key_dtype=str(kv.dtype))
+        return solve(priced), priced
     # from here every solve prices the chunk with the cached keys it attends (the session's reach): the first one at
     # the chunk the plan already has, and that priced plan is the one the raise must hold
-    keys, rows, held, cfg = int(kv.max_cache_len), int(kv.prefill_chunk), None, input_config
     while rows <= keys:
         trial_cfg = dataclasses.replace(input_config, seq_len=rows, prefill_keys=keys, prefill_key_dtype=str(kv.dtype))
         try:

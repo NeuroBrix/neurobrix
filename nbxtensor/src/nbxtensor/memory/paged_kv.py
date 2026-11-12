@@ -36,6 +36,9 @@ class PagedTritonKVCache:
     (§4.3.1); None on CUDA, where the host write is stream-ordered after the kernels already launched."""
 
     paged = True
+    #: the math route's scores budget a prefill chunk's attention over the cached keys routes on, as the caller's plan
+    #: states it (0: never the math route, which writes the full scores); None: the executing device's own
+    chunk_scores_budget: Optional[int] = None
 
     def __init__(self, num_layers: int, num_kv_heads: int, k_head_dim: int, v_head_dim: int, max_cache_len: int,
                  dtype: NBXDtype, page_tokens: int, async_release: bool, window_ceiling: int = 0,
@@ -462,7 +465,7 @@ class PagedTritonKVCache:
                                   self.max_cache_len, self.dtype, self.page_tokens, self.async_release,
                                   self.window_ceiling, self.decode_budget, self.initial_cache_len, self.fence,
                                   self.card_pages)        # no host spill of its own: past the card, refused by name
-        twin.on_reallocate = self.on_reallocate
+        twin.on_reallocate, twin.chunk_scores_budget = self.on_reallocate, self.chunk_scores_budget
         return twin
 
     # -- lifetime -----------------------------------------------------------------------------------------------------
@@ -577,7 +580,8 @@ def chunk_attention(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, 
     vg = cache.gather_pages(layer_idx, "v", keys, heads, q._dtype)
     mask = chunk_mask(int(q._device_idx), int(start), rows, keys, memo)
     return scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
-                                                scale=scale, k_pre_transposed=False)
+                                                scale=scale, k_pre_transposed=False,
+                                                scores_budget_bytes=cache.chunk_scores_budget)
 
 
 def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, start: int, heads: int, scale, dropout_p,
@@ -606,7 +610,7 @@ def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, sta
         return (out.to(NBXDtype.float32).numpy().reshape(nheads * rows, -1).astype(np.float64),
                 lse.numpy().reshape(nheads * rows).astype(np.float64))
     parts = [host(scaled_dot_product_attention_wrapper(q, kg, vg, attn_mask=mask, dropout_p=dropout_p, is_causal=False,
-                                                       scale=scale, k_pre_transposed=False, return_lse=True))]
+                                                       scale=scale, k_pre_transposed=False, return_lse=True, scores_budget_bytes=cache.chunk_scores_budget))]
     del kg, vg
     host_dtype = {NBXDtype.float16: np.float16, NBXDtype.float32: np.float32}.get(q._dtype)
 
@@ -623,7 +627,7 @@ def _chunk_attention_spilled(cache: "PagedTritonKVCache", layer_idx: int, q, sta
         vd = up(vb)
         parts.append(host(scaled_dot_product_attention_wrapper(q, kd, vd, attn_mask=open_, dropout_p=dropout_p,
                                                                is_causal=False, scale=scale, k_pre_transposed=False,
-                                                               return_lse=True)))
+                                                               return_lse=True, scores_budget_bytes=cache.chunk_scores_budget)))
     out, lse = parts[0]
     with np.errstate(invalid="ignore"):
         for o2, l2 in parts[1:]:                                           # fixed order: deterministic

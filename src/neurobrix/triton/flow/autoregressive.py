@@ -140,7 +140,8 @@ def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
         (in_force() or {}).get("memory"), int(getattr(kv_plan, "memory_bytes", 0) or 0),
         PAGED_DECODE_TILE_CANDIDATES)
     cache = PagedTritonKVCache(page_tokens=tokens, async_release=async_release, **kv_params)
-    cache.on_reallocate = retire_replay_plans
+    # the route budget the plan states for a served chunk's attention over the cached keys (None: the device's own)
+    cache.on_reallocate, cache.chunk_scores_budget = retire_replay_plans, kv_plan.chunk_scores_budget_bytes
     return cache
 
 
@@ -238,7 +239,7 @@ class TritonAutoregressiveHandler:
             self.ctx.kv_tier.prepare(kv_session, kv_session.cache, prompt_ids)   # a parked continuation restored
         start = kv_session.match(prompt_ids) if kv_session is not None else 0
         hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk,
-                                 ids=prompt_ids if (start or chunk) else None)
+                                 ids=prompt_ids if (start or chunk) else None, pads=not chunk or kv_plan.prefill_chunk_pads)
         _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
         # Teacher-forced scoring mode (quant-ppl-scoring, tier row

@@ -23,6 +23,7 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
+from neurobrix.core.prism.kv_plan import KVCachePlan
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
@@ -317,44 +318,6 @@ class ComponentMemory:
         return self.overhead_bytes / (1024 * 1024)
 
 
-@dataclass
-class KVCachePlan:
-    """KV cache allocation computed by Prism. Runtime MUST use these values."""
-    max_cache_len: int          # Max tokens cacheable — ceiling (Prism VRAM budget)
-    num_layers: int
-    num_kv_heads: int
-    k_head_dim: int             # K head dimension (qk_nope + qk_rope for MLA, else head_dim)
-    v_head_dim: int             # V head dimension (v_head_dim for MLA, else head_dim)
-    dtype: str                   # Cache dtype string (may differ from weight dtype)
-    memory_bytes: int           # Total KV cache memory budget (at max_cache_len)
-    per_token_bytes: int        # Memory per cached token (for runtime info)
-    initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max_cache_len)
-    # The positions a SERVING session would hold on this plan's device: the remaining room this cache was sized from, in
-    # the declared window (`kv_cache_size(serve=True)`) — the longest context a user's request can reach on this memory
-    # class, which the derived census keys a decoder's prompt lengths up to. None: the decoder's state declares no window
-    # (no session is planned for it) or its floor does not fit the room.
-    session_reach: Optional[int] = None
-    # The rows of one prefill chunk (docs/design/prism_kv.md §5bis): a request's prefill split into chunks of exactly
-    # this many rows, a multiple of the cache page, the last chunk completed with masked rows the next chunk or the
-    # decode overwrites — so every chunk meets the same kernel keys and a turn served from a session's cache gives the
-    # bytes of the same turns prefilled together. Chosen by Prism from the certified times of each candidate's census
-    # keys (core/prism/prefill_chunk.py), never a constant; None: one chunk of the turn's own rows, the reason stated.
-    # A serving session's turns read it; a one-shot request prefills in one pass.
-    prefill_chunk: Optional[int] = None
-    # Why prefill_chunk is what it is (core/prism/prefill_chunk.py): the candidates' certified costs, or why none was
-    # eligible — stated, never silent.
-    prefill_chunk_reason: str = ""
-
-    @property
-    def head_dim(self) -> int:
-        """Backward compat for code that reads .head_dim"""
-        return self.k_head_dim
-
-    @property
-    def memory_mb(self) -> float:
-        return self.memory_bytes / (1024 * 1024)
-
-
 class ProfileFactMissing(RuntimeError):
     """A fact the plan needs that the hardware profile does not declare (rule 1): refused by name, never read as 0 and
     never taken for a reading that failed."""
@@ -634,22 +597,7 @@ class ExecutionPlan:
                 }
                 for name, mem in self.component_memory.items()
             },
-            "kv_cache_plan": {
-                "max_cache_len": self.kv_cache_plan.max_cache_len,
-                "num_layers": self.kv_cache_plan.num_layers,
-                "num_kv_heads": self.kv_cache_plan.num_kv_heads,
-                "k_head_dim": self.kv_cache_plan.k_head_dim,
-                "v_head_dim": self.kv_cache_plan.v_head_dim,
-                "dtype": self.kv_cache_plan.dtype,
-                "memory_mb": self.kv_cache_plan.memory_mb,
-                "per_token_bytes": self.kv_cache_plan.per_token_bytes,
-                # exact, never through the float MB above (a restored plan lost them: the defect A's step 0 names)
-                "memory_bytes": int(self.kv_cache_plan.memory_bytes),
-                "initial_cache_len": int(self.kv_cache_plan.initial_cache_len),
-                "session_reach": self.kv_cache_plan.session_reach,
-                "prefill_chunk": self.kv_cache_plan.prefill_chunk,
-                "prefill_chunk_reason": self.kv_cache_plan.prefill_chunk_reason,
-            } if self.kv_cache_plan else None,
+            "kv_cache_plan": self.kv_cache_plan.to_record() if self.kv_cache_plan else None,
         }
 
     def save(self, output_path: Path, hardware_profile: str = "unknown") -> None:
@@ -708,23 +656,7 @@ class ExecutionPlan:
 
         # Deserialize KV cache plan
         kv_data = data.get("kv_cache_plan")
-        kv_cache_plan = None
-        if kv_data:
-            kv_cache_plan = KVCachePlan(
-                max_cache_len=kv_data["max_cache_len"],
-                num_layers=kv_data["num_layers"],
-                num_kv_heads=kv_data["num_kv_heads"],
-                k_head_dim=kv_data.get("k_head_dim") or kv_data["head_dim"],
-                v_head_dim=kv_data.get("v_head_dim") or kv_data["head_dim"],
-                dtype=kv_data["dtype"],   # required, like num_layers above
-                memory_bytes=int(kv_data["memory_bytes"]),
-                per_token_bytes=kv_data.get("per_token_bytes", 0),
-                initial_cache_len=int(kv_data["initial_cache_len"]),
-                session_reach=kv_data.get("session_reach"),
-                # a plan saved before the field planned one chunk: None is that plan's meaning
-                prefill_chunk=kv_data.get("prefill_chunk"),
-                prefill_chunk_reason=kv_data.get("prefill_chunk_reason", ""),
-            )
+        kv_cache_plan = KVCachePlan.from_record(kv_data) if kv_data else None
 
         return cls(
             components=components,
@@ -1583,7 +1515,7 @@ class PrismSolver:
             return None
         return memory, scores_budget(memory, dev.memory_mb)
 
-    def _attention_scratch(self, profile, dtype: str):
+    def _attention_scratch(self, profile, dtype: str, component: Optional[str] = None):
         """(batch, heads, Tq, Tk, D=, Dv=) -> the scores an attention writes while it runs, or None. The compiled
         engine: what its attention writes at the plan's budget (`attention_scratch.scratch_bytes`). The Triton engines:
         what THEIR route writes — the wrappers' own `launch_keys.sdpa_route` over the device's vendor facts: the
@@ -1592,13 +1524,16 @@ class PrismSolver:
         math budget) wrote its 731 MB of scores beside a piece cut to the card's edge and ran out of memory (2026-10-28)."""
         from neurobrix.core.prism.host_footprint import engine_of
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            from neurobrix.core.prism.attention_scratch import triton_scratch
+            from neurobrix.core.prism.served_attention import over_the_session_keys
             # one per profile and dtype: a temporal stream's search prices every chunk it tries through it, and each
             # build reads every device's vendor file
             cache = self.__dict__.setdefault("_triton_scratch_by", {})
             key = (id(profile), str(dtype))
             if key not in cache or cache[key][0] is not profile:
-                cache[key] = (profile, self._triton_attention_scratch(profile, dtype))
-            return cache[key][1]
+                cache[key] = (profile, triton_scratch(profile, dtype))
+            return over_the_session_keys(cache[key][1], getattr(self, "_input_config", None), profile, dtype,
+                                         component is not None and component == getattr(self, "_kv_decoder", None))
         found = self._attention_budget(profile)
         if found is None:
             return None
@@ -1606,61 +1541,6 @@ class PrismSolver:
         memory, budget = found
         return lambda b, h, tq, tk, **_: scratch_bytes(memory, budget, b, h, tq, tk)
 
-    def _triton_attention_scratch(self, profile, dtype: str):
-        if profile is None or not profile.devices:
-            return None
-        from neurobrix.core.prism.attention_scratch import vendor_memory
-        from nbxtensor.ops import tiling_sizes as _ts
-        from nbxtensor.ops import launch_keys as _lk
-        from nbxtensor.dtype.nbx_dtype import NBXDtype
-        # the route the wrappers take on EACH card the plan may run on (`wrappers._sdpa_math_scores_budget_bytes_for`:
-        # the executing device's budget, `tiling_sizes.sdpa_math_scores_budget`), priced at the dearest of them: on a
-        # rack of 16 and 32 GB cards an attention between the two budgets runs the math route on the larger one
-        from neurobrix.core.config.loader import vendor_config_for_device
-        from nbxtensor.ops._configs import matrix_unit
-        routes = []
-        for device in profile.devices:
-            memory = vendor_memory(device)
-            brand = getattr(getattr(device, "brand", None), "value", getattr(device, "brand", None))
-            # the matrix unit of THIS device's vendor file, read once (never the planning process's own profile)
-            unit = matrix_unit(vendor_config_for_device(brand, device.architecture,
-                                                        getattr(device, "compute_capability", None),
-                                                        model=getattr(device, "name", None)))
-            routes.append((_ts.sdpa_math_scores_budget(int(memory.get("sdpa_math_max_scores_bytes") or 0),
-                                                       float(memory.get("sdpa_math_scores_device_fraction") or 0.0),
-                                                       device.memory_mb),
-                           int(memory.get("sdpa_math_min_chunk_rows") or 0), int(memory.get("sdpa_math_max_chunks") or 0),
-                           unit))
-        # `dtype`: the dtype the component runs at (`_run_dtype`, the DtypeEngine's resolution the executor receives)
-        unit_dtype = NBXDtype[dtype]                    # an unknown dtype is refused by name
-        native_bf16 = [bool(profile.has_native_bf16)] * len(profile.devices)   # the run's flag is the profile's (`set_hardware_profile`)
-        takes = {}                                      # (device route, head dim) -> the unit runs its flash
-
-        def scratch(b, h, tq, tk, D, Dv, Hk=None, mask=False):
-            # the math route's buffers as the wrapper takes them (`attention_wrappers.math_attention_cost` /
-            # `chunked_math_attention_cost`: the scores' product, its scale, a mask made dense, the softmax, the casts,
-            # the output's product), less the output the walk already counts; the flash route writes no scores
-            from nbxtensor.ops import attention_wrappers as _aw
-            from nbxtensor.ops._cost import Spec
-            hk = int(Hk or h)
-            q = Spec.contiguous((b, h, tq, D), dtype)
-            k = Spec.contiguous((b, hk, tk, D), dtype)
-            v = Spec.contiguous((b, hk, tk, Dv), dtype)
-            m = Spec.contiguous((b, 1, tq, tk), dtype) if mask else None
-            worst = 0
-            for i, (budget, min_rows, max_chunks, unit) in enumerate(routes):
-                if (i, D) not in takes:
-                    takes[(i, D)] = _lk.unit_flash_takes(D, unit_dtype, unit_dtype, unit_dtype, unit)
-                route, rows = _lk.sdpa_route(b, h, tq, tk, D, Dv, budget, min_rows, max_chunks,
-                                             unit_flash=takes[(i, D)])
-                if route == "flash":
-                    continue
-                facts = dict(native_bf16=native_bf16[i], force_accum=False, contract_half=False, unit=unit)
-                cost = (_aw.math_attention_cost(q, k, v, m, False, **facts) if route == "math"
-                        else _aw.chunked_math_attention_cost(q, k, v, rows, m, False, **facts))
-                worst = max(worst, cost.peak_bytes - sum(x.nbytes for x in cost.outputs))
-            return worst
-        return scratch
 
     def _op_workspace(self, profile):
         """(op_type, x_shape, x_width, out_width) -> the bytes the compiled engine's implementation of an op holds beside
@@ -1822,7 +1702,7 @@ class PrismSolver:
     def _rung_part_mb(self, dev: "DeviceState") -> float:
         """The part of the rung one component may hold, before any drain is set aside: the whole rung under the Triton
         engines, whose budget holds the runtime's measured growth (`_runtime_growth`) and whose activations price their
-        attention's scores (`_triton_attention_scratch`); the whole-component fraction (0.92, its provenance never
+        attention's scores (`attention_scratch.triton_scratch`); the whole-component fraction (0.92, its provenance never
         recorded) under the compiled engine, whose growth is not measured yet. On the Triton engine the fraction hid
         those two terms: unpriced, Wan2.2-I2V-A14B's pieces ran out of memory by them; hedged, Janus-Pro-7B's language
         model was refused whole and ran 3.4x slower on a V100-16GB (2026-10-28)."""
@@ -4461,7 +4341,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                         in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str, comp.name), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -4538,7 +4418,7 @@ class PrismSolver:
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str, comp.name), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
                                 tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
@@ -4564,7 +4444,7 @@ class PrismSolver:
                                 inplace_adds=inplace_adds,
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str, comp.name), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
                                 tiled_convs=conv_tiles,
                             )
                             activation_bytes = ap_tiled.peak_bytes
@@ -4849,7 +4729,9 @@ class PrismSolver:
         flow decodes nothing. Refused by name when it decodes with a component the container declares no KV for."""
         from neurobrix.core.state.price import kv_declaration
         topology = self._flow_topology(container)
-        return kv_declaration(topology, list((topology.get("components") or {}).keys()))
+        declared = kv_declaration(topology, list((topology.get("components") or {}).keys()))
+        self._kv_decoder = declared[0] if declared else None    # whose attention a served chunk runs over the keys
+        return declared
 
     def _kv_token_bytes(self, container, dtype_str: str) -> int:
         """Bytes one cached position costs across every sequence the cache holds (core/state/price.py), 0 when the flow
@@ -5220,6 +5102,12 @@ class PrismSolver:
         )
         plan.prefill_chunk, plan.prefill_chunk_reason = self._prefill_chunk(container, plan, defaults, profile,
                                                                             kv_devices)
+        from neurobrix.core.prism.prefill_chunk import UNPADDED
+        plan.prefill_chunk_pads = UNPADDED not in plan.prefill_chunk_reason
+        if plan.prefill_chunk and getattr(self, "_serve_requested", False):
+            from neurobrix.core.prism.served_attention import served_chunk_route
+            plan.chunk_scores_budget_bytes = served_chunk_route(profile, getattr(self, "_component_dtypes", None),
+                                                                getattr(self, "_kv_decoder", None), plan, self._mode)
         return plan
 
     def _prefill_chunk(self, container, kv: "KVCachePlan", defaults, profile, kv_devices) -> Tuple[Optional[int], str]:
@@ -5274,7 +5162,9 @@ class PrismSolver:
                        f"{page}); the {self._mode} engine keeps {UNTIMED} to choose among them")
         record = PC.chunk_record(Path(str(container.cache_path)), vendor, arch, cls,
                                  "triton" if self._mode == "triton" else "triton-sequential")
-        return PC.choose(record, P.prefill_chunk_candidates(page, rows), rows, PC.certified_times(vendor, arch, cls))
+        candidates = P.prefill_chunk_candidates(page, rows)
+        C, why = PC.choose(record, candidates, rows, PC.certified_times(vendor, arch, cls))
+        return (C, why) if C is not None or not getattr(self, "_serve_requested", False) else PC.served_untimed(why, page, kv.session_reach, cls)
 
     def _apply_attention_correction(
         self, comp, activation_bytes: int, manifest: dict, dtype_str: str, profiled: bool
@@ -8802,7 +8692,7 @@ class PrismSolver:
         ap = profiler.estimate_peak_memory(
             input_config=input_config, dtype_bytes=dtype_bytes, zero_alloc_uids=fusion | f2a | chains,
             inplace_adds=inplace, widths=widths, source_holding_uids=fusion | f2a,
-            in_place_weight_reads=profiler.weight_transposes_free(engine, input_config, comp.name), attention_scratch=self._attention_scratch(profile, comp_dtype),
+            in_place_weight_reads=profiler.weight_transposes_free(engine, input_config, comp.name), attention_scratch=self._attention_scratch(profile, comp_dtype, comp.name),
             conv3d_workspace=self._conv3d_workspace(profile, comp_dtype), op_workspace=self._op_workspace(profile),
             tiled_convs=tiled)
         return int(self._scale_activations_to_request(comp, ap.peak_bytes, input_config)), str(ap.peak_op_uid or "")
@@ -10380,7 +10270,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "v_head_dim": getattr(kv, "v_head_dim", None),
                            "session_reach": getattr(kv, "session_reach", None),
                            "prefill_chunk": getattr(kv, "prefill_chunk", None),
-                           "prefill_chunk_reason": getattr(kv, "prefill_chunk_reason", "")}
+                           "prefill_chunk_reason": getattr(kv, "prefill_chunk_reason", ""), "chunk_scores_budget_bytes": kv.chunk_scores_budget_bytes, "prefill_chunk_pads": kv.prefill_chunk_pads}
     if plan.cfg_split_components:
         rec["cfg_split_components"] = list(plan.cfg_split_components)
     if getattr(plan, "batch_split_components", None):
