@@ -29,7 +29,7 @@ import numpy as np
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.core.runtime.resolution.vace_spec import SPEC_KEYS, _vae_latent_stats, conditioning_spec  # noqa: F401
-from neurobrix.triton.i2v_conditioning import _nbx_on, _to_channels_first
+from neurobrix.triton.i2v_conditioning import _to_channels_first
 import logging
 _log = logging.getLogger(__name__)
 
@@ -78,12 +78,13 @@ def build_control(ctx: Any, spec: dict) -> Optional[NBXTensor]:
             np.broadcast_to(np.asarray(mean, np.float32).reshape(1, -1, 1, 1, 1), shape))
         inv_std_full = np.ascontiguousarray(
             np.broadcast_to((1.0 / np.asarray(std, np.float32)).reshape(1, -1, 1, 1, 1), shape))
-        latent = (latent - _nbx_on(mean_full, dev_idx)) * _nbx_on(inv_std_full, dev_idx)
+        mean_t = NBXTensor.from_numpy(mean_full, device=dev_idx)
+        latent = (latent - mean_t) * NBXTensor.from_numpy(inv_std_full, device=dev_idx)
 
     video_latents = NBXTensor.cat(
         [latent.narrow(0, 0, 1).contiguous(), latent.narrow(0, 1, 1).contiguous()], dim=1)
     pm = pixel_mask.numpy() if isinstance(pixel_mask, NBXTensor) else np.asarray(pixel_mask)
-    mask_t = _nbx_on(vace_fold_mask_np(pm, lt, lh, lw, int(spec["mask_channels"])), dev_idx)
+    mask_t = NBXTensor.from_numpy(vace_fold_mask_np(pm, lt, lh, lw, int(spec["mask_channels"])), device=dev_idx)
     control = NBXTensor.cat([video_latents, mask_t], dim=1)  # [1, 2*z_dim+mask_ch, ...]
 
     import os as _os
@@ -110,8 +111,8 @@ def build_scale(spec: dict, dev_idx: int) -> NBXTensor:
     if _os.environ.get("NBX_VACE_SCALE_ZERO") == "1":
         _log.debug("   [NBX-VACE-SCALE] forced to ZEROS (NBX_VACE_SCALE_ZERO=1) — "
                    "vace injection disabled (pure-T2V differential)")
-        return _nbx_on(np.zeros((int(spec["vace_layers"]),), dtype=np.float32), dev_idx)
-    return _nbx_on(np.ones((int(spec["vace_layers"]),), dtype=np.float32), dev_idx)
+        return NBXTensor.from_numpy(np.zeros((int(spec["vace_layers"]),), dtype=np.float32), device=dev_idx)
+    return NBXTensor.from_numpy(np.ones((int(spec["vace_layers"]),), dtype=np.float32), device=dev_idx)
 
 
 def batch_for_cfg(control: NBXTensor) -> NBXTensor:

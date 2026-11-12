@@ -22,21 +22,10 @@ from typing import Any, Optional
 from neurobrix.core.runtime.resolution.flux_video_spec import is_flux_family  # noqa: F401
 
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.memory.allocator import DeviceAllocator
 
 IMG_IDS_VAR = "global.img_ids"
 TXT_IDS_VAR = "global.txt_ids"
 COND_VAR = "global.cond"
-
-
-def _nbx_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
-    """from_numpy onto a specific device (from_numpy uses the current device)."""
-    prev = DeviceAllocator.get_device()
-    DeviceAllocator.set_device(dev_idx)
-    try:
-        return NBXTensor.from_numpy(np.ascontiguousarray(arr))
-    finally:
-        DeviceAllocator.set_device(prev)
 
 
 def _resolve_txt(ctx: Any) -> Optional[NBXTensor]:
@@ -93,7 +82,7 @@ def prepare(ctx: Any, packed_state: NBXTensor, packing_info: dict) -> None:
     ids[..., 2] = np.arange(lw, dtype=np.float32)[None, None, :]
     ids = ids.reshape(1, t * lh * lw, 3)
     ids = np.broadcast_to(ids, (b, t * lh * lw, 3))
-    img_ids = _nbx_on(ids, dev_idx).to(dtype)
+    img_ids = NBXTensor.from_numpy(ids, device=dev_idx).to(dtype)
 
     # txt_ids: zeros [B, txt_seq, 3] — txt_seq from the T5 embedding.
     txt_ids = NBXTensor.zeros(tuple(shp["txt_ids"]), dtype, f"cuda:{dev_idx}")

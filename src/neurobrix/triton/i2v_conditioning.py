@@ -26,7 +26,6 @@ from typing import Any, Optional
 import numpy as np
 
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.device_transfer import transfer_tensor
 from neurobrix.core.runtime.resolution.i2v_spec import (  # noqa: F401 — the facts both branches read
     _vae_latent_stats, _vae_temporal_ratio, condition_channel_dim, conditioning_spec)
@@ -120,16 +119,6 @@ def _state_video_mask_np(b: int, num_frames: int, ratio: int, lh: int, lw: int,
     return np.ascontiguousarray(mask.reshape(b, ratio, latent_size_t, lh, lw))
 
 
-def _nbx_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
-    """from_numpy onto a specific device (from_numpy uses the current device)."""
-    prev = DeviceAllocator.get_device()
-    DeviceAllocator.set_device(dev_idx)
-    try:
-        return NBXTensor.from_numpy(arr)
-    finally:
-        DeviceAllocator.set_device(prev)
-
-
 def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[NBXTensor]:
     """Build the per-step-invariant condition for the active style (R30 mirror
     of the compiled brick). "wan" (frame-mask + mean/std, channels-first),
@@ -165,7 +154,7 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[NBXTensor]:
     b, c, f, h, w = img.shape
     t_target = _target_latent_frames(ctx)
     if t_target and t_target > f:
-        pad = _nbx_on(np.zeros((b, c, t_target - f, h, w), dtype=np.float32), dev_idx)
+        pad = NBXTensor.from_numpy(np.zeros((b, c, t_target - f, h, w), dtype=np.float32), device=dev_idx)
         img = NBXTensor.cat([img, pad], dim=2)  # [B, C, T, H, W], frame 0 = image
     # frames-first to match the CogVideoX state layout [B, T, C, H, W]
     return img.permute(0, 2, 1, 3, 4).contiguous()
@@ -231,7 +220,7 @@ def _build_condition_state_video_mask(ctx: Any, spec: dict,
             f"{latent_t} latent frames but the folded mask has "
             f"{mask_np.shape[2]} (num_frames={num_frames}, ratio={ratio})")
 
-    mask_t = _nbx_on(mask_np, dev_idx)
+    mask_t = NBXTensor.from_numpy(mask_np, device=dev_idx)
     if mask_t._dtype != latent._dtype:
         mask_t = mask_t.to(latent._dtype)
     return NBXTensor.cat([latent, mask_t], dim=1)  # [B, C + ratio, T, lh, lw]
@@ -265,12 +254,12 @@ def _build_condition_wan(ctx: Any, spec: dict, num_frames: int) -> Optional[NBXT
             np.broadcast_to(np.asarray(mean, np.float32).reshape(1, -1, 1, 1, 1), shape))
         inv_std_full = np.ascontiguousarray(
             np.broadcast_to((1.0 / np.asarray(std, np.float32)).reshape(1, -1, 1, 1, 1), shape))
-        mean_t = _nbx_on(mean_full, dev_idx)
-        inv_std_t = _nbx_on(inv_std_full, dev_idx)
+        mean_t = NBXTensor.from_numpy(mean_full, device=dev_idx)
+        inv_std_t = NBXTensor.from_numpy(inv_std_full, device=dev_idx)
         latent = (latent - mean_t) * inv_std_t
 
-    mask_t = _nbx_on(_frame_mask_np(num_frames, latent_t, lh, lw,
-                                    spec["mask_channels"]), dev_idx)
+    mask_t = NBXTensor.from_numpy(_frame_mask_np(num_frames, latent_t, lh, lw,
+                                    spec["mask_channels"]), device=dev_idx)
     return NBXTensor.cat([mask_t, latent], dim=1)  # [B, mask_ch + C, T, H, W]
 
 

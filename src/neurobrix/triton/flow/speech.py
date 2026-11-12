@@ -33,7 +33,6 @@ import numpy as np
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
@@ -47,22 +46,6 @@ _log = logging.getLogger(__name__)
 
 
 _require = functools.partial(require_contract, "speech")   # this leg's contract block
-
-
-def _from_np_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
-    """Upload a host array to a SPECIFIC device.
-
-    from_numpy allocates on the allocator's CURRENT device; under a
-    multi-GPU placement the leg's components sit on different devices,
-    so every host-created tensor is pinned explicitly (a kernel cannot
-    read a pointer from another device — the 'cannot be accessed from
-    Triton' class)."""
-    prev = DeviceAllocator.get_device()
-    try:
-        DeviceAllocator.set_device(dev_idx)
-        return NBXTensor.from_numpy(arr)
-    finally:
-        DeviceAllocator.set_device(prev)
 
 
 class SpeechLeg(FlowLeg):
@@ -92,14 +75,14 @@ class SpeechLeg(FlowLeg):
         arr = np.asarray(ids, dtype=np.int64)
         if shape is not None:
             arr = arr.reshape(shape)
-        return _from_np_on(arr, self._dev)
+        return NBXTensor.from_numpy(arr, device=self._dev)
 
     def _mrope_positions(self, seq_len: int) -> NBXTensor:
         # Text-style positions on all three M-RoPE planes (the talker
         # consumes projected hiddens — no spatial grid exists for TTS).
         base = np.arange(seq_len, dtype=np.int64)
-        return _from_np_on(
-            np.broadcast_to(base, (3, 1, seq_len)).copy(), self._dev)
+        return NBXTensor.from_numpy(
+            np.broadcast_to(base, (3, 1, seq_len)).copy(), device=self._dev)
 
     # ── the leg ──
 
@@ -191,7 +174,7 @@ class SpeechLeg(FlowLeg):
         _w_dev = int(thinker_embed_w._device_idx)
         tts_embeds = _nbx_index_wrappers.embedding(
             thinker_embed_w,
-            _from_np_on(np.asarray([tts_ids], dtype=np.int64), _w_dev))
+            NBXTensor.from_numpy(np.asarray([tts_ids], dtype=np.int64), device=_w_dev))
         if needs_move(tts_embeds, self._dev):
             tts_embeds = transfer_tensor(tts_embeds, self._dev)
         tts_embeds = tts_embeds.to(dtype)                    # [1, 3, 2048]
@@ -349,8 +332,8 @@ class SpeechLeg(FlowLeg):
             group_embeds = [last_id_embed]
             for g in range(num_groups - 1):
                 P = pred_embeds.shape[1]
-                pos = _from_np_on(
-                    np.arange(P, dtype=np.int64)[None], self._dev)
+                pos = NBXTensor.from_numpy(
+                    np.arange(P, dtype=np.int64)[None], device=self._dev)
                 # Mono-step predictor: backbone + in-graph head_index
                 # gather -> logits (vendor lm_head[g] on every position;
                 # the last-position slice below is the AR read).
@@ -409,9 +392,9 @@ class SpeechLeg(FlowLeg):
         for r in rates + ratios:
             total_upsample *= int(r)
 
-        codes = _from_np_on(
+        codes = NBXTensor.from_numpy(
             np.asarray(frames, dtype=np.int64).T[None].copy(),
-            self._dev)                                   # [1, 16, T]
+            device=self._dev)                                   # [1, 16, T]
         wavs: List[NBXTensor] = []
         start = 0
         T = codes.shape[-1]

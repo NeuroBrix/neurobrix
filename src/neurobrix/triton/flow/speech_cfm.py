@@ -41,7 +41,7 @@ from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the f
 from nbxtensor.random.seeded_draw import SeededDrawStream, seeded_gaussian
 from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
-from neurobrix.triton.flow.speech import _require, _from_np_on
+from neurobrix.triton.flow.speech import _require
 import logging
 _log = logging.getLogger(__name__)
 
@@ -170,8 +170,8 @@ class SpeechCFMLeg(FlowLeg):
                    f"{len(span_ids)} tokens, seed={seed}")
 
         # ── 2. condition: additive merge + prefix ────────────────────
-        _ids_t = _from_np_on(
-            np.asarray([span_ids], dtype=np.int64), self._dev)
+        _ids_t = NBXTensor.from_numpy(
+            np.asarray([span_ids], dtype=np.int64), device=self._dev)
         text_emb = self._run(c_temb, input=_ids_t)          # [1, T, H]
         proj = self._run(c_hproj,
                          audio_features=span_hidden.to(dtype))
@@ -186,8 +186,8 @@ class SpeechCFMLeg(FlowLeg):
             proj = pf / nrm
         merged = text_emb.to(NBXDtype.float32) \
             + proj.to(NBXDtype.float32)                     # [1, T, H]
-        _fix_t = _from_np_on(
-            np.asarray([[text_eos, audio_bos]], dtype=np.int64), self._dev)
+        _fix_t = NBXTensor.from_numpy(
+            np.asarray([[text_eos, audio_bos]], dtype=np.int64), device=self._dev)
         fix_emb = self._run(c_temb, input=_fix_t)           # [1, 2, H]
         prefix = NBXTensor.cat(
             [merged.to(dtype), fix_emb.to(dtype)], dim=1)
@@ -209,8 +209,8 @@ class SpeechCFMLeg(FlowLeg):
                    f"max {max_new})...")
         for t in range(max_new):
             S = int(context.shape[1])
-            _pos = _from_np_on(
-                np.arange(S, dtype=np.int64).reshape(1, -1), self._dev)
+            _pos = NBXTensor.from_numpy(
+                np.arange(S, dtype=np.int64).reshape(1, -1), device=self._dev)
             hidden = self._run(c_bb, inputs_embeds=context,
                                position_ids=_pos)
             last = hidden[:, -1:].contiguous().to(dtype)
@@ -226,8 +226,8 @@ class SpeechCFMLeg(FlowLeg):
             if code == codec_eos:
                 break
             codes.append(code)
-            _c_t = _from_np_on(
-                np.asarray([[code]], dtype=np.int64), self._dev)
+            _c_t = NBXTensor.from_numpy(
+                np.asarray([[code]], dtype=np.int64), device=self._dev)
             context = NBXTensor.cat(
                 [context, self._run(c_cemb, input=_c_t).to(dtype)], dim=1)
         if not codes:
@@ -249,8 +249,8 @@ class SpeechCFMLeg(FlowLeg):
                 f"ZERO FALLBACK: unknown speaker '{req_spk}' — declared "
                 f"speakers: {declared}.")
         _kb = f"{spk_prefix}.{req_spk}"
-        xvec = _from_np_on(
-            consts[f"{_kb}.xvector"].astype(np.float32), self._dev) \
+        xvec = NBXTensor.from_numpy(
+            consts[f"{_kb}.xvector"].astype(np.float32), device=self._dev) \
             .to(dtype)
         ptoks_np = consts[f"{_kb}.prompt_tokens"].astype(np.int64)
         pmel_np = consts[f"{_kb}.prompt_mel"].astype(np.float32)
@@ -259,10 +259,10 @@ class SpeechCFMLeg(FlowLeg):
         mel_bins = int(_require(voc, "mel_bins", "vocoder geometry"))
         sample_rate = int(_require(voc, "sample_rate", "vocoder output"))
 
-        all_tok = _from_np_on(
+        all_tok = NBXTensor.from_numpy(
             np.concatenate(
                 [ptoks_np, np.asarray([codes], dtype=np.int64)], axis=1),
-            self._dev)                                      # [1, Tp+Tg]
+            device=self._dev)                                      # [1, Tp+Tg]
         _fe_out = self._run(c_fenc, token=all_tok, embedding=xvec)
         if isinstance(_fe_out, (tuple, list)):
             h, spk_p = _fe_out[0], _fe_out[1]
@@ -282,17 +282,17 @@ class SpeechCFMLeg(FlowLeg):
         _Tm = int(h.shape[1])
         conds_np = np.zeros((1, _Tm, int(h.shape[2])), dtype=np.float32)
         conds_np[:, :mel_len1] = pmel_np
-        conds = _from_np_on(
-            np.ascontiguousarray(conds_np.transpose(0, 2, 1)), self._dev)
+        conds = NBXTensor.from_numpy(
+            np.ascontiguousarray(conds_np.transpose(0, 2, 1)), device=self._dev)
         mu = h.transpose(1, 2).contiguous()                 # [1, 80, Tm]
-        mask = _from_np_on(
-            np.ones((1, 1, _Tm), dtype=np.float32), self._dev)
+        mask = NBXTensor.from_numpy(
+            np.ones((1, 1, _Tm), dtype=np.float32), device=self._dev)
         # CFM Euler on the cosine grid; initial noise from the SHARED
         # frontier; CFG batch-2 with zeroed uncond mu/spks/cond
         # (vendor solve_euler verbatim, combine (1+r)*c − r*u).
-        x = _from_np_on(
+        x = NBXTensor.from_numpy(
             seeded_gaussian(seed, (1, mel_bins, _Tm)).astype(np.float32),
-            self._dev)
+            device=self._dev)
         ts = [1.0 - math.cos(v * 0.5 * math.pi)
               for v in np.linspace(0.0, 1.0, n_steps + 1)]
         spk_f = spk_p.to(NBXDtype.float32)
@@ -308,8 +308,8 @@ class SpeechCFMLeg(FlowLeg):
         t_cur, dt = ts[0], ts[1] - ts[0]
         for stp in range(1, n_steps + 1):
             x_in = NBXTensor.cat([x, x], dim=0)
-            t_in = _from_np_on(
-                np.full((2,), float(t_cur), dtype=np.float32), self._dev)
+            t_in = NBXTensor.from_numpy(
+                np.full((2,), float(t_cur), dtype=np.float32), device=self._dev)
             dphi = self._run(
                 c_fdec, x=x_in.to(dtype), mask=mask_in.to(dtype),
                 mu=mu_in.to(dtype), t=t_in.to(dtype),

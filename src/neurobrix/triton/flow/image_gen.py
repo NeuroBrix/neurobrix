@@ -33,7 +33,7 @@ import numpy as np
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.random.seeded_draw import seeded_gaussian
-from neurobrix.triton.flow.speech import SpeechLeg, _from_np_on   # the speech leg's plumbing, the same
+from neurobrix.triton.flow.speech import SpeechLeg   # the speech leg's plumbing, the same
 from neurobrix.core.flow.base import FlowLeg   # the leg's engine, ctx and resolver, both branches
 from neurobrix.core.flow.shared_steps import require_contract
 import logging
@@ -139,8 +139,8 @@ class ImageGenLeg(FlowLeg):
         # Latent init through the SHARED seeded frontier (R30): both
         # engines consume the same CPU fp32 array — RNG provenance can
         # never explain a cross-engine divergence.
-        latents = _from_np_on(
-            seeded_gaussian(seed, (1, lat_ch, h_lat, w_lat)), self._dev)
+        latents = NBXTensor.from_numpy(
+            seeded_gaussian(seed, (1, lat_ch, h_lat, w_lat)), device=self._dev)
 
         scheduler.set_timesteps(steps)
         timesteps = scheduler.timesteps
@@ -167,9 +167,9 @@ class ImageGenLeg(FlowLeg):
                 continue
             lat_h = latents.to(dtype)
             lat_in = NBXTensor.cat([lat_h, lat_h], dim=0)
-            t_in = _from_np_on(
+            t_in = NBXTensor.from_numpy(
                 np.full((2,), t_f * ts_scale, dtype=np.float32),
-                self._dev).to(dtype)
+                device=self._dev).to(dtype)
             noise_pred = self._run(
                 c_den, hidden_states=lat_in,
                 timestep=t_in, encoder_hidden_states=cond,
