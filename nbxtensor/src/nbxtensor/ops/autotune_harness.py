@@ -501,13 +501,15 @@ _EXPERT_TABLES: List[Any] = []
 def _expert_table(experts: List[Any]) -> Any:
     """The device-address table the MoE kernels read their experts' weights through, built as the runtime builds it
     (`memory.pointer_tables.build_ptr_tables`): on Metal a shader dereferences captured addresses held under a pinned
-    scope, never a buffer's `data_ptr()`. The last few keys' tables are kept (their pins with them)."""
+    scope, never a buffer's `data_ptr()`. The last few keys' tables are kept, their pins AND the expert tensors with
+    them: a table holds bare addresses, so a caller's temporary list freed after the build left CUDA reading freed
+    memory (every MoE config inf on Volta, the Dell, 2026-11-12 19:10; Metal's pins hid it)."""
     from nbxtensor.memory.pointer_tables import build_ptr_tables
     from nbxtensor.memory.allocator import DeviceAllocator
     tables = build_ptr_tables(experts, experts, experts)
-    _EXPERT_TABLES.append(tables)
+    _EXPERT_TABLES.append((tables, list(experts)))
     while len(_EXPERT_TABLES) > 8:
-        _EXPERT_TABLES.pop(0).release_pins()
+        _EXPERT_TABLES.pop(0)[0].release_pins()
     return tables.gate_ptrs[DeviceAllocator.get_device()]
 
 
