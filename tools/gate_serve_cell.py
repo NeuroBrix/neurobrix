@@ -15,6 +15,11 @@ CONTRACT
     between chunks is more than `SLOWER_IS_RED` times the FIRST's (the gate's speed rule, the same factor as a cell
     against its base); GREEN otherwise. Whether the three texts are byte-equal is RECORDED, not judged: a request
     that reuses the previous one's cache may round differently, and the text's judgment is the reader's;
+  * a five-turn CONVERSATION on the same daemon, each request adding the last answer and a new user turn (a multi-row
+    continuation after a decode, an agent's every turn), then the same conversation on a second daemon whose replay is
+    off (`serve_without_replay.py`, the oracle): RED when a turn answers nothing or not the oracle's text. The replay
+    is built to give the direct path's bytes; on 2026-11-12 a served MoE answered turns 3-5 EMPTY with it, right
+    without it, and no three identical requests could see it;
   * one JSON row appended to <out>/serve_rows.jsonl whatever happens (verdict, reason, the three requests, the load
     time, the cards' peak memory read from outside), the daemon stopped by its pid, its log kept beside the row.
 
@@ -41,6 +46,40 @@ import atelier  # noqa: E402 — the workshop's roots
 SLOWER_IS_RED = 1.5          # the gate's rule: slower than its base by more than this is a speed regression
 MODES = {"native": [], "triton": ["--triton"]}
 PROMPT = "Explain what a hash table is, how collisions are handled, and give a short Python example."
+
+
+FOLLOW_UPS = ("Say it in one sentence.", "Now give a Python example.", "What is its lookup cost?", "Name one drawback.")
+
+
+def judge_conversation(on: list, off: list) -> tuple:
+    """(verdict, reason) of the conversation's turns with the replay (`on`) against the oracle without it (`off`) —
+    pure, tested without a card."""
+    if len(on) != len(FOLLOW_UPS) + 1 or len(off) != len(on):
+        return "RED", f"the conversation answered {len(on)} turn(s) with the replay, {len(off)} without, of {len(FOLLOW_UPS) + 1}"
+    for i, (a, b) in enumerate(zip(on, off), 1):
+        if not a:
+            return "RED", f"turn {i} of the conversation answered nothing with the replay"
+        if a != b:
+            return "RED", f"turn {i} of the conversation differs from the replay-off oracle"
+    return "GREEN", f"the {len(on)} turns of the conversation equal the replay-off oracle's"
+
+
+def converse(port: int, model: str, max_tokens: int, budget: float) -> list:
+    """The conversation's answers, turn by turn (greedy, not streamed); a failed turn ends it."""
+    msgs, texts = [{"role": "user", "content": PROMPT}], []
+    for i in range(len(FOLLOW_UPS) + 1):
+        body = {"model": model, "temperature": 0, "max_tokens": max_tokens, "stream": False, "messages": msgs}
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=budget) as resp:
+                text = json.loads(resp.read())["choices"][0]["message"]["content"] or ""
+        except Exception:                                      # noqa: BLE001 — the judgment names the short turn
+            return texts
+        texts.append(text)
+        if i < len(FOLLOW_UPS):
+            msgs = msgs + [{"role": "assistant", "content": text}, {"role": "user", "content": FOLLOW_UPS[i]}]
+    return texts
 
 
 def judge(requests: list) -> tuple:
@@ -92,6 +131,51 @@ def cards_memory(gpu: str) -> list:
     return [int(x) for x in out if x.isdigit()]
 
 
+def timed(a, row, peak) -> None:
+    """The three timed requests, then the conversation, on the daemon with its replay."""
+    for _ in range(3):
+        row["requests"].append(ask(a.port, a.model, a.max_tokens, 600.0))
+        peak.append(cards_memory(a.gpu))
+        if row["requests"][-1].get("error"):
+            return
+    row["conversation_on"] = converse(a.port, a.model, 64, 600.0)
+
+
+def serve(argv_serve, env, src, log, port, ready_timeout, sock, work) -> tuple:
+    """(load seconds, None or why the daemon did not serve): one daemon up through its entry point, `work()` run against
+    it, the daemon stopped by its process group whatever happens and its socket's leftovers removed."""
+    t0 = time.time()
+    with open(log, "w") as lf:
+        daemon = subprocess.Popen(argv_serve, env=env, cwd=str(src.parent), stdout=lf, stderr=subprocess.STDOUT,
+                                  stdin=subprocess.DEVNULL, start_new_session=True)
+    try:
+        ready = False
+        while time.time() - t0 < ready_timeout and daemon.poll() is None:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=3) as r:
+                    ready = b'"id"' in r.read()
+            except Exception:                                  # noqa: BLE001 — not up yet
+                ready = False
+            if ready:
+                break
+            time.sleep(4)
+        load = round(time.time() - t0, 1)
+        if not ready:
+            return load, (f"the daemon did not come up in {ready_timeout} s" if daemon.poll() is None
+                          else f"the daemon exited rc={daemon.returncode}")
+        work()
+        return load, None
+    finally:
+        if daemon.poll() is None:
+            os.killpg(daemon.pid, signal.SIGTERM)
+            try:
+                daemon.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                os.killpg(daemon.pid, signal.SIGKILL)
+        for leftover in sock.parent.glob(sock.stem + ".*"):
+            leftover.unlink(missing_ok=True)
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     for name in ("--model", "--gpu", "--hardware", "--src", "--out"):
@@ -117,44 +201,25 @@ def main(argv=None) -> int:
     argv_serve = [a.python, "-m", "neurobrix", "serve", "--model", a.model, "--hardware", a.hardware, *MODES[a.mode],
                   "--http", "--http-host", "127.0.0.1", "--http-port", str(a.port), "--foreground"]
     row["command"] = " ".join(argv_serve[1:])
-    t0, peak = time.time(), []
-    with open(log, "w") as lf:
-        daemon = subprocess.Popen(argv_serve, env=env, cwd=str(src.parent), stdout=lf, stderr=subprocess.STDOUT,
-                                  stdin=subprocess.DEVNULL, start_new_session=True)
+    peak = []
     try:
-        ready = False
-        while time.time() - t0 < a.ready_timeout and daemon.poll() is None:
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/v1/models", timeout=3) as r:
-                    ready = b'"id"' in r.read()
-            except Exception:                                  # noqa: BLE001 — not up yet
-                ready = False
-            if ready:
-                break
-            time.sleep(4)
-        row["load_s"] = round(time.time() - t0, 1)
-        if not ready:
-            row["verdict"], row["reason"] = "RED", (f"the daemon did not come up in {a.ready_timeout} s"
-                                                    if daemon.poll() is None else f"the daemon exited rc={daemon.returncode}")
+        row["load_s"], err = serve(argv_serve, env, src, log, a.port, a.ready_timeout, sock, lambda: timed(a, row, peak))
+        if err:
+            row["verdict"], row["reason"] = "RED", err
         else:
-            for _ in range(3):
-                row["requests"].append(ask(a.port, a.model, a.max_tokens, 600.0))
-                peak.append(cards_memory(a.gpu))
-                if row["requests"][-1].get("error"):
-                    break
             row["verdict"], row["reason"] = judge(row["requests"])
             shas = {r.get("text_sha") for r in row["requests"]}
             row["texts_equal"] = len(shas) == 1 and None not in shas
             row["peak_mib"] = [max(c) for c in zip(*peak)] if peak and all(peak) else None
+            off_argv = [a.python, str(Path(__file__).resolve().parent / "serve_without_replay.py"), *argv_serve[3:]]
+            _s, err = serve(off_argv, env, src, out / f"{cell}.oracle.serve.log", a.port, a.ready_timeout, sock,
+                            lambda: row.__setitem__("conversation_off", converse(a.port, a.model, 64, 600.0)))
+            conv = (("RED", f"the replay-off oracle's daemon: {err}") if err
+                    else judge_conversation(row.get("conversation_on") or [], row.get("conversation_off") or []))
+            row["conversation_verdict"], row["conversation_reason"] = conv
+            if row["verdict"] == "GREEN" and conv[0] != "GREEN":
+                row["verdict"], row["reason"] = conv
     finally:
-        if daemon.poll() is None:
-            os.killpg(daemon.pid, signal.SIGTERM)
-            try:
-                daemon.wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                os.killpg(daemon.pid, signal.SIGKILL)
-        for leftover in sock.parent.glob(sock.stem + ".*"):
-            leftover.unlink(missing_ok=True)
         with open(out / "serve_rows.jsonl", "a") as f:
             f.write(json.dumps(row) + "\n")
     print(f"{row['verdict']} {cell} ({a.gpu}, {a.hardware}, {sha}): {row['reason']}")

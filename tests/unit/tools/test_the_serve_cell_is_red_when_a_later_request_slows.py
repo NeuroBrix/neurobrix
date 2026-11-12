@@ -34,3 +34,28 @@ def test_an_empty_answer_is_red():
     assert cell.judge([_r(0.08), _r(0.08), _r(0.08, text_sha=None)])[0] == "RED"
     assert cell.judge([_r(0.08), _r(0.08), _r(0.08, chunks=1)])[0] == "RED"
     assert cell.judge([_r(0.0), _r(0.08), _r(0.08)])[0] == "RED"
+
+
+# The conversation (supervisor 2026-11-12 05:40): five turns with the replay against the same five without it. Red on
+# the tree before it: no `judge_conversation` — the cell judged three identical requests only, and a served MoE that
+# answered turns 3-5 EMPTY with the replay passed it.
+_ORACLE = ["a", "b", "c", "d", "e"]
+
+
+def test_a_conversation_equal_to_its_oracle_is_green():
+    assert cell.judge_conversation(list(_ORACLE), list(_ORACLE))[0] == "GREEN"
+
+
+def test_an_empty_later_turn_is_red_and_named():
+    verdict, reason = cell.judge_conversation(["a", "b", "", "", ""], list(_ORACLE))
+    assert verdict == "RED" and "turn 3" in reason and "nothing" in reason
+
+
+def test_a_turn_unlike_the_oracle_is_red():
+    verdict, reason = cell.judge_conversation(["a", "b", "c", "x", "e"], list(_ORACLE))
+    assert verdict == "RED" and "turn 4" in reason
+
+
+def test_a_short_conversation_is_red():
+    assert cell.judge_conversation(["a", "b"], list(_ORACLE))[0] == "RED"
+    assert cell.judge_conversation(list(_ORACLE), ["a"])[0] == "RED"

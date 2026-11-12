@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-11-12
+
+A corrective version (nbxtensor stays 0.1.3): a served mixture-of-experts model answered later turns of a conversation
+wrong or empty; and the server's tool-call formats, chat templates and error statuses for the coding models to come.
+
 ### Added
 
 - **Two more tool-call formats in the server: GLM's and Mistral's.** A model whose chat template writes
