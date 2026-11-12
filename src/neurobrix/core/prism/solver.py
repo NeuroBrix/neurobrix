@@ -1195,7 +1195,7 @@ class PrismSolver:
             return int(self._whole_usable_mb(dev) * 1024 * 1024)
         return int(self._effective_capacity_mb(dev) * 1024 * 1024)
 
-    def _kv_card_room(self, cards, held_bytes: int, kv_plan) -> Optional[Tuple[str, int]]:
+    def _kv_card_room(self, cards, held: int, kv_plan) -> Optional[Tuple[str, int]]:
         """(card, bytes) the decode cache and what the plan holds beside it leave the cache's ONE card on the Triton
         engine, from the accounting that sized the cache — the drain's room there (`_assign_drain_cliffs`). Sized apart,
         the two promised the same memory: deepseek-moe-16b-chat served on one V100-32GB, 31 376 MB held whole + a
@@ -1204,7 +1204,7 @@ class PrismSolver:
         if kv_plan is None or not cards or len(cards) != 1 or engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return None
         room = int(self._rung_part_mb(cards[0]) * 1024 * 1024)
-        return cards[0].device_string, room - held_bytes - int(kv_plan.memory_bytes)
+        return cards[0].device_string, room - held - int(kv_plan.memory_bytes)
 
     def _assign_drain_cliffs(self, container, plan, devices) -> None:
         """The deferred-drain cliff of every accelerator the plan uses, set on each component held
