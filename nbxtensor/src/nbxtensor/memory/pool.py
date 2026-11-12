@@ -42,7 +42,7 @@ POOL_SMALL_SEGMENT_BYTES = 1 << 21
 LARGE, SMALL = 0, 1
 
 
-def enabled() -> bool:
+def parks_freed_blocks() -> bool:
     """Whether the allocator parks a freed block in the pool (`NBX_ALLOC_POOL`, on unless "0"): the switch's one
     reading, for the allocator and for a planner pricing what it holds."""
     return os.environ.get("NBX_ALLOC_POOL", "1") != "0"

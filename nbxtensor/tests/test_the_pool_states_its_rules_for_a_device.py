@@ -1,4 +1,4 @@
-"""`memory.pool.enabled`, `parked_cap_bytes`, `fit_slack`: the pool's rules for a device, answered by the library from
+"""`memory.pool.parks_freed_blocks`, `parked_cap_bytes`, `fit_slack`: the pool's rules for a device, answered by the library from
 the device's file — the allocator's switch and cap, and what a planner prices the pool by. The NeuroBrix planner
 (Prism) read the same keys and the same switch a second time from its own copy of the reading until 2026-11-12.
 
@@ -11,11 +11,11 @@ from nbxtensor.memory import pool
 
 def test_the_switch_is_on_unless_set_to_zero(monkeypatch):
     monkeypatch.delenv("NBX_ALLOC_POOL", raising=False)
-    assert pool.enabled() is True
+    assert pool.parks_freed_blocks() is True
     monkeypatch.setenv("NBX_ALLOC_POOL", "0")
-    assert pool.enabled() is False
+    assert pool.parks_freed_blocks() is False
     monkeypatch.setenv("NBX_ALLOC_POOL", "1")
-    assert pool.enabled() is True
+    assert pool.parks_freed_blocks() is True
 
 
 @pytest.fixture

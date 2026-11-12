@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.backend import runtime as _rt
 from nbxtensor.memory.pool import (SegmentPool, LARGE, range_add, range_extend, range_unmapped, range_reclaimable,
-                                   enabled as _pool_switch)
+                                   parks_freed_blocks as _pool_switch)
 import logging
 _log = logging.getLogger(__name__)
 

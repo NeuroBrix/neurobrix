@@ -24,9 +24,9 @@ def join_weights(held: dict, loaded: dict) -> dict:
 
 
 def pool_enabled() -> bool:
-    """Whether the allocator parks freed blocks (`pool.enabled`)."""
-    from nbxtensor.memory.pool import enabled
-    return enabled()
+    """Whether the allocator parks freed blocks (`pool.parks_freed_blocks`)."""
+    from nbxtensor.memory.pool import parks_freed_blocks
+    return parks_freed_blocks()
 
 
 def pool_parked_cap_bytes(vendor: str, architecture: str, total_bytes: float) -> int:

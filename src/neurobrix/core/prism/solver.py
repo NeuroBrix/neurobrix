@@ -2073,12 +2073,6 @@ class PrismSolver:
         cap = _nbx_memory.pool_parked_cap_bytes(*_vendor_arch(dev.spec), float(dev.spec.memory_mb) * (1 << 20))
         return cap / (1 << 20) if cap else math.inf
 
-    @staticmethod
-    def _pool_fit_slack(dev: "DeviceState") -> float:
-        """The most the Triton allocator's pool hands out beyond a request, as a fraction of it: the pool's answer
-        (`nbxtensor.memory.pool_fit_slack`)."""
-        return _nbx_memory.pool_fit_slack(*_vendor_arch(dev.spec))
-
     def _arena_door(self, container, strat_name: str, allocs, devices, component_memory) -> Optional[str]:
         """Why the plan `strat_name` proposes asks some device for one arena over its largest
         allocation, or None. A component counts when it is held WHOLE on one accelerator: allocated
@@ -9052,7 +9046,7 @@ class PrismSolver:
         _normalized: Dict[str, Any] = {}
         _cap_mb = self._max_allocation_mb(target)
         _parked_mb = self._parked_cap_mb(target, profile)
-        _fit_slack = None if _parked_mb is None else self._pool_fit_slack(target)
+        _fit_slack = None if _parked_mb is None else _nbx_memory.pool_fit_slack(*_vendor_arch(target.spec))
 
         def _no(reason: str, crowded: bool = False, comp: Optional[str] = None):
             return None, reason, (crowded, comp)
