@@ -16,6 +16,7 @@ from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.device_transfer import parse_device_idx
+from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers
 
 from neurobrix.triton.generator import TritonGenerator
 from neurobrix.triton.session import TritonLMSession
@@ -270,16 +271,7 @@ class TritonAutoregressiveHandler:
                     flat = arr
                     while flat.ndim > 1:
                         flat = flat[0]
-                    # NBXTensor → numpy via to(fp32)
-                    from nbxtensor.dtype.nbx_dtype import NBXDtype as _NBX
-                    flat = flat.to(_NBX.float32)
-                    n = flat.numel()
-                    import ctypes as _ct
-                    buf = (_ct.c_float * n)()
-                    from nbxtensor.memory.allocator import DeviceAllocator as _DA
-                    _DA.memcpy(_ct.addressof(buf), flat.data_ptr(),
-                               n * 4, kind=2)
-                    vals = list(buf)
+                    vals = flat.to(NBXDtype.float32).numpy().reshape(-1).tolist()
                 else:
                     # Triton logits are always NBXTensor (the branch above). A
                     # non-NBX tensor here would mean a wiring bug, not a torch
@@ -316,19 +308,9 @@ class TritonAutoregressiveHandler:
                         _gen.extend([_gen[-1]] * _skip)
 
             # Per-step token diagnostic (mirrors the compiled flow's NBX_DEBUG_DECODE)
-            # for triton-seq-vs-sequential decode parity. R33-pure scalar read
-            # (ctypes + DeviceAllocator, no torch).
+            # for triton-seq-vs-sequential decode parity: the first id, read through the library.
             if _os_dl.environ.get("NBX_DEBUG_DECODE") == "1" and step_idx < 15:
-                from nbxtensor.dtype.nbx_dtype import NBXDtype as _NBXdt
-                from nbxtensor.memory.allocator import DeviceAllocator as _DAdt
-                import ctypes as _ctdt
-                _tk = next_token
-                while hasattr(_tk, "ndim") and _tk.ndim > 1:
-                    _tk = _tk[0]
-                _tkf = _tk.to(_NBXdt.float32)
-                _b = (_ctdt.c_float * 1)()
-                _DAdt.memcpy(_ctdt.addressof(_b), _tkf.data_ptr(), 4, kind=2)
-                _log.debug(f"  [DBG-TRITON] step={step_idx} token={int(round(_b[0]))}")
+                _log.debug(f"  [DBG-TRITON] step={step_idx} token={int(next_token.numpy().reshape(-1)[0])}")
 
             if is_done:
                 break
@@ -546,16 +528,7 @@ class TritonAutoregressiveHandler:
 
     def _read_ids_to_list(self, input_ids: NBXTensor) -> List[int]:
         """Read token IDs from GPU to Python list (small transfer)."""
-        import ctypes
-        n = input_ids.numel()
-        buf = (ctypes.c_char * (n * 8))()
-        # Through DeviceAllocator, not a hardcoded libcudart: this is the
-        # triton path, and `libcudart.so` does not exist on ROCm or Apple.
-        # It also checks the return code, which the raw call did not — a
-        # failed copy used to return silent garbage.
-        DeviceAllocator.memcpy(ctypes.addressof(buf), input_ids.data_ptr(),
-                               n * 8, 2)  # D2H
-        return list(np.frombuffer(bytes(buf), dtype=np.int64))
+        return list(input_ids.numpy().reshape(-1))
 
     def _create_session(self, gen_info: Dict) -> TritonLMSession:
         """Create TritonLMSession with executor and KV cache."""
@@ -974,24 +947,6 @@ def _graph_input_name(executor, fallback: str) -> str:
     return fallback
 
 
-def _int64_shift(nbx: NBXTensor, offset: int) -> NBXTensor:
-    """Add a scalar offset to an int64 NBXTensor via D2H → add → H2D.
-
-    Used to shift VQ codebook indices (0..codebook_size-1) into the LM vocab
-    range (lm_vocab_size - codebook_size .. lm_vocab_size-1) before feeding
-    them back as language_model decode tokens. The transfer is tiny (one
-    int64 per decode step × 576 steps) — not a hot-path concern.
-    """
-    import ctypes
-    n = nbx.numel()
-    host_buf = (ctypes.c_int64 * n)()
-    DeviceAllocator.memcpy(ctypes.addressof(host_buf), nbx.data_ptr(),
-                           n * 8, kind=2)  # D2H
-    host_np = np.ctypeslib.as_array(host_buf).reshape(nbx.shape)
-    shifted = host_np + offset
-    return NBXTensor.from_numpy(np.ascontiguousarray(shifted))
-
-
 class TritonImageStrategy:
     """VQ autoregressive image strategy — zero torch.
 
@@ -1104,7 +1059,7 @@ class TritonImageStrategy:
             aligned = aligned.narrow(1, 0, 1)
 
         # Shift token into LM vocab range (VQ index → LM token id).
-        decode_token = _int64_shift(next_token, self._vq_token_offset)
+        decode_token = _nbx_elementwise_wrappers.add(next_token, self._vq_token_offset)
         if decode_token.ndim == 1:
             decode_token = decode_token.unsqueeze(0)  # → (1, S)
         if decode_token.ndim == 2 and decode_token.shape[1] != 1:
