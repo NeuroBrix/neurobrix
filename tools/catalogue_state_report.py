@@ -479,7 +479,7 @@ def coverage_cell(cov) -> str:
 
 # ---------------------------------------------------------------------------
 # the debts named beside the line they hold — the A rows of
-# docs/reference/debts-triage.md (a debt that blocks a catalogue line), keyed by
+# the internal debts triage, docs/internal/debts-triage.md, not published (a debt that blocks a catalogue line), keyed by
 # container. A line with none says "none named"; a debt named here and not in
 # DETTE.md is a defect of this table.
 # ---------------------------------------------------------------------------
@@ -755,7 +755,7 @@ def main() -> int:
     print("evidence; each returns to *proven* when its artefact is produced and judged")
     print("(`nbx/campaigns/2026_09_16_vitrine`).\n")
     print("**debts named** — the entries of `DETTE.md` that hold this line (the A rows of")
-    print("`docs/reference/debts-triage.md`), so a reader of the line sees what it waits on")
+    print("internal debts triage), so a reader of the line sees what it waits on")
     print("without opening the debt file. A line that runs and measures may still name one:")
     print("a debt that bounds it (frames, a card class) rather than blocks it.\n")
     print("**certified for this card's memory** — of the shapes this model's catalogue")

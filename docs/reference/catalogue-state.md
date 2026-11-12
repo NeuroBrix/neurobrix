@@ -132,7 +132,7 @@ evidence; each returns to *proven* when its artefact is produced and judged
 (`nbx/campaigns/2026_09_16_vitrine`).
 
 **debts named** — the entries of `DETTE.md` that hold this line (the A rows of
-`docs/reference/debts-triage.md`), so a reader of the line sees what it waits on
+internal debts triage), so a reader of the line sees what it waits on
 without opening the debt file. A line that runs and measures may still name one:
 a debt that bounds it (frames, a card class) rather than blocks it.
 
