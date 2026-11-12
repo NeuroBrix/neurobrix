@@ -104,6 +104,11 @@ class G2P:
         self._lex = lexicon
 
     # -- loading ------------------------------------------------------------
+    @property
+    def lexicon(self) -> Dict[str, str]:
+        """word -> IPA, the embedded lexicon this runner reads (the text front end asks it which acronyms to spell)."""
+        return self._lex
+
     @classmethod
     def from_path(cls, path) -> "G2P":
         """Load the embedded lexicon from a .txt or .txt.gz path (word\\tipa)."""
@@ -332,7 +337,14 @@ def g2p_phonemes(prompt: str, nbx_path_str: str,
     """Embedded-lexicon mirror of the old _g2p_phonemes(): text -> IPA string.
     `lang`/`kokoro_lang` are accepted for signature compatibility; the embedded
     lexicon is American-English (Kokoro phoneme_lang 'a')."""
-    return load_runner(nbx_path_str).convert(prompt)
+    from neurobrix.core.module.audio.text_normalize import unspeakable, verbalize
+    runner = load_runner(nbx_path_str)
+    said = verbalize(prompt, runner.lexicon)
+    left = unspeakable(said)
+    if left:
+        raise ValueError(f"the text holds characters the voice cannot say and nothing writes out: "
+                         f"{' '.join(repr(c) for c in left)} — write them as words (the voice never drops them silently)")
+    return runner.convert(said)
 
 
 _ESPEAK_LANG = {"a": "en-us", "b": "en-gb"}

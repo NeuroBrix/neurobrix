@@ -509,6 +509,23 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-12 | the samplers' host arithmetic, six copies: `triton/samplers.py` (`_apply_repetition_penalty`, `_shift_mask_right`), `_sample_token_nbx` (triton encoder-decoder), `_sample_token_np` (triton dual-AR and TTS), `_sample_token_np_core` (compiled dual-AR and TTS) | `nbxtensor.random.seeded_draw.draw_from_probabilities`, `draw_from_masked_logits`; `nbxtensor.ops.token_filters.penalize_repeats`, `outside_nucleus` |
 | 2026-11-12 | the RNNT joint network computed in numpy on the host (`triton/flow/rnnt._run_joint_np`) | the library's `linear_wrapper`, `add`, `relu` on the device (a flow composing library ops) |
 
+## The voice's text front end (2026-11-12): what it adds, all policy
+
+The text a speech model is given is written out before its g2p lexicon reads it: numbers, years, decimals, ordinals,
+versions, percents, currencies, units, multipliers, symbols, brand words and unknown acronyms (as espeak's normalizer
+and Kokoro's misaki front end do), and a character still unspeakable is refused by name. Before, a digit was taken
+for punctuation and dropped from the speech with nothing said ("2017" vanished; "NeuroBrix" was "Nair Aubrix"). It is
+text, read before any tensor exists: engine policy, nothing for nbxtensor. Proof, whisper's transcription of the
+rendered audio: "NeuroBrix was founded in 2017. Version 0.6.13 runs PyTorch models 5.7x faster on a 16GB Mac, for
+$5.50." heard before as "Nair Abrex was founded in a version, runs Ptorch models, X faster on a G-Mac.", now as "New
+Robrix was founded in 2017. Version 0.6.13 runs PyTorch models 5.7 times faster on a 16GB Mac, for $5.50." The header
+rose by exactly these lines, measured: 80 938 (main bf3993c39) to 81 047, +109.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| core/module/audio/text_normalize.py | +99 | how numbers, years, versions, money, units, symbols and brand words are said; what is unspeakable |
+| core/module/audio/g2p.py | +10 | the text written out before the lexicon reads it; an unspeakable character refused by name; the lexicon public |
+
 ## Kept in the engine
 
 | kind | path | symbol | why it stays |
