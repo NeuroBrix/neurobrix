@@ -2937,6 +2937,8 @@ def mark_unmeasured(at, key) -> None      # this tuner's choice for `key` was no
 def is_unmeasured(at, key) -> bool        # was it marked so?
 def record_screen_exclusions(entries) -> int   # persist the configs the screen refused, for later sweeps and readers
 def screen_exclusions() -> Dict[str, Dict]     # everything the screen has refused on this machine
+def seed_late(at) -> int                  # a tuner imported after the first seed: its stored settings, once; the count
+def qual_of(at) -> Optional[str]          # a loaded tuner's qualified name `module.attr`
 ```
 
 ### `nbxtensor.ops.autotune_bucket` — the autotune keys' size classes, from the profile's ladders

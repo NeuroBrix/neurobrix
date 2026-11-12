@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Arena.slots`: the slot list itself, for a reader pairing it with a snapshot.
 - `NBXTensor.device_idx`: the card a tensor's memory is on.
 
+### Fixed
+- `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's
+  first autotuned launch gets the machine's stored settings too (the certified directory first), once — they were
+  seeded only into the modules already imported, so every new process measured the late ones again.
+
 ## [0.1.3] - 2026-11-11
 
 ### Added

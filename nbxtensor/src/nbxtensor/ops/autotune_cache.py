@@ -23,7 +23,7 @@ Storage: ~/.neurobrix/replay_cache/autotune_configs_<arch>.json.
 import ast
 import json
 import os
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 import logging
 _log = logging.getLogger(__name__)
 
@@ -334,6 +334,35 @@ def capture() -> int:
         return 0
 
 
+_STORED: List[Optional[Dict[str, Dict]]] = [None]     # the artifact, read once per process (`_stored`)
+_SEEDED_TUNERS: set = set()                           # id() of every tuner the artifact was offered to
+
+
+def _stored() -> Dict[str, Dict]:
+    """The artifact's entries, read once per process ({} when there is none or it cannot be read)."""
+    if _STORED[0] is None:
+        path = _artifact_path()
+        try:
+            with open(path) as f:
+                _STORED[0] = json.load(f) if path is not None else {}
+        except (OSError, ValueError):
+            _STORED[0] = {}
+    return _STORED[0]
+
+
+def seed_late(at) -> int:
+    """The stored entries of ONE tuner the process-wide seed did not reach — its kernel module was imported after
+    the process's first autotuned launch (the paged decode attention, the MoE decode kernels: a serving daemon imports
+    them at its first request) — offered once, under `seed()`'s membership gate. Without it every new process
+    measured those kernels again although the artifact held their settings (2026-11-12: 357 stored entries of ten
+    kernels never seeded; every daemon said it was measuring). Returns the number seeded."""
+    if id(at) in _SEEDED_TUNERS:
+        return 0
+    _SEEDED_TUNERS.add(id(at))
+    qual = qual_of(at)
+    return 0 if qual is None else _seed_tuner(qual, at, _stored())
+
+
 def seed() -> int:
     """Insert stored configs into the Autotuner caches. Returns the
     number of entries seeded.
@@ -348,15 +377,10 @@ def seed() -> int:
     NBX_DISABLE_AUTOTUNE's pinned single-config list (one member).
     Non-members and non-literal keys are skipped: that shape simply
     re-tunes, exactly the pre-E2 behavior."""
-    path = _artifact_path()
-    if path is None:
+    if _artifact_path() is None:
         return 0
-    try:
-        with open(path) as f:
-            stored = json.load(f)
-    except (OSError, ValueError):
-        return 0
-    return _seed_entries(stored)
+    _STORED[0] = None                                 # the process-wide seed reads the artifact as it is now
+    return _seed_entries(_stored())
 
 
 def _seed_entries(stored: Dict[str, Dict]) -> int:
@@ -364,26 +388,34 @@ def _seed_entries(stored: Dict[str, Dict]) -> int:
     membership gate documented on `seed()`. Returns the number seeded."""
     seeded = 0
     for qual, at in _autotuners():
-        prefix = f"{qual}::"
-        space = {(tuple(sorted(c.kwargs.items())), c.num_warps,
-                  c.num_stages) for c in getattr(at, "configs", [])}
-        for k, d in stored.items():
-            if not k.startswith(prefix):
-                continue
-            member = (tuple(sorted(dict(d["kwargs"]).items())),
-                      d["num_warps"], d["num_stages"])
-            if member not in space:
-                continue
+        _SEEDED_TUNERS.add(id(at))
+        seeded += _seed_tuner(qual, at, stored)
+    return seeded
+
+
+def _seed_tuner(qual: str, at, stored: Dict[str, Dict]) -> int:
+    """`stored`'s entries for the tuner `qual` inserted into its cache under the membership gate; the count."""
+    seeded = 0
+    prefix = f"{qual}::"
+    space = {(tuple(sorted(c.kwargs.items())), c.num_warps,
+              c.num_stages) for c in getattr(at, "configs", [])}
+    for k, d in stored.items():
+        if not k.startswith(prefix):
+            continue
+        member = (tuple(sorted(dict(d["kwargs"]).items())),
+                  d["num_warps"], d["num_stages"])
+        if member not in space:
+            continue
+        try:
+            key = ast.literal_eval(k[len(prefix):])
+        except (ValueError, SyntaxError):
+            continue
+        if key not in at.cache:
             try:
-                key = ast.literal_eval(k[len(prefix):])
-            except (ValueError, SyntaxError):
+                at.cache[key] = _config_from_dict(d)
+                seeded += 1
+            except Exception:
                 continue
-            if key not in at.cache:
-                try:
-                    at.cache[key] = _config_from_dict(d)
-                    seeded += 1
-                except Exception:
-                    continue
     return seeded
 
 
@@ -400,7 +432,8 @@ def key_of(at, args, kwargs) -> tuple:
     return tuple(key)
 
 
-def _qual_of(at) -> Optional[str]:
+def qual_of(at) -> Optional[str]:
+    """The qualified name `module.attr` of a loaded tuner, or None."""
     for qual, obj in _autotuners():
         if obj is at:
             return qual
@@ -430,3 +463,6 @@ def note_timings(at, key: tuple, timings) -> None:
     _TIMINGS[(id(at), key)] = {
         "best_ms": best, "second_ms": second, "candidates": len(times),
         "margin": (second / best - 1.0) if (second is not None and best > 0) else None}
+
+
+_qual_of = qual_of      # the name the library's callers have used

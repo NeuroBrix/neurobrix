@@ -97,6 +97,25 @@ _SWEEP_NOTICE = (
 )
 
 
+def _seed(tuned) -> None:
+    """The machine's stored settings into the tuners, the certified directory first: every tuner already loaded at
+    the process's first autotuned launch, then — once each — a tuner whose module was imported later (a serving
+    daemon's paged decode and MoE decode kernels: unseeded, every daemon measured them again, 2026-11-12)."""
+    from nbxtensor.ops import autotune_cache as _atc
+    from nbxtensor.ops import autotune_certified as _cert_mode
+    try:
+        if not _SEEDED[0]:
+            _SEEDED[0] = True
+            _cert_mode.note_local(_atc.seed())
+            _cert_mode.override_seeded()   # the directory first, even on a warm machine
+        _n = _atc.seed_late(tuned)
+        if _n:
+            _cert_mode.note_local(_n)
+            _cert_mode.override_seeded([(_atc.qual_of(tuned), tuned)])   # the directory first, here too
+    except Exception:                      # the replay cache is an optimisation, never a failure source
+        pass
+
+
 def _announce_first_sweep(tuned):
     """Say, once, that the engine is tuning rather than hung.
 
@@ -137,15 +156,8 @@ def _announce_first_sweep(tuned):
         # read it looked "served" while 39 % of its key uses were replayed sweeps — the Mac,
         # 2026-09-28). A census shadow is not a confirmation run and keeps its own rules.
         _confirm = _cert_mode.certified_only() and not _census.active()
-        if not _SEEDED[0]:
-            _SEEDED[0] = True
-            if not _confirm:
-                try:
-                    _n = _atc.seed()
-                    _cert_mode.note_local(_n)
-                    _cert_mode.override_seeded()   # the directory first, even on a warm machine
-                except Exception:              # the replay cache is an optimisation, never a failure source
-                    pass
+        if not _confirm:
+            _seed(tuned)
         # The certified directory (owner directive 2026-09-06, the engine
         # component): a shape the directory certifies for the profile in
         # force, this kernel and its dtype is applied here — no sweep, no
