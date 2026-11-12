@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Sequence
 
 __all__ = ["PIECE", "WITNESS_BYTES", "START_BYTES", "mount_of", "pieces", "trial", "choose", "measure", "workers_for",
-           "can_bypass_the_cache"]
+           "can_bypass_the_cache", "evict", "cold_read_gbps"]
 
 PIECE = 16 << 20                       # the loaders' read piece
 
@@ -47,6 +47,28 @@ def _evict(path: str, size: int) -> None:
             libc.munmap(addr, size)
         elif hasattr(os, "posix_fadvise"):
             os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+    finally:
+        os.close(fd)
+
+
+def evict(paths) -> None:
+    """Every file of `paths` out of the page cache (`_evict`); an empty file has nothing to evict."""
+    for p in paths:
+        size = os.path.getsize(p)
+        if size > 0:
+            _evict(str(p), size)
+
+
+def cold_read_gbps(path) -> float:
+    """GB/s of one sequential read of the whole file at `path` (64 MiB reads), its cached pages evicted first."""
+    size = os.path.getsize(path)
+    evict([path])
+    fd = os.open(str(path), os.O_RDONLY)
+    try:
+        t0 = time.perf_counter()
+        while os.read(fd, 64 << 20):
+            pass
+        return size / (time.perf_counter() - t0) / 1e9
     finally:
         os.close(fd)
 

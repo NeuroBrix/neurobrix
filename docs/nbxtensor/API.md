@@ -2703,6 +2703,20 @@ def assemble_quantized(weights: dict)
     # Fold `.qweight`/`.scales`/`.qmins` triplets in a loaded weights dict into QuantizedTensor entries under the graph key `<base>.weight`.
 ```
 
+### `nbxtensor.backend.device_measure` — a device's speeds, timed through the library's own kernels and copies
+
+```python
+def matmul_tflops(dtype, sizes=(2048, 4096, 8192), warmup=50, rep=200) -> dict
+    # {"best", "per_size": {n: TFLOP/s}}: a square GEMM (linalg_wrappers.mm) on device 0, 2*n^3 / time; bfloat16 is
+    # drawn float32 and cast on the device
+def gemv_gbps(dtype, k, n, reps) -> float           # GB/s of W's bytes one x[1, k] @ W[n, k]^T streams, device 0
+def copies(nbytes=1 << 30, reps=10) -> dict
+    # {"memory_gbps" (device to device, read + write), "h2d_gbps", "d2h_gbps" (page-locked host),
+    #  "h2d_pageable_gbps"}
+```
+
+The operands come from `numpy.random.default_rng(0)`: two machines time the same values.
+
 ### `nbxtensor.io.read_rate` — how fast the machine reads its weight files, by parallel reads
 
 ```python
@@ -2716,6 +2730,8 @@ def measure(files, max_bytes, max_workers, within=0.05) -> dict
     # {'rates': {1: .., 2: .., 4: ..}, 'workers': choose(...), 'steady': bool, 'bytes': .., 'last_one_worker': ..}
 WITNESS_BYTES = 1 << 30                           # the witness written when the storage holds no weight file
 START_BYTES = 2 << 30                             # the first trial: one shard's read, at most this
+def evict(paths) -> None                          # every file out of the page cache (an empty file: nothing to do)
+def cold_read_gbps(path) -> float                 # GB/s of one sequential read of the whole file, evicted first
 def mount_of(path) -> str                         # the mount point a file is read through
 def workers_for(directory, witness_dir=None, max_workers=None, pattern='*/components/*/weights/*.safetensors') -> dict
     # {'workers': n, 'storage': the mount point read, 'read': 'shards' | 'witness'}: measured on the directory's

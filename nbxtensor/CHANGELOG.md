@@ -117,6 +117,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   num_experts, n_gate, block_m, act_dev)`: a routed layer whose experts sit on several devices, computed where its
   weights are — one share per device of the layer's pointer tables, summed on the activations' device. The engine
   carried this op, with its device-to-host and card-to-card copies; it now hands over the tables its placement built.
+- `nbxtensor.backend.device_measure`: `matmul_tflops`, `gemv_gbps` and `copies` — a device's GEMM, decode-step GEMV
+  and copy speeds (device to device, page-locked and pageable host to device, device to host), timed through the
+  library's own kernels and copies. `io.read_rate.evict(paths)` and `cold_read_gbps(path)`: files out of the page
+  cache, and one cold sequential read. The engine's planner measured them with its own raw allocations and copies.
 
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).

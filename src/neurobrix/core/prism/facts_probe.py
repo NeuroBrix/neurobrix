@@ -1,4 +1,4 @@
-"""The hardware facts Prism's time estimate reads, MEASURED through the engine's own primitives — ONE code for the
+"""The hardware facts Prism's time estimate reads, MEASURED (the device's speeds by nbxtensor's backend.device_measure) — ONE code for the
 measuring tool (`tools/profile_facts.py`, the full measurement a committed profile records) and for the first launch on
 a machine (`autodetect`, `ensure_loader_rates`: the quick measurement a generated profile records), so a machine whose
 profile and vendor file carry no measured facts is measured where it runs instead of planned without them (the
@@ -30,30 +30,9 @@ import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-
-def _sync() -> None:
-    from nbxtensor.memory.allocator import DeviceAllocator
-    DeviceAllocator.device_synchronize()
-
-
-def matmul_tflops(dtype: str, sizes: Sequence[int] = (2048, 4096, 8192), warmup: int = 50, rep: int = 200) -> dict:
-    """The GEMM throughput at `dtype`. numpy draws float16 and float32; bfloat16 (no numpy dtype) is drawn float32 and
-    cast on the device by the engine's own cast, so the measured kernel is the bf16 matmul a bf16 plan launches."""
-    import numpy as np
-    from nbxtensor.backend import launcher as L
-    from nbxtensor.ops import wrappers as W
-    from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
-    from nbxtensor.tensor import NBXTensor
-    npd = {"float16": np.float16, "float32": np.float32, "bfloat16": np.float32}[dtype]
-    rng = np.random.default_rng(0)
-    per = {}
-    for n in sizes:
-        a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
-        b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((n, n)) * 0.1).astype(npd))).to_cuda(0).to(dtype)
-        ms = float(L.do_bench(lambda: _nbx_linalg_wrappers.mm(a, b), warmup=warmup, rep=rep))
-        per[n] = 2.0 * n * n * n / (ms * 1e-3) / 1e12
-        del a, b
-    return {"best": max(per.values()), "per_size": per}
+# The device's speeds are measured by the library (its kernels, its copies); the page cache is evicted by it too.
+from nbxtensor.backend.device_measure import copies, matmul_tflops  # noqa: E402,F401  (read here as P.copies, ...)
+from nbxtensor.io.read_rate import cold_read_gbps as storage_read_gbps, evict  # noqa: E402,F401
 
 
 def gemv_gbps(dtype: str, engine: str, k: int, n: int, reps: int) -> float:
@@ -61,70 +40,30 @@ def gemv_gbps(dtype: str, engine: str, k: int, n: int, reps: int) -> float:
     linear of a generated token, timed over `reps` launches; W's bytes / time. A decode is weight-bound and an engine
     reaches a fraction of the device's copy bandwidth on it (the Mac, 2026-10-27 23:02: Triton on the M4 Pro ~1/15 —
     Janus-Pro-7B estimated 41-47 s at the device bandwidth, measured 445 s)."""
+    if engine == "triton":
+        from nbxtensor.backend.device_measure import gemv_gbps as _library_gemv
+        return _library_gemv(dtype, k, n, reps)
     import numpy as np
     rng = np.random.default_rng(0)
     npd = {"float16": np.float16, "float32": np.float32, "bfloat16": np.float32}[dtype]
     xs = np.ascontiguousarray((rng.standard_normal((1, k)) * 0.1).astype(npd))
     ws = np.ascontiguousarray((rng.standard_normal((n, k)) * 0.05).astype(npd))
-    if engine == "triton":
-        from nbxtensor.backend import launcher as L
-        from nbxtensor.ops import wrappers as W
-        from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
-        from nbxtensor.tensor import NBXTensor
-        x = NBXTensor.from_numpy(xs).to_cuda(0).to(dtype)
-        w = NBXTensor.from_numpy(ws).to_cuda(0).to(dtype)
-        wt = w.t()
-        ms = float(L.do_bench(lambda: _nbx_linalg_wrappers.mm(x, wt), warmup=10, rep=reps))
-        nbytes = w.nbytes()
-    else:
-        import torch
-        dev = "cuda" if torch.cuda.is_available() else "mps"
-        td = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}[dtype]
-        x = torch.from_numpy(xs).to(dev).to(td)
-        w = torch.from_numpy(ws).to(dev).to(td)
-        sync = torch.cuda.synchronize if dev == "cuda" else torch.mps.synchronize
-        for _ in range(10):
-            torch.mm(x, w.t())
-        sync()
-        t0 = time.perf_counter()
-        for _ in range(reps):
-            torch.mm(x, w.t())
-        sync()
-        ms = (time.perf_counter() - t0) / reps * 1e3
-        nbytes = w.numel() * w.element_size()
-    return round(nbytes / (ms * 1e-3) / 1e9, 1)
-
-
-def _timed_copies(dst: int, src: int, nbytes: int, kind: int, reps: int) -> float:
-    from nbxtensor.memory.allocator import DeviceAllocator
-    DeviceAllocator.memcpy(dst, src, nbytes, kind)
-    _sync()
+    import torch
+    dev = "cuda" if torch.cuda.is_available() else "mps"
+    td = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}[dtype]
+    x = torch.from_numpy(xs).to(dev).to(td)
+    w = torch.from_numpy(ws).to(dev).to(td)
+    sync = torch.cuda.synchronize if dev == "cuda" else torch.mps.synchronize
+    for _ in range(10):
+        torch.mm(x, w.t())
+    sync()
     t0 = time.perf_counter()
     for _ in range(reps):
-        DeviceAllocator.memcpy(dst, src, nbytes, kind)
-    _sync()
-    return (time.perf_counter() - t0) / reps
-
-
-def copies(nbytes: int = 1 << 30, reps: int = 10) -> dict:
-    import numpy as np
-    from nbxtensor.memory.allocator import DeviceAllocator
-    n = int(nbytes)
-    d0, d1 = DeviceAllocator.malloc_cuda(n), DeviceAllocator.malloc_cuda(n)
-    h = DeviceAllocator.malloc_host_pinned(n)
-    pageable = np.ones(n, dtype=np.uint8)
-    try:
-        t_dd = _timed_copies(d1, d0, n, 3, 2 * reps)
-        t_hd = _timed_copies(d0, h, n, 1, reps)
-        t_dh = _timed_copies(h, d0, n, 2, reps)
-        t_pd = _timed_copies(d0, pageable.ctypes.data, n, 1, max(1, reps // 2))
-    finally:
-        DeviceAllocator.free_cuda(d0)
-        DeviceAllocator.free_cuda(d1)
-        DeviceAllocator.free_host_pinned(h)
-    g = lambda b, t: b / t / 1e9                                                    # noqa: E731
-    return {"memory_gbps": g(2 * n, t_dd), "h2d_gbps": g(n, t_hd), "d2h_gbps": g(n, t_dh),
-            "h2d_pageable_gbps": g(n, t_pd)}
+        torch.mm(x, w.t())
+    sync()
+    ms = (time.perf_counter() - t0) / reps * 1e3
+    nbytes = w.numel() * w.element_size()
+    return round(nbytes / (ms * 1e-3) / 1e9, 1)
 
 
 def host_matmul_gflops(n: int = 4096) -> float:
@@ -152,54 +91,6 @@ def host_memory_gbps(nbytes: int = 1 << 30) -> float:
         np.copyto(dst, src)
         best = min(best, time.perf_counter() - t0)
     return 2.0 * int(nbytes) / best / 1e9
-
-
-def drop_cache(fd: int, size: int) -> None:
-    """Drop a file's pages from the OS page cache: posix_fadvise(DONTNEED) where it exists (Linux); on macOS, which has
-    no posix_fadvise, msync(MS_INVALIDATE) over a shared read-only mapping of the file (the Mac, eb15e505, measured on
-    the M4 Pro 2026-10-27: a shard read at 21 GB/s warm reads at 6.5 GB/s, the SSD's own rate, right after)."""
-    if hasattr(os, "posix_fadvise"):
-        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-        return
-    import ctypes
-    import mmap as _mmap
-    libc = ctypes.CDLL(None)
-    libc.mmap.restype = ctypes.c_void_p
-    libc.mmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
-    libc.msync.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
-    libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
-    if size <= 0:
-        return
-    addr = libc.mmap(None, size, _mmap.PROT_READ, _mmap.MAP_SHARED, fd, 0)
-    if addr in (None, ctypes.c_void_p(-1).value):
-        raise OSError(f"mmap of fd {fd} failed: cannot drop its pages from the cache")
-    try:
-        if libc.msync(addr, size, 2):          # MS_INVALIDATE
-            raise OSError(f"msync(MS_INVALIDATE) failed on fd {fd}")
-    finally:
-        libc.munmap(addr, size)
-
-
-def evict(paths: Iterable[Path]) -> None:
-    for p in paths:
-        fd = os.open(str(p), os.O_RDONLY)
-        try:
-            drop_cache(fd, os.fstat(fd).st_size)
-        finally:
-            os.close(fd)
-
-
-def storage_read_gbps(path: Path) -> float:
-    size = path.stat().st_size
-    fd = os.open(str(path), os.O_RDONLY)
-    try:
-        drop_cache(fd, size)                   # cold: not the page cache
-        t0 = time.perf_counter()
-        while os.read(fd, 64 << 20):
-            pass
-        return size / (time.perf_counter() - t0) / 1e9
-    finally:
-        os.close(fd)
 
 
 def block_keys(root: Path, comp: str, gb: float) -> Tuple[List[str], int, List[Path]]:
