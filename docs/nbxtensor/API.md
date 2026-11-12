@@ -2522,6 +2522,8 @@ slabs(slab_bytes, device_idx, others) -> (SlabAllocator, {card: SlabAllocator}) 
 record(run, slab, others) -> (actions, exception or None, broken reason or None)  # run() recorded into the slabs
 retire(plan) -> None                         # a rejected plan's slabs and captured graph released
 head_values(t, nbytes=64) -> numpy float16   # a diagnostic's look at a buffer's first bytes
+values_sha256(t) -> str                      # sha256 of a tensor's shape and logical values (a verify's comparison)
+carved_from(t, slab) -> bool                 # whether t's memory starts inside the slab
 ```
 
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)

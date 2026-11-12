@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FrozenPlan`, `install_seams`, `arm_launch_recorder`, the action tags. Moved from the NeuroBrix engine, which
   keeps only when a step is recorded, verified and replayed.
 - `frozen_plan.measure`, `room_for`, `slabs`, `record`, `retire`, `head_values`, `FrozenPlan.hand_out_outputs`,
-  `STATE.open_measurement`: a step's slab measured, made room for, allocated and recorded into, a rejected plan
+  `STATE.open_measurement`, `values_sha256`, `carved_from`: a step's slab measured, made room for, allocated and recorded into, a rejected plan
   released — the mechanism of the replay's state machine, whose decisions stay the caller's.
 - `DeviceAllocator.give_back_cached(dev)`: a card's cached free memory (the expandable range's chunks, the pool's
   blocks) back to the driver after its work ends.

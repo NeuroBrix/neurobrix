@@ -367,8 +367,6 @@ def _output_hashes(seq) -> Dict[str, str]:
     """sha256 of every graph-output tensor's LOGICAL values (its shape, then its elements in order; D2H once — verify
     runs once per bucket per process). Hashed from the storage, a view's bytes matched a scrambled copy of them, and a
     plan whose permuted output came back in the wrong order matched (Allegro-TI2V's encoder, 2026-11-04)."""
-    import ctypes
-    import hashlib
     out: Dict[str, str] = {}
     for tid in seq.dag.get("output_tensor_ids") or []:
         slot = seq._tid_to_slot.get(tid)
@@ -378,11 +376,7 @@ def _output_hashes(seq) -> Dict[str, str]:
         if t is None:
             out[tid] = "none"
             continue
-        t = t.contiguous()
-        buf = (ctypes.c_char * t._nbytes)()
-        DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(),
-                               t._nbytes, 2)
-        out[tid] = hashlib.sha256(repr(tuple(t.shape)).encode() + bytes(buf)).hexdigest()
+        out[tid] = FP.values_sha256(t)
     return out
 
 
@@ -643,11 +637,11 @@ def would_replay(seq, pre_op_callback) -> bool:
 def _outputs_off_the_slab(seq, slab) -> int:
     """Every graph output of `seq` carved from `slab` replaced in the arena by a heap copy; the count. A retired slab is
     freed only once nothing carved from it lives, and the caller keeps a run's outputs."""
-    lo, hi, n = slab.base, slab.base + slab.size, 0
+    n = 0
     for tid in (seq.dag.get("output_tensor_ids") or []):
         slot = seq._tid_to_slot.get(tid)
         t = seq._arena[slot] if slot is not None else None
-        if t is None or not (lo <= t.data_ptr() < hi):
+        if t is None or not FP.carved_from(t, slab):
             continue
         seq._arena[slot] = _heap_copy(t)
         n += 1

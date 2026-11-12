@@ -730,3 +730,20 @@ def head_values(t: NBXTensor, nbytes: int = 64):
     DeviceAllocator.memcpy(_c.addressof(rb), t.data_ptr(), nb, 2)
     return _np.frombuffer(bytes(rb), dtype=_np.float16)
 
+
+def values_sha256(t: NBXTensor) -> str:
+    """sha256 of a tensor's LOGICAL values: its shape, then its elements in order (one device-to-host copy). Hashed
+    from the storage, a view's bytes matched a scrambled copy of them (Allegro-TI2V's encoder, 2026-11-04)."""
+    import ctypes
+    import hashlib
+    t = t.contiguous()
+    buf = (ctypes.c_char * t.nbytes())()
+    DeviceAllocator.memcpy(ctypes.addressof(buf), t.data_ptr(),
+                           t.nbytes(), 2)
+    return hashlib.sha256(repr(tuple(t.shape)).encode() + bytes(buf)).hexdigest()
+
+
+def carved_from(t: NBXTensor, slab: SlabAllocator) -> bool:
+    """Whether `t`'s memory starts inside `slab`."""
+    return slab.base <= t.data_ptr() < slab.base + slab.size
+
