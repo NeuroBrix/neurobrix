@@ -1,7 +1,9 @@
 """A routed layer whose experts are held by two cards computes what it computes on one (CARDS REQUIRED: two).
 
 A plan that fills the cards in order (`weight_sharding`) can leave one layer's experts on both. Three defects of the
-split path (`triton/moe.py::_multi_device_fused_moe`), found on Qwen3-Coder-30B-A3B on two V100-32GB, 2026-11-11
+split path (now the library's op, `nbxtensor.ops.moe_multi_device.fused_moe_across_devices`, whose own test is
+`nbxtensor/tests/test_a_layer_on_several_devices_is_the_sum_of_their_shares.py`; this one enters through the engine's
+`execute_moe_fused`, which hands a split layer to it), found on Qwen3-Coder-30B-A3B on two V100-32GB, 2026-11-11
 (89 experts of a block on one card, 39 on the other: "cudaMemcpy rc=700" on a run, a wrong text served):
 
   * each card held a pointer table of ITS experts only, packed in ascending order, and the kernel reads a table at
