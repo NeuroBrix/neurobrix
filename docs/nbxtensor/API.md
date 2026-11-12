@@ -323,6 +323,20 @@ def end_call_pins(tables: "PtrTables", holder: "TablePins" = None, sync: bool = 
     # End a per-call table's pins: the holder takes them when there is one; otherwise the call ends them, after a device sync when `sync`
 ```
 
+`nbxtensor.memory.expert_slots`
+
+```python
+class ExpertSlotStore(residency, device_idx: int, like, in_place: bool = False)
+    # `residency.n_slots` device slots of one expert geometry (`like`: one expert's (gate, up, down) host triple) in ONE arena on `device_idx`, each projection a 256-byte-aligned view. WHICH expert sits in WHICH slot is the caller's: `residency` answers n_slots, assign(layer, routed) -> ({expert: slot}, missed), reserve(layer, experts, protect) -> {expert: slot}, resident() -> [((layer, expert), slot)] least recently routed first, reset(), clear(), hits, misses, summary(). `in_place`: slots are pointers to mapped host views bound in place (a unified device), nothing copied
+    #   acquire(layer, routed, n_experts, host) -> (gate, up, down) lists over all experts, the misses copied into their slots on the store's stream (`host(e)` gives expert e's host triple), an unrouted entry pointing at a routed slot
+    #   prefetch(layer, experts, host, protect) -> the number of experts copied ahead of their call into slots outside `protect`
+    #   enable_device_decode(layer_index, n_experts): arms the residency ON THE CARD for one-token calls (slot map, owners, stamps, a clock)
+    #   decode_on_card(layer, flat_indices, flat_scores, hidden, host, top_k, K, N_gate) -> [1, K]: slots assigned and misses copied by kernels, the half decode band read through the slots' table; no host decision
+    #   slots, slot_bytes, device_bytes, bytes_in, table_pins, summary(), release()
+class HeldExperts(device_idx: int, layers)
+    # Every expert of whole layers copied once into one arena on `device_idx` (`layers`: {layer key: [(gate, up, down) host triples]}): `.layers[key]` -> (gate, up, down) lists of device views, `.bytes`, `release()`
+```
+
 `nbxtensor.memory.pool`
 
 ```python

@@ -118,7 +118,8 @@ nbxtensor/                     # own pyproject, own README/LICENSE; future own r
     tensor.py   NBXTensor: the core class only (no allocator, no backend table inside)
     memory/     Allocator interface; cuda, metal, cpu allocators; arena and pool;
                 slab allocator for replay; host pinned memory; transfers (D2D, peer, H2D);
-                static planner; oom advice
+                static planner; oom advice; the expert slots of a routed component
+                (arena, copies, the card-side map and its clock)
     backend/    detection, capability table, launcher and launcher contract, Metal driver
                 (triton-ext), CPU backend, device faults channel, graph capture/replay primitive
     ops/        the kernel files, the op table, launch keys, autotune (bucket, certified store,
@@ -134,7 +135,9 @@ benchmarks/nbxtensor_vs_torch/   OUTSIDE the library: imports both nbxtensor and
 
 What stays in the engine: Prism, the DtypeEngine's policy (AMP op sets,
 calibration), the flows, the execution modes (sequence, sequential, FrozenPlan
-replay), census and certification of graphs, KV cache, expert store, the
+replay), census and certification of graphs, KV cache, the expert store's
+decisions (which expert sits in which slot, how many slots, the copy ahead; the
+slots themselves are `memory/expert_slots.py`, the owner 2026-11-12 11:05), the
 weight loader's policy, symbolic shapes, the TilingEngine's decisions.
 
 ## 4. Public API (target of M2)

@@ -299,6 +299,40 @@ the driver: `DeviceAllocator.give_back_cached`, where the engine reached three a
 recording run, the release of a plan rejected at its verify, and the diagnostic's buffer read moved into
 `frozen_plan` (`measure`, `room_for`, `slabs`, `record`, `retire`, `head_values`, `FrozenPlan.hand_out_outputs`);
 `maybe_run` keeps the state machine's decisions. 85 771 to 85 707, -64 (triton/replay.py 607 -> 543).
+## The experts store's tensor side moves into nbxtensor (2026-11-12): the move, and what stays as policy
+
+The owner's line of 2026-11-12 11:05 ("nbxtensor is our torch": what touches tensors, device memory, arenas, copies,
+compute kernels and the experts store's tensor side lives in the library, never in the engine) and the boundary audit
+of the same morning (rows B1, B4, F3, F5). Behaviour unchanged: the bodies moved as they stood, cut into small
+functions where the library's limits ask it, the private tensor fields read through their public accessors.
+
+What moved: the store's device arena and its slot views, the host-to-card copies and their stream, the in-place
+binding of a unified device, the card's own slot map, stamps and clock with the read of that clock, the launches of
+the assign and miss-copy kernels (`nbxtensor.memory.expert_slots.ExpertSlotStore`); the blocks another card holds whole
+(`HeldExperts`); the routing's alignment and the one-token half band's launches (`ops.moe_wrappers`); and the layer
+whose experts sit on several cards, as an op taking the layer's tables (`ops.moe_multi_device`).
+
+What stays, and why it is policy: WHICH expert sits in WHICH slot (`core/runtime/expert_residency.ExpertResidency`,
+one rule shared by the compiled engine's own torch store, which nbxtensor never serves — R33; the library's store
+asks it through a written protocol and holds no decision of its own); how many slots and on which card (Prism's plan,
+`core/strategies/expert_store.py`); whether the next layer's predicted experts are copied ahead (an opt-in the engine
+reads, `prefetch_next`); the recording of a decode's routing for Prism's reuse curve; and `execute_moe_fused`'s choice
+of a path from the call's shape and placement.
+
+Not moved by this lot, said: the rest of `triton/moe.py` is tensor work too — the one-card grouped pass
+(`_fused_moe_pass`), the quantized one-token band (`_moe_decode_vec_pass`), the pass that serves a call wider than the
+store in runs of experts (`_expert_store_grouped_pass`), the promotion of host weights and the transfers
+`execute_moe_fused` makes between cards (`_xfer`). They were outside the audit's rows; they are the next move of this
+file.
+
+Code lines measured: 86 132 (main ae4b65a09) to 85 674, -458.
+
+| file | lines | what it holds now |
+|---|---|---|
+| triton/expert_store.py | -328 (359 to 31) | `NBXExpertStore`, the library's slot store plus three decisions: the routing noted before the slots are acquired, the opt-in copy ahead, the record written at release |
+| triton/moe.py | -132 (608 to 476) | the alignment's launcher, the half band's launches and the multi-card dispatch gone; the split layer handed to the library's op with the tables the placement built |
+| core/runtime/expert_residency.py | +2 | `resident()`: who sits where, least recently routed first — what the library's store reads in place of the residency's private map |
+| core/strategies/expert_store.py, kernels/autotune_certify.py | 0, 0 | the held blocks built from the library's `HeldExperts`; the certifier aligns through the library's launcher at the library's own row block |
 
 ## The scan
 
@@ -414,6 +448,7 @@ count and the number of open findings. `tests/unit/nbxtensor_boundary/test_the_e
 | 2026-11-11 | (no move) The RATCHET RAISED by +3 code lines (85 940 -> 85 943), POLICY, the command line's model lookup: a name that leads to an installed model without being its one name gets the single message naming it (`nbx/names.resolve`, the organisation-prefixed folder name included), the "installed models" lists print the names `--model` accepts (`nbx/names.accepted_names`), and `import` says when the hub's name is not the one typed (`cli/commands/registry._installed_line`; `_import_body` does not grow). No tensor code. |
 | 2026-11-11 | (no move) The RATCHET RAISED by +7 code lines (85 943 -> 85 950), POLICY: what a launch SAYS while it measures the machine is one small component with its contract (`core/prism/launch_lines.py`: a table of lines by phase, said once a process) instead of a function inside the long `autodetect.py` (which loses 5 code lines). It gains the line a LATER launch owes — its reload rate measured again because the last launch's reloads were not steady — where the first launch's "once" line was said at every such launch. Nothing of it is nbxtensor's: the library logs no user line. |
 | 2026-11-11 | (no move) The RATCHET RAISED by +4 code lines (85 950 -> 85 954), POLICY: whether a decode token's residency is kept on the card is a named decision of the strategy (`core/strategies/expert_store.card_residency_applies`: Triton, experts copied, half precision, the reuse curve recorded) instead of an inline condition of the 100-line `build_expert_store_state` (which loses 2), and it gains the condition that was missing — the backend's kernels read a tensor's `data_ptr()` as their address. The FACT is nbxtensor's and lives there (`backend.capabilities.backend_kernels_read_data_ptr`, one row per backend); the engine only asks it. |
+| 2026-11-12 | the Triton expert store's tensor side (`triton/expert_store.py`: arena, slot views, host-to-card copies, in-place binding, the card-side map and its clock, the residency kernels' launches; `NBXHeldExperts`), and from `triton/moe.py` the alignment's launcher `moe_align_block_size`, the half band `_moe_decode_vec_half_pass` and the multi-card dispatch `_multi_device_fused_moe`. Engine 86 132 -> 85 674 code lines (-458); the engine keeps the residency's decisions, Prism's count and placement, the opt-in copy ahead | `nbxtensor.memory.expert_slots.ExpertSlotStore`, `HeldExperts`; `nbxtensor.ops.moe_wrappers.moe_align_block_size`, `moe_decode_vec_half_pass`, `MOE_BLOCK_M`; `nbxtensor.ops.moe_multi_device.fused_moe_across_devices` |
 
 ## Kept in the engine
 

@@ -22,8 +22,8 @@ class _Holder:
 
 
 def _setup(monkeypatch, cards):
-    import neurobrix.triton.expert_store as TS
-    monkeypatch.setattr(TS, "NBXHeldExperts", _Holder)
+    import nbxtensor.memory.expert_slots as TS
+    monkeypatch.setattr(TS, "HeldExperts", _Holder)
     _Holder.made = []
     layers, tensors = {}, {}
     for b in range(3):

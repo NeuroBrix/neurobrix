@@ -161,7 +161,7 @@ class TorchExpertStore:
 
 class TorchHeldExperts:
     """The routed experts of whole blocks held on ANOTHER card (S3, Prism's `ComponentAllocation.expert_cards`), the
-    compiled engine's twin of `triton/expert_store.NBXHeldExperts`: every expert of each held layer copied once into
+    compiled engine's twin of `nbxtensor.memory.expert_slots.HeldExperts`: every expert of each held layer copied once into
     one buffer on that card, each projection a view of it, so the layer's fused op runs there against resident weights
     (its hidden state crosses to the card and back). `layers` maps a layer key to its host expert triples."""
 

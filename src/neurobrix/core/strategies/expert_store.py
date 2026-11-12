@@ -217,8 +217,8 @@ def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any
     holders = []
     for card, lay in sorted(per_card.items()):
         if is_triton:
-            from neurobrix.triton.expert_store import NBXHeldExperts
-            holder = NBXHeldExperts(_parse_device(card)[1], lay)
+            from nbxtensor.memory.expert_slots import HeldExperts
+            holder = HeldExperts(_parse_device(card)[1], lay)
         else:
             from neurobrix.core.runtime.graph.expert_store import TorchHeldExperts
             holder = TorchHeldExperts(card, lay)

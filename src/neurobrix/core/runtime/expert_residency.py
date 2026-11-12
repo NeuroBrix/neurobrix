@@ -5,7 +5,7 @@ component's dense weights resident and its experts on pinned host memory, with a
 of `expert_cache_mb` on the card. This module is the part of that cache the two engines share:
 WHICH expert sits in WHICH device slot. It moves no byte and imports no tensor library (R33):
 the compiled store (`core/runtime/graph/expert_store.py`, torch) and the triton store
-(`triton/expert_store.py`, NBXTensor) each own their slots and their copies.
+(`nbxtensor.memory.expert_slots`, under `triton/expert_store.py`) each own their slots and their copies.
 
 The policy is one least-recently-used set over the whole component: a slot is keyed by
 (layer, expert), never partitioned per layer, so a layer whose routing is concentrated lends its
@@ -65,6 +65,11 @@ class ExpertResidency:
         self._free = list(range(self.n_slots - 1, -1, -1))
         self._prefetched.clear()
         self.last_routed = {}
+
+    def resident(self) -> List[Tuple[Tuple[Hashable, int], int]]:
+        """((layer, expert), slot) of every resident expert, least recently routed first — what a store reads to
+        tell its card which expert each slot holds."""
+        return list(self._lru.items())
 
     def slot_of(self, layer: Hashable, expert: int) -> Optional[int]:
         return self._lru.get((layer, int(expert)))

@@ -1,10 +1,11 @@
 """The expert store's host residency takes over from the card's only after reading whether the CARD moved its slots —
-by the card's own clock (`NBXExpertStore._card_moved_slots`), never by a flag the host's Python sets.
+by the card's own clock (`ExpertSlotStore._card_moved_slots`), never by a flag the host's code sets. The clock is read
+at the size of the word it is read into (`nbytes`), no byte count written in the code.
 
 Before (2026-11-12): `_host_takes_over` reset the host's map only when `_host_dirty` said so, and only a DIRECT decode
 step sets it (`decode_on_card`). A replayed decode step runs no Python: its slot assignments refilled slots with other
 experts unseen, the next prompt's MoE layers (the host's path) read them as the experts its map named, and wrote that
-stale map back to the card. A served Qwen3-Coder-30B-A3B answered the same turn right twice, then "`` ```"; with the
+stale map back to the card. A served mixture-of-experts coding model answered the same turn right twice, then "`` ```"; with the
 replay off, eleven requests were right.
 
 What this test does if the code is wrong (a store whose card residency is armed, its clock a real device word on
@@ -22,7 +23,7 @@ import pytest
 
 
 def _store():
-    from neurobrix.triton.expert_store import NBXExpertStore
+    from nbxtensor.memory.expert_slots import ExpertSlotStore
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.memory.allocator import DeviceAllocator as DA
     try:
@@ -30,7 +31,7 @@ def _store():
         clock = NBXTensor.from_numpy(np.array([7], dtype=np.int64), device=0)
     except Exception as e:                              # no card here
         pytest.skip(f"no card: {e}")
-    s = object.__new__(NBXExpertStore)
+    s = object.__new__(ExpertSlotStore)
     s.device_idx, s._clock, s._clock_seen = 0, clock, 7
     s._dev_valid, s._host_dirty = True, False
 
