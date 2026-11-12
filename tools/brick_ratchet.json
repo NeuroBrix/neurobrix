@@ -11,6 +11,24 @@
   {"in": "src/neurobrix/core/", "never": ["neurobrix.cli", "neurobrix.serving"], "why": "the engine's core never knows its doors"},
   {"in": "src/neurobrix/triton/", "never": ["neurobrix.cli", "neurobrix.serving", "torch"], "why": "the Triton branch never knows the doors, and is torch-free (R33)"},
   {"in": "src/neurobrix/kernels/", "never": ["neurobrix.cli", "neurobrix.serving", "torch"], "why": "kernels are torch-free (R33)"},
-  {"in": "src/neurobrix/core/prism/", "never": ["neurobrix.core.flow", "neurobrix.triton.flow", "neurobrix.core.runtime.graph", "neurobrix.triton.sequence"], "why": "the planner decides; it never reaches into what executes"}
- ]
+  {"in": "src/neurobrix/core/prism/", "never": ["neurobrix.core.flow", "neurobrix.triton.flow", "neurobrix.core.runtime.graph", "neurobrix.triton.sequence"], "why": "the planner decides; it never reaches into what executes"},
+  {"in": "src/neurobrix/core/", "never": ["triton", "nbxtensor.memory.allocator", "nbxtensor.memory.arena", "nbxtensor.memory.memory_pool", "nbxtensor.memory.pool", "nbxtensor.memory.pages", "nbxtensor.memory.paged_kv", "nbxtensor.memory.kv_host_pages", "nbxtensor.memory.slab", "nbxtensor.memory.vmm", "nbxtensor.memory.device_memory", "nbxtensor.memory.device_transfer", "nbxtensor.memory.pointer_tables", "nbxtensor.memory.shadow", "nbxtensor.memory.metal", "nbxtensor.backend.launcher", "nbxtensor.backend.replay_graph", "nbxtensor.backend.runtime", "nbxtensor.backend.level_zero_driver", "nbxtensor.backend.metal_device", "nbxtensor.backend.triton_ext_driver"], "why": "the engine's core keeps policy and computes with torch; it never imports the library's tensor mechanics (allocator, arenas, pools, copies, launches, replay) directly (owner rule 2026-11-12)"}
+ ],
+ "tensor_logic": {
+  "why": "Owner rule 2026-11-12: nbxtensor is the ecosystem's torch. Everything that touches tensors or follows torch's logic (tensors, device, memory, arenas, copies, compute kernels, replay, the experts store's tensor side) lives in nbxtensor, never in the engine; the engine keeps policy. Per engine file, the count of the hits below only goes down; a file that has none gains none. The PyTorch engine's torch calls are not counted: torch is its library.",
+  "how": "Read with the AST, never as text: a comment, a docstring or a string is no hit. An imported name is resolved through its import (`import ctypes as _ct`, `from x import Y as Z`). Kinds: `names` = every use of a dotted name matching a pattern (fnmatch, `*` crosses dots; the name itself or any attribute under it); `methods` = a call `x.m(...)` on any receiver; `attribute_tails` = an attribute chain ending so on an object (`a.ctypes.data`); `driver_call` = a called identifier matching the regex; `launch` = a call `k[g](...)` whose subscript is a tuple, a lambda or a name in `grid_names`, or whose `k` ends in `kernel_suffix`; `arena_receiver` = a call `r.m(...)` whose receiver's last name matches the regex. A methods, driver or arena hit is not counted when its receiver is reached from `torch_library` or through one of `torch_only_attributes`, or is a local name assigned from such an expression, or when the call is an argument of a torch call.",
+  "packages": ["neurobrix"],
+  "names": {
+   "the library's allocator, arenas and pools": ["nbxtensor.*.DeviceAllocator", "nbxtensor.*.ComponentArena", "nbxtensor.*.HostPinnedArena", "nbxtensor.*.Arena", "nbxtensor.*.SlabAllocator", "nbxtensor.*.SegmentPool", "nbxtensor.*.PagePool", "nbxtensor.*.HostPagePool", "nbxtensor.memory.vmm", "nbxtensor.memory.slab", "nbxtensor.memory.pointer_tables", "nbxtensor.memory.shadow", "nbxtensor.backend.launcher", "nbxtensor.backend.replay_graph"],
+   "ctypes pointers and buffers": ["ctypes.c_void_p", "ctypes.c_char_p", "ctypes.c_char", "ctypes.addressof", "ctypes.cast", "ctypes.memmove", "ctypes.memset", "ctypes.string_at", "ctypes.wstring_at", "ctypes.create_string_buffer"],
+   "kernel definitions": ["triton.jit", "triton.autotune", "triton.heuristics"]
+  },
+  "methods": {"raw copies and pointers": ["memcpy", "memcpy_async", "memset", "memset_cuda", "memmove", "data_ptr", "from_raw", "from_address", "from_buffer", "from_buffer_copy"]},
+  "attribute_tails": {"array buffer addresses": ["ctypes.data", "ctypes.data_as"]},
+  "driver_call": {"driver calls": "^(cu|cuda|hip|hsa|ze|nvrtc)[A-Z]"},
+  "launch": {"kernel launches": {"grid_names": ["grid"], "kernel_suffix": "_kernel"}},
+  "arena_receiver": {"arena calls": "(?i)arena$"},
+  "torch_library": ["torch"],
+  "torch_only_attributes": ["untyped_storage"]
+ }
 }

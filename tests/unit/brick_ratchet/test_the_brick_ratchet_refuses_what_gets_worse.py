@@ -7,8 +7,11 @@ What this file does if the tool is wrong:
 2. on a small package written in a temporary directory, each of these must be refused by name and is injected one at
    a time: a new function over the length limit, one over the depth limit, a listed offender that grew, a private
    name taken from another module, an import against the declared direction, more `x._name` reaches, a new long
-   module, a module without a docstring; and a listed offender that no longer offends must ask for `--update` — a
-   tool that lets any of them through is red;
+   module, a module without a docstring, one more tensor mechanism in a file of the engine (the owner's rule of
+   2026-11-12: tensor mechanics live in nbxtensor) and a first one in a clean file; and a listed offender that no
+   longer offends must ask for `--update` — a tool that lets any of them through is red;
+   the tensor-mechanism count itself: one hit per pattern kind, none for a comment, a string, or a call of torch (the
+   PyTorch engine's own library) — red otherwise;
 3. the repository itself: anything worse than `tools/brick_ratchet.baseline.json`, or a baseline entry already
    resolved, is red — this is the ratchet a lot meets before it lands.
 
@@ -25,7 +28,9 @@ _spec.loader.exec_module(B)
 
 CONFIG = {"packages": {"pkg": {"root": "pkg", "top": "pkg", "max_code_lines": 5, "max_depth": 2}},
           "max_module_code_lines": 30,
-          "direction": [{"in": "pkg/core/", "never": ["pkg.door"]}]}
+          "direction": [{"in": "pkg/core/", "never": ["pkg.door", "nbxtensor.backend.launcher"]}],
+          "tensor_logic": json.loads((REPO / "tools" / "brick_ratchet.json").read_text())["tensor_logic"]
+          | {"packages": ["pkg"]}}
 
 CLEAN = {
     "pkg/__init__.py": "",
@@ -33,6 +38,8 @@ CLEAN = {
     "pkg/core/__init__.py": "",
     "pkg/core/a.py": '"""Does a."""\n_HIDDEN = 1\n\n\ndef small(x):\n    """Says x."""\n    # a reason\n\n    return x\n',
     "pkg/core/b.py": ('"""Does b."""\n\n\ndef old(x):\n' + "".join(f"    x += {i}\n" for i in range(8)) + "    return x\n"),
+    "pkg/flow.py": ('"""Moves a block."""\nfrom nbxtensor.memory.allocator import DeviceAllocator as DA\n\n\n'
+                    'def move(d, s, n):\n    DA.memcpy(d, s, n, 1)\n'),
 }
 
 
@@ -87,7 +94,7 @@ def test_a_new_deep_function_is_refused(tmp_path):
 def test_a_kernel_body_is_exempt_from_length_not_from_depth(tmp_path):
     body = "".join(f"    x += {i}\n" for i in range(9))
     kernel = '"""Does a."""\n_HIDDEN = 1\nimport triton\n\n\n@triton.jit\ndef k(x):\n' + body + "    return x\n"
-    assert _refusals(tmp_path, {"pkg/core/a.py": kernel}) == []
+    assert [r for r in _refusals(tmp_path, {"pkg/core/a.py": kernel}) if "tensor logic" not in r] == []
     deep = kernel + "\n\n@triton.jit\ndef k2(x):\n    for i in x:\n        if i:\n            while i:\n                i -= 1\n"
     assert any("::k2 is new" in r for r in _refusals(tmp_path, {"pkg/core/a.py": deep}))
 
@@ -126,6 +133,52 @@ def test_a_new_long_module_and_a_mute_module_are_refused(tmp_path):
     assert len(out) == 1 and "pkg/core/c.py is new and over the limit (31 code lines)" in out[0], out
     out = _refusals(tmp_path, {"pkg/core/d.py": "X = 1\n"})
     assert out == ["pkg mute: pkg/core/d.py — a module that states no responsibility (no docstring)"], out
+
+
+def _hits(source):
+    """The tensor-mechanism hits of one module, by kind."""
+    import ast
+    return [kind for _, kind, _ in B.tensor_hits(ast.parse(source), CONFIG["tensor_logic"])]
+
+
+def test_each_tensor_mechanism_is_one_hit_and_comments_strings_and_torch_are_none():
+    one = {
+        "the library's allocator, arenas and pools": "from nbxtensor.memory.allocator import DeviceAllocator\nDeviceAllocator.set_device(0)\n",
+        "ctypes pointers and buffers": "import ctypes as _ct\nb = (_ct.c_char * 8)()\n",
+        "kernel definitions": "import triton\n\n\n@triton.jit\ndef k(x):\n    pass\n",
+        "raw copies and pointers": "def f(t, u):\n    t.memcpy(u)\n",
+        "array buffer addresses": "def f(a):\n    return a.ctypes.data\n",
+        "driver calls": "def f(rt, d, s, n):\n    rt.cudaMemcpy(d, s, n, 1)\n",
+        "kernel launches": "def f(x, grid):\n    add_kernel[grid](x)\n    other[(1,)](x)\n",
+        "arena calls": "def f(self):\n    self._arena.alloc(4)\n",
+    }
+    for kind, source in one.items():
+        assert set(_hits(source)) == {kind}, (kind, _hits(source))
+    assert _hits(one["kernel launches"]) == ["kernel launches"] * 2
+    quiet = ('"""DeviceAllocator.memcpy(d, s, n) in a docstring."""\n# t.data_ptr() and cudaMemcpy in a comment\n'
+             'X = "DeviceAllocator.memcpy(d, s, n)"\nimport torch\n\n\ndef f(o, ops, op, block):\n'
+             '    torch.cuda.cudart().cudaHostUnregister(block.data_ptr())\n    t = torch.empty(3)\n    st = o.untyped_storage()\n    torch.cuda.cudart().cudaHostRegister(t.data_ptr(), 4, 0)\n'
+             '    return st.data_ptr(), o.untyped_storage().data_ptr(), ops[op](o)\n')
+    assert _hits(quiet) == [], _hits(quiet)
+
+
+def test_one_more_tensor_mechanism_in_the_engine_is_refused_and_said_to_belong_in_nbxtensor(tmp_path):
+    more = CLEAN["pkg/flow.py"] + "    DA.memcpy(s, d, n, 2)\n"
+    out = _refusals(tmp_path, {"pkg/flow.py": more})
+    assert len(out) == 1 and "pkg/flow.py holds 2" in out[0] and "baseline 1" in out[0] and "nbxtensor" in out[0], out
+    print("\n".join(out))
+    fresh = CLEAN["pkg/door.py"] + "\n\ndef shut(d, s):\n    from nbxtensor.memory.allocator import DeviceAllocator\n" \
+                                   "    DeviceAllocator.memcpy(d, s, 4, 1)\n"
+    out = _refusals(tmp_path, {"pkg/door.py": fresh})
+    assert len(out) == 1 and "pkg/door.py holds 1" in out[0] and "had none" in out[0] and "nbxtensor" in out[0], out
+    out = _refusals(tmp_path, {"pkg/flow.py": '"""Moves a block."""\n'})
+    assert out and all(r.startswith("resolved, run --update") for r in out) and "pkg/flow.py" in out[0], out
+
+
+def test_an_import_of_a_name_out_of_a_forbidden_package_is_against_direction(tmp_path):
+    out = _refusals(tmp_path, {"pkg/core/b.py": CLEAN["pkg/core/b.py"] + "\nfrom nbxtensor.backend import launcher\n"})
+    assert out == ["pkg direction: pkg/core/b.py -> nbxtensor.backend.launcher — an import against the declared "
+                   "direction"], out
 
 
 def test_the_repository_holds_its_baseline():
