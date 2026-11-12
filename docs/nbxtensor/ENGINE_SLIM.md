@@ -383,8 +383,8 @@ without its census tables and Prism planned as if no model had a certified chunk
 engine: which census a hardware has (`census_table.census_declared`, read from the certified directory the package
 ships), the named refusal of a missing file (`_required`), and Prism's three cases (no census for this hardware or
 memory class: said; a certified hardware with no census file at all: a broken install, refused by name). 83 465 to
-83 479, +14 (measured): kernels/census_table.py +9, core/prism/prefill_chunk.py +5. On main (after the fused-MoE move): 82 831 to 82 845,
-+14 (measured).
+83 477, +12 (measured): kernels/census_table.py +9, core/prism/prefill_chunk.py +3. On main (after the fused-MoE move): 82 831 to 82 843,
++12 (measured).
 
 ## The scan
 

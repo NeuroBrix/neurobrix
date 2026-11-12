@@ -95,14 +95,12 @@ def chunk_record(cache_dir: Path, vendor: str, profile: str, memory_gb: int, mod
     written for another graph (a retrace). A census of this hardware without its chunk file is a broken install,
     refused by name (FileNotFoundError), never planned as if no model had a record."""
     from neurobrix.kernels import census_table as T
-    if not T.census_declared(vendor, profile):
-        return None                                      # no census of this hardware: said by the plan
     table = T.table_path(vendor, profile, memory_gb)
-    if not table.exists():
-        if not any(table.parent.glob("*g.jsonl")):       # a certified hardware whose census files are all absent
-            raise FileNotFoundError(f"no census table at all in {table.parent} for the certified hardware "
-                                       f"{vendor}/{profile} — a broken install (reinstall neurobrix)")
-        return None                                      # this memory class has no census: said by the plan
+    if not T.chunks_path(table).exists():
+        if T.census_declared(vendor, profile) and not any(table.parent.glob("*g.jsonl")):
+            raise FileNotFoundError(f"no census file at all in {table.parent} for the certified hardware "
+                                    f"{vendor}/{profile} — a broken install (reinstall neurobrix)")
+        return None                                      # no chunk record for this hardware / class: said by the plan
     rec = T.read_chunks(T.table_path(vendor, profile, memory_gb)).get((Path(cache_dir).name, mode))
     if rec is None or rec.get("container") != T.container_sha(cache_dir):
         return None
