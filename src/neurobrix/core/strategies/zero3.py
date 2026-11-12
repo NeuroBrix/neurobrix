@@ -68,13 +68,14 @@ Polymorphism:
     ratchet — each tensor flavor exposes the same priming API
     (rebind_partial, recompute_op_devices_for_slots, get_op_blocks,
     materialize_slots_depending_on, override_weightless_op_devices,
-    mark_cpu_weighted_ops_for_transfer). The transport primitives
-    (to_cuda / to_cuda_async) live on the tensor, not on the strategy.
+    mark_cpu_weighted_ops_for_transfer). The triton path's transport
+    (copy stream, block upload, readiness events) is nbxtensor's
+    (`nbxtensor.memory.block_upload`), not the strategy's.
 
 Portability:
-    Stream + event API is backed by DeviceAllocator.create_stream /
-    record_event / stream_wait_event via ctypes, routed through the
-    CUDA or HIP runtime depending on the active backend. MPS /
+    The library's block upload is backend-dispatched through its
+    allocator, routed through the CUDA or HIP runtime depending on the
+    active backend. MPS /
     CPU-only execute devices fall back to synchronous prefetch (no
     stream) so the ratchet stays correct even without overlap.
 """
@@ -274,9 +275,9 @@ class Zero3Strategy(ExecutionStrategy):
         # managed GPU residency — zero3 was selected by Prism (a 31 GB
         # component was assigned it on mps:0) and then did nothing at all.
         #
-        # The ratchet's primitives — create_stream / create_event /
-        # record_event / stream_wait_event / destroy_* — are backend-dispatched
-        # through DeviceAllocator and were verified working on Metal before
+        # The ratchet's primitives — nbxtensor.memory.block_upload's copy
+        # stream, upload and events — are backend-dispatched through the
+        # library's allocator and were verified working on Metal before
         # this guard was widened. The memory counters it also touches are
         # diagnostics only (NBX_ZERO3_VRAM_LOG), so their accounting does not
         # gate the mechanism. A backend where a primitive does NOT work now
@@ -387,51 +388,33 @@ class Zero3Strategy(ExecutionStrategy):
         if entry is None:
             return
         dev_idx = state['exec_dev_idx']
-        moved: Dict[str, Any] = {}
-        stream = state['transfer_stream']
+        host = {tid: state['cpu_originals'][tid] for tid in entry['weight_tensor_ids']
+                if state['cpu_originals'].get(tid) is not None}
         if is_triton:
-            from nbxtensor.memory.allocator import DeviceAllocator as DA
-            DA.set_device(dev_idx)
-        else:
-            import torch
-            on_cuda = self.exec_device.startswith("cuda")
-            if on_cuda:
-                torch.cuda.set_device(dev_idx)
-        for tid in entry['weight_tensor_ids']:
-            cpu_t = state['cpu_originals'].get(tid)
-            if cpu_t is None:
+            # the library's block upload: on the copy stream with a readiness event, or synchronous without one
+            from nbxtensor.memory.block_upload import upload_block
+            state['gpu_cache'][bidx], ev = upload_block(host, dev_idx, state['transfer_stream'])
+            if ev is not None:
+                state['block_events'][bidx] = ev
+            return
+        import torch
+        on_cuda = self.exec_device.startswith("cuda")
+        if on_cuda:
+            torch.cuda.set_device(dev_idx)
+        moved: Dict[str, Any] = {}
+        for tid, cpu_t in host.items():
+            if not (is_torch_tensor(cpu_t) and cpu_t.device.type == 'cpu'):
                 continue
-            if is_triton:
-                if getattr(cpu_t, '_device', 'cuda') != 'cpu':
-                    continue
-                if stream:
-                    moved[tid] = cpu_t.to_cuda_async(dev_idx, stream=stream)
-                else:
-                    moved[tid] = cpu_t.to_cuda(dev_idx)
-            else:
-                if not (is_torch_tensor(cpu_t) and cpu_t.device.type == 'cpu'):
-                    continue
-                import torch
-                target = torch.device(f"cuda:{dev_idx}" if on_cuda else self.exec_device)
-                if cpu_t.is_pinned() and state['transfer_stream_torch'] is not None:
-                    with torch.cuda.stream(state['transfer_stream_torch']):
-                        moved[tid] = cpu_t.to(target, non_blocking=True)
-                else:
+            target = torch.device(f"cuda:{dev_idx}" if on_cuda else self.exec_device)
+            if cpu_t.is_pinned() and state['transfer_stream_torch'] is not None:
+                with torch.cuda.stream(state['transfer_stream_torch']):
                     moved[tid] = cpu_t.to(target, non_blocking=True)
+            else:
+                moved[tid] = cpu_t.to(target, non_blocking=True)
         state['gpu_cache'][bidx] = moved
         # Record readiness so the compute stream can wait on this block
         # before consuming any of its weights.
-        if is_triton and stream:
-            from nbxtensor.memory.allocator import DeviceAllocator as DA
-            # Ordering only — this handle never reaches a timing query, and a
-            # timing-enabled event costs 9.6 us to record against 1.6 us for
-            # an ordering-only one (measured 2026-09-03,
-            # validation_outputs/tp_collective_latency_2026_09_03/).
-            ev = DA.create_event(timing=False)
-            DA.record_event(ev, stream=stream)
-            state['block_events'][bidx] = ev
-        elif not is_triton and state['transfer_stream_torch'] is not None:
-            import torch
+        if state['transfer_stream_torch'] is not None:
             ev = torch.cuda.Event()
             ev.record(state['transfer_stream_torch'])
             state['block_events'][bidx] = ev
@@ -460,10 +443,8 @@ class Zero3Strategy(ExecutionStrategy):
         if ev is None:
             return
         if is_triton:
-            from nbxtensor.memory.allocator import DeviceAllocator as DA
-            # stream=0 is the default (compute) stream.
-            DA.stream_wait_event(0, ev, flags=0)
-            DA.destroy_event(ev)
+            from nbxtensor.memory.block_upload import wait_for_upload
+            wait_for_upload(ev)
         else:
             # torch.cuda.Event.wait posts to the current stream.
             ev.wait()
@@ -511,8 +492,8 @@ class Zero3Strategy(ExecutionStrategy):
 
         # Step 4: sync so the next malloc sees the freed region
         if is_triton:
-            from nbxtensor.memory.allocator import DeviceAllocator as DA
-            DA.sync_device()
+            from nbxtensor.memory.block_upload import wait_device
+            wait_device()
         else:
             device_sync(self.exec_device)
 
@@ -555,9 +536,8 @@ class Zero3Strategy(ExecutionStrategy):
                 self._evict_block(state, bidx, is_triton)
         # Also drop any unwaited readiness events.
         if is_triton:
-            from nbxtensor.memory.allocator import DeviceAllocator as DA
-            for ev in state['block_events'].values():
-                DA.destroy_event(ev)
+            from nbxtensor.memory.block_upload import drop_upload_events
+            drop_upload_events(state['block_events'].values())
         state['block_events'].clear()
         state['current_block'] = -1
         state['fresh_pass'] = True
@@ -626,9 +606,8 @@ class Zero3Strategy(ExecutionStrategy):
         transfer_stream_torch = None
         if is_triton:
             try:
-                from nbxtensor.memory.allocator import DeviceAllocator as DA
-                DA.set_device(dev_idx)
-                transfer_stream = DA.create_stream()
+                from nbxtensor.memory.block_upload import open_copy_stream
+                transfer_stream = open_copy_stream(dev_idx)
             except Exception as e:
                 logger.warning(
                     f"[Zero3] {component_name}: transfer_stream create "
@@ -929,12 +908,8 @@ class Zero3Strategy(ExecutionStrategy):
                 from .expert_store import release_expert_store
                 release_expert_store(state)
             if is_triton:
-                from nbxtensor.memory.allocator import DeviceAllocator as DA
-                for ev in state['block_events'].values():
-                    DA.destroy_event(ev)
-                ts = state.get('transfer_stream') or 0
-                if ts:
-                    DA.destroy_stream(ts)
+                from nbxtensor.memory.block_upload import close_copy_stream
+                close_copy_stream(state.get('transfer_stream') or 0, state['block_events'].values())
 
     # ------------------------------------------------------------------
     # Strategy entry points

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `memory.block_upload` (`open_copy_stream`, `upload_block`, `wait_for_upload`, `drop_upload_events`,
+  `close_copy_stream`, `wait_device`): a block of host weights uploaded to one device on a copy stream with an
+  ordering-only readiness event the compute stream waits on (synchronous, with no event, given no stream), and the
+  stream's and events' release. Moved from the NeuroBrix engine's zero3 strategy, which keeps which block moves, when,
+  and how much stays resident.
 - `memory.shadow.install_shadow(devices)`, `shadow_launch`, `shadow_device`, `DevicesVisible`: the whole shadow device — the
   allocator's direct operations, streams, events and device queries answered without a driver, every launch skipped,
   a value read answering a host-born value or a benign one — refused while a device is visible. Moved from the

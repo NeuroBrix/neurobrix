@@ -457,6 +457,23 @@ class DevicesVisible(RuntimeError)
     # `install_shadow` was asked with a device in sight
 ```
 
+`nbxtensor.memory.block_upload`
+
+```python
+def open_copy_stream(device: int) -> int
+    # A new copy stream on `device` (made current), as a handle; raises when the driver cannot create one
+def upload_block(host: Dict[str, object], device: int, stream: int = 0) -> Tuple[Dict[str, object], Optional[int]]
+    # Each HOST-resident tensor of `host` copied to `device` (async on `stream`, else synchronous); returns (name -> device copy, the readiness event or None)
+def wait_for_upload(event: int) -> None
+    # The compute (default) stream waits until the upload that recorded `event` is complete; the event is released
+def drop_upload_events(events: Iterable[int]) -> None
+    # Release readiness events nobody will wait on
+def close_copy_stream(stream: int, events: Iterable[int] = ()) -> None
+    # Release a copy stream (0: none was opened) and the readiness events still recorded on it
+def wait_device() -> None
+    # Every operation queued on the current device completes (after a block's copies are dropped)
+```
+
 `nbxtensor.memory.slab`
 
 ```python
