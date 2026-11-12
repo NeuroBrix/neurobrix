@@ -1396,7 +1396,7 @@
     4
    ],
    "src/neurobrix/triton/flow/autoregressive.py::TritonAutoregressiveHandler.execute": [
-    127,
+    110,
     4
    ],
    "src/neurobrix/triton/flow/dual_ar.py::TritonDualAREngine._try_chunked_forward": [
@@ -1483,10 +1483,6 @@
     425,
     5
    ],
-   "src/neurobrix/triton/kv_cache.py::TritonAttentionInterceptor.intercept": [
-    65,
-    3
-   ],
    "src/neurobrix/triton/moe.py::_fused_moe_pass": [
     71,
     1
@@ -1556,7 +1552,7 @@
     3
    ],
    "src/neurobrix/triton/sequence.py::TritonSequence._maybe_trace_nan": [
-    43,
+    27,
     5
    ],
    "src/neurobrix/triton/sequence.py::TritonSequence._run_multi_device": [
@@ -1570,10 +1566,6 @@
    "src/neurobrix/triton/sequence.py::TritonSequence.compute_op_devices": [
     64,
     5
-   ],
-   "src/neurobrix/triton/sequence.py::TritonSequence.nbx_tid_stats": [
-    92,
-    4
    ],
    "src/neurobrix/triton/sequence.py::TritonSequence.run": [
     69,
@@ -1590,7 +1582,7 @@
    "src/neurobrix/core/runtime/graph/compiled_sequence.py": 2501,
    "src/neurobrix/core/runtime/graph_executor.py": 3553,
    "src/neurobrix/kernels/autotune_certify.py": 2036,
-   "src/neurobrix/triton/sequence.py": 3018
+   "src/neurobrix/triton/sequence.py": 2844
   },
   "mute": [
    "src/neurobrix/core/cfg/engine.py",
@@ -1660,12 +1652,10 @@
    "src/neurobrix/triton/flow/autoregressive.py <- neurobrix.core.runtime.prompt_length._flatten_tokenizer_output",
    "src/neurobrix/triton/flow/dual_ar.py <- neurobrix.core.flow.shared_steps._is_tensor",
    "src/neurobrix/triton/flow/encoder_decoder.py <- neurobrix.core.flow.shared_steps._maybe_log_topk",
-   "src/neurobrix/triton/flow/image_gen.py <- neurobrix.triton.flow.speech._from_np_on",
    "src/neurobrix/triton/flow/iterative_process.py <- neurobrix.core.flow.iterative_steps._dump_final_latent",
    "src/neurobrix/triton/flow/next_token_diffusion.py <- neurobrix.core.flow.shared_steps._require_default",
    "src/neurobrix/triton/flow/rnnt.py <- neurobrix.triton.audio_frontend._model_config_path",
    "src/neurobrix/triton/flow/rnnt.py <- neurobrix.triton.audio_frontend._nemo_mel",
-   "src/neurobrix/triton/flow/speech_cfm.py <- neurobrix.triton.flow.speech._from_np_on",
    "src/neurobrix/triton/flow/speech_cfm.py <- neurobrix.triton.flow.speech._require",
    "src/neurobrix/triton/flow/tts_llm.py <- neurobrix.core.flow.shared_steps._is_tensor",
    "src/neurobrix/triton/flow/vlm.py <- neurobrix.triton.flow.image_gen._require",
@@ -1674,10 +1664,9 @@
    "src/neurobrix/triton/sequence.py <- neurobrix.core.device_utils._parse_device",
    "src/neurobrix/triton/sequential.py <- neurobrix.triton.sequence._BLOCK_RE",
    "src/neurobrix/triton/vace_control_conditioning.py <- neurobrix.core.runtime.resolution.vace_spec._vae_latent_stats",
-   "src/neurobrix/triton/vace_control_conditioning.py <- neurobrix.triton.i2v_conditioning._nbx_on",
    "src/neurobrix/triton/vace_control_conditioning.py <- neurobrix.triton.i2v_conditioning._to_channels_first"
   ],
-  "reach": 685,
+  "reach": 656,
   "tensor_logic": {
    "src/neurobrix/cli/commands/doctor.py": 1,
    "src/neurobrix/cli/commands/run.py": 5,
@@ -1704,22 +1693,18 @@
    "src/neurobrix/triton/audio_frontend.py": 2,
    "src/neurobrix/triton/cfg/engine.py": 4,
    "src/neurobrix/triton/expert_store.py": 66,
-   "src/neurobrix/triton/flow/autoregressive.py": 33,
-   "src/neurobrix/triton/flow/dual_ar.py": 4,
+   "src/neurobrix/triton/flow/autoregressive.py": 20,
+   "src/neurobrix/triton/flow/dual_ar.py": 1,
    "src/neurobrix/triton/flow/encoder_decoder.py": 1,
    "src/neurobrix/triton/flow/iterative_process.py": 7,
    "src/neurobrix/triton/flow/next_token_diffusion.py": 2,
    "src/neurobrix/triton/flow/rnnt.py": 1,
-   "src/neurobrix/triton/flow/speech.py": 3,
-   "src/neurobrix/triton/flow/tts_llm.py": 4,
+   "src/neurobrix/triton/flow/tts_llm.py": 1,
    "src/neurobrix/triton/flow/vlm.py": 4,
-   "src/neurobrix/triton/flux_video_conditioning.py": 3,
    "src/neurobrix/triton/generator.py": 1,
-   "src/neurobrix/triton/i2v_conditioning.py": 3,
    "src/neurobrix/triton/moe.py": 67,
    "src/neurobrix/triton/replay.py": 5,
-   "src/neurobrix/triton/samplers.py": 18,
-   "src/neurobrix/triton/sequence.py": 59,
+   "src/neurobrix/triton/sequence.py": 43,
    "src/neurobrix/triton/session.py": 6,
    "src/neurobrix/triton/weight_loader.py": 12
   }
