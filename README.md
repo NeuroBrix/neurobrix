@@ -14,13 +14,12 @@
   <a href="https://github.com/NeuroBrix/neurobrix/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License: Apache 2.0"/></a>
   <a href="https://neurobrix.org/models"><img src="https://img.shields.io/badge/hub-neurobrix.org-orange" alt="NeuroBrix Hub"/></a>
   <a href="https://github.com/NeuroBrix/neurobrix/stargazers"><img src="https://img.shields.io/github/stars/NeuroBrix/neurobrix?style=social" alt="GitHub stars"/></a>
+  <a href="https://www.pythonweekly.com/p/python-weekly-issue-771-november-12-2026"><img src="https://img.shields.io/badge/featured%20in-Python%20Weekly%20%23771-3776AB?logo=python&logoColor=white" alt="Featured in Python Weekly #771"/></a>
 </p>
 
-<!-- Demo GIF: uncomment when assets/demo.gif is delivered (the Mac captures it after 0.6.11).
 <p align="center">
-  <img src="./assets/demo.gif" alt="pip install, import a model, run it: the answer in the terminal" width="760"/>
+  <img src="./assets/demo.gif" alt="pip install neurobrix, import TinyLlama, run it: the answer in the terminal" width="760"/>
 </p>
--->
 
 ```bash
 pip install neurobrix                      # the Triton engine: no PyTorch (about 1.8 GB installed)
