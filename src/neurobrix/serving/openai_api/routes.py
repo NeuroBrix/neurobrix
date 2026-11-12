@@ -164,7 +164,7 @@ class Served:
 
     def __init__(self, engine) -> None:
         from neurobrix.core.config import get_family_config
-        self.family = engine.family or ""
+        self.family, self._engine = engine.family or "", engine
         cfg = get_family_config(self.family)
         modes = cfg.get("modes") or {}
         self.supported: List[str] = list(modes.get("supported") or [])
@@ -172,6 +172,8 @@ class Served:
         self.strict = bool(modes.get("multimodal_strict"))
         self.required: List[str] = list((cfg.get("inputs") or {}).get("required") or [])
         self.ext: Dict[str, str] = dict((cfg.get("output") or {}).get("default_extension_per_mode") or {})
+
+    package = property(lambda self: self._engine.package, doc="The loaded container (its cache path, defaults).")
 
     def mode_with(self, ext: str, prompt_only: bool) -> Optional[str]:
         """The mode whose output has `ext` (the default mode first), when the family's required inputs allow a
@@ -640,6 +642,10 @@ def audio_speech(door, handler, body) -> bytes:
         raise errors.ApiError(400, "`input` is required", param="input")
     if body.get("response_format") not in (None, "wav"):
         raise errors.unsupported("response_format", "only wav: the engine ships no audio encoder")
+    from neurobrix.core.flow.audio_utils import voices_to_choose
+    if body.get("voice") is None and (voices := voices_to_choose(served.package.cache_path, served.package.defaults)):
+        raise errors.ApiError(400, f"`voice` is required: this model ships {len(voices)} voices and declares none as "
+                                   f"its default: {', '.join(voices)}", param="voice")
     params: Dict[str, Any] = {"prompt": body["input"], **served.mode_arg(mode)}
     if body.get("voice") is not None:
         params["speaker"] = body["voice"]

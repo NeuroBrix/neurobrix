@@ -681,6 +681,8 @@ class InferenceEngine:
     def is_loaded(self) -> bool:
         return self._is_loaded
 
+    package = property(lambda self: self._pkg, doc="The loaded container's RuntimePackage (its cache path, defaults).")
+
     @property
     def family(self) -> Optional[str]:
         return self._family

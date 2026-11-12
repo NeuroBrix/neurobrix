@@ -467,6 +467,22 @@ def get_embed_weight(ctx: FlowContext, comp_name: str) -> Optional[torch.Tensor]
     return None
 
 
+def shipped_voices(nbx_path) -> Tuple[Path, List[str]]:
+    """The container's voicepacks folder and its voices, sorted; refused by name when the folder is absent (returning
+    used to let the decoder and predictor run with no style bound at all)."""
+    vdir = Path(nbx_path) / "modules" / "voices"
+    if not vdir.exists():
+        raise RuntimeError(f"ZERO FALLBACK: this model's flow binds a voice style, but '{vdir}' does not exist.")
+    return vdir, sorted(p.stem for p in vdir.glob("*.pt"))
+
+
+def voices_to_choose(cache_path, defaults) -> List[str]:
+    """The voices a request must choose from — the container ships them and declares no default — else []: what
+    `requested_voice` would refuse inside the run, known before it (a served request missing `voice` is a 400)."""
+    vdir = Path(cache_path) / "modules" / "voices"
+    return [] if defaults.get("voice") or not vdir.is_dir() else shipped_voices(cache_path)[1]
+
+
 def requested_voice(engine, available) -> str:
     """Which voice this run asked for.
 

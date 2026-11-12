@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`/v1/audio/speech` without a `voice`, for a model that ships several and declares no default, is a 400 naming
+  `voice` and the voices**, before anything runs. It was a 500 from inside the run, with a traceback in the daemon's log.
 - **`neurobrix run` refuses by name a prompt longer than the model's context**, before anything loads, with the
   prompt's token count and the model's context, as `neurobrix serve` does. It used to fail in a GPU kernel (`--triton`)
   or abort the process (`--compiled`).

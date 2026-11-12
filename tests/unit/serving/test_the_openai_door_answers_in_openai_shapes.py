@@ -16,6 +16,7 @@ import shutil
 import socket
 import tempfile
 import threading
+from types import SimpleNamespace
 import time
 import urllib.error
 import urllib.request
@@ -61,6 +62,7 @@ class FakeEngine:
     _session = None
     hardware_id = "none"
     mode = "compiled"
+    package = SimpleNamespace(cache_path="/nonexistent-container", defaults={})   # no voicepacks: no voice to choose
 
     def __init__(self, family="llm", pieces=("Hello", " world", "."), special=(), template="", answer=None,
                  opening="", step_s=STEP_S):
@@ -434,6 +436,24 @@ def test_speech_answers_wav_bytes(make):
                                   {"model": "fake-model", "input": "hello", "voice": "af_heart"}, raw=True)
     assert status == 200 and headers["Content-Type"] == "audio/wav" and data == b"RIFF fake wav"
     assert engine.calls[-1][2]["speaker"] == "af_heart"
+
+
+def test_speech_without_a_voice_the_model_needs_is_a_400_naming_voice(make, tmp_path):
+    """A container shipping several voices and declaring none as its default: a request without `voice` is the
+    request's omission, refused before the run by a 400 naming `voice` and the voices (it was a 500 from inside the
+    flow, with a traceback in the daemon's log: the Mac's real-use campaign, Kokoro, 2026-11-12)."""
+    (tmp_path / "modules" / "voices").mkdir(parents=True)
+    for name in ("af_heart", "bm_lewis"):
+        (tmp_path / "modules" / "voices" / f"{name}.pt").write_bytes(b"")
+    engine = FakeEngine(family="tts")
+    engine.package = SimpleNamespace(cache_path=str(tmp_path), defaults={})
+    _, base = make(engine)
+    _assert_error(*_post(base + "/v1/audio/speech", {"model": "fake-model", "input": "hello"})[:2], 400,
+                  param="voice")
+    assert not engine.calls, "the run started although the request named no voice"
+    status, _, _ = _post(base + "/v1/audio/speech", {"model": "fake-model", "input": "hello", "voice": "bm_lewis"},
+                         raw=True)
+    assert status == 200 and engine.calls[-1][2]["speaker"] == "bm_lewis"
 
 
 def test_a_transcription_reads_a_multipart_upload(make):

@@ -39,7 +39,7 @@ from neurobrix.core.module.audio.mel_dsp import (  # noqa: F401
     extract_features_np,
 )
 from neurobrix.core.flow.audio_utils import (   # torch-free: the compiled flow's own readers, the same
-    get_component_input_shape, postprocess_text_output as postprocess_text_output_np, requested_voice)
+    get_component_input_shape, postprocess_text_output as postprocess_text_output_np, requested_voice, shipped_voices)
 import logging
 _log = logging.getLogger(__name__)
 
@@ -109,14 +109,7 @@ def _set_device_for(ctx):
 
 def _load_voicepack_np(engine, phoneme_count: int) -> None:
     """Torch-free Kokoro voicepack load + split (decoder/predictor styles)."""
-    nbx_path = Path(engine.ctx.nbx_path_str)
-    vdir = nbx_path / "modules" / "voices"
-    if not vdir.exists():
-        raise RuntimeError(
-            f"ZERO FALLBACK: this model's flow binds a voice style, but "
-            f"'{vdir}' does not exist. Returning here used to let the decoder "
-            f"and predictor run with no style bound at all.")
-    available = sorted(f.stem for f in vdir.glob("*.pt"))
+    vdir, available = shipped_voices(engine.ctx.nbx_path_str)
     vname = requested_voice(engine, available)
     vp = vdir / f"{vname}.pt"
     if not vp.exists():

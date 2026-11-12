@@ -12,7 +12,7 @@ here.
 import torch
 from typing import Dict
 
-from neurobrix.core.flow.audio_utils import requested_voice   # both frontends read the voice alike
+from neurobrix.core.flow.audio_utils import requested_voice, shipped_voices   # both frontends read the voice alike
 import logging
 _log = logging.getLogger(__name__)
 
@@ -85,18 +85,7 @@ def _load_voicepack(engine, phoneme_count: int, device) -> None:
     Voicepacks are [N, 256] tensors stored in modules/voices/.
     Index by phoneme count, then split: [:128]=decoder, [128:]=predictor.
     """
-    from pathlib import Path
-
-    nbx_path = Path(engine.ctx.nbx_path_str)
-    voices_dir = nbx_path / "modules" / "voices"
-
-    if not voices_dir.exists():
-        raise RuntimeError(
-            f"ZERO FALLBACK: this model's flow binds a voice style, but "
-            f"'{voices_dir}' does not exist. Returning here used to let the "
-            f"decoder and predictor run with no style bound at all.")
-
-    available = sorted(p.stem for p in voices_dir.glob("*.pt"))
+    voices_dir, available = shipped_voices(engine.ctx.nbx_path_str)
     voice_name = requested_voice(engine, available)
     voice_path = voices_dir / f"{voice_name}.pt"
 
