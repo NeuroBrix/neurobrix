@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neurobrix"
-version = "0.6.12"
+version = "0.6.13"
 description = "Inference engine that runs language, speech, image and video models from one container format"
 dynamic = ["readme"]
 license = "Apache-2.0"
@@ -51,7 +51,7 @@ dependencies = [
     # path — a path is baked into the wheel as the building machine's file:// URL, which no other machine can install and
     # PyPI refuses. From the repository: `pip install -e nbxtensor -e .`; from wheels: both in one wheelhouse. The version
     # is the one nbxtensor/pyproject.toml holds, raised with it (tests/unit/packaging).
-    "nbxtensor==0.1.4",
+    "nbxtensor==0.1.5",
     # The grammar engine of constrained decoding (its own package, github.com/NeuroBrix/nbxgrammar): pinned exactly, and
     # only where a wheel of that release is published on PyPI (recorded and checked by tests/unit/packaging). Elsewhere pip installs nothing for it (no Rust build) and a
     # constrained request answers 501 constrained_decoding_not_installed, by name.

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.13] - 2026-11-12
+
+With nbxtensor 0.1.5: the Triton engine on Apple GPUs several times faster, and the engine's remaining tensor work moved
+into its library.
+
+### Changed
+
+- **Triton models on Apple GPUs run several times faster.** nbxtensor runs each compiled kernel on its own Metal stream,
+  in order, and waits for the GPU only where a result is read, instead of after every kernel. Measured on an M4 Pro,
+  outputs byte-identical: TinyLlama 1.1B, 256 tokens, 46.2 s -> 8.1 s; granite-3.1-1b-a400m (mixture of experts), 128
+  tokens, 22.5 s -> 4.7 s.
+- **The engine is lighter: its tensor work is nbxtensor's.** The mixture-of-experts layer, the tiling engine's tile
+  reads and blends, the allocator's deferred frees and release order, device and storage measurements, the samplers'
+  arithmetic, the speech-to-text decoder's joint network (now on the device), the certification harness and the
+  census's stand-in device all live in the library now; the engine calls it. 83 477 -> 80 938 code lines
+  and 321 -> 172 places doing tensor work in the engine (measured, 0.6.11 -> 0.6.13), outputs unchanged.
+- A tensor handed from PyTorch to the Triton engine enters through the library's DLPack reader, in its own layout.
+
 ## [0.6.12] - 2026-11-12
 
 A corrective version (nbxtensor stays 0.1.4).

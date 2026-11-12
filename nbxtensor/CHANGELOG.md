@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-12
+
 ### Changed
 - Triton models on Apple GPUs run several times faster: nbxtensor now runs each compiled kernel on its own Metal stream,
   in order, and waits for the GPU only where a result is read, instead of after every kernel. Measured on an M4 Pro,
@@ -16,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   launch.
 - `NBX_SYNC_TIMING=1` on Apple now counts launches and the time spent issuing them, per kernel; there is no per-launch
   wait left to time.
+- The library's documentation lives in its own `docs/` (the API reference, the backends' contract, the device keys;
+  `docs/design/` the allocator, cost and design notes; `docs/history/` the inventory and the migration record) and
+  the three tensor reference pages (tensor cores through linear layouts, the certified-autotune method, recording a
+  replay in a one-shot request) with the Triton CPU install page. The README links them in this repository.
+- The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,
+  _WARPS, _BND, _WARPS_D, _STAGES, read by the engine until now): they are the defaults those variables had.
+- `memory.deferred_frees`: `DeferredFrees`, `Drain`, `sync_devices_of` — the tensors a run drops, released in batches
+  at a bytes cliff, a count or (pool off) a free-memory reserve, every owning device synchronised first, and the
+  allocator's out-of-memory reclaimer while the batch lives. The engine's two hot loops held this queue themselves.
 
 ### Added
 - `memory.block_upload` (`open_copy_stream`, `upload_block`, `wait_for_upload`, `drop_upload_events`,
@@ -90,19 +101,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   application's door to the release and the pool's rules, beside `set_limit`.
 - `memory.pool.parks_freed_blocks`, `parked_cap_bytes`, `fit_slack`: the pool's rules for a device, from its file — the
   allocator's own switch, and what a planner prices the pool by. Prism read the same keys and switch again itself.
+- `nbxtensor.backend.device_measure`: `matmul_tflops`, `gemv_gbps` and `copies` — a device's GEMM, decode-step GEMV
+  and copy speeds (device to device, page-locked and pageable host to device, device to host), timed through the
+  library's own kernels and copies. `io.read_rate.evict(paths)` and `cold_read_gbps(path)`: files out of the page
+  cache, and one cold sequential read. The engine's planner measured them with its own raw allocations and copies.
+- `inspection.values_at(t, positions)`: a few values of a tensor at row-major positions, each element read alone after
+  a device synchronisation (a view read in its logical order, never its storage's). The engine's sequential value
+  sampler walked the strides and copied each element itself.
+- `backend.device_names.ACCELERATOR_PREFIXES`, `accelerator_index(device)`, `to_named_device(tensor, device)` and
+  `synchronize_named(device)`: a device name ("cuda:1", "hip:0", "mps:0", "cpu") read once for every backend, a tensor
+  moved to the device it names, the named device waited for with the current device restored. The engine's Triton
+  strategies and its parked values each read device names themselves.
+- `random.seeded_draw.draw_from_probabilities` and `draw_from_masked_logits`: one token drawn on the host from a logits
+  row in its own dtype (repetition penalty, greedy at temperature 0, top-p on the probabilities; or min-p and top-p
+  written on the logits), and `ops.token_filters.penalize_repeats` / `outside_nucleus` on a device row. The engine
+  held the same arithmetic six times (its Triton sampler, the encoder-decoder, dual-AR and TTS flows, and the
+  compiled twins of the last two); every copy draws the same tokens through these.
 
-### Changed
-- The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,
-  _WARPS, _BND, _WARPS_D, _STAGES, read by the engine until now): they are the defaults those variables had.
-- `memory.deferred_frees`: `DeferredFrees`, `Drain`, `sync_devices_of` — the tensors a run drops, released in batches
-  at a bytes cliff, a count or (pool off) a free-memory reserve, every owning device synchronised first, and the
-  allocator's out-of-memory reclaimer while the batch lives. The engine's two hot loops held this queue themselves.
+### Fixed
+- `NBXTensor.item()` on a bfloat16 element returns its value (the high half of a float32); it returned 0.0.
 
 ## [0.1.4] - 2026-11-12
-- The library's documentation lives in its own `docs/` (the API reference, the backends' contract, the device keys;
-  `docs/design/` the allocator, cost and design notes; `docs/history/` the inventory and the migration record) and
-  the three tensor reference pages (tensor cores through linear layouts, the certified-autotune method, recording a
-  replay in a one-shot request) with the Triton CPU install page. The README links them in this repository.
 
 ### Added
 - `ops.oracles.attention_fp64`: the attention family's float64 reference on query-row windows (moved from the
@@ -161,22 +180,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   num_experts, n_gate, block_m, act_dev)`: a routed layer whose experts sit on several devices, computed where its
   weights are — one share per device of the layer's pointer tables, summed on the activations' device. The engine
   carried this op, with its device-to-host and card-to-card copies; it now hands over the tables its placement built.
-- `nbxtensor.backend.device_measure`: `matmul_tflops`, `gemv_gbps` and `copies` — a device's GEMM, decode-step GEMV
-  and copy speeds (device to device, page-locked and pageable host to device, device to host), timed through the
-  library's own kernels and copies. `io.read_rate.evict(paths)` and `cold_read_gbps(path)`: files out of the page
-  cache, and one cold sequential read. The engine's planner measured them with its own raw allocations and copies.
-- `inspection.values_at(t, positions)`: a few values of a tensor at row-major positions, each element read alone after
-  a device synchronisation (a view read in its logical order, never its storage's). The engine's sequential value
-  sampler walked the strides and copied each element itself.
-- `backend.device_names.ACCELERATOR_PREFIXES`, `accelerator_index(device)`, `to_named_device(tensor, device)` and
-  `synchronize_named(device)`: a device name ("cuda:1", "hip:0", "mps:0", "cpu") read once for every backend, a tensor
-  moved to the device it names, the named device waited for with the current device restored. The engine's Triton
-  strategies and its parked values each read device names themselves.
-- `random.seeded_draw.draw_from_probabilities` and `draw_from_masked_logits`: one token drawn on the host from a logits
-  row in its own dtype (repetition penalty, greedy at temperature 0, top-p on the probabilities; or min-p and top-p
-  written on the logits), and `ops.token_filters.penalize_repeats` / `outside_nucleus` on a device row. The engine
-  held the same arithmetic six times (its Triton sampler, the encoder-decoder, dual-AR and TTS flows, and the
-  compiled twins of the last two); every copy draws the same tokens through these.
 
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
@@ -191,7 +194,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cuDeviceCanAccessPeer`); a call that failed was read as "no peer" and the grant silently named the owning card
   alone, so a later card-to-card copy failed far from its cause. The failing call, its device and its status are now
   the error. A driver that answers "not a peer" is unchanged.
-- `NBXTensor.item()` on a bfloat16 element returns its value (the high half of a float32); it returned 0.0.
 
 ## [0.1.3] - 2026-11-11
 
