@@ -2483,10 +2483,18 @@ def install(force: Optional[bool] = None) -> bool:
 # runtime handle — Triton's own asks torch for its timing and its buffers.
 # ---------------------------------------------------------------------------
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", budget_ms=None, **_):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", budget_ms=None,
+             size_repetitions_by="repetition", **_):
     """Same contract as `triton.testing.do_bench` (milliseconds; quantiles or
     a mean/min/max), with the L2 flush and the timing done through the
-    engine's runtime (`DeviceAllocator`: events on the legacy stream)."""
+    engine's runtime (`DeviceAllocator`: events on the legacy stream).
+
+    `size_repetitions_by`: "repetition" (the default: a run's first tuning of an uncertified key) sizes the count from
+    one whole repetition, flush and timing included, so `rep` is the time budget it is upstream; "kernel" sizes it from
+    the kernel's own time, the count a certification campaign has always used (offline, done once: its tables stay
+    comparable; the Orchestrateur, 2026-11-12)."""
+    if size_repetitions_by not in ("repetition", "kernel"):
+        raise ValueError(f"size_repetitions_by={size_repetitions_by!r}: 'repetition' or 'kernel'")
     import numpy as np
     from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.tensor import NBXTensor
@@ -2528,11 +2536,20 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         pass
     t_est = (t_probe + 4.0 * _time_ms(fn, 4)) / 5.0
     n_warmup = max(1, int(warmup / max(t_est, 1e-3)))
-    n_repeat = max(1, int(rep / max(t_est, 1e-3)))
     for _i in range(n_warmup):
         fn()
-    times = []
-    for _i in range(n_repeat):
+    # The repetitions are sized from what ONE costs, the flush and the timing included, so `rep` stays the time
+    # budget it is upstream. Sized from the kernel's time alone, a 0.01 ms kernel got 10 000 repetitions, each behind
+    # a 256 MB clear: a new user's first long request on Metal ran past 10 minutes (trial M of 0.6.13, 2026-11-12),
+    # once the launch stopped inflating that time.
+    import time as _wall
+    began = _wall.perf_counter()
+    DeviceAllocator.memset_cuda(flush.data_ptr(), 0, flush._nbytes)
+    times = [_time_ms(fn, 1)]
+    one_ms = 1000.0 * (_wall.perf_counter() - began)
+    per = one_ms if size_repetitions_by == "repetition" else 0.0
+    n_repeat = max(1, int(rep / max(per, t_est, 1e-3)))
+    for _i in range(n_repeat - 1):
         DeviceAllocator.memset_cuda(flush.data_ptr(), 0, flush._nbytes)
         times.append(_time_ms(fn, 1))
     times = np.asarray(times, dtype=np.float64)

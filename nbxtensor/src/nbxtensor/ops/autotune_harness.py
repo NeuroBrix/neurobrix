@@ -992,7 +992,7 @@ def unit_runs(tuner, args, kwargs) -> List[Tuple[Dict[str, Any], Any]]:
 def time_launch(fn, warmup: int, rep: int) -> float:
     """`fn` timed by the sweep's timer (`launcher.do_bench`, warm-up and repetitions in milliseconds)."""
     from nbxtensor.backend import launcher as L
-    return float(L.do_bench(fn, warmup=warmup, rep=rep))
+    return float(L.do_bench(fn, warmup=warmup, rep=rep, size_repetitions_by="kernel"))
 
 
 def witness_ms(M: int, N: int, K: int, dtype: str, warmup: int, rep: int) -> float:
@@ -1005,7 +1005,7 @@ def witness_ms(M: int, N: int, K: int, dtype: str, warmup: int, rep: int) -> flo
     rng = np.random.default_rng(0)
     a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((M, K)) * 0.1).astype(npd)))
     b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((K, N)) * 0.1).astype(npd)))
-    return float(L.do_bench(lambda: LW.mm(a, b), warmup=warmup, rep=rep))
+    return float(L.do_bench(lambda: LW.mm(a, b), warmup=warmup, rep=rep, size_repetitions_by="kernel"))
 
 
 def candidate_configs(tuner, kwargs) -> list:
