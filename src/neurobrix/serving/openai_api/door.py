@@ -118,17 +118,33 @@ def port_owner(port: int) -> str:
 
 
 class _SSE:
-    """The event stream of one response, written by the connection thread."""
+    """The event stream of one response, written by the connection thread. Its 200 and headers go out with its FIRST
+    event (`started`): a request that fails before it answers with its own status, never an error inside a 200 — the
+    served Qwen3-Coder's out-of-memory reached an agent as "refused (200)" (2026-11-12)."""
 
     def __init__(self, handler: "_Handler") -> None:
         self._h = handler
         self.gone = False
+        self.started = False
+
+    def _open(self) -> None:
+        if self.started:
+            return
+        self.started = True
+        h = self._h
+        h.send_response(200)
+        h.send_header("Content-Type", "text/event-stream")
+        h.send_header("Cache-Control", "no-cache")
+        h.send_header("Connection", "close")
+        h.end_headers()
+        h.wfile.flush()
 
     def send(self, obj: Any) -> None:
         if self.gone:
             return
         data = b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n\n"
         try:
+            self._open()
             self._h.wfile.write(data)
             self._h.wfile.flush()
         except OSError as e:
@@ -153,6 +169,7 @@ class _SSE:
     def done(self) -> None:
         if not self.gone:
             try:
+                self._open()
                 self._h.wfile.write(b"data: [DONE]\n\n")
                 self._h.wfile.flush()
             except OSError as e:
@@ -195,12 +212,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def start_sse(self) -> _SSE:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.flush()
+        """This response's event stream; its 200 goes out with its first event (`_SSE`)."""
         self._sse = _SSE(self)
         return self._sse
 
@@ -293,7 +305,7 @@ class _Handler(BaseHTTPRequestHandler):
             if out is not None:
                 self._send_json(200, out)
         except errors.ApiError as e:
-            if self._sse is not None:
+            if self._sse is not None and self._sse.started:
                 self._sse.send(e.body())
                 self._sse.done()
             else:
@@ -304,7 +316,7 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:   # an engine refusal or a defect: said, never a dropped connection
             _log.exception("[HTTP] request failed")
             err = errors.ApiError(500, f"{type(e).__name__}: {e}", "server_error", code="engine_error")
-            if self._sse is not None:
+            if self._sse is not None and self._sse.started:
                 self._sse.send(err.body())
                 self._sse.done()
             else:

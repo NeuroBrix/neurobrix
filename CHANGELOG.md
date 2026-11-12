@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A streamed request that fails before its first token answers with its own status.** The OpenAI-compatible
+  server sent its `200` and the event stream's headers before running the request, so a failure before the first
+  token reached the client as an error event inside a `200` ("refused (200)"). The stream now opens with its first
+  event; an earlier failure is a plain JSON error with its status (`500` for an engine failure). An error after
+  tokens have streamed is still an event in the stream, as the protocol requires.
 - **A served mixture-of-experts model answers a conversation's later turns right.** When its experts stream from host
   memory (one card too small to hold them all, e.g. Qwen3-Coder-30B-A3B on one V100-32GB), a turn that brought more
   than one new token could read some layers' experts from slots the previous answer had refilled with others: from

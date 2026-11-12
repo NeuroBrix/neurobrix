@@ -504,6 +504,8 @@ def _stream_chat(door, handler, method, model, created, reader, work, tools, inc
     try:
         op, result = _run(door, handler, method, work, deliver=lambda *a: sse.guard(deliver, *a))
     except errors.ApiError as e:
+        if not sse.started:
+            raise                   # nothing streamed yet: the error answers with its own status
         sse.send(e.body())
         sse.done()
         return None
@@ -557,6 +559,8 @@ def completions(door, handler, body) -> Optional[Dict[str, Any]]:
         try:
             op, result = _run(door, handler, "generate", work, deliver=lambda *a: sse.guard(deliver, *a))
         except errors.ApiError as e:
+            if not sse.started:
+                raise               # nothing streamed yet: the error answers with its own status
             sse.send(e.body())
             sse.done()
             return None

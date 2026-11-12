@@ -277,6 +277,10 @@ missed it and a served MoE's next prompt read slots refilled with other experts.
 store (triton/expert_store.py, +11: `_card_moved_slots` and the clock it compares); whether the store itself belongs in
 the library is the store's own question, not this fix's. 86 109 to 86 120, +11 (measured).
 
+A streamed request's status sent with its first event (2026-11-12, "refused (200)" at a user): the door's event stream
+opens at its first event, and a route re-raises an error that arrives before it, so the error answers with its own
+status. Policy (the server's protocol). serving/openai_api/door.py +8, routes.py +4. 86 120 to 86 132, +12 (measured).
+
 ## The scan
 
 `tools/engine_slim_scan.py` (standard library, ast) lists four kinds of finding in `src/neurobrix`, both branches:
