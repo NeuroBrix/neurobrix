@@ -61,16 +61,29 @@ class Vmm:
         grant names — enabling peer access between two contexts does nothing for it — so a chunk granted to its owner
         alone could not be copied card to card: `cudaMemcpy` answered "invalid value" for any tensor of the expandable
         range (a dense model split over two cards died at its first hand-off of more than a pool block, 2026-11-11;
-        NVIDIA's statement of the rule: forums.developer.nvidia.com/t/148875)."""
+        NVIDIA's statement of the rule: forums.developer.nvidia.com/t/148875). A driver call that fails is refused by
+        name (`_driver`): a grant narrowed to the owner because the question could not be asked is the same card-to-card
+        failure, later and unnamed."""
         count, owner = ctypes.c_int(0), ctypes.c_int()
-        peers = []
-        if self.lib.cuDeviceGetCount(ctypes.byref(count)) == 0 and self.lib.cuDeviceGet(ctypes.byref(owner), self.device) == 0:
-            for other in range(count.value):
-                dev, can = ctypes.c_int(), ctypes.c_int(0)
-                if (other != self.device and self.lib.cuDeviceGet(ctypes.byref(dev), other) == 0
-                        and self.lib.cuDeviceCanAccessPeer(ctypes.byref(can), dev, owner) == 0 and can.value == 1):
-                    peers.append(other)
+        self._driver("cuDeviceGetCount", self.lib.cuDeviceGetCount(ctypes.byref(count)))
+        self._driver("cuDeviceGet", self.lib.cuDeviceGet(ctypes.byref(owner), self.device), self.device)
+        peers = [other for other in range(count.value) if other != self.device and self._is_peer(other, owner)]
         return (_Access * (1 + len(peers)))(*(_Access(_Loc(_LOC_DEVICE, d), _PROT_RW) for d in (self.device, *peers)))
+
+    def _is_peer(self, other: int, owner) -> bool:
+        """Whether device `other` can reach this device's memory as a peer — the driver's answer, never a guess."""
+        dev, can = ctypes.c_int(), ctypes.c_int(0)
+        self._driver("cuDeviceGet", self.lib.cuDeviceGet(ctypes.byref(dev), other), other)
+        self._driver("cuDeviceCanAccessPeer", self.lib.cuDeviceCanAccessPeer(ctypes.byref(can), dev, owner), other)
+        return can.value == 1
+
+    def _driver(self, call: str, rc: int, about=None) -> None:
+        """Refuse, by name, a driver call the access grant is built from when it fails."""
+        if rc != 0:
+            raise RuntimeError(
+                f"ZERO FALLBACK: the driver refused {call}" + ("" if about is None else f" for device {about}")
+                + f" (status {rc}) while device {self.device}'s expandable range asked which devices reach it as "
+                  f"peers; a chunk granted to its owner alone cannot be copied card to card")
 
     @staticmethod
     def load(libs) -> Optional[object]:

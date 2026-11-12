@@ -368,6 +368,7 @@ def first_replay(device: int, trace: Optional[str]=None) -> Tuple[float, float]
 ```python
 class Vmm(lib, device: int)
     # One device's virtual memory management calls (CUDA's driver API through ctypes): load(libs), supported(), granularity(), reserve(), unreserve(), create(), map(), unmap(), release() — each returns the driver's status code
+    # The constructor builds the chunks' access grant (the device, then every device the driver says reaches it as a peer); a driver call that fails there raises a RuntimeError naming the call, the device and the status
 ```
 
 `nbxtensor.backend.process_memory`

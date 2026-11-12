@@ -150,6 +150,8 @@ def _a_device_that_can_map(monkeypatch, can: bool):
     from nbxtensor.memory import vmm as V
     monkeypatch.setattr(V.Vmm, "load", staticmethod(lambda libs: object() if can else None))
     monkeypatch.setattr(V.Vmm, "supported", lambda self: True)
+    # the stand-in library answers no driver call: the access grant (asked of the driver at construction) is stood in too
+    monkeypatch.setattr(V.Vmm, "_reachable_from", lambda self: None)
 
 
 def test_a_profile_without_the_measured_chunk_is_refused_by_name(card, monkeypatch):
