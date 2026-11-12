@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A model with thousands of added tokens no longer stalls on a long prompt, with the same tokens.** The text was
   scanned for every added token at every character; orpheus (28 940 added tokens), a 34 880-character prompt:
   43.6 s -> 0.02 s, in `run` and `serve`.
+- **`serve` no longer keeps every long prompt in memory.** A Llama-tokenizer model's prompt is one word for the
+  tokenizer, and every word stayed in its cache for the life of the process; the cache is now bounded as the reference
+  library's (words under 256 bytes, at most 10 000). TinyLlama, 50 distinct 32 276-character prompts: 30.9 MiB held
+  -> 0.0 MiB, the same tokens.
 
 ## [0.6.9] - 2026-11-12
 
