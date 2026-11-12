@@ -1958,6 +1958,13 @@ MOE_BLOCK_M
     # The row block the grouped kernel runs at: the block a caller aligns the routing by
 ```
 
+`nbxtensor.ops.moe_multi_device`
+
+```python
+def fused_moe_across_devices(hidden_states, flat_indices, flat_scores, tables, top_k: int, num_experts: int, n_gate: int, block_m: int, act_dev: int)
+    # The routed SwiGLU sum of a layer whose experts sit on several devices, [M, K] on `act_dev`: for each device of `tables.device_experts`, the pairs routed to its experts are aligned there and mapped back to their flat positions, the three grouped passes run against the device's own table, and its per-token share crosses back and is added. `tables`: the layer's `PtrTables`; `n_gate`: the experts' intermediate width; `block_m`: the alignment's block (`moe_wrappers.MOE_BLOCK_M`)
+```
+
 `nbxtensor.ops.mse_loss`
 
 ```python

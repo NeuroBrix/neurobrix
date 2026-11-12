@@ -15,10 +15,9 @@ Architecture:
 Zero extra GPU memory — expert weights stay in the arena. Only a small
 offset table ([E] int64 = 1KB for 128 experts) is allocated per projection.
 
-Multi-GPU: one set of kernel launches per device, bulk D2D transfers.
+Multi-GPU: one set of kernel launches per device, bulk D2D transfers (nbxtensor.ops.moe_multi_device).
 """
 
-import ctypes as _ctypes
 import os as _os
 
 import numpy as np
@@ -27,9 +26,10 @@ from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops.moe_wrappers import moe_align_block_size  # the routing's alignment: the library's launcher
+from nbxtensor.ops.moe_multi_device import fused_moe_across_devices
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
+from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.capabilities import backend_loads_pointers_from_memory
 from nbxtensor.memory import pointer_tables as _pt
@@ -316,8 +316,8 @@ def execute_moe_fused(
         # would double-normalize. Consume verbatim.
         indices = topk_indices
         if indices._dtype != NBXDtype.int64:
-            # moe_align_block_size and _multi_device_fused_moe read the flat
-            # index buffer as int64 via ctypes — normalize at the boundary.
+            # moe_align_block_size and the multi-card op read the flat
+            # index buffer as int64 — normalize at the boundary.
             indices = indices.to(NBXDtype.int64)
         scores = topk_weights.to(NBXDtype.float32)
         _dump("blend_indices", indices)
@@ -521,11 +521,10 @@ def execute_moe_fused(
 
         output = result
     else:
-        output = _multi_device_fused_moe(
-            hidden_states, flat_indices, flat_scores,
-            tables, gate_weights, up_weights, down_weights,
-            top_k, num_experts, M, K, N_gate, act_dev,
-        )
+        # a layer whose experts sit on several cards: one share per card, summed (the library's op; the placement
+        # that put them there is Prism's, read from the tables)
+        output = fused_moe_across_devices(hidden_states, flat_indices, flat_scores, tables, top_k, num_experts,
+                                          N_gate, _BLOCK_SIZE_M, act_dev)
 
     if len(orig_shape) == 3:
         output = output.reshape(orig_shape)
@@ -792,131 +791,3 @@ def _fused_moe_pass(
     if _diag_dump is not None:
         _diag_dump("result_final", result)
     return result
-
-
-# ============================================================================
-# MULTI-GPU DISPATCH
-# ============================================================================
-
-def _multi_device_fused_moe(
-    hidden_states, flat_indices, flat_scores,
-    tables, _gate_weights, _up_weights, _down_weights,
-    top_k, _num_experts, M, K, N_gate, act_dev,
-):
-    """Execute fused MoE across multiple GPUs.
-
-    For each device holding experts:
-    1. Identify which flat routing positions go to experts on this device
-    2. Build GLOBAL sorted_token_ids (original flat positions, not remapped)
-    3. Transfer activations + scores subset to device
-    4. Run fused kernel with per-device offset tables
-    5. Scatter results back using original token positions
-    """
-    dt = hidden_states._dtype
-    output = NBXTensor.zeros((M, K), dtype=dt, device=f"cuda:{act_dev}")
-
-    n_total = flat_indices.numel()
-
-    # D2H the flat indices to know which expert each token goes to
-    buf = (_ctypes.c_int64 * n_total)()
-    DeviceAllocator.memcpy(_ctypes.addressof(buf), flat_indices.data_ptr(),
-                           n_total * 8, kind=2)
-    flat_ids_cpu = np.frombuffer(buf, dtype=np.int64).copy()
-
-    # D2H flat_scores
-    sbuf = (_ctypes.c_char * (n_total * dtype_size(dt)))()
-    DeviceAllocator.memcpy(_ctypes.addressof(sbuf), flat_scores.data_ptr(),
-                           n_total * dtype_size(dt), kind=2)
-
-    for dev, global_expert_ids in tables.device_experts.items():
-        expert_set = set(global_expert_ids)
-        E_local = len(global_expert_ids)
-
-        # Find which flat positions route to experts on this device
-        mask = np.isin(flat_ids_cpu, list(expert_set))
-        if not mask.any():
-            continue
-
-        # original_positions: the flat indices [0..M*top_k) that go to this device
-        original_positions = np.where(mask)[0]
-        n_local = len(original_positions)
-
-        # The expert's number in the LAYER: a card's pointer tables keep the layer's length (`build_ptr_tables`), so
-        # the kernel reads them at that number and the launch keeps the layer's key
-        local_expert_ids = flat_ids_cpu[original_positions].astype(np.int64)
-
-        DeviceAllocator.set_device(dev)
-        DeviceAllocator.ensure_triton_device(dev)
-
-        local_expert_ids_gpu = NBXTensor.from_numpy(local_expert_ids)
-
-        # Align tokens for local experts — using GLOBAL expert IDs
-        sorted_tids, exp_ids, num_post_pad = \
-            moe_align_block_size(local_expert_ids_gpu, _BLOCK_SIZE_M, _num_experts, dev, pairs=M * top_k)
-
-        # FIX #1: Remap sorted_tids from local positions back to GLOBAL flat positions
-        # sorted_tids contains indices into [0..n_local). We need indices into [0..M*top_k).
-        padded_n = sorted_tids.shape[0]
-        stid_buf = (_ctypes.c_int64 * padded_n)()
-        DeviceAllocator.memcpy(_ctypes.addressof(stid_buf), sorted_tids.data_ptr(),
-                               padded_n * 8, kind=2)
-        stid_cpu = np.frombuffer(stid_buf, dtype=np.int64).copy()
-
-        # Remap: local index → global flat position; the padding becomes the kernel's sentinel (n_total, not a token)
-        stid_cpu = np.where(stid_cpu < n_local, original_positions[np.minimum(stid_cpu, n_local - 1)], n_total)
-        sorted_tids = NBXTensor.from_numpy(stid_cpu.astype(np.int64))
-
-        # FIX #2: Build local scores matching the global flat positions
-        # The kernel indexes flat_scores by sorted_token_ids (now global)
-        # So we pass the FULL flat_scores — the kernel will index correctly
-        local_scores = _xfer(flat_scores, dev)
-
-        # Transfer activations to this device
-        h_local = _xfer(hidden_states, dev)
-
-        # Run 3 GEMM passes + activation. The kernel writes a pair's row at its GLOBAL flat position (the sorted id
-        # it reads), so every pass's output holds the layer's n_total rows — this card's pairs filled, the others 0.
-        gate_out = NBXTensor.zeros((n_total, N_gate), dtype=dt, device=f"cuda:{dev}")
-        _nbx_moe_wrappers.invoke_fused_moe(
-            h_local,
-            tables.gate_ptrs[dev],
-            gate_out, local_scores,
-            sorted_tids, exp_ids, num_post_pad,
-            N_gate, K,
-            tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
-            top_k, mul_routed_weight=False,
-        )
-
-        up_out = NBXTensor.zeros((n_total, N_gate), dtype=dt, device=f"cuda:{dev}")
-        _nbx_moe_wrappers.invoke_fused_moe(
-            h_local,
-            tables.up_ptrs[dev],
-            up_out, local_scores,
-            sorted_tids, exp_ids, num_post_pad,
-            N_gate, K,
-            tables.up_stride_bk[dev], tables.up_stride_bn[dev],
-            top_k, mul_routed_weight=False,
-        )
-
-        gate_silu = _nbx_elementwise_wrappers.silu(gate_out)
-        activated = _nbx_elementwise_wrappers.mul(gate_silu, up_out)
-
-        # Down pass, weighted by the routing scores: row p is flat position p's term, 0 where another card holds it.
-        down_out = NBXTensor.zeros((n_total, K), dtype=dt, device=f"cuda:{dev}")
-        _nbx_moe_wrappers.invoke_fused_moe(
-            activated,
-            tables.down_ptrs[dev],
-            down_out, local_scores,
-            sorted_tids, exp_ids, num_post_pad,
-            K, N_gate,
-            tables.down_stride_bk[dev], tables.down_stride_bn[dev],
-            top_k, mul_routed_weight=True, topk_divide=False,
-        )
-
-        # This card's share of every token: its rows summed over the token's top_k, added on the activation's card.
-        share = _xfer(_nbx_reduction_wrappers.sum_wrapper(down_out.reshape(M, top_k, K), dim=1), act_dev)
-        DeviceAllocator.set_device(act_dev)
-        DeviceAllocator.ensure_triton_device(act_dev)
-        output = _nbx_elementwise_wrappers.add(output, share)
-
-    return output

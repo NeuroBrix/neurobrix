@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the three `ops.moe_align` stages, which the engine carried. `MOE_BLOCK_M` names the block to align by.
 - `ops.moe_wrappers.moe_decode_vec_half_pass(...)`: one decode token through a routed layer of half-precision experts
   (the `ops.moe_decode_vec` half kernels' three launches), which the engine carried.
+- `ops.moe_multi_device.fused_moe_across_devices(hidden_states, flat_indices, flat_scores, tables, top_k,
+  num_experts, n_gate, block_m, act_dev)`: a routed layer whose experts sit on several devices, computed where its
+  weights are — one share per device of the layer's pointer tables, summed on the activations' device. The engine
+  carried this op, with its device-to-host and card-to-card copies; it now hands over the tables its placement built.
+
+### Changed
+- The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's
