@@ -16,11 +16,11 @@ Contract.
   `price.session_chunk_attention_bytes`, which both engines' wrappers read from the plan's own chunk, reach and dtype
   — is in the price (`chunk_mask_bytes`); the plan the raise holds is the first one priced so.
 - Unchanged, the first plan and the caller's config, when the plan has no KV cache or no chunk. A chunk this module
-  does not raise (chosen from certified times, core/prism/prefill_chunk.py, or the rows the Triton engine prices):
-  the plan solved once more at that chunk over the cached keys, and that config — the chunk's choice is not this
-  module's, its price over the keys is.
-- Refuses nothing: a size no plan fits (the solve's RuntimeError) or that moves a resident ends the raise at the size
-  before it.
+  does not raise (the Triton engines' ladder, core/prism/prefill_chunk.served_ladder): the plan solved once more at
+  its top rung over the cached keys, then at each rung below while no plan holds, and that config — the ladder is
+  not this module's, its price over the keys is.
+- Refuses nothing of its own: a raise ends at the size before the one no plan fits (the solve's RuntimeError) or
+  that moves a resident; a ladder whose bottom rung no plan holds lets that solve's refusal through.
 """
 import dataclasses
 import logging
@@ -88,10 +88,19 @@ def raise_while_the_plan_holds(solve: Callable[[Any], Any], input_config) -> Tup
         return plan, input_config
     keys, rows, held, cfg = int(kv.max_cache_len), int(kv.prefill_chunk), None, input_config
     if UNTIMED not in str(kv.prefill_chunk_reason):
-        # a chunk not raised (certified, or the rows the Triton engine prices): the plan priced at it over the cached
-        # keys it attends, once — unpriced, a served chunk's attention over a long session was never in the plan
-        priced = dataclasses.replace(input_config, seq_len=rows, prefill_keys=keys, prefill_key_dtype=str(kv.dtype))
-        return solve(priced), priced
+        # a chunk not raised (the Triton engines' ladder, core/prism/prefill_chunk.served_ladder): the plan priced at
+        # it over the cached keys it attends — unpriced, a served chunk's attention over a long session was never in
+        # the plan. The ladder is descended while no plan holds its top rung; the refusal is the bottom rung's own.
+        ladder = sorted({int(r) for r in (kv.prefill_chunk_rungs or [rows])}, reverse=True)
+        for r in ladder:
+            priced = dataclasses.replace(input_config, seq_len=r, prefill_keys=keys, prefill_key_dtype=str(kv.dtype))
+            try:
+                return solve(priced), priced
+            except RuntimeError as exc:
+                if r == ladder[-1]:
+                    raise
+                log.info("Prism: no served plan at chunks of %d rows (%s): the next rung down",
+                         r, (str(exc).splitlines() or [""])[0])
     # from here every solve prices the chunk with the cached keys it attends (the session's reach): the first one at
     # the chunk the plan already has, and that priced plan is the one the raise must hold
     while rows <= keys:

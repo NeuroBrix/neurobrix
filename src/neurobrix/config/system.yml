@@ -111,11 +111,12 @@ serving:
   # hands a child no inherited fd through subprocess, so the file remains there. A wait ends on
   # the file or on the child's exit, never on a deadline: a long load is not a failure.
   ready_poll_s: 0.5
-  # The rows a served session's plan prices ONE prefill pass at when no certified time chose its chunk
-  # (core/prism/prefill_chunk.py `served_untimed`), per GB of the decoder card's memory class: a turn that
-  # brings up to that many new positions is one unpadded pass; a longer one is cut into passes of that many
-  # rows (whole pages of the session's cache). Per GB because the rows cost memory, and what a card can give
-  # is its own (the Mac's review, 2026-11-12): 64 rows a GB is 2 048 rows on a 32 GB card, 1 024 on 16 GB.
+  # The rows a served session's plan prices ONE prefill pass at on the Triton engines (core/prism/
+  # prefill_chunk.py `served_ladder`), per GB of the decoder card's memory class: the top of the ladder of
+  # chunk sizes (one page of the session's cache, doubling). A turn that brings up to that many new
+  # positions is one pass, completed to the smallest rung that holds it; a longer one is cut into passes of
+  # the top rung. Per GB because the rows cost memory, and what a card can give is its own (the Mac's
+  # review, 2026-11-12): 64 rows a GB is 2 048 rows on a 32 GB card, 1 024 on 16 GB.
   # Measured 2026-11-12 on ONE class (Qwen3-Coder-30B-A3B, experts streamed, one V100-32GB, Triton): a pass
   # costs about the same whatever its rows (128 rows 8.5 s, 1 124 rows 10.2 s: each pass streams most of the
   # experts), so the PASSES are the cost — a 1 124-token first request took 51.6 s in 128-row passes against

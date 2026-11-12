@@ -1,8 +1,9 @@
 """The prefill chunk C of a serving session, chosen by Prism from facts (docs/design/prism_kv.md §5bis).
 
-A session's prefill runs in chunks of exactly C rows, the last completed with padding rows, every chunk attending over
-the cache's keys as whole pages: every chunk then meets the same kernel keys, and a turn served from the session gives
-the bytes of the same turns prefilled together. C is chosen here, never written:
+A session's prefill runs in chunks of exactly C rows, the last completed with padding rows (to C, or — a served turn
+on the Triton engines, `served_ladder` — to the smallest rung of the ladder that holds it), every chunk
+attending over the cache's keys as whole pages: every chunk then meets census keys, and a turn served from the session
+gives the bytes of the same turns prefilled together. C is chosen here, never written:
 
 - the candidates are `core/state/price.prefill_chunk_candidates` (whole pages, at most the prefill rows the plan
   prices a session's activations at);
@@ -99,11 +100,6 @@ def chunk_record(cache_dir: Path, vendor: str, profile: str, memory_gb: int, mod
     return rec
 
 
-#: the phrase by which a plan says a turn's last chunk is NOT completed to the chunk's rows (`KVCachePlan.
-#: prefill_chunk_pads` False): `served_untimed` builds its reason FROM this constant, and the solver reads it there
-UNPADDED = "a turn's last chunk runs its own rows"
-
-
 def served_rows(memory_class_gb: int) -> int:
     """The rows a served session prices one prefill pass at when no certified time chose its chunk, on a decoder card
     of `memory_class_gb`: `serving.session_prefill_rows_per_card_gb` of config/system.yml (its measurement is written
@@ -117,14 +113,32 @@ def served_rows(memory_class_gb: int) -> int:
     return v * int(memory_class_gb)
 
 
-def served_untimed(why: str, page: int, reach: int, memory_class_gb: int) -> Tuple[int, str]:
-    """A SERVED turn's chunk when no certified time chooses one (`choose` returned None for `why`): the whole pages of
-    `served_rows(memory_class_gb)`, never more than the session's `reach` (at least one page), priced over the
-    session's keys (`served_prefill`) — never one pass of rows the plan did not price. Unchunked and priced at 128
-    rows, a served Qwen3-Coder-30B-A3B ran its 2 800- to 3 700-row agent turns in one pass and out of memory
-    (2026-11-12). Its last chunk is NOT padded (`UNPADDED`): a turn that fits the chunk is one pass of its own rows,
-    as before, now priced."""
-    C = max(1, min(served_rows(memory_class_gb), int(reach)) // int(page)) * int(page)
-    return C, (f"chunks of {C} rows: the rows a served turn's prefill is priced at on a {int(memory_class_gb)} GB card "
-               f"(serving.session_prefill_rows_per_card_gb, whole pages of {page}); {why.split(': ', 1)[-1]}, so no "
-               f"certified time chooses among them; {UNPADDED}")
+def served_ladder(page: int, reach: int, memory_class_gb: int, priced_rows: int = 0) -> Tuple[int, List[int], str]:
+    """A SERVED turn's chunks on the Triton engines: (C, the rungs, the reason). The rungs are the ladder
+    `price.prefill_chunk_candidates` up to `served_rows(memory_class_gb)`, never past the session's `reach`, nor past
+    `priced_rows` when the plan is solved at stated rows (`served_prefill` descends the ladder until a plan holds).
+    C is the top rung, the rows the plan prices one pass at over the session's keys — never one pass of rows the plan
+    did not price: unchunked and priced at 128 rows, a served Qwen3-Coder-30B-A3B ran its 2 800- to 3 700-row agent
+    turns in one pass and out of memory (2026-11-12). A turn runs whole chunks of C rows, then its last chunk
+    completed to the SMALLEST rung that holds it: a 30-row turn is one 64-row pass, and every shape the session runs
+    is a census row (a rung x a whole number of pages of keys), certifiable — a turn's own row count is not.
+    The size is not chosen from certified kernel times: a pass has costs no kernel time holds (a mixture-of-experts
+    model streams its experts at every pass — 128-row chunks took 51.6 s to the first token of a 1 124-token prompt
+    against 10.2 s in one pass, same card, 2026-11-12), so the fewest priced passes are the fastest turn."""
+    from neurobrix.core.state import price as P
+    top = min(served_rows(memory_class_gb), int(reach), int(priced_rows) or int(reach))
+    rungs = P.prefill_chunk_candidates(int(page), max(int(page), top))
+    return rungs[-1], rungs, (
+        f"chunks of {rungs[-1]} rows, the last on the smallest of the rungs {rungs} that holds it: the rows a served "
+        f"turn's prefill is priced at on a {int(memory_class_gb)} GB card (serving.session_prefill_rows_per_card_gb, "
+        f"whole pages of {page})" + (f", at most the {int(priced_rows)} rows this plan was asked to price"
+                                     if priced_rows else ""))
+
+
+def served_chunk(page: int, reach: int, memory_class_gb: int, input_config) -> Tuple[int, str, List[int]]:
+    """(C, the reason, the rungs) of a served plan on the Triton engines — `served_ladder`, capped at the rows the
+    plan is solved at when its request states them over cached keys (`InputConfig.seq_len` with `prefill_keys`:
+    `served_prefill`'s priced solve)."""
+    priced = int(getattr(input_config, "seq_len", 0) or 0) if getattr(input_config, "prefill_keys", 0) else 0
+    C, rungs, why = served_ladder(page, reach, memory_class_gb, priced)
+    return C, why, rungs

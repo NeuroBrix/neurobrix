@@ -5100,47 +5100,46 @@ class PrismSolver:
             initial_cache_len=size["initial_cache_len"],
             session_reach=session_reach,
         )
-        plan.prefill_chunk, plan.prefill_chunk_reason = self._prefill_chunk(container, plan, defaults, profile,
-                                                                            kv_devices)
-        from neurobrix.core.prism.prefill_chunk import UNPADDED
-        plan.prefill_chunk_pads = UNPADDED not in plan.prefill_chunk_reason
+        plan.prefill_chunk, plan.prefill_chunk_reason, plan.prefill_chunk_rungs = self._prefill_chunk(
+            container, plan, defaults, profile, kv_devices)
         if plan.prefill_chunk and getattr(self, "_serve_requested", False):
             from neurobrix.core.prism.served_attention import served_chunk_route
             plan.chunk_scores_budget_bytes = served_chunk_route(profile, getattr(self, "_component_dtypes", None),
                                                                 getattr(self, "_kv_decoder", None), plan, self._mode)
         return plan
 
-    def _prefill_chunk(self, container, kv: "KVCachePlan", defaults, profile, kv_devices) -> Tuple[Optional[int], str]:
-        """A serving session's prefill chunk C and its reason (core/prism/prefill_chunk.py): the candidates
+    def _prefill_chunk(self, container, kv: "KVCachePlan", defaults, profile, kv_devices) -> tuple:
+        """A serving session's prefill chunk C, its reason and the rungs its last chunk may be completed to (None: C
+        always) (core/prism/prefill_chunk.py): the candidates
         (`price.prefill_chunk_candidates`, whole pages of the session cache up to the prefill rows the plan prices a
         session at), each priced from the certified times of its derived census keys on the decoder's card class."""
         from neurobrix.core.prism import prefill_chunk as PC
         from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
         from neurobrix.core.state import price as P
         if kv.session_reach is None:
-            return None, "no serving session is planned (no session reach): one chunk per request"
+            return None, "no serving session is planned (no session reach): one chunk per request", None
         # the phrase `served_prefill` reads a chunk chosen without certified times by: its constant, never restated
         from neurobrix.core.prism.served_prefill import UNTIMED
         untimed = self._mode not in TRITON_ENGINES
         if untimed and not getattr(self, "_serve_requested", False):
             # a run prices its prefill at its own request's rows (`InputConfig.seq_len`): its one pass is priced
             return None, (f"one chunk per turn: the {self._mode} engine keeps {UNTIMED} to price a "
-                          f"chunk from, and a run's prefill is priced at its own rows")
+                          f"chunk from, and a run's prefill is priced at its own rows"), None
         if profile is None or not kv_devices or getattr(container, "cache_path", None) is None:
-            return None, "one chunk per turn: the plan names no decoder card to price a chunk on"
+            return None, "one chunk per turn: the plan names no decoder card to price a chunk on", None
         cards = set()
         for d in kv_devices:
             if ":" not in str(d):
                 if untimed:
                     continue                # the host side of the cache prices no chunk; the cards' page does
-                return None, f"one chunk per turn: the decoder's cache lives on {d}, which certifies no kernel time"
+                return None, f"one chunk per turn: the decoder's cache lives on {d}, which certifies no kernel time", None
             idx = int(str(d).rsplit(":", 1)[1])
             spec = next((x for x in profile.devices if int(x.index) == idx), None)
             if spec is None:
-                return None, f"one chunk per turn: the profile states no device {d}"
+                return None, f"one chunk per turn: the profile states no device {d}", None
             cards.add((spec.brand.value, spec.architecture, spec.memory_class_gb))
         if len(cards) != 1 or None in next(iter(cards)):
-            return None, f"one chunk per turn: the decoder's cards are of several classes {sorted(map(str, cards))}"
+            return None, f"one chunk per turn: the decoder's cards are of several classes {sorted(map(str, cards))}", None
         vendor, arch, cls = cards.pop()
         from neurobrix.core.config.loader import get_vendor_config
         from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES
@@ -5148,6 +5147,8 @@ class PrismSolver:
                                        get_vendor_config(vendor, arch).get("memory"), int(kv.memory_bytes),
                                        PAGED_DECODE_TILE_CANDIDATES)
         rows = P.session_prefill_rows(defaults)
+        if not untimed and getattr(self, "_serve_requested", False):
+            return PC.served_chunk(page, kv.session_reach, cls, getattr(self, "_input_config", None))
         if untimed:
             # the rows this plan PRICES a served turn's prefill at: the request's when it states them (`served_prefill`
             # raises them while the plan holds), else the container's prompt margin
@@ -5159,12 +5160,12 @@ class PrismSolver:
             # beyond the priced rows is the next step.
             C = P.prefill_chunk_candidates(page, rows)[-1]
             return C, (f"chunks of {C} rows: the rows the plan prices a served turn's prefill at (whole pages of "
-                       f"{page}); the {self._mode} engine keeps {UNTIMED} to choose among them")
+                       f"{page}); the {self._mode} engine keeps {UNTIMED} to choose among them"), None
         record = PC.chunk_record(Path(str(container.cache_path)), vendor, arch, cls,
                                  "triton" if self._mode == "triton" else "triton-sequential")
         candidates = P.prefill_chunk_candidates(page, rows)
         C, why = PC.choose(record, candidates, rows, PC.certified_times(vendor, arch, cls))
-        return (C, why) if C is not None or not getattr(self, "_serve_requested", False) else PC.served_untimed(why, page, kv.session_reach, cls)
+        return C, why, None
 
     def _apply_attention_correction(
         self, comp, activation_bytes: int, manifest: dict, dtype_str: str, profiled: bool
@@ -10270,7 +10271,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "v_head_dim": getattr(kv, "v_head_dim", None),
                            "session_reach": getattr(kv, "session_reach", None),
                            "prefill_chunk": getattr(kv, "prefill_chunk", None),
-                           "prefill_chunk_reason": getattr(kv, "prefill_chunk_reason", ""), "chunk_scores_budget_bytes": kv.chunk_scores_budget_bytes, "prefill_chunk_pads": kv.prefill_chunk_pads}
+                           "prefill_chunk_reason": getattr(kv, "prefill_chunk_reason", ""), "chunk_scores_budget_bytes": kv.chunk_scores_budget_bytes, "prefill_chunk_rungs": kv.prefill_chunk_rungs}
     if plan.cfg_split_components:
         rec["cfg_split_components"] = list(plan.cfg_split_components)
     if getattr(plan, "batch_split_components", None):

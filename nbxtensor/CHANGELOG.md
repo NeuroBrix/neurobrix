@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one attention (0: never the math route, which writes the full scores); unset, the device's own, as before.
 - `PagedTritonKVCache.chunk_scores_budget`: the budget a prefill chunk's attention over the paged cache routes on, set
   from the caller's plan and read by `chunk_attention` and the spilled chunk's attention (kept by `clone_empty`).
-- `kv_session.chunk_rows(..., pads=)`: with `pads=False` a prefill's last chunk holds its own rows instead of being
-  completed to the chunk's rows — a turn that fits the chunk is one chunk of exactly its rows.
+- `kv_session.chunk_rows(..., rungs=)`: with `rungs` (ascending row counts) a prefill's last chunk is completed to
+  the smallest rung that holds it instead of to the chunk's rows — a short turn is a short pass of a row count the
+  caller knows in advance; a last chunk no rung holds is refused by name.
 
 ## [0.1.3] - 2026-11-11
 

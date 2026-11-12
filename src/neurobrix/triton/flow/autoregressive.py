@@ -239,7 +239,7 @@ class TritonAutoregressiveHandler:
             self.ctx.kv_tier.prepare(kv_session, kv_session.cache, prompt_ids)   # a parked continuation restored
         start = kv_session.match(prompt_ids) if kv_session is not None else 0
         hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk,
-                                 ids=prompt_ids if (start or chunk) else None, pads=not chunk or kv_plan.prefill_chunk_pads)
+                                 ids=prompt_ids if (start or chunk) else None, rungs=kv_plan.prefill_chunk_rungs if chunk else None)
         _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
         # Teacher-forced scoring mode (quant-ppl-scoring, tier row

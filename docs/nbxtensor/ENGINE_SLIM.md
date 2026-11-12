@@ -283,21 +283,21 @@ status. Policy (the server's protocol). serving/openai_api/door.py +8, routes.py
 
 A served turn's pass priced, its attention over the cached keys on the route the plan states (2026-11-12, an
 out-of-memory at a user). Policy: Prism's price of a served pass (which rows: `serving.session_prefill_rows_per_card_gb`; which
-route; what its attention over the session's keys holds; whether a turn's last chunk is padded); the mechanisms it
+route; what its attention over the session's keys holds; the ladder a turn's last chunk is completed on); the mechanisms it
 needs went into the library (`launch_keys.sdpa_math_scores_bound`, the wrapper's `scores_budget_bytes`,
-`PagedTritonKVCache.chunk_scores_budget`, `kv_session.chunk_rows(pads=)`). Two pure moves out of the solver, which
+`PagedTritonKVCache.chunk_scores_budget`, `kv_session.chunk_rows(rungs=)`). Two pure moves out of the solver, which
 shrank by 81 lines: the Triton engine's attention price (`attention_scratch.triton_routes` / `triton_scratch`) and the
-plan's KV cache record with its two serialisations (`kv_plan.KVCachePlan`). 86 132 to 86 235, +103 (measured,
+plan's KV cache record with its two serialisations (`kv_plan.KVCachePlan`). 86 132 to 86 252, +120 (measured,
 `brick_ratchet.code_lines`):
 
 | file | lines | what it holds |
 |---|---|---|
 | core/prism/served_attention.py | +56 | new: the served chunk's attention at its dearest key length; the route budget the plan states |
-| core/prism/kv_plan.py | +61 | the plan's KV cache record, moved from the solver with its serialisations; `prefill_chunk_pads` |
+| core/prism/kv_plan.py | +61 | the plan's KV cache record, moved from the solver with its serialisations; `prefill_chunk_rungs` |
 | core/prism/attention_scratch.py | +48 | the Triton price, moved from the solver and split (the devices' routes; the price) |
 | core/prism/solver.py | -81 | the two moves out; thin calls to the bricks |
-| core/prism/prefill_chunk.py, served_prefill.py | +13, +3 | a served turn with no certified chunk (the serving setting, unpadded); a chunk not raised priced once over the keys |
-| core/flow/autoregressive.py, triton/session.py, triton/flow/autoregressive.py | +1, 0, 0 | both engines' sessions follow the plan's `prefill_chunk_pads` |
+| core/prism/prefill_chunk.py, served_prefill.py, core/state/price.py | +21, +11, +3 | a served turn's ladder (the serving setting; `price.prefill_chunk_candidates` doubles); the ladder descended while no plan holds |
+| core/flow/autoregressive.py, triton/session.py, triton/flow/autoregressive.py | +1, 0, 0 | both engines' sessions follow the plan's `prefill_chunk_rungs` |
 
 ## The scan
 

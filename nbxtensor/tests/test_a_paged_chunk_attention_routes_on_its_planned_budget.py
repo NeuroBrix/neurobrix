@@ -43,15 +43,19 @@ def test_a_zero_budget_routes_to_the_flash_where_the_unit_takes_it():
     assert LK.sdpa_route(1, 32, 128, 65536, 128, 128, 0, 128, 16, unit_flash=True) == ("flash", 0)
 
 
-def test_an_unpadded_last_chunk_holds_its_own_rows():
-    """`chunk_rows(pads=False)`: full chunks of `rows`, then the turn's remainder as it is — a turn that fits `rows` is
-    one chunk of exactly its rows (red when the last chunk is completed with copies: a one-row continuation ran 128)."""
+def test_the_last_chunk_is_completed_to_the_smallest_rung_that_holds_it():
+    """`chunk_rows(rungs=)`: full chunks of `rows`, then the turn's remainder completed to the smallest rung that
+    holds it — red when it is completed to `rows` (a one-row continuation ran the whole chunk), when it runs its own
+    row count (a row count the caller's ladder does not hold), or when a remainder no rung holds passes."""
     from nbxtensor.memory.kv_session import chunk_rows
     ids = list(range(100, 111))                                   # 11 positions
     padded = chunk_rows(ids, 3, 4, True)
     assert [(s, real, len(c)) for s, real, c, _ in padded] == [(3, 4, 4), (7, 4, 4)]
-    ragged = chunk_rows(ids, 2, 4, True, pads=False)
-    assert [(s, real, c, pos) for s, real, c, pos in ragged] == [
-        (2, 4, [102, 103, 104, 105], [2, 3, 4, 5]), (6, 4, [106, 107, 108, 109], [6, 7, 8, 9]), (10, 1, [110], [10])]
-    assert chunk_rows(ids, 2, 4, True)[-1][2] == [110, 110, 110, 110]            # the padded form, unchanged
-    assert chunk_rows(ids, 10, 128, False, pads=False) == [(10, 1, [110], [0])]  # a one-row continuation: one row
+    assert chunk_rows(ids, 2, 4, True)[-1][2] == [110, 110, 110, 110]            # no rungs: completed to `rows`
+    laddered = chunk_rows(ids, 2, 4, True, rungs=[2, 4])
+    assert laddered == [(2, 4, [102, 103, 104, 105], [2, 3, 4, 5]), (6, 4, [106, 107, 108, 109], [6, 7, 8, 9]),
+                        (10, 1, [110, 110], [10, 10])]                           # 1 row -> the 2-row rung
+    assert chunk_rows(ids, 8, 4, True, rungs=[2, 4]) == [(8, 3, [108, 109, 110, 110], [8, 9, 10, 10])]
+    assert chunk_rows(ids, 10, 128, False, rungs=[64, 128]) == [(10, 1, [110] * 64, list(range(64)))]
+    with pytest.raises(ValueError, match="no rung holds it"):
+        chunk_rows(ids, 0, 8, True, rungs=[2, 4])

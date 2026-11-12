@@ -96,7 +96,7 @@ class TritonLMSession:
         return pos_np
 
     def prefill(self, input_ids: NBXTensor, batch_size: int, start: int = 0, chunk: Optional[int] = None,
-                ids: Optional[List[int]] = None, pads: bool = True) -> NBXTensor:
+                ids: Optional[List[int]] = None, rungs: Optional[List[int]] = None) -> NBXTensor:
         """Run prefill pass, switch to decode mode, return hidden states.
 
         `start` > 0: the cache already holds the request's first `start` positions (a serving session's, matched by
@@ -104,7 +104,7 @@ class TritonLMSession:
         (KVCachePlan.prefill_chunk). Either one takes the chunked path (`_prefill_chunks`), which needs the request's
         host ids `ids`; neither keeps the one-pass prefill below, unchanged."""
         if start or chunk:
-            return self._prefill_chunks(ids, batch_size, int(start), chunk, pads)
+            return self._prefill_chunks(ids, batch_size, int(start), chunk, rungs)
         if self.kv_wrapper is not None:
             self.kv_wrapper.reset()
 
@@ -179,7 +179,7 @@ class TritonLMSession:
         return hidden
 
     def _prefill_chunks(self, ids: Optional[List[int]], batch_size: int, start: int,
-                        chunk: Optional[int], pads: bool = True) -> NBXTensor:
+                        chunk: Optional[int], rungs: Optional[List[int]] = None) -> NBXTensor:
         """The prefill of positions [start, len(ids)) in chunks (docs/design/prism_kv.md §5bis): `chunk` rows each, the
         last completed with copies of its last real row (its token and position) whose K/V the next chunk or the
         decode overwrites — or, with no chunk planned, one chunk of the request's own rows. Every chunk attends over
@@ -206,8 +206,8 @@ class TritonLMSession:
             self.executor.enable_hidden_states_capture()
         from nbxtensor.memory.kv_session import chunk_rows
         rows_planned = int(chunk) if chunk else total - start
-        # `pads` False (the plan's `prefill_chunk_pads`): the last chunk runs its own rows, never copies of its last
-        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position, pads)
+        # `rungs` (the plan's `prefill_chunk_rungs`): the last chunk is completed to the smallest that holds it
+        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position, rungs)
         outputs = None
         for s, real, chunk_ids, pos in plan:
             DeviceAllocator.set_device(self.device_idx)

@@ -2411,8 +2411,15 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req, ha
     return sites
 
 
+def _one_class(profile):
+    """The one memory class (GB) of a profile's cards, or None (several, or none stated)."""
+    from neurobrix.core.prism.structure import memory_class_gb
+    classes = {memory_class_gb(d.memory_mb) for d in profile.devices}
+    return classes.pop() if len(classes) == 1 else None
+
+
 def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unhandled, prompt="",
-                   audio_path=None, max_tokens_req=None, image_path=None):
+                   audio_path=None, max_tokens_req=None, image_path=None, class_gb=None):
     """Every key class of every value-derived extent, by the census's own bisection
     (`census.bisect_extent`) over the derived keys — nothing runs."""
     from neurobrix.kernels import census as _census
@@ -2483,7 +2490,8 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
               f"in {len(seen)} derivation(s)")
         if getattr(chain, "session", None):
             keys, record = _session_chunks(model, mode, plan, defaults, chain.session, dtypes[chain.session["lm"]],
-                                           lambda n: (at(n), full[n])[1], has_native_bf16, sdpa, unhandled)
+                                           lambda n: (at(n), full[n])[1], has_native_bf16, sdpa, unhandled,
+                                           class_gb)
             found.update(keys)
             SESSION_CHUNKS[mode] = record
     return found
@@ -2502,7 +2510,8 @@ def _continued_at(model, mode, lm, cdtype, feed, n, keys_len, has_native_bf16, s
     return frozenset(launches)
 
 
-def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_native_bf16, sdpa, unhandled):
+def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_native_bf16, sdpa, unhandled,
+                    class_gb=None):
     """A serving session's prefill chunks on the plan's cache (docs/design/prism_kv.md §5bis): (the keys its turns
     form, the record Prism prices its chunk candidates from — `kernels/census_table.chunks_path`).
 
@@ -2555,10 +2564,18 @@ def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_
     # in one chunk: those keys cross every turn length with every whole-page key length (measured 2026-11-08: +841
     # keys on TinyLlama, +1 169 on deepseek-moe-16b-chat; Qwen3-30B-A3B's ~442 pages x ~400 row classes on each of the
     # class's rungs did not finish in 50 minutes) — not derived, so such a turn under certified-only names its key.
-    for c in ([int(C)] if C else cands_rows):
+    # A SERVED turn runs the ladder's rungs (core/prism/prefill_chunk.served_ladder — the one list Prism plans and
+    # the session pads to), each over every whole-page key length: derived whatever this run plan chose.
+    if not class_gb:
+        raise SystemExit(f"{model}: a session's served ladder is per memory class and the profile's cards state none "
+                         f"single (classes {class_gb!r})")
+    from neurobrix.core.prism.prefill_chunk import served_ladder
+    rungs = served_ladder(page, reach, class_gb)[1]
+    cands_rows = sorted(set(cands_rows) | set(rungs))
+    for c in sorted(set([int(C)] if C else []) | set(cands_rows)):
         for launches in over_pages(c, c // page).values():
             keys |= set(launches)
-    what = (f"C={C}" if C else f"no chunk planned, the candidates {cands_rows}") + \
+    what = (f"C={C}, " if C else "") + f"the served ladder {rungs}, the candidates {cands_rows}" + \
         f": {pages} page(s) of key length"
     # the record Prism prices the candidates from
     sdpa_uids = {u for u, o in runtime_graph(model, lm)["ops"].items() if o.get("op_type") in _SDPA_KINDS}
@@ -2727,7 +2744,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     for uid, q_, key in derive_extents(a.model, a.mode, topo, defaults, plan, prof.has_native_bf16,
                                        (budget, min_rows, max_chunks), unhandled, prompt=_prompt,
                                        audio_path=_audio, max_tokens_req=_mt_req,
-                                       image_path=_image):
+                                       image_path=_image, class_gb=_one_class(prof)):
         derived.add((uid, q_, C.key_repr(key)))
     if flow.get("type") == "rnnt":
         # the greedy decoder's LSTM runs through `lstm_wrapper` directly, one step at a time in

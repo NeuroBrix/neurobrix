@@ -165,7 +165,7 @@ class GraphLMSession:
         return device
 
     def _prefill_chunks(self, ids: List[int], batch_size: int, start: int, chunk: Optional[int],
-                        pads: bool = True) -> torch.Tensor:
+                        rungs: Optional[List[int]] = None) -> torch.Tensor:
         """The prefill of positions [start, len(ids)) in chunks (docs/design/prism_kv.md §5bis; R30 mirror of
         triton/session.TritonLMSession._prefill_chunks): `chunk` rows each, the last completed with copies of its last
         real row whose K/V the next chunk or the decode overwrites — or one chunk of the request's own rows. Every
@@ -190,8 +190,8 @@ class GraphLMSession:
         self.executor.enable_hidden_states_capture()
         from nbxtensor.memory.kv_session import chunk_rows
         rows_planned = int(chunk) if chunk else total - start
-        # `pads` False (the plan's `prefill_chunk_pads`): the last chunk runs its own rows, never copies of its last
-        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position, pads)
+        # `rungs` (the plan's `prefill_chunk_rungs`): the last chunk is completed to the smallest that holds it
+        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position, rungs)
         for s, real, ids_, pos in plan:
             chunk_ids = torch.tensor([ids_], dtype=torch.long, device=device)
             position_ids = torch.tensor([pos], dtype=torch.long, device=device)
@@ -228,14 +228,14 @@ class GraphLMSession:
         return hidden_states[:, :real, :]
 
     def prefill(self, input_ids: torch.Tensor, batch_size: int, start: int = 0,
-                chunk: Optional[int] = None, pads: bool = True) -> torch.Tensor:
+                chunk: Optional[int] = None, rungs: Optional[List[int]] = None) -> torch.Tensor:
         """Reset cache → run prefill → switch to decode mode → return hidden_states.
 
         `start` > 0: the cache already holds the request's first `start` positions (a serving session's, matched by
         ids — core/state/kv_session.py) and only the rest is prefilled. `chunk`: the plan's prefill chunk
         (KVCachePlan.prefill_chunk). Either one takes the chunked path; neither keeps the one-pass prefill below."""
         if start or chunk:
-            return self._prefill_chunks([int(t) for t in input_ids[0].tolist()], batch_size, int(start), chunk, pads)
+            return self._prefill_chunks([int(t) for t in input_ids[0].tolist()], batch_size, int(start), chunk, rungs)
         # Reset KV cache for new sequence
         if self.kv_wrapper is not None:
             self.kv_wrapper.reset_for_new_sequence()
@@ -747,7 +747,7 @@ class AutoregressiveHandler(FlowHandler):
 
         with torch.inference_mode():
             # ── PREFILL ────────────────────────────────────
-            hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk, pads=not chunk or kv_plan.prefill_chunk_pads)
+            hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk, rungs=kv_plan.prefill_chunk_rungs if chunk else None)
             _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
             # ── DECODE LOOP ────────────────────────────────

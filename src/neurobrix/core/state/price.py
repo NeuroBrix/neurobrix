@@ -143,14 +143,19 @@ def paged_cache_params(num_kv_heads: int, k_head_dim: int, v_head_dim: int, dtyp
 
 
 def prefill_chunk_candidates(page: int, priced_rows: int) -> List[int]:
-    """The prefill chunk sizes a serving session may run (docs/design/prism_kv.md §5bis), in rows: whole pages (a chunk
-    ends on a page, so the next attends over whole pages and a turn's bytes do not depend on where it ended), at most
-    the prefill rows the plan prices a session's activations at (`priced_rows`: its prompt margin) rounded down to
-    pages — a chunk never asks activations the plan did not price — and at least one page. Prism and the derived
-    census both read this one list."""
+    """The prefill chunk sizes a serving session may run (docs/design/prism_kv.md §5bis), in rows — a LADDER: one
+    page, then doubling (a chunk ends on a page, so the next attends over whole pages and a turn's bytes do not depend
+    on where it ended), at most the prefill rows the plan prices a session's activations at (`priced_rows`) — a chunk
+    never asks activations the plan did not price — and at least one page. A short ladder, so that every shape a
+    served turn runs (a rung's rows over a whole number of pages of keys) is a row of the derived census and can be
+    certified: a turn's own row count crossed with every key length cannot (2026-11-12). Prism, the session (through
+    the plan's `prefill_chunk_rungs`) and the derived census read this one list."""
     if int(page) <= 0 or int(priced_rows) <= 0:
         raise ValueError(f"prefill_chunk_candidates: page {page}, priced rows {priced_rows}")
-    return [int(page) * k for k in range(1, max(1, int(priced_rows) // int(page)) + 1)]
+    rungs = [int(page)]
+    while rungs[-1] * 2 <= int(priced_rows):
+        rungs.append(rungs[-1] * 2)
+    return rungs
 
 
 def session_prefill_rows(defaults: Mapping[str, Any]) -> int:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -37,12 +37,13 @@ class KVCachePlan:
     # served_attention.py): 0 where every decoder card's matrix unit runs the flash route at the cache's head dim — the
     # flash writes no scores, so the session holds no reserve for them; None: the executing device's own budget.
     chunk_scores_budget_bytes: Optional[int] = None
-    # Whether a turn's last chunk is completed to the chunk's rows. True for a chunk chosen from certified times (its
-    # keys are the certified ones, and a turn's bytes do not depend on where it ended); False where no certified time
-    # chose it: the last chunk runs its own rows, so a turn that fits the priced rows is ONE unpadded pass — padded to
-    # 128 rows, a 1 124-token first request took 51.6 s to its first token against 10.2 s in one pass, and a one-row
-    # continuation 3-6 s against 1.1 s (measured 2026-11-12, Qwen3-Coder-30B-A3B, one V100-32GB).
-    prefill_chunk_pads: bool = True
+    # The rows a turn's LAST chunk may be completed to, ascending, the last being prefill_chunk
+    # (`prefill_chunk.served_ladder`): it runs on the smallest that holds it, so every shape a session runs is a
+    # census row (a rung over whole pages of keys) and a short turn is not a pass of prefill_chunk rows — completed
+    # to 128 rows always, a 1 124-token first request took 51.6 s to its first token against 10.2 s in one pass
+    # (measured 2026-11-12, Qwen3-Coder-30B-A3B, one V100-32GB). None: every chunk has prefill_chunk rows (a chunk
+    # chosen from certified times: its keys are the certified ones).
+    prefill_chunk_rungs: Optional[List[int]] = None
 
     @property
     def head_dim(self) -> int:
@@ -71,7 +72,7 @@ class KVCachePlan:
             "prefill_chunk": self.prefill_chunk,
             "prefill_chunk_reason": self.prefill_chunk_reason,
             "chunk_scores_budget_bytes": self.chunk_scores_budget_bytes,
-            "prefill_chunk_pads": self.prefill_chunk_pads,
+            "prefill_chunk_rungs": self.prefill_chunk_rungs,
         }
 
     @classmethod
@@ -94,5 +95,5 @@ class KVCachePlan:
             # a plan saved before the field routed on the device's budget: None is that plan's meaning
             chunk_scores_budget_bytes=kv_data.get("chunk_scores_budget_bytes"),
             # a plan saved before the field padded every chunk: True is that plan's meaning
-            prefill_chunk_pads=kv_data.get("prefill_chunk_pads", True),
+            prefill_chunk_rungs=kv_data.get("prefill_chunk_rungs"),
         )

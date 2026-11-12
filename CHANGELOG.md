@@ -12,10 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A served model no longer runs out of memory on a long turn.** On the Triton engine a served session with no
   certified prefill chunk ran each turn's whole prompt in one pass that its memory plan had not priced: a served
   Qwen3-Coder-30B-A3B on one 32 GB card stopped on agent turns of 2 800 to 3 700 tokens. The plan now prices a served
-  turn's pass (`serving.session_prefill_rows_per_card_gb` in `config/system.yml`: 2 048 rows on a 32 GB card) and what its attention over every
-  cached position needs; a turn that fits is one pass, as before, and a longer one is cut into passes of that size.
-  Where the card's matrix unit runs the flash attention, that attention takes the flash route, which writes no score
-  matrix, so the memory the session keeps for decoding stays close to what it was.
+  turn's pass (`serving.session_prefill_rows_per_card_gb` in `config/system.yml`: 2 048 rows on a 32 GB card) and
+  what its attention over every cached position needs; a turn that fits is one pass, as before, and a longer one is
+  cut into passes of that size. Where the card's matrix unit runs the flash attention, that attention takes the flash
+  route, which writes no score matrix, so the memory the session keeps for decoding stays close to what it was.
+- **A served turn runs kernel shapes that are known in advance.** A turn's pass ran its own number of rows over
+  however many positions the conversation held: a pair no kernel configuration had been measured for, so the server
+  measured one on the spot, turn after turn, before the first token. A turn's last pass is now completed to the
+  nearest of a few sizes (64, 128, 256 rows and so on, up to the priced pass), so the shapes a conversation meets are
+  a short, fixed list.
 
 ## [0.6.9] - 2026-11-12
 

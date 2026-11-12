@@ -155,9 +155,9 @@ def held_ids(prompt_ids, generated, cache_len) -> List[int]
     # the ids a cache of cache_len positions holds after a request (prompt then the fed generated tokens)
 def forgetting_on_failure(kv_session, run)
     # run(); a failure leaves the session holding nothing
-def chunk_rows(ids, start, rows, absolute, pads=True) -> List[Tuple[int, int, List[int], List[int]]]
+def chunk_rows(ids, start, rows, absolute, rungs=None) -> List[Tuple[int, int, List[int], List[int]]]
     # the chunks of a prefill from `start`: (first position, real rows, ids, positions), the last padded with its last row
-    # (`pads=False`: the last chunk holds its own rows only)
+    # to `rows`, or (`rungs`: ascending row counts) to the smallest rung that holds it
 ```
 
 `nbxtensor.memory.kv_host_tier` — the KV cache's host tier, the shared half (pure bookkeeping)
