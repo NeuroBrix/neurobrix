@@ -869,8 +869,8 @@ class ValueAxis:
     the dims it carries downstream (`carry` {tid: {dim: fn(extent)}}) and the ops reading them
     (`cone_ops`); `refused` names why it cannot be classed (then nothing else is trusted)."""
 
-    def __init__(self, uid, kind, out_tid, dim, trace):
-        self.uid, self.kind, self.out_tid, self.dim, self.trace = uid, kind, out_tid, dim, trace
+    def __init__(self, uid, kind, out_tid, dim, built):
+        self.uid, self.kind, self.out_tid, self.dim, self.built = uid, kind, out_tid, dim, built
         self.carry = {out_tid: {dim: (lambda n: n)}}
         self.cone_ops = {uid}
         self.outputs = []          # graph outputs that carry the axis
@@ -930,12 +930,12 @@ def _carry_op(ax: ValueAxis, g: dict, uid: str):
     k = o["op_type"]
     ins = o.get("input_tensor_ids") or []
     outs = o.get("output_tensor_ids") or []
-    probe = (ax.trace + 1, 3 * ax.trace + 7)          # two extents off the build: tells functions apart
+    probe = (ax.built + 1, 3 * ax.built + 7)          # two extents off the build: tells functions apart
     tshape = lambda t: list(T[t]["shape"])
 
     def checked(fn, extent, what):
-        if fn(ax.trace) != extent:
-            raise ValueDerivedAxisRefused(f"{uid} ({k}): {what} gives {fn(ax.trace)} at the build "
+        if fn(ax.built) != extent:
+            raise ValueDerivedAxisRefused(f"{uid} ({k}): {what} gives {fn(ax.built)} at the build "
                                           f"where the graph holds {extent}")
         return fn
     for oi, ot in enumerate(outs):
@@ -1048,8 +1048,8 @@ def value_axes(model: str, comp: str) -> list:
             # tower's cu_seqlens from its grid, a row count only indexed) — inert, not classed
             ax.inert = True
             ax.outputs = [t for t in (g.get("output_tensor_ids") or []) if t in reach]
-        elif ax.trace <= 1:
-            ax.refused = (f"built at {ax.trace}: its carried dims cannot be told from a broadcast's")
+        elif ax.built <= 1:
+            ax.refused = (f"built at {ax.built}: its carried dims cannot be told from a broadcast's")
         else:
             try:
                 for u in order[pos + 1:]:

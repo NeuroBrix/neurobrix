@@ -76,8 +76,8 @@ CTX = {"symbols": {
     "s2": {"name": "height", "trace_value": 26, "source": "input::hidden_states::dim_3", "constraints": {"min": 1}},
     "s3": {"name": "width", "trace_value": 38, "source": "input::hidden_states::dim_4", "constraints": {"min": 1}}}}
 
-TRACE = (7, 26, 38)
-GRIDS = [TRACE, (3, 18, 30), (9, 90, 250)]          # the build, a second grid, a far one
+BUILD = (7, 26, 38)
+GRIDS = [BUILD, (3, 18, 30), (9, 90, 250)]          # the build, a second grid, a far one
 
 
 def _env(grid):
@@ -171,7 +171,7 @@ SCALAR_READERS = [read_aten_resolver, read_triton_resolver, read_compiled_sequen
 LIST_READERS = [read_compiled_sequence, read_triton_sequence, read_triton_sequential, read_aten_sequential]
 
 
-@pytest.mark.parametrize("grid", GRIDS, ids=["trace", "second", "far"])
+@pytest.mark.parametrize("grid", GRIDS, ids=["build", "second", "far"])
 @pytest.mark.parametrize("reader", SCALAR_READERS, ids=lambda f: f.__name__)
 def test_every_reader_evaluates_the_rotary_bounds_as_the_vendor_computes_them(reader, grid):
     env, want = _env(grid), _eager(grid)
@@ -182,7 +182,7 @@ def test_every_reader_evaluates_the_rotary_bounds_as_the_vendor_computes_them(re
     assert reader(H_STEPS, env) == grid[1] // 2 + 1
 
 
-@pytest.mark.parametrize("grid", GRIDS, ids=["trace", "second", "far"])
+@pytest.mark.parametrize("grid", GRIDS, ids=["build", "second", "far"])
 def test_the_readers_agree_to_the_bit(grid):
     env = _env(grid)
     for node in BOUNDS.values():
@@ -202,7 +202,7 @@ def test_the_float32_edges_are_the_vendors(grid):
 
 
 def test_the_recorded_build_is_what_the_tree_gives_at_the_build():
-    env = _env(TRACE)
+    env = _env(BUILD)
     for node in BOUNDS.values():
         assert read_triton_resolver(node, env) == node["trace"]
 
@@ -248,9 +248,9 @@ def test_an_exact_quotient_is_still_a_real():
 def test_a_node_outside_the_vocabulary_refuses_by_name():
     from neurobrix.core.runtime.symexpr import UnknownExpression
     with pytest.raises(UnknownExpression, match="'pow'"):
-        _triton(_env(TRACE)).resolve_scalar({"type": "pow", "left": _sym(2, 26), "right": 0.5})
+        _triton(_env(BUILD)).resolve_scalar({"type": "pow", "left": _sym(2, 26), "right": 0.5})
     with pytest.raises(UnknownExpression, match="'pow'"):
-        _aten(_env(TRACE)).resolve({"type": "pow", "left": _sym(2, 26), "right": 2})
+        _aten(_env(BUILD)).resolve({"type": "pow", "left": _sym(2, 26), "right": 2})
 
 
 def test_an_unbound_symbol_inside_a_real_refuses_by_name():

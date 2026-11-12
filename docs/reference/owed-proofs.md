@@ -2670,10 +2670,10 @@ by the container builder, which is the Dell's toolchain:
 
 | container | census status | keys |
 |---|---|---|
-| PixArt-Sigma-XL-1024 | `retrace+probe_failed`, frozen 1 symbol | 35 |
-| Sana_1600M_4Kpx_BF16 | `retrace`, frozen 1 symbol | 166 |
-| Wan2.1-I2V-14B-480P-Diffusers | `retrace+failed`, frozen 1 symbol | 0 |
-| Wan2.1-VACE-1.3B-diffusers | `retrace+failed`, frozen 1 symbol | 9 |
+| PixArt-Sigma-XL-1024 | `rebuild+probe_failed`, frozen 1 symbol | 35 |
+| Sana_1600M_4Kpx_BF16 | `rebuild`, frozen 1 symbol | 166 |
+| Wan2.1-I2V-14B-480P-Diffusers | `rebuild+failed`, frozen 1 symbol | 0 |
+| Wan2.1-VACE-1.3B-diffusers | `rebuild+failed`, frozen 1 symbol | 9 |
 
 (PixArt-Sigma-XL-1024 and Wan2.1-I2V-14B-480P also appear in classes 2 and 1 respectively — a
 container can be blocked more than one way, and closing one does not close the other.)
@@ -4436,7 +4436,7 @@ class), 10 Allegro-TI2V (its container lacks `pad_image_to_num_frames`, see the 
 ### 2026-09-24 — the merged census's non-streaming failures, by class and owner
 
 From the same census (`51edc3b5`, 59 containers, default request only). The streamed-execution
-rows are in `docs/reference/streamed-execution-failures-2026-09-24.md`.
+rows are in the internal failure report of 2026-09-24 (not published).
 
 **MoE, 76 runs, owner: the Mac.** Every run of the 7 MoE containers (DeepSeek-Coder-V2-Lite,
 deepseek-moe-16b-chat, granite-3.1-1b-a400m, Qwen3-30B-A3B-Thinking, Qwen3-Coder-30B-A3B and its

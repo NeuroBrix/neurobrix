@@ -93,7 +93,7 @@ def _declared_inputs(dag, by_name, rng):
             if sid is None:
                 shape.append(int(d))
                 continue
-            if by_name.get("seq_len") == "trace":
+            if by_name.get("seq_len") == "build":
                 shape.append(int((syms.get(sid) or {})["trace_value"]))
                 continue
             name = (syms.get(sid) or {}).get("name")
@@ -114,11 +114,13 @@ def _declared_inputs(dag, by_name, rng):
 
 def main():
     model, comp, mode, batch, seq, host_free, rung, out_path = sys.argv[1:9]
-    if (batch == "trace") != (seq == "trace"):
+    # the mode's old spelling stays a hidden alias of `build` until nbx_version 0.2
+    batch, seq = ("build" if v in ("build", "trace") else v for v in (batch, seq))
+    if (batch == "build") != (seq == "build"):
         raise SystemExit("BATCH and SEQ are both `build` or both numbers: the build mode binds "
                          "every symbol, the batch among them, at its build value")
     host_free, rung = int(host_free), int(rung)
-    batch, seq = (batch, seq) if seq == "trace" else (int(batch), int(seq))
+    batch, seq = (batch, seq) if seq == "build" else (int(batch), int(seq))
     h, w = (int(sys.argv[9]), int(sys.argv[10])) if len(sys.argv) > 10 else (None, None)
     root, plan = _plan(model, mode, host_free, rung, h, w)
     bounds = (plan.layer_stream_plan or {}).get(comp)
@@ -152,7 +154,7 @@ def main():
     whole_ex = executor()
     wanted = [t[7:] for t in whole_ex._dag["input_tensor_ids"]]
     if sorted(wanted) == ["attention_mask", "input_ids"]:
-        if seq == "trace":
+        if seq == "build":
             raise SystemExit("SEQ `build` binds a component's declared inputs; a token component "
                              "takes BATCH x SEQ ids — give SEQ a number")
         arrays = {"input_ids": rng.integers(0, 32000, size=(batch, seq), dtype=np.int64),

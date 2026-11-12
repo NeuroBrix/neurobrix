@@ -56,7 +56,7 @@ def root(role: str) -> Path:
 
 
 def python(name: str) -> str:
-    """The interpreter of the environment `name` (`engine`, `oracle`, `competitors`, `the container builder`: environments.md)."""
+    """The interpreter of the environment `name` (`engine`, `oracle`, `competitors`, the container builder's: environments.md)."""
     env = os.environ.get(f"NBX_ATELIER_PYTHON_{name.upper()}")
     if env:
         return env
@@ -107,7 +107,7 @@ def optional_root(role: str):
 
 class Interpreter(os.PathLike):
     """The interpreter of environment `name`, resolved when it is USED (as a path, a string or an argv element), not
-    when a tool is imported: a machine without that environment (the Mac has no the container builder python, by design) imports and
+    when a tool is imported: a machine without that environment (the Mac has no container-builder python, by design) imports and
     collects every tool, and only a run that needs the interpreter is refused, by name."""
 
     def __init__(self, name: str):

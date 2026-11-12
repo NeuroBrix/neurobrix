@@ -2,7 +2,7 @@
 
 Guard for the aten::max_pool3d_with_indices dispatch gap: video
 conditioning masks (Allegro-TI2V state_video_mask downsampled to the
-latent grid via F.max_pool3d) trace to this op, which had no triton
+latent grid via F.max_pool3d) lower to this op, which had no triton
 kernel — `[triton] Missing op: aten::max_pool3d_with_indices` in the
 transformer loop. Kernel: kernels/ops/max_pool3d.py (temporal extension
 of the FlagGems-derived 2D pool kernel).

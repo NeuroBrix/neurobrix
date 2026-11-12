@@ -152,7 +152,7 @@ def test_the_axis_is_found_bounded_and_carried(synthetic):
     g = synthetic(graph())
     (grp,) = D.value_axes(MODEL, COMP)
     (ax,) = grp
-    assert ax.uid == "aten.repeat_interleave::0" and ax.trace == 34 and ax.refused is None
+    assert ax.uid == "aten.repeat_interleave::0" and ax.built == 34 and ax.refused is None
     shape = D._shape_fn(g, COMP, {"s1": 94}, {}, {})
     assert ax.extent_range(g, shape) == (94, 94 * 50)          # [1, 50] frames per phoneme
     assert {"aten.bmm::0", "aten.convolution::0", "aten.upsample_nearest1d::0",

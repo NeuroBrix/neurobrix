@@ -620,7 +620,7 @@ def blind_axes(from_cache: bool = False) -> dict:
         for e in entries:
             for cls, _why in e["flags"]:
                 out.setdefault(model, []).append(
-                    f"{comp.split('/',1)[1]} `{e['name']}`@{e['trace']} ({cls})")
+                    f"{comp.split('/',1)[1]} `{e['name']}`@{e.get('built', e.get('trace'))} ({cls})")
     stamp = _t.strftime("%Y-%m-%d %H:%M UTC", _t.gmtime())
     CENSUS_CACHE.parent.mkdir(parents=True, exist_ok=True)
     CENSUS_CACHE.write_text(json.dumps({"taken_utc": stamp, "blind": out}, indent=1))
@@ -879,7 +879,7 @@ def public_wording(text: str) -> str:
     """`text` with the private tool's name and verb written as the public pages write them, capitals kept."""
     def swap(match, forms):
         word = match.group(0)
-        key = "forge" if word.lower() == "forge" else re.sub(r"^(?:re-?)?trac", "", word.lower())
+        key = _TOOL if word.lower() == _TOOL else re.sub(r"^(?:re-?)?trac", "", word.lower())
         out = forms[key]
         return out.upper() if word.isupper() else out
     for pattern, forms in _PUBLIC_WORDS:

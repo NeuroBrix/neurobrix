@@ -103,13 +103,13 @@ def census_one(path: Path, show_all: bool = False) -> tuple:
         return [{"error": f"{type(exc).__name__}: {exc}"}], []
     weights = weight_extents(graph)
     rows, accepted = [], []
-    for sid, (name, trace, source) in sorted(declared_symbols(graph).items()):
+    for sid, (name, built, source) in sorted(declared_symbols(graph).items()):
         flags = []
-        if isinstance(trace, int) and trace in ARITHMETIC_COLLISIONS:
-            flags.append(("arithmetic", ARITHMETIC_COLLISIONS[trace]))
-        if isinstance(trace, int) and trace in weights:
+        if isinstance(built, int) and built in ARITHMETIC_COLLISIONS:
+            flags.append(("arithmetic", ARITHMETIC_COLLISIONS[built]))
+        if isinstance(built, int) and built in weights:
             flags.append(("weight-extent",
-                          f"{trace} is also a parameter extent in this component"))
+                          f"{built} is also a parameter extent in this component"))
         # THE BATCH AXIS IS A DELIBERATE, DOCUMENTED CHOICE at every small
         # value it takes, and not a blind spot anyone can act on. The project
         # REQUIRES batch to stay symbolic at a single item ("a batch symbol is
@@ -125,7 +125,8 @@ def census_one(path: Path, show_all: bool = False) -> tuple:
             accepted.append(sid)
             continue
         if flags:
-            rows.append({"symbol": sid, "name": name, "trace": trace,
+            # "built" is the key; the old key is written beside it until nbx_version 0.2
+            rows.append({"symbol": sid, "name": name, "built": built, "trace": built,
                          "source": source, "flags": flags})
     return rows, accepted
 
@@ -187,7 +188,7 @@ def main() -> int:
         print(f"  {key}")
         for row in findings[key]:
             src = f"  <- {row['source']}" if row.get("source") else ""
-            print(f"      {row['symbol']} '{row['name']}' built at {row['trace']}{src}")
+            print(f"      {row['symbol']} '{row['name']}' built at {row['built']}{src}")
             for cls, why in row["flags"]:
                 print(f"          [{cls}] {why}")
     print(f"\n  components with at least one blind axis: {len(findings)} of {len(graphs)}")

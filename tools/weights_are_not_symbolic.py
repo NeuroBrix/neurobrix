@@ -8,7 +8,7 @@ binds one to the other has mistaken a coincidence for a relationship.
 
 WHAT IT COST, measured 2026-09-23
 ---------------------------------
-mochi-1-preview was rebuilt at `--trace-spatial 30,54`. At those values
+mochi-1-preview was rebuilt with its spatial size bound at 30,54. At those values
 
     time(10) + width(54) == 64 == the attention head dim
 

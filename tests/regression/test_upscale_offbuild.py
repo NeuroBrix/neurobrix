@@ -124,7 +124,7 @@ def _make_input(hw: tuple[int, int], dest: Path) -> Path:
 
 
 @pytest.mark.parametrize("mode", ["compiled", "triton"])
-@pytest.mark.parametrize("size", ["trace", "offtrace", "offtrace_unaligned"])
+@pytest.mark.parametrize("size", ["build", "offbuild", "offbuild_unaligned"])
 @pytest.mark.parametrize("model", CELLS)
 def test_upscale_two_sizes(model: str, size: str, mode: str,
                            tmp_path: Path) -> None:
@@ -136,9 +136,9 @@ def test_upscale_two_sizes(model: str, size: str, mode: str,
     except Exception:
         pytest.skip(f"{model} not in the local cache")
 
-    hw = {"trace": None, "offtrace": OFF_BUILD_HW,
-          "offtrace_unaligned": OFF_BUILD_UNALIGNED_HW}[size] or _build_hw(model)
-    if size != "trace" and hw == _build_hw(model):
+    hw = {"build": None, "offbuild": OFF_BUILD_HW,
+          "offbuild_unaligned": OFF_BUILD_UNALIGNED_HW}[size] or _build_hw(model)
+    if size != "build" and hw == _build_hw(model):
         pytest.skip("off-build size coincides with the build size — "
                     "pick a different off-build size")
     if mode == "triton" and model == "hat-l-x4":
@@ -227,7 +227,7 @@ def _tone_params() -> list:
     for model, cfg in TONE_REF["artifacts"].items():
         defect = cfg.get("known_defect")
         for engine in cfg["engines"]:
-            for size in ("trace", "offtrace", "offtrace_rect"):
+            for size in ("build", "offbuild", "offbuild_rect"):
                 # A defect can be scoped to a size, or to one engine at
                 # one size: swin2sr-x2 after its rebuild fails compiled
                 # at both sizes and triton only off-build, and marking a
@@ -265,9 +265,9 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
     # off-build half is where a shape-dependent value defect shows.
     from PIL import Image
 
-    hw = {"trace": None, "offtrace": OFF_BUILD_HW,
-          "offtrace_rect": OFF_BUILD_RECT_HW}[size] or _build_hw(model)
-    if size != "trace" and hw == _build_hw(model):
+    hw = {"build": None, "offbuild": OFF_BUILD_HW,
+          "offbuild_rect": OFF_BUILD_RECT_HW}[size] or _build_hw(model)
+    if size != "build" and hw == _build_hw(model):
         pytest.skip("off-build size coincides with the build size")
     src = tmp_path / f"tone_in_{model}_{size}.png"
     Image.open(asset).convert("RGB").resize(
