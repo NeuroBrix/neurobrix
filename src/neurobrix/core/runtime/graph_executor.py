@@ -2489,33 +2489,14 @@ class GraphExecutor:
         # autotune bench found 121 MiB free on a 32 GB card.)
         DeviceAllocator.empty_cache_pool()
 
-        # TEMP DIAG: probe VRAM right after triton weight load commits the
-        # component's arena. Gate env NBX_UNLOAD_DIAG=1.
-        import os as _os_d
-        if _os_d.environ.get("NBX_UNLOAD_DIAG") == "1":
-            import ctypes as _ct
+        # NBX_UNLOAD_DIAG=1: the device's memory right after the weight load committed the component's arena.
+        if os.environ.get("NBX_UNLOAD_DIAG") == "1":
             try:
-                try:
-                    _rt = _ct.CDLL("libcudart.so")
-                except OSError:
-                    _rt = None
-                    for _v in (12, 11, 10):
-                        try:
-                            _rt = _ct.CDLL(f"libcudart.so.{_v}")
-                            break
-                        except OSError:
-                            continue
-                if _rt is not None:
-                    _free = _ct.c_size_t(0); _total = _ct.c_size_t(0)
-                    _rt.cudaMemGetInfo(_ct.byref(_free), _ct.byref(_total))
-                    _used_gb = (_total.value - _free.value) / 1e9
-                    _free_gb = _free.value / 1e9
-                    _log.debug(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
-                               f"used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
-                               f"cuda:{device_idx}")
+                _free, _total = DeviceAllocator.mem_get_info(device_idx)
+                _log.debug(f"[VRAM_PROBE after_load_weights_triton[{component}]] used={(_total - _free) / 1e9:.2f}GB "
+                           f"free={_free / 1e9:.2f}GB cuda:{device_idx}")
             except Exception as _e:
-                _log.debug(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
-                           f"failed: {_e}")
+                _log.debug(f"[VRAM_PROBE after_load_weights_triton[{component}]] failed: {_e}")
 
         # Computable buffers + handler prep now live in load_weights() so
         # both native and triton paths run them. See shared post-dispatch
@@ -3773,9 +3754,8 @@ class GraphExecutor:
             _fp_path_sq = _os_fp_sq.environ.get("NBX_OP_FINGERPRINT", "")
             if _fp_path_sq and output_tids:
                 try:
-                    import json as _json_fp_sq, hashlib as _hl_sq
-                    import ctypes as _ct_fp_sq
-                    from nbxtensor.memory.allocator import DeviceAllocator as _DA_fp_sq
+                    import json as _json_fp_sq
+                    from nbxtensor import inspection as _inspection_sq
                     from neurobrix.core.runtime.fingerprint import hashed_span as _span_sq
                     _fp_max_sq = int(
                         _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_MAX", "0"))
@@ -3793,20 +3773,14 @@ class GraphExecutor:
                                              "op_type": op_type, "tid": _ot,
                                              "sha": "none"})
                             continue
-                        if hasattr(_t, "_device_idx"):
-                            _DA_fp_sq.set_device(_t._device_idx)
-                        _c = _t.contiguous()
-                        _nb = _c._nbytes
+                        _nb = _t.nbytes()
                         _hb = _span_sq(_nb)          # the whole tensor unless a cap is asked by name
-                        _buf = (_ct_fp_sq.c_char * _hb)()
-                        _DA_fp_sq.memcpy(_ct_fp_sq.addressof(_buf),
-                                         _c.data_ptr(), _hb, kind=2)
                         _recs_sq.append({
                             "i": self._fp_idx_sq, "op_uid": op_uid,
                             "op_type": op_type, "tid": _ot,
                             "shape": list(_t.shape), "dtype": str(_t.dtype),
                             "nbytes": _nb, "hashed": _hb,
-                            "sha": _hl_sq.sha256(bytes(_buf)).hexdigest()})
+                            "sha": _inspection_sq.digest(_t, "sha256", _hb)})
                     with open(_fp_path_sq, "a") as _f_sq:
                         for _r in _recs_sq:
                             _json_fp_sq.dump(_r, _f_sq)
@@ -4600,88 +4574,18 @@ class GraphExecutor:
         except Exception as _e:
             return f"ERR_torch:{_e}"
         try:
+            from nbxtensor import inspection
             from nbxtensor.tensor import NBXTensor
             from nbxtensor.dtype.nbx_dtype import NBXDtype
-            from nbxtensor.memory.allocator import DeviceAllocator
             if isinstance(t, NBXTensor):
-                n = t._numel
+                n = t.numel()
                 if n == 0:
                     return "empty"
-                if t._dtype not in (NBXDtype.float32, NBXDtype.float16,
-                                    NBXDtype.bfloat16):
-                    return f"int_dtype={t._dtype}"
-                # Map NBX dtype -> numpy dtype + element-size bytes.
-                np_dtype_map = {NBXDtype.float32: _np.float32,
-                                NBXDtype.float16: _np.float16,
-                                NBXDtype.bfloat16: _np.float16}
-                np_dtype = np_dtype_map[t._dtype]
-                el_bytes = {NBXDtype.float32: 4,
-                            NBXDtype.float16: 2,
-                            NBXDtype.bfloat16: 2}[t._dtype]
-                # Sample 5 INTERIOR positions only. The n-1 (last
-                # element) sample produced inconsistent reads across
-                # otherwise-deterministic runs (3rd fingerprint bug
-                # this session — neither sync_device nor logical-to-
-                # physical mapping fixed it; suspected off-by-one in
-                # some kernel boundary write or arena padding leak at
-                # the tail). Five interior positions are immune to
-                # boundary-write artifacts.
-                idxs = (0, n // 8, n // 4, n // 2, 3 * n // 4)
-                samples = []
-                # Map logical (row-major) flat index -> physical byte
-                # offset using shape/strides. Required for non-contiguous
-                # views (transpose, slice) so NBX fingerprint matches
-                # torch.Tensor.flatten()[i] semantics. P-SANA-4KPX-RUNTIME
-                # 2026-05-07: fixed false-positive divergence on every
-                # transpose op caused by raw data_ptr + i*el_bytes which
-                # samples physical storage order, diverging from the
-                # logical row-major view that torch flatten() returns.
-                shape = tuple(t._shape) if hasattr(t, '_shape') else ()
-                strides = tuple(t._strides) if hasattr(t, '_strides') else ()
-                def _logical_to_physical_byte(p):
-                    if not shape:
-                        return p * el_bytes
-                    off = 0
-                    rem = p
-                    for d in range(len(shape) - 1, -1, -1):
-                        coord = rem % shape[d]
-                        rem //= shape[d]
-                        off += coord * strides[d]
-                    return off * el_bytes
-                # Use t.data_ptr() — it adds _offset * el_bytes for
-                # sliced/narrowed views (NBXTensor stores _offset
-                # separately from _data_ptr; narrow/select update
-                # _offset but keep _data_ptr pointing at the parent
-                # storage base).
-                base_ptr = t.data_ptr()
-                # Sync device before sampling. Triton kernel launches
-                # are async; the last block (which writes the n-1
-                # element) may still be pending when we issue a D2H
-                # memcpy on a different stream. Without sync the n-1
-                # sample reads stale memory inconsistently across
-                # runs, producing a false-positive divergence on
-                # every op output (3rd fingerprint helper bug
-                # discovered this session: P-SANA-4KPX-RUNTIME
-                # 2026-05-07). Earlier sample positions (0, n//4,
-                # n//2, 3n//4) happen to live in earlier blocks
-                # which had time to settle, hence appeared aligned.
-                DeviceAllocator.sync_device()
-                for i in idxs:
-                    buf = _np.zeros(1, dtype=np_dtype)
-                    DeviceAllocator.memcpy(
-                        buf.ctypes.data,
-                        base_ptr + _logical_to_physical_byte(i),
-                        el_bytes, 2)  # kind=2 = D2H
-                    # bf16 stored as fp16 numpy (raw bits) — convert via
-                    # bit-cast for human-readable comparison.
-                    if t._dtype == NBXDtype.bfloat16:
-                        u = buf.view(_np.uint16)[0]
-                        # bf16 -> fp32: shift left 16 bits
-                        f32_bits = int(u) << 16
-                        samples.append(float(_np.array(
-                            f32_bits, dtype=_np.uint32).view(_np.float32)))
-                    else:
-                        samples.append(float(buf[0]))
+                if t.nbx_dtype not in (NBXDtype.float32, NBXDtype.float16, NBXDtype.bfloat16):
+                    return f"int_dtype={t.nbx_dtype}"
+                # Five interior positions (the last element read inconsistently across deterministic runs), each
+                # element read alone at its row-major position, as torch's flatten()[i] (P-SANA-4KPX-RUNTIME).
+                samples = inspection.values_at(t, (0, n // 8, n // 4, n // 2, 3 * n // 4))
                 return f"[{','.join(f'{s:.4g}' for s in samples)}]"
         except Exception as _e:
             return f"ERR_nbx:{_e}"

@@ -65,3 +65,16 @@ def test_the_digest_covers_the_elements_in_row_major_order():
     assert inspection.digest(t, "sha256", 8) == hashlib.sha256(x.tobytes()[:8]).hexdigest()
     assert inspection.digest(t.t(), "blake2b", digest_size=8) == \
         hashlib.blake2b(np.ascontiguousarray(x.T).tobytes(), digest_size=8).hexdigest()
+
+
+def test_values_at_read_the_logical_positions_of_a_view_in_every_half_dtype():
+    """A transposed or narrowed view is read at its row-major positions, never its storage order; a bf16 value is its
+    exact float32 (`item()` read a bf16 element as 0.0 before 2026-11-12)."""
+    _accelerator()
+    x = np.array([[1.5, -2.25, 3.0], [0.0078125, -96.0, 7.0]], dtype=np.float32)   # every value exact in fp16, bf16
+    for dtype in (NBXDtype.float32, NBXDtype.float16, NBXDtype.bfloat16):
+        t = NBXTensor.from_numpy(x).to(dtype)
+        assert inspection.values_at(t.t(), range(6)) == x.T.reshape(-1).tolist(), dtype
+        assert inspection.values_at(t.narrow(1, 1, 2), (0, 3)) == [-2.25, 7.0], dtype
+        assert t.select(0, 1).select(0, 1).item() == -96.0, dtype
+    assert inspection.values_at(NBXTensor.from_numpy(np.array(5.5, dtype=np.float32)), (0,)) == [5.5]

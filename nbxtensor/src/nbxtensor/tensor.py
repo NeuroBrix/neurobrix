@@ -1707,6 +1707,9 @@ class NBXTensor:
         elif self._dtype == NBXDtype.float16:
             raw = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint16))[0]
             return struct.unpack('e', struct.pack('H', raw))[0]
+        elif self._dtype == NBXDtype.bfloat16:                  # the high half of a float32
+            raw = ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint16))[0]
+            return struct.unpack('f', struct.pack('I', raw << 16))[0]
         elif self._dtype == NBXDtype.bool_:
             return bool(ctypes.cast(buf, ctypes.POINTER(ctypes.c_uint8))[0])
         return 0.0

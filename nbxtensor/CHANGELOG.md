@@ -121,6 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and copy speeds (device to device, page-locked and pageable host to device, device to host), timed through the
   library's own kernels and copies. `io.read_rate.evict(paths)` and `cold_read_gbps(path)`: files out of the page
   cache, and one cold sequential read. The engine's planner measured them with its own raw allocations and copies.
+- `inspection.values_at(t, positions)`: a few values of a tensor at row-major positions, each element read alone after
+  a device synchronisation (a view read in its logical order, never its storage's). The engine's sequential value
+  sampler walked the strides and copied each element itself.
 
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
@@ -135,6 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cuDeviceCanAccessPeer`); a call that failed was read as "no peer" and the grant silently named the owning card
   alone, so a later card-to-card copy failed far from its cause. The failing call, its device and its status are now
   the error. A driver that answers "not a peer" is unchanged.
+- `NBXTensor.item()` on a bfloat16 element returns its value (the high half of a float32); it returned 0.0.
 
 ## [0.1.3] - 2026-11-11
 

@@ -1,5 +1,5 @@
 """A tensor's values read on the host for a diagnostic: non-finite scan, value statistics, the last position's row, a
-digest of the bytes.
+digest of the bytes, a few values at row-major positions.
 
 What an engine prints or writes when it inspects an op's output (which op, which tensor, which file) is its own
 choice; reading the values is the library's. Every function copies to the host through `NBXTensor.numpy()` (floats
@@ -16,7 +16,7 @@ import numpy as np
 
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 
-__all__ = ["host_values", "non_finite", "value_stats", "last_position_row", "digest"]
+__all__ = ["host_values", "non_finite", "value_stats", "last_position_row", "digest", "values_at"]
 
 
 def _real(t):
@@ -84,3 +84,23 @@ def digest(t, algorithm: str, nbytes: Optional[int] = None, **params) -> str:
     of them when given."""
     data = t.numpy().tobytes()
     return hashlib.new(algorithm, data if nbytes is None else data[:nbytes], **params).hexdigest()
+
+
+def values_at(t, positions) -> list:
+    """The values of `t` at the row-major flat `positions`, as Python floats, each element read alone (the tensor is
+    never copied whole: a sample of a large output stays cheap). The device is synchronised first, so a kernel still
+    writing `t` is waited for."""
+    from nbxtensor.memory.allocator import DeviceAllocator
+    DeviceAllocator.sync_device()
+    shape = list(t.shape)
+    out = []
+    for p in positions:
+        coords = []
+        for size in reversed(shape):
+            coords.append(p % size)
+            p //= size
+        v = t
+        for i in reversed(coords):
+            v = v.select(0, i)
+        out.append(float(v.item()))
+    return out
