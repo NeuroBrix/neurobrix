@@ -22,15 +22,14 @@ Two rules this file keeps:
 * **We do not re-derive their ABI.** The scalar layout comes from triton-ext's own
   `_compute_scalar_layout`/`_SCALAR_PACK_INFO`, so a change on their side is a
   change here, not a silent divergence. We follow the line of Triton.
-* **No torch.** triton-ext ships two dispatch runtimes and prefers the libtorch
-  one whenever torch is merely installed; R33 forbids that, so this driver pins
-  the torch-free `_NativeRuntime`. Upstream has no supported switch for it —
-  that is an owed upstream contribution, with `spike_native_runtime.py` as its
-  reproducer.
+* **We run what they compile.** triton-ext compiles the kernel to a metallib; nbxtensor builds its pipeline and
+  encodes every launch on its own Metal stream (`metal_dispatch`): one serial compute encoder, so consecutive kernels
+  are ordered by Metal and the host waits only where it reads. triton-ext's runtime (a command buffer and a fresh
+  wrap per launch, on a queue of its own) is not used: Metal ran two of its launches overlapped, so it had to wait
+  after every one (131 493 waits, 19.58 s of a 30.36 s TinyLlama run, the Mac, 2026-11-12).
 """
 from __future__ import annotations
 
-import ctypes
 import struct
 from typing import Any, List, NamedTuple, Optional, Sequence, Tuple
 
@@ -40,55 +39,35 @@ _log = logging.getLogger(__name__)
 
 
 def _ext():
-    """triton-ext's driver module, with the torch-free runtime pinned.
-
-    `_runtime()` chooses `_TorchRuntime` whenever torch can be imported and
-    offers no override, so the choice is made here before anything builds one.
-    """
+    """triton-ext's driver module: the authority for the packed-scalar layout (`_compute_scalar_layout`)."""
     from triton_apple_backend import driver as D
-    if not isinstance(getattr(D, "_RUNTIME", None), D._NativeRuntime):
-        D._RUNTIME = D._NativeRuntime()
     return D
 
 
 _SYNC_TIMING = __import__("os").environ.get("NBX_SYNC_TIMING", "0") == "1"
-_SYNC_ACC = [0.0, 0.0, 0.0, 0]   # drain, submit, synchronize, count
-_SYNC_PER_KERNEL = {}            # name -> [calls, seconds inside synchronize]
-_KERNEL_NAMES = {}               # id(kernel) -> (kernel, its metallib function name); filled only when counting
+_SYNC_ACC = [0.0, 0]             # seconds encoding launches, launches
+_SYNC_PER_KERNEL = {}            # name -> [launches, seconds encoding them]
 
 
 def kernel_name(function) -> str:
-    """The name a loaded Metal kernel was asked for (`load`). triton-ext's `MetalKernel` keeps it but does not expose
-    it, so without this every row of the sync counter read `MetalKernel` (the Mac, 2026-11-12). Held only while
-    `NBX_SYNC_TIMING=1`; the kernel is kept with its name so its id is never reused."""
-    held = _KERNEL_NAMES.get(id(function))
-    return held[1] if held else (getattr(function, "name", None) or type(function).__name__)
+    """The name a Metal kernel was compiled under (`metal_dispatch.Pipeline.name`): the counter's rows."""
+    return getattr(function, "name", None) or type(function).__name__
+
+
 if _SYNC_TIMING:                                       # pragma: no cover
     import atexit as _ax
 
     @_ax.register
     def _report_sync():
-        d, s_, y, n = _SYNC_ACC
+        e, n = _SYNC_ACC
         if not n:
             return
-        _log.debug(f"[sync-timing] launches={n}  drain={d:.3f}s  submit={s_:.3f}s  "
-                   f"synchronize={y:.3f}s  (per launch: drain {1000*d/n:.3f}ms  "
-                   f"submit {1000*s_/n:.3f}ms  sync {1000*y/n:.3f}ms)")
-        if not _SYNC_PER_KERNEL:
-            return
-        rows = sorted(_SYNC_PER_KERNEL.items(), key=lambda kv: -kv[1][1])
-        tot = sum(v[1] for v in _SYNC_PER_KERNEL.values()) or 1.0
-        _log.debug(f"[sync-timing] per operator, by time inside synchronize:")
-        _log.debug(f"[sync-timing]   {'kernel':<44} {'calls':>7} {'sync s':>9} "
-                   f"{'ms/call':>9} {'share':>7}")
+        _log.debug(f"[sync-timing] launches={n}  encode={e:.3f}s ({1000*e/n:.4f} ms a launch); the host now waits "
+                   f"only where it reads (metal_device flush), never after a launch")
+        rows = sorted(_SYNC_PER_KERNEL.items(), key=lambda kv: -kv[1][0])
+        _log.debug(f"[sync-timing]   {'kernel':<44} {'launches':>8} {'encode s':>9}")
         for name, (c, t) in rows[:18]:
-            _log.debug(f"[sync-timing]   {name[:44]:<44} {c:>7} {t:>9.3f} "
-                       f"{1000*t/max(c,1):>9.3f} {100*t/tot:>6.1f}%")
-
-
-def _native():
-    from triton_apple_backend import metal_native
-    return metal_native
+            _log.debug(f"[sync-timing]   {name[:44]:<44} {c:>8} {t:>9.3f}")
 
 
 #: Our `_pack_param` kinds -> the width, in bytes, of the value it produced.
@@ -114,10 +93,8 @@ class TritonExtDriver(Driver):
     #: "flat arg count does not match signature keep-mask length".
     wants_scratch_params = False
 
-    #: This driver binds a pointer by wrapping memory, and a wrap costs what it maps (~11.5 ms per GiB on M4 Pro,
-    #: 2026-10-04): it asks the launcher for each tensor's addressable extent so it wraps that, not the rest of the
-    #: allocation the tensor lives in.
-    wants_extents = True
+    #: Pointers bind as (buffer, offset) of their allocation (`metal_dispatch`): no wrap, so no extent is needed.
+    wants_extents = False
 
     _instance: Optional["TritonExtDriver"] = None
 
@@ -178,16 +155,9 @@ class TritonExtDriver(Driver):
 
     # -- load --------------------------------------------------------------
     def load(self, binary: bytes, name: str, shared: int):
-        module = _native().load_metallib(bytes(binary))
-        fn = module.get_function(name)
-        if _SYNC_TIMING:
-            _KERNEL_NAMES[id(fn)] = (fn, name)
-        import os as _os
-        if _os.environ.get("NBX_EXT_DEBUG"):
-            _log.debug(f"[ext] load name={name!r} metallib={len(bytes(binary))}B "
-                       f"fn={fn} max_threads="
-                       f"{getattr(fn, 'max_total_threads_per_threadgroup', None)}")
-        return fn
+        """Our pipeline of the compiled kernel (`metal_dispatch.pipeline`): triton-ext compiles, nbxtensor runs."""
+        from nbxtensor.backend.metal_dispatch import pipeline
+        return pipeline(bytes(binary), name)
 
     # -- launch ------------------------------------------------------------
     def trailing_buffers(self, metadata):
@@ -228,9 +198,12 @@ class TritonExtDriver(Driver):
         # encoder names. We passed neither until 2026-10-04.
         exposes = bool(getattr(metadata, "exposes_addresses", False))
         reads = bool(getattr(metadata, "reads_addresses", False))
-        if pl is None and al is None and not exposes and not reads:
+        # A kernel with a barrier across threadgroups needs its whole grid co-resident: Metal has no cooperative
+        # launch and does not preempt a spinning threadgroup (triton-ext's compiler, `cross_tg_barrier`).
+        barrier = bool(getattr(metadata, "cross_tg_barrier", False))
+        if pl is None and al is None and not exposes and not reads and not barrier:
             return None
-        return _Trailing(pl, al, exposes, reads)
+        return _Trailing(pl, al, exposes, reads, barrier)
 
     def launch(self, function, grid, block, shared: int, stream: int,
                params: Sequence[Tuple[str, Any]], names=None, types=None,
@@ -258,133 +231,70 @@ class TritonExtDriver(Driver):
                 f"says nothing.")
 
         D = _ext()
-        ptr_args: List[Any] = []
+        pointers: List[int] = []
         scalar_types: List[str] = []
         scalar_vals: List[Tuple[str, int]] = []
-
-        extents = list(extents) if extents is not None else [None] * len(params)
-        for ((kind, value), ty), extent in zip(zip(params, types), extents):
+        for (kind, value), ty in zip(params, types):
             if kind == "ptr":
-                ptr_args.append(_buffer_for(int(value), ty, extent))
+                if not int(value):
+                    raise RuntimeError(f"kernel {kernel_name(function)!r} was handed a null pointer parameter")
+                pointers.append(int(value))
             else:
                 scalar_types.append(ty)
                 scalar_vals.append((kind, int(value)))
-
-        args: Tuple[Any, ...] = tuple(ptr_args)
+        packed = None
         if scalar_types:
             total, offsets = D._compute_scalar_layout(scalar_types)
             limit = getattr(D, "_SETBYTES_LIMIT", 4096)
             if total > limit:
-                raise RuntimeError(
-                    f"packed scalar args are {total} bytes, over Metal's "
-                    f"{limit}-byte setBytes limit")
+                raise RuntimeError(f"packed scalar args are {total} bytes, over Metal's {limit}-byte setBytes limit")
             buf = bytearray(total)
             for (kind, val), ty, off in zip(scalar_vals, scalar_types, offsets):
                 width = _KIND_WIDTH.get(kind)
                 if width is None:
-                    raise RuntimeError(
-                        f"the triton-ext driver cannot pack a parameter of kind "
-                        f"{kind!r} (Triton type {ty!r})")
-                fmt = {1: "<B", 2: "<H", 4: "<I", 8: "<Q"}[width]
-                struct.pack_into(fmt, buf, off, val & ((1 << (8 * width)) - 1))
-            args = args + (bytes(buf),)
-
-        gx, gy, gz = grid
-        lx, ly, lz = block
-        import os as _os
-        if _os.environ.get("NBX_EXT_DEBUG"):
-            _log.debug(f"[ext] ptrs={len(ptr_args)} scalars={list(zip(scalar_types, scalar_vals))} "
-                       f"packed={(args[-1].hex() if scalar_types else None)} "
-                       f"threads={[gx*lx, gy*ly, gz*lz]} group_size={[lx, ly, lz]} "
-                       f"grid={grid} block={block} shared={shared}")
-        # The emitter's own trailing parameters, bound LAST and in its order
-        # (print, then assert), which is what `planKernelAbi` fixed. Both must
-        # start zeroed: each block's head word is a running count the kernel
-        # bumps.
-        print_buf = assert_buf = None
-        addr_flags = {}
-        if trailing is not None:
-            if trailing.exposes_addresses:
-                addr_flags["exposes_addresses"] = True
-            if trailing.reads_addresses:
-                addr_flags["reads_addresses"] = True
-        if trailing is not None:
-            rt = D._runtime()      # D is the pinned torch-free runtime's module
-            if trailing.print_layout is not None:
-                print_buf = rt.zeros_i32(trailing.print_layout.nbytes // 4)
-                args = args + (print_buf,)
-            if trailing.assert_layout is not None:
-                assert_buf = rt.zeros_i32(trailing.assert_layout.nbytes // 4)
-                args = args + (assert_buf,)
-
-        # Two queues, one device, shared buffers. Metal orders command buffers
-        # within a queue; ACROSS queues nothing is ordered without an explicit
-        # event (Apple: a fence cannot synchronize untracked resources accessed
-        # from separate queues; MTLEvent/MTLSharedEvent is the mechanism).
-        #
-        # NeuroBrix enqueues its device-to-device copies as blits on ITS queue
-        # and returns to the host immediately — correct while the kernels shared
-        # that queue, which is what `metal_device._blit` says in as many words:
-        # "a blit on the same queue as the kernels is ordered by the GPU and
-        # waits for nothing". triton-ext breaks that premise: its kernels run on
-        # its own queue, so a blit that has not landed is invisible to them.
-        #
-        # Measured on swin2SR (M4 Pro, 2026-09-17): without this drain, the conv
-        # at (1,180,448,448)->64 read 63181 NaN / 356 Inf / absmax 3.39e+38 from
-        # an input that is `absmax 1.492` and finite in every ordered run, and
-        # the fp64 screen refused all 18 candidates. A host round trip inserted
-        # before the launch made the same run clean, which is what identified
-        # the ordering rather than the arithmetic.
-        with _launch_pool(addr_flags):
-            if _SYNC_TIMING:
-                import time as _t
-                _a = _t.perf_counter(); _nbx_queue_drain()
-                _b = _t.perf_counter()
-                function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
-                _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
-                _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
-                _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
-                _kn = kernel_name(function)
-                _row = _SYNC_PER_KERNEL.get(_kn)
-                if _row is None:
-                    _SYNC_PER_KERNEL[_kn] = [1, _d - _c]
-                else:
-                    _row[0] += 1; _row[1] += _d - _c
-            else:
-                _nbx_queue_drain()
-                function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
-                # And the other direction: the host (and NeuroBrix's own blits) must
-                # see what this kernel wrote.
-                _native().synchronize()
-
-        # Read what the kernel recorded. Prints first, so anything it printed is
-        # already out when a failed assert raises.
-        if print_buf is not None:
-            from triton_apple_backend.device_print import format_records
-            rt = D._runtime()
-            for line in format_records(trailing.print_layout, rt.as_u32(print_buf)):
-                _log.debug("%s", line)
-        if assert_buf is not None:
-            from triton_apple_backend.device_assert import check as _check_asserts
-            rt = D._runtime()
-            _check_asserts(trailing.assert_layout, rt.as_u32(assert_buf))
+                    raise RuntimeError(f"the Metal launch cannot pack a parameter of kind {kind!r} (Triton type "
+                                       f"{ty!r})")
+                struct.pack_into({1: "<B", 2: "<H", 4: "<I", 8: "<Q"}[width], buf, off,
+                                 val & ((1 << (8 * width)) - 1))
+            packed = bytes(buf)
+        # The emitter's own trailing parameters, bound LAST and in its order (print, then assert), each a zeroed
+        # block whose head word is a running count the kernel bumps: triton-ext's `planKernelAbi`.
+        from nbxtensor.backend import metal_dispatch as MD
+        MD.raise_landed_asserts()                       # an earlier launch's failure the host already sees
+        printed = _zeroed_block(trailing.print_layout.nbytes) if trailing and trailing.print_layout else None
+        asserted = MD.assert_block(function, trailing.assert_layout) if trailing and trailing.assert_layout else None
+        t0 = _now()
+        MD.dispatch(function, stream, pointers, packed, [t.data_ptr() for t in (printed, asserted) if t is not None],
+                    grid, block, exposes=bool(trailing and trailing.exposes_addresses),
+                    reads=bool(trailing and trailing.reads_addresses), shared=int(shared or 0),
+                    barrier=bool(trailing and trailing.cross_tg_barrier))
+        if _SYNC_TIMING:
+            spent = _now() - t0
+            _SYNC_ACC[0] += spent; _SYNC_ACC[1] += 1
+            row = _SYNC_PER_KERNEL.setdefault(kernel_name(function), [0, 0.0])
+            row[0] += 1; row[1] += spent
+        if printed is not None:
+            _print_records(trailing.print_layout, printed)
 
 
-def _launch_pool(addr_flags):
-    """The scope a kernel call and its drain run in: an autorelease pool when the kernel reads addresses.
+def _now() -> float:
+    return __import__("time").perf_counter() if _SYNC_TIMING else 0.0
 
-    Such a kernel is launched with the exposed buffers named to Metal: triton-ext builds that list as
-    `[exposedBuffers() allObjects]`, an AUTORELEASED array, and a Python thread has no pool around the call, so
-    it is never released and it holds every exposed buffer. Ours is the pinned scope's wrap of a whole
-    allocation: one such launch kept the arena in the process for good (2 116 MB of a freed 2 GiB arena; with
-    the launch inside a pool, 69-78 MB; deepseek-moe streamed went 11 -> 20 GB of footprint with one segment in
-    the allocator's books, 2026-10-04). Every other launch keeps the path it had.
-    """
-    if addr_flags.get("reads_addresses"):
-        import objc
-        return objc.autorelease_pool()
-    import contextlib
-    return contextlib.nullcontext()
+
+def _zeroed_block(nbytes: int):
+    """A zeroed device block for an emitter's print or assert records, from nbxtensor's own allocator."""
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.tensor import NBXTensor
+    return NBXTensor.zeros((max(int(nbytes) // 4, 1),), dtype=NBXDtype.int32, device="cuda:0")
+
+
+def _print_records(layout, block) -> None:
+    """What a printing kernel recorded, after it ran (its records exist only then): a debug path, it waits."""
+    from nbxtensor.backend.metal_device import runtime
+    from triton_apple_backend.device_print import format_records
+    runtime().flush()
+    for line in format_records(layout, block.numpy().view("uint32")):
+        _log.debug("%s", line)
 
 
 class _Trailing(NamedTuple):
@@ -397,204 +307,22 @@ class _Trailing(NamedTuple):
     """
     print_layout: Any
     assert_layout: Any
-    #: triton-ext's two address flags for this compilation, passed to the kernel call as its own launcher does.
+    #: triton-ext's two address flags for this compilation, honoured at the launch as its own launcher does.
     exposes_addresses: bool = False
     reads_addresses: bool = False
-
-
-#: Binding census, printed at exit under NBX_EXT_STATS=1. An interior binding
-#: takes its LENGTH from the allocator's range table rather than from an exact
-#: pointer hit, which is the one place a stale entry could hand back a buffer
-#: shorter than the tensor.
-_STATS = {"exact": 0, "interior": 0, "extent_bound": 0}
-
-import os as _os_stats
-if _os_stats.environ.get("NBX_EXT_STATS"):
-    import atexit as _atexit
-    _atexit.register(lambda: _log.debug(f"[ext-stats] pointer bindings: exact={_STATS['exact']} "
-        f"interior={_STATS['interior']}"))
-
-#: Metal's zero-copy wrap requires page-aligned memory; Apple Silicon pages
-#: are 16 KiB.
-_PAGE = 16384
-
-#: Triton pointer type -> numpy dtype. `wrap` reads the element type off the
-#: object it is given; a bare memoryview arrives as dtype None, which is not a
-#: buffer triton-ext can bind.
-_PTR_NP = {
-    "fp16": "float16", "bf16": "uint16", "fp32": "float32", "fp64": "float64",
-    "i1": "bool", "i8": "int8", "i16": "int16", "i32": "int32", "i64": "int64",
-    "u8": "uint8", "u16": "uint16", "u32": "uint32", "u64": "uint64",
-    "fp8e4nv": "uint8", "fp8e5": "uint8", "fp8e4b15": "uint8",
-}
-
-
-#: Wraps pinned by an open `pinned_addresses` scope: (addr, np_dtype) -> the
-#: MetalBuffer every launch inside the scope reuses for that pointer. Keeping
-#: ONE wrap per (address, element type) is what keeps a captured GPU address
-#: meaning the same storage from one launch to the next.
-_PINNED_WRAPS: dict = {}
-
-# Pinned wraps: ONE uint8 wrap of each WHOLE allocation containing a pinned
-# tensor, held HERE for the scope's lifetime, its address read through the
-# served triton-ext API (`MetalBuffer.gpu_address()`). What that buys is a
-# PINNED LIFETIME: the wrap, and so its GPU virtual address,
-# outlives the launch that made it. A kernel that reads through a
-# pointer-table entry needs the covering wrap ALIVE, and this driver otherwise
-# makes a fresh wrap per launch. Once that wrap is dropped, its captured
-# address reads wrong bytes with nothing raised. Upstream documents exactly
-# this: an address is valid only while its buffer lives (triton-ext
-# address.gpu_address). It is not a residency fix. Re-measured 2026-09-24
-# against PR #126's head 8b45b9aa: an ALIVE wrap left unbound reads correctly
-# from a later command buffer at 1 KiB, at 64 MiB and after churn, with or
-# without a useResource; a DROPPED wrap reads 0/256
-# (docs/reference/owed-proofs.md, 2026-09-24). Until 2026-10-04 this called
-# `metal_native.retain_resident`, a function of the retired residency commit
-# that the served build never had: every mixture-of-experts model failed at
-# its first band on Apple (granite-3.1-1b-a400m, "has no attribute
-# 'retain_resident'"). Upstream's contract is the one followed now:
-# `gpu_address()` records the buffer as exposed (weakly), and a kernel compiled
-# as reading addresses names the exposed buffers to Metal at its launch
-# (`reads_addresses`, carried by `_Trailing`). Measured 2026-09-21
-# (granite): per-expert kept wraps also worked but Metal declined the ~480th
-# GB-scale alias, so one wrap per allocation is the shape that scales.
-# (base, size) -> [wrap, refcount, gpu_va]. Keyed by the EXTENT, never by the base alone: a pool segment and its
-# first block begin at the same address, and under one key a view inside another block of the segment found the
-# first block's short wrap and was handed an address past that buffer's end (the expert store's slots, 2026-11-11:
-# wrong bytes, nothing raised).
-_RESIDENT_WRAPS: dict = {}
-
-
-def _pinned_extent(addr: int):
-    """(base, size) of the allocation whose whole-allocation wrap answers for `addr` — the block registered at
-    `addr`, else the live range containing it — or None for a recorded shadow (memory that exists nowhere). The one
-    place both the pin and the address read it, so they cannot disagree."""
-    from nbxtensor.memory.allocator import DeviceAllocator
-    size = DeviceAllocator._cuda_ptr_size.get(addr)
-    if size is not None:
-        return addr, size
-    if _recorded_shadow(addr) is not None:
-        return None
-    return _containing_allocation(addr)
-
-
-def _resident_acquire(addr: int):
-    """Pin one wrap of the whole allocation containing `addr` for the scope's
-    lifetime (`_RESIDENT_WRAPS` holds it); returns its key, the extent (None: a
-    census shadow allocation, recorded as one — nothing to wrap, nothing to
-    hold; an address nobody recorded still fails in `_pinned_extent`)."""
-    import numpy as np
-
-    key = _pinned_extent(addr)
-    if key is None:
-        return None
-    ent = _RESIDENT_WRAPS.get(key)
-    if ent is not None:
-        ent[1] += 1
-        return key
-    base, size = key
-    raw = (ctypes.c_byte * size).from_address(base)
-    view = np.frombuffer(memoryview(raw), dtype=np.uint8)
-    # Inside a pool: `gpu_address()` records the buffer in triton-ext's weak table of exposed buffers, and an
-    # insert into a weak NSHashTable can load its live members, each load a retain + AUTORELEASE. A Python
-    # thread has no pool, so that reference was never dropped: about one pinned scope in fifteen kept its whole
-    # arena for good (48 rounds on a fresh 128 MiB arena, no kernel: +128 MB at rounds 15, 30 and 45;
-    # deepseek-moe streamed kept one 8.5 GB segment at its third pass, 2026-10-04).
-    import objc
-    with objc.autorelease_pool():
-        buf = _native().wrap(view)
-        gpu_va = int(buf.gpu_address())                # also records it as exposed, weakly
-    _RESIDENT_WRAPS[key] = [buf, 1, gpu_va]
-    return key
-
-
-def pinned_gpu_address(addr: int) -> int:
-    """The address a SHADER may read at `addr`, valid while its pin is held.
-
-    Every MTLBuffer has its own GPU virtual address — a no-copy wrap of the
-    same memory is a DIFFERENT VA, which is why an address captured through a
-    transient launch wrap reads zeros once that wrap dies (measured,
-    probe_read_through 2026-09-21). The pin's whole-allocation kept wrap
-    is therefore the one address authority: its gpu_address plus the CPU
-    offset inside the allocation, computable on the host with no launch.
-    Refuses by name an address its allocation's wrap is not held for, and one
-    that would lie beyond the wrap it resolved: past a buffer's end the read
-    is whatever Metal maps there.
-    """
-    key = _pinned_extent(addr)
-    if key is None:
-        # A recorded shadow has no GPU address to give; the shadow's own address stands
-        # for it, exactly as every other address in a shadow addresses nothing.
-        return int(addr)
-    ent = _RESIDENT_WRAPS.get(key)
-    if ent is None:
-        raise RuntimeError(
-            f"pinned_gpu_address(0x{addr:x}): its allocation is not under any "
-            f"pinned_addresses scope — an address handed out without a pin "
-            f"would go stale silently, which is the defect this refuses")
-    if not 0 <= addr - key[0] < ent[0].nbytes:
-        raise RuntimeError(
-            f"pinned_gpu_address(0x{addr:x}): {addr - key[0]} bytes from its allocation's base, beyond the wrap "
-            f"held for it ({ent[0].nbytes} bytes) — an address past a buffer's end reads another buffer's bytes")
-    return ent[2] + (addr - key[0])
-
-
-def _recorded_shadow(addr: int):
-    """(base, nbytes) when `addr` is a shadow allocation RECORDED as one (`memory.shadow`), else None.
-    Never true in a real run: nothing is recorded there unless an application installed the shadow."""
-    from nbxtensor.memory.shadow import shadow_range
-    return shadow_range(addr)
-
-
-def _resident_release(key) -> None:
-    if key is None:                                    # a recorded shadow held nothing
-        return
-    ent = _RESIDENT_WRAPS.get(key)
-    if ent is None:
-        return
-    ent[1] -= 1
-    if ent[1] <= 0:
-        _RESIDENT_WRAPS.pop(key, None)                # the wrap dies here; the weak exposed table drops it
-#: How many open scopes pin each address. A wrap is dropped only when the last
-#: scope holding its address exits.
-_PIN_COUNTS: dict = {}
+    #: the grid must be co-resident (`metal_dispatch.dispatch` refuses one wider than the GPU holds).
+    cross_tg_barrier: bool = False
 
 
 class pinned_addresses:
-    """Pin the Metal wraps behind these tensors, so an address a kernel CAPTURES
-    stays valid for every launch inside the scope.
+    """Hold these tensors, so an address a kernel CAPTURES stays valid for every launch inside the scope.
 
-    The contract this makes enforceable: a kernel may store the bitcast of a
-    pointer it was handed (``tl.cast(ptr, tl.int64, bitcast=True)``) into a
-    table, and a later kernel inside the same scope may load that table entry
-    and read through it. That is how a mixture-of-experts band addresses its
-    per-expert weights.
-
-    Why a scope and not a convention. ``_buffer_for`` builds a NEW
-    ``metal_native.wrap`` for every launch, so without this an address captured
-    in one launch names a buffer that is RELEASED before the next launch runs.
-    What the read then returns is UNDEFINED, and both outcomes were measured:
-    0/256 in one ordering (verify_wrap_lifetime.py, 2026-09-19) and, when Metal
-    happened to hand a re-wrap of the same region the same GPU address,
-    256/256 that LOOK correct (2026-09-20, in test ordering). With one wrap
-    kept alive it is 256/256 by contract rather than by accident:
-
-        wrap created fresh per launch (as shipped)     undefined — an accident
-        the same wrap kept alive                       256/256, by contract
-
-    The scope holds two things, because the lifetime has two halves and both
-    were measured:
-
-    * **the wraps** — Metal keeps the GPU address mapped to this buffer for as
-      long as the MetalBuffer object lives;
-    * **the tensors** — so the engine's allocator cannot free and reissue the
-      storage underneath. On MPS the FIRST same-size allocation after a free
-      reissued the exact address, and the stale table then read the newcomer's
-      bytes with nothing raised (repro_130_mps_reissue.py). A stale table does
-      not fail loudly in either direction, which is why this is a scope in code
-      and not a caution in a comment.
-
-    Nests: an address pinned by two scopes stays pinned until both exit.
+    A kernel may store the bitcast of a pointer it was handed into a table, and a later kernel inside the scope may
+    load that entry and read through it: that is how a mixture-of-experts band addresses its per-expert weights. The
+    address is the allocation's own `gpuAddress()` plus the offset (`pinned_gpu_address`), valid as long as the
+    allocation lives; the scope holds the tensors so the allocator cannot free and reissue their storage underneath
+    a table (on MPS the first same-size allocation after a free reissued the exact address, and a stale table read
+    the newcomer's bytes with nothing raised: repro_130_mps_reissue.py). Nests.
     """
 
     def __init__(self, *tensors):
@@ -603,160 +331,63 @@ class pinned_addresses:
                 "pinned_addresses with nothing to pin would promise a lifetime "
                 "it does not hold; pass the tensors whose addresses kernels "
                 "will capture")
-        self._tensors = tuple(tensors)   # the allocator half of the lifetime
-        self._addrs = []
+        self._tensors = tuple(tensors)
 
     def __enter__(self):
-        self._resident_bases = []
-        for t in self._tensors:
-            addr = int(t.data_ptr())
-            _PIN_COUNTS[addr] = _PIN_COUNTS.get(addr, 0) + 1
-            self._addrs.append(addr)
-            self._resident_bases.append(_resident_acquire(addr))
+        held = [_recorded(int(t.data_ptr())) for t in self._tensors]
+        self._bases = [extent[0] for extent in held if extent is not None]     # a recorded shadow holds nothing
+        for base in self._bases:
+            _PIN_COUNTS[base] = _PIN_COUNTS.get(base, 0) + 1
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        for addr in self._addrs:
-            n = _PIN_COUNTS.get(addr, 0) - 1
+        for base in getattr(self, "_bases", ()):
+            n = _PIN_COUNTS.get(base, 0) - 1
             if n > 0:
-                _PIN_COUNTS[addr] = n
-                continue
-            _PIN_COUNTS.pop(addr, None)
-            for key in [k for k in _PINNED_WRAPS if k[0] == addr]:
-                _PINNED_WRAPS.pop(key, None)
-        for base in getattr(self, "_resident_bases", ()):
-            _resident_release(base)
-        self._resident_bases = []
-        self._addrs.clear()
+                _PIN_COUNTS[base] = n
+            else:
+                _PIN_COUNTS.pop(base, None)
+        self._bases = []
         return False
 
 
-def _buffer_for(addr: int, ty: str, extent: Optional[int] = None):
-    """Alias the NBXTensor allocation containing `addr` as a MetalBuffer.
+#: How many open scopes hold each allocation, by its base: any address inside a held allocation is pinned.
+_PIN_COUNTS: dict = {}
 
-    `extent`: the bytes the launch's tensor can address from `addr` (the launcher's `_addressable_extent`), or None.
-    Given, the wrap covers that, rounded up to the page and never past the allocation — not the rest of the
-    allocation: a no-copy wrap costs what it maps, and a weight at the start of its multi-GB arena made every launch
-    on it map the whole remaining arena (10.9 ms at 1 GiB, 46.7 ms at 4 GiB for a 0.5 ms gemv; orpheus decoded at
-    6.3 s per token, 2026-10-04). A pinned address keeps the whole-allocation span its scope's captured table needs.
 
-    The launcher reduces a pointer parameter to its integer address, so the
-    length has to come from the allocator, which already records it. A tensor
-    VIEW points into the middle of an allocation, so the base is looked up
-    before the size.
-
-    `ty` is the Triton pointer type ("*fp32"): the element type has to travel
-    with the address, because `wrap` takes it from the object it is handed and a
-    typeless buffer is not bindable.
-    """
-    import numpy as np
-
-    elem = ty.lstrip("*k") if ty else ""
-    np_dtype = _PTR_NP.get(elem)
-    if np_dtype is None:
-        raise RuntimeError(
-            f"the triton-ext driver has no numpy element type for pointer "
-            f"parameter of type {ty!r}; binding it typeless would not fail, it "
-            f"would bind a buffer the kernel reads as zeros")
-    if addr == 0:
-        raise RuntimeError(
-            "the triton-ext driver was handed a null pointer parameter; its "
-            "launcher has no slot for one")
+def _recorded(addr: int):
+    """(base, size) of the allocation holding `addr`; None for a recorded census shadow (memory that exists nowhere,
+    pinned as nothing). Any other address is refused by name, in a shadow and in a real run alike: a path that let an
+    unrecorded address through would one day pass a real one in silence (the census of 2026-09-24)."""
     from nbxtensor.memory.allocator import DeviceAllocator
-
+    from nbxtensor.memory.shadow import shadow_range
+    if shadow_range(addr) is not None:
+        return None
     size = DeviceAllocator._cuda_ptr_size.get(addr)
-    base = addr
-    if size is None:
-        base, size = _containing_allocation(addr)
-        _STATS["interior"] += 1
-    else:
-        _STATS["exact"] += 1
-    # An interior pointer — a view, or a tensor packed inside a larger buffer —
-    # binds by starting the Metal buffer AT that address and running to the end
-    # of the allocation. Binding the allocation's base instead would read the
-    # wrong elements silently, and `metal_native` has no offset binding
-    # (`metal_native.m`: every argument goes in with `setBuffer:...offset:0`).
-    #
-    # Metal decides whether a given address can be wrapped with no copy. The
-    # documented requirement is page alignment, but MEASURED on M4 Pro a
-    # non-page-aligned interior address inside an already-mapped region is
-    # accepted (repro_ext_no_offset_binding.py, case 3: offset 0x300, wrapped,
-    # 64768 bytes). So we do not pre-judge it: we ask, and turn Metal's own
-    # refusal into a named one. Guessing a binding is what this driver exists
-    # to stop; refusing a binding that would have worked is merely wrong.
-    offset = addr - base
-    # Floor the span to a whole number of elements. The allocation runs to the
-    # end of its block, which need not be a multiple of this tensor's element
-    # size — and `np.frombuffer` refuses a remainder with "buffer size must be a
-    # multiple of element size". Measured on Kokoro-82M, aten.upsample_linear1d
-    # at (1, 9, 76800). Flooring is safe: the kernel addresses its own tensor,
-    # which ends at or before the block's end, so no element it reads or writes
-    # is cut off.
-    itemsize = np.dtype(np_dtype).itemsize
-    span = ((size - offset) // itemsize) * itemsize
-    if span <= 0:
-        raise RuntimeError(
-            f"the triton-ext driver cannot bind pointer 0x{addr:x}: the "
-            f"allocation leaves {size - offset} bytes from it, less than one "
-            f"{np_dtype} element")
-    # A launch inside a `pinned_addresses` scope must reuse the scope's wrap:
-    # a fresh wrap would be a fresh GPU address, and the table the scope exists
-    # for would go stale mid-scope.
-    _pin_key = (addr, np_dtype)
-    _pinned = _PINNED_WRAPS.get(_pin_key)
-    if _pinned is not None:
-        return _pinned
-    if extent is not None and addr not in _PIN_COUNTS:
-        reach = -(-max(int(extent), 1) // _PAGE) * _PAGE          # the tensor's extent, rounded up to the page
-        span = (min(span, reach) // itemsize) * itemsize
-        _STATS["extent_bound"] += 1
-    raw = (ctypes.c_byte * span).from_address(addr)
-    view = np.frombuffer(memoryview(raw), dtype=np_dtype)
-    try:
-        _buf = _native().wrap(view)
-        if addr in _PIN_COUNTS:
-            _PINNED_WRAPS[_pin_key] = _buf
-        return _buf
-    except Exception as exc:
-        raise RuntimeError(
-            f"the triton-ext driver could not bind pointer 0x{addr:x} "
-            f"(0x{offset:x} into an allocation at 0x{base:x}, {size - offset} "
-            f"bytes): Metal declined a zero-copy view of it. `metal_native` "
-            f"binds every buffer at offset 0, so there is no other correct "
-            f"binding here — binding the allocation base would read the wrong "
-            f"elements WITHOUT failing. Metal said: {exc}") from exc
-
-
-def _containing_allocation(addr: int) -> Tuple[int, int]:
-    from nbxtensor.memory.allocator import DeviceAllocator
+    if size is not None:
+        return addr, size
     hit = DeviceAllocator.containing(addr)
-    if hit is not None:
-        return hit
-    raise RuntimeError(
-        f"the triton-ext driver cannot bind pointer 0x{addr:x}: the allocator "
-        f"does not record it, so its length is unknown and it cannot be wrapped "
-        f"as a Metal buffer")
+    if hit is None:
+        raise RuntimeError(f"the Metal launch cannot pin pointer 0x{addr:x}: the allocator does not record it, so "
+                           f"its length and lifetime are unknown")
+    return hit
+
+
+def pinned_gpu_address(addr: int) -> int:
+    """The address a SHADER may read at `addr` (its allocation's `gpuAddress()` plus the offset), valid while its
+    pin is held. Refuses by name an address no open scope holds: handed out without a pin, it would go stale with
+    nothing raised. A recorded census shadow has no GPU address; its own address stands for it."""
+    extent = _recorded(int(addr))
+    if extent is None:
+        return int(addr)
+    if extent[0] not in _PIN_COUNTS:
+        raise RuntimeError(
+            f"pinned_gpu_address(0x{addr:x}): its allocation is not under any "
+            f"pinned_addresses scope — an address handed out without a pin "
+            f"would go stale silently, which is the defect this refuses")
+    from nbxtensor.backend.metal_device import runtime
+    return runtime().gpu_address(int(addr))
 
 
 def driver() -> TritonExtDriver:
     return TritonExtDriver.instance()
-
-
-def _nbx_queue_drain():
-    """Wait for NeuroBrix's own Metal queue before a foreign queue reads its
-    buffers. Coarse — a host wait — but correct; an MTLSharedEvent between the
-    two queues is the finer instrument and is owed if this costs measurably."""
-    from nbxtensor.backend.metal_device import runtime
-    rt = runtime()
-    # Skip the round trip when this queue has nothing that could be writing.
-    # `sync()` does `flush()` and then commits an EMPTY command buffer and waits
-    # on it — and that empty buffer queues behind triton-ext's work on a busy
-    # GPU, which is why it costs 0.458 ms per launch in a decode against
-    # 0.019 ms on an idle queue standalone. Measured over a 120-token TinyLlama
-    # decode, 4943 drains: 0 had a committed buffer pending, 1240 (25.1 %) had an
-    # open encoder, and 3703 (74.9 %) had NOTHING. Waiting for work that does not
-    # exist cannot order anything, so those 3703 are skipped.
-    if not rt.has_pending_gpu_writes():
-        return
-    rt.sync()
-

@@ -106,12 +106,12 @@ def _fused_call(where, seed):
 
 def test_a_per_call_table_releases_its_pins_when_the_call_returns():
     drv = _metal_or_skip()
-    wraps, counts = set(drv._RESIDENT_WRAPS), dict(drv._PIN_COUNTS)
+    counts = dict(drv._PIN_COUNTS)
     weights, _ = _fused_call("host", seed=41)
-    left = set(drv._RESIDENT_WRAPS) - wraps
+    left = set(drv._PIN_COUNTS) - set(counts)
     assert not left, (
-        f"the call returned and the driver still keeps the wrap of {len(left)} allocation(s) it promoted for "
-        f"that call: a per-call table's pins never exited")
+        f"the call returned and the driver still pins {len(left)} allocation(s) it promoted for that call: a "
+        f"per-call table's pins never exited")
     assert dict(drv._PIN_COUNTS) == counts, "the call returned and left addresses pinned"
     del weights
 
@@ -122,16 +122,15 @@ def test_unloading_the_weights_releases_the_cached_tables_that_pin_them(unload):
     import nbxtensor.memory.pointer_tables as PT  # the MoE pointer tables (M2)
     weights, _ = _fused_call("resident", seed=43)
     spans = [(t.data_ptr(), DeviceAllocator._cuda_ptr_size[t.data_ptr()]) for t in weights.values()]
-    assert all(span in drv._RESIDENT_WRAPS for span in spans), "a resident table that pins nothing is an accident"
+    assert all(base in drv._PIN_COUNTS for base, _ in spans), "a resident table that pins nothing is an accident"
     assert _live_tensors_in(spans) > 2, "the cached table's pins hold the expert views: the instrument sees them"
 
     unload(weights)                                    # what every strategy's unload goes through
 
     assert not any(t.pins for t in PT._ptr_cache.values()), "a cached table still pins after the unload"
-    assert not drv._RESIDENT_WRAPS, (
-        f"the weights were unloaded and the driver still keeps {len(drv._RESIDENT_WRAPS)} whole-allocation "
-        f"wrap(s): the arena stays mapped beside whatever loads next")
-    assert not drv._PIN_COUNTS and not drv._PINNED_WRAPS, "the unload left addresses pinned"
+    assert not drv._PIN_COUNTS, (
+        f"the weights were unloaded and the driver still pins {len(drv._PIN_COUNTS)} allocation(s): the arena "
+        f"stays held beside whatever loads next")
     live = _live_tensors_in(spans)
     assert live == 0, f"{live} tensor(s) of the unloaded slabs are still alive: a pin still holds them"
 

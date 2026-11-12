@@ -310,7 +310,8 @@ class MetalRuntime:
         # for a different encoder kind ends the current one and opens the new
         # one in the SAME buffer, so a blit and the kernels around it keep
         # their order without a commit between them.
-        self._open: Dict[int, list] = {}
+        # `_exposed` (GPU address -> buffer): the buffers whose addresses a kernel may load and read through.
+        self._open, self._exposed = {}, {}
         self._dispatch_cap: Optional[int] = None
 
         # An encoder that is FREED while still open aborts the whole process:
@@ -463,6 +464,7 @@ class MetalRuntime:
             # caller, and it must not pass silently: on CUDA the same call
             # returns cudaErrorInvalidValue.
             return _ERR_UNKNOWN_POINTER
+        self._unexpose(entry[0])
         entry[1].release()
         return _OK
 
@@ -499,6 +501,7 @@ class MetalRuntime:
                 _drop_base(self._bases, address)
         if entry is None:
             return _ERR_UNKNOWN_POINTER
+        self._unexpose(entry[0])
         entry[1].release()
         return _OK
 
@@ -540,6 +543,8 @@ class MetalRuntime:
             entry = self._host_buffers.pop(int(start), None)
             if entry is not None:
                 _drop_base(self._bases, int(start))
+        if entry is not None:
+            self._unexpose(entry[0])
         return entry is not None
 
     # -- copies -------------------------------------------------------------
@@ -811,6 +816,8 @@ class MetalRuntime:
                 buffers = self._pending.pop(int(queue_handle or 0), [])
         for command_buffer in buffers:
             self._await(command_buffer)
+        from nbxtensor.backend.metal_dispatch import raise_failed_asserts
+        raise_failed_asserts()                  # every launch retired: an assert a kernel failed raises here
         return _OK
 
     def has_pending_gpu_writes(self) -> bool:
@@ -1083,6 +1090,31 @@ class MetalRuntime:
                 return None, 0
             return entry[0], address - base
 
+    def gpu_address(self, address: int) -> int:
+        """The address a SHADER reads for `address`: its allocation's `gpuAddress()` plus the offset inside it. A
+        CPU pointer is not one (`data_ptr()` is the CPU mapping). The allocation joins the buffers a kernel reading
+        loaded addresses names to Metal (`exposed_buffers`). Refuses an address in no allocation by name."""
+        buffer, offset = self.buffer_for_pointer(int(address))
+        if buffer is None:
+            raise RuntimeError(f"gpu_address(0x{int(address):x}): in no allocation of this Metal runtime, so no "
+                               f"shader address exists for it")
+        self.expose([buffer])
+        return int(buffer.gpuAddress()) + offset
+
+    def expose(self, buffers) -> None:
+        """Record buffers whose addresses a kernel may later load and read through."""
+        with self._lock:
+            for buffer in buffers:
+                self._exposed[int(buffer.gpuAddress())] = buffer
+
+    def exposed_buffers(self) -> list:
+        with self._lock:
+            return list(self._exposed.values())
+
+    def _unexpose(self, buffer) -> None:
+        with self._lock:
+            self._exposed.pop(int(buffer.gpuAddress()), None)
+
     # -- diagnostics --------------------------------------------------------
 
     def live_allocation_count(self) -> int:
@@ -1163,6 +1195,14 @@ def runtime() -> MetalRuntime:
             if _RUNTIME is None:
                 _RUNTIME = MetalRuntime()
     return _RUNTIME
+
+
+def host_reads() -> None:
+    """Before the host reads memory it did not copy (a tensor already on "cpu" that a kernel may write: a unified
+    card's cache alias): the kernels encoded so far retire first. Nothing when no Metal runtime is open or nothing
+    is pending."""
+    if _RUNTIME is not None and _RUNTIME.has_pending_gpu_writes():
+        _RUNTIME.flush()
 
 
 def metal_device_available() -> bool:

@@ -96,12 +96,15 @@ def test_scalars_arrive_whole_and_the_host_sees_the_writes():
 
 
 def test_a_parameter_the_allocator_does_not_own_is_refused_not_guessed():
-    """A pointer has to be wrapped with its LENGTH, which only the allocator
-    knows. An unknown pointer must be named, never bound at a guessed size."""
-    from nbxtensor.backend.triton_ext_driver import _buffer_for
+    """A pointer binds as (buffer, offset) of the allocation holding it, whose
+    length and lifetime only the runtime knows. An unknown pointer must be
+    named, never bound to a guess (`nbxtensor.backend.metal_dispatch`)."""
+    from nbxtensor.backend import metal_dispatch
+    from nbxtensor.backend.metal_device import runtime
 
-    with pytest.raises(RuntimeError, match="does not record it"):
-        _buffer_for(0xDEADB000, "*fp32")
+    _cb, encoder = runtime().encoder_for(0)
+    with pytest.raises(RuntimeError, match="lies in no allocation of this Metal runtime"):
+        metal_dispatch.bind_pointer(runtime(), encoder, 0, 0xDEADB000, "k")
 
 
 def test_launching_without_parameter_types_is_refused():

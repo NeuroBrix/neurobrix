@@ -2810,6 +2810,37 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs, make_buffer, r
 def from_dlpack(obj, device=None) -> NBXTensor
     # The elements `obj` exports through DLPack: host memory copied in the order it shows (strides, bfloat16), this
     # backend's own device memory wrapped in place, another vendor's device memory refused by name.
+
+### `nbxtensor.backend.metal_dispatch` — Triton's compiled Metal kernels, run on nbxtensor's own stream
+
+`nbxtensor.backend.metal_dispatch`
+
+```python
+class Pipeline(NamedTuple)
+    # A kernel ready to dispatch: its compute pipeline state and the function name it was compiled under.
+def pipeline(binary, name) -> Pipeline
+    # The pipeline of `name` in a metallib, built once per (binary, name).
+def bind_pointer(rt, encoder, index, address, kernel)
+    # Bind an address as (buffer, offset) of the allocation holding it; one in no allocation is refused by name.
+def check_launch(pipe, n_buffers, grid, block, barrier)
+    # The launch-ABI checks, refused by name before encoding: thread limit, Metal's 31 buffer slots, co-residency.
+def gpu_cores() -> int
+    # This GPU's core count, read from the IORegistry; refused by name when it does not say.
+def assert_block(pipe, layout)
+    # The zeroed status block an asserting kernel writes, checked later, never by a wait after the launch.
+def raise_landed_asserts() -> None
+    # Before a launch: raise for an earlier failed assert the host already sees.
+def raise_failed_asserts() -> None
+    # After a flush: raise for the first launch whose assert failed.
+def dispatch(pipe, stream, pointers, scalars, trailing, grid, block, exposes=False, reads=False, shared=0, barrier=False)
+    # Encode one launch on the stream's serial compute encoder.
+```
+
+`nbxtensor.backend.metal_device`
+
+```python
+def host_reads() -> None
+    # Before the host reads memory it did not copy: the kernels encoded so far retire first.
 ```
 
 ### `nbxtensor.quant` — quantized tensors

@@ -1095,6 +1095,9 @@ class NBXTensor:
         f = self.contiguous()
         if f._device != 'cpu':
             f = f.to_cpu()
+        else:
+            from nbxtensor.backend.metal_device import host_reads
+            host_reads()                                # a kernel may still be writing it (a unified alias)
         typestr = _DTYPE_TYPESTR[f._dtype]          # every member has its type string in the dtype table
         nbytes = f.numel() * dtype_size(f._dtype)
         # A view over the host buffer, then one copy. `ctypes.string_at(ptr, n)` hands `n` to

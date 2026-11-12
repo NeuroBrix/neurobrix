@@ -66,7 +66,7 @@ def test_a_recorded_shadow_is_pinned_as_nothing():
         with drv.pinned_addresses(v):
             a = drv.pinned_gpu_address(v.data_ptr())
         assert a == v.data_ptr(), (hex(a), hex(v.data_ptr()))
-        assert not drv._RESIDENT_WRAPS, drv._RESIDENT_WRAPS
+        assert not drv._PIN_COUNTS, drv._PIN_COUNTS      # a shadow holds nothing
         print("SHADOW_PINNED_AS_NOTHING")
     """, census=True)
     assert p.returncode == 0 and "SHADOW_PINNED_AS_NOTHING" in p.stdout, p.stderr[-1500:]

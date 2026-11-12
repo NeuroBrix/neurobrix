@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Triton models on Apple GPUs run several times faster: nbxtensor now runs each compiled kernel on its own Metal stream,
+  in order, and waits for the GPU only where a result is read, instead of after every kernel. Measured on an M4 Pro,
+  outputs byte-identical: TinyLlama 1.1B, 256 tokens, 46.2 s -> 8.1 s; granite-3.1-1b-a400m (mixture of experts),
+  128 tokens, 22.5 s -> 4.7 s.
+- A failed device assert in a kernel now raises at the next read of a result (or the next launch), not at its own
+  launch.
+- `NBX_SYNC_TIMING=1` on Apple now counts launches and the time spent issuing them, per kernel; there is no per-launch
+  wait left to time.
+
 ### Added
 - `memory.block_upload` (`open_copy_stream`, `upload_block`, `wait_for_upload`, `drop_upload_events`,
   `close_copy_stream`, `wait_device`): a block of host weights uploaded to one device on a copy stream with an

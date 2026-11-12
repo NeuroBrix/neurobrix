@@ -204,11 +204,14 @@ def test_triton_ext_reports_a_failing_device_assert():
                                2.0 * np.arange(n, dtype=np.float32))
 
     # Predicate fails on every lane: this MUST raise. Before 2026-09-17 it
-    # returned normally and the failure was lost.
+    # returned normally and the failure was lost. It raises once the kernel has
+    # run, at the next flush (a host read, here) or the next launch, never by a
+    # wait after every launch: triton-ext's own contract (`device_assert.defer`).
     bad_in = NBXTensor.from_numpy(np.full(n, 5000.0, dtype=np.float32))
     bad_out = NBXTensor.zeros((n,), dtype="float32")
     with pytest.raises(Exception) as e:
         L.launch(_guarded, (1,), bad_in, bad_out, n, BLOCK=BLOCK)
+        bad_out.to_cpu()
     assert "assert" in str(e.value).lower()
     assert "v must stay under 1000" in str(e.value), (
         "the raise must carry the author's own message, which is the only "

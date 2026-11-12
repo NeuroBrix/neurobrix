@@ -1,4 +1,7 @@
-"""A pinned address is read through a wrap that COVERS it.
+"""A pinned address is read through the buffer that COVERS it.
+
+(Until 2026-11-12 the address came from a wrap of the memory; nbxtensor binds its own buffers now, and the address is
+the allocation's buffer address plus the offset. The defect below is what the test keeps shut.)
 
 The pinned wraps were kept under their base address alone. A base names two different extents: a pool segment (what
 the allocator's `containing()` answers for an address that is not a block's own base — a view inside a block) and the
@@ -10,7 +13,7 @@ segment whose first block — a 4 096-byte expert of an earlier run, pinned by a
 pinned, and every row of the store's result was wrong (a slot 47 616 bytes into a 4 096-byte wrap).
 
 What these tests would do if the code were wrong: the first reads the view's bytes back wrong; the second lets an
-address beyond its wrap out instead of refusing it by name.
+address beyond its allocation out instead of refusing it by name.
 """
 from __future__ import annotations
 
@@ -83,8 +86,8 @@ def test_a_view_in_another_block_is_read_right_while_its_segments_first_block_is
         assert DA.containing(view.data_ptr())[0] == first.data_ptr() != block.data_ptr()
         with drv.pinned_addresses(view):
             gpu = drv.pinned_gpu_address(view.data_ptr())
-            covering = [(base, wrap.nbytes, va) for (base, _), (wrap, _, va) in drv._RESIDENT_WRAPS.items()
-                        if va <= gpu and gpu + 4 * N <= va + wrap.nbytes]
+            from nbxtensor.backend.metal_device import runtime
+            buffer, offset = runtime().buffer_for_pointer(view.data_ptr())
             tab = NBXTensor.from_numpy(np.array([gpu], dtype=np.int64))
             out = NBXTensor.from_numpy(np.zeros(N, dtype=np.float32))
             launch(_read_through, (1,), tab, out, N, BLOCK=N)
@@ -92,36 +95,24 @@ def test_a_view_in_another_block_is_read_right_while_its_segments_first_block_is
     finally:
         for s in scopes:
             s.__exit__(None, None, None)
-    # The contract, not the accident: the address lies inside a held wrap, at the view's own offset in it. (Past a
-    # wrap's end the read is whatever Metal maps there — the neighbour's bytes with 240 wraps alive, the right ones
-    # in a quiet process: a test on that alone is a coin.)
-    assert covering, f"the pinned address {gpu:#x} lies in no held wrap: {sorted(drv._RESIDENT_WRAPS)[:4]}"
-    base, _, va = covering[0]
-    assert gpu - va == view.data_ptr() - base
+    # The contract, not the accident: the address is the view's own allocation's buffer address at the view's offset
+    # in it, inside that buffer. (Past a buffer's end the read is whatever Metal maps there: a test on the bytes
+    # alone is a coin.)
+    assert buffer is not None and gpu == int(buffer.gpuAddress()) + offset, (hex(gpu), offset)
+    assert offset + 4 * N <= int(buffer.length())
     assert np.array_equal(got, want), f"the view read {got[:4]} through its pinned address, it holds {want[:4]}"
     del kept
 
 
-def test_an_address_beyond_the_wrap_it_resolves_to_is_refused_by_name():
-    """Not reachable through the allocator once the wraps are keyed by their extent; the refusal is what stands
-    between a future disagreement of the two and an address past a buffer's end. The held wrap is replaced by a
-    shorter one to see it."""
+def test_an_address_beyond_its_allocation_is_refused_by_name():
+    """An address past the end of every allocation has no shader address: refused by name, never answered with an
+    address past a buffer's end."""
     drv = _metal_or_skip()
+    from nbxtensor.backend.metal_device import runtime
     t = NBXTensor.from_numpy(np.zeros(1024, np.float32))
-    inner = NBXTensor.from_raw(t.data_ptr() + 64, (16,), NBXDtype.float32, "cuda", owns_data=False, device_idx=0,
-                               base=t)
-
-    class Short:
-        nbytes = 16
-
-    with drv.pinned_addresses(inner):
-        key = drv._pinned_extent(inner.data_ptr())
-        assert drv.pinned_gpu_address(inner.data_ptr()) == drv._RESIDENT_WRAPS[key][2] + inner.data_ptr() - key[0]
-        real = drv._RESIDENT_WRAPS[key]
-        drv._RESIDENT_WRAPS[key] = [Short(), real[1], real[2]]     # put back below: the scope's exit ends the real one
-        try:
-            with pytest.raises(RuntimeError, match="beyond the wrap"):
-                drv.pinned_gpu_address(inner.data_ptr())
-        finally:
-            drv._RESIDENT_WRAPS[key] = real
-    assert key not in drv._RESIDENT_WRAPS
+    buffer, offset = runtime().buffer_for_pointer(t.data_ptr())
+    past = t.data_ptr() - offset + int(buffer.length())               # the first byte after the allocation's buffer
+    if runtime().buffer_for_pointer(past)[0] is not None:
+        pytest.skip("another allocation begins right after this one")
+    with pytest.raises(RuntimeError, match="in no allocation of this Metal runtime"):
+        runtime().gpu_address(past)

@@ -1,23 +1,12 @@
-"""A GPU address a kernel captures is valid exactly as long as its wrap lives.
+"""A GPU address a kernel captures stays valid for every launch inside a `pinned_addresses` scope.
 
-`_buffer_for` builds a NEW `metal_native.wrap` per launch, so an address a
-kernel stores into a table (`tl.cast(ptr, tl.int64, bitcast=True)`) names a
-buffer that is released before the next launch runs — the read comes back
-ZEROS, nothing raised. That is the mixture-of-experts idiom, and it is why
-`execute_moe_fused` refuses today.
+A kernel stores the bits of a pointer it was handed (`tl.cast(ptr, tl.int64, bitcast=True)`) into a table and a later
+kernel reads through it: the mixture-of-experts idiom. The address is the allocation's own buffer address plus the
+offset (nbxtensor binds its own buffers: `backend/metal_dispatch.py`), valid as long as the allocation lives; the scope
+holds the tensors, so the allocator cannot free and reissue their storage under a table.
 
-`pinned_addresses` is the lifetime as CODE: inside the scope every launch
-reuses one wrap per (address, element type), so the captured address keeps
-naming the same storage.
-
-The bare path is asserted at the MECHANISM (a fresh wrap object per launch),
-not at the data. Measured 2026-09-20 while writing this file: with no scope the
-table read came back 0/256 in one ordering and 256/256 in another — Metal can
-hand a re-wrap of the same region the same GPU address it just released, so the
-stale read sometimes accidentally works. A behaviour that is an accident cannot
-be pinned by asserting either of its outcomes; what CAN be pinned is that the
-wrap is transient without the scope and stable inside it, which is exactly the
-difference the scope exists to make.
+Until 2026-11-12 a launch bound a FRESH wrap of the memory each time, so a captured address named a buffer released
+before the next launch, and the scope's job was to keep one wrap alive; the tests of that wrap are retired with it.
 """
 from __future__ import annotations
 
@@ -35,7 +24,7 @@ def _metal_or_skip():
     try:
         from nbxtensor.backend.runtime import gpu_backend
         if gpu_backend() != "metal":
-            pytest.skip("the transient-wrap lifetime is this driver's; "
+            pytest.skip("the captured-address lifetime is this driver's; "
                         "other drivers bind their own way")
         from nbxtensor.backend import triton_ext_driver as drv
         return drv
@@ -67,33 +56,6 @@ def _capture_then_read(src):
     return out.numpy()
 
 
-def test_without_a_scope_every_launch_gets_a_fresh_wrap():
-    """The failure's MECHANISM, asserted where it is deterministic.
-
-    Two binds of the same pointer outside any scope must be two objects: the
-    first launch's wrap is released before the second runs, which is why a
-    captured address is undefined there. If this ever returns one object, a
-    cache has appeared under the driver and `pinned_addresses` needs
-    re-justifying against whatever now holds it."""
-    drv = _metal_or_skip()
-    src = NBXTensor.from_numpy(np.arange(1, N + 1, dtype=np.float32))
-    a = drv._buffer_for(src.data_ptr(), "*fp32")
-    b = drv._buffer_for(src.data_ptr(), "*fp32")
-    assert a is not b, (
-        "the driver returned the SAME wrap for two binds outside any scope")
-
-
-def test_inside_a_scope_one_wrap_serves_every_bind():
-    """The mechanism, inside: same pointer, same scope, ONE wrap object."""
-    drv = _metal_or_skip()
-    src = NBXTensor.from_numpy(np.arange(1, N + 1, dtype=np.float32))
-    with drv.pinned_addresses(src):
-        a = drv._buffer_for(src.data_ptr(), "*fp32")
-        b = drv._buffer_for(src.data_ptr(), "*fp32")
-        assert a is b, "two binds inside one scope must reuse the pinned wrap"
-    assert not drv._PIN_COUNTS
-
-
 def test_inside_the_scope_the_captured_address_reads_the_data():
     drv = _metal_or_skip()
     want = np.arange(1, N + 1, dtype=np.float32)
@@ -106,20 +68,15 @@ def test_inside_the_scope_the_captured_address_reads_the_data():
 
 
 def test_the_pin_does_not_outlive_its_scope():
-    """After exit the driver is back to transient wraps — nothing leaks."""
+    """After exit nothing is held, and an address asked for outside a scope is refused by name."""
     drv = _metal_or_skip()
     want = np.arange(1, N + 1, dtype=np.float32)
     src = NBXTensor.from_numpy(want)
     with drv.pinned_addresses(src):
         pass
-    assert not drv._PINNED_WRAPS and not drv._PIN_COUNTS, (
-        f"the scope exited but left pins behind: "
-        f"{list(drv._PINNED_WRAPS)} / {dict(drv._PIN_COUNTS)}")
-    a = drv._buffer_for(src.data_ptr(), "*fp32")
-    b = drv._buffer_for(src.data_ptr(), "*fp32")
-    assert a is not b, (
-        "after the scope exited the driver still serves one wrap for two "
-        "binds — the pin leaked past its lifetime")
+    assert not drv._PIN_COUNTS, f"the scope exited but left pins behind: {dict(drv._PIN_COUNTS)}"
+    with pytest.raises(RuntimeError, match="not under any pinned_addresses scope"):
+        drv.pinned_gpu_address(src.data_ptr())
 
 
 def test_nested_scopes_hold_until_the_last_exit():
@@ -140,20 +97,6 @@ def test_an_empty_scope_refuses():
     drv = _metal_or_skip()
     with pytest.raises(RuntimeError, match="nothing to pin"):
         drv.pinned_addresses()
-
-
-def test_the_pin_reads_its_address_from_the_served_build():
-    """The pinned wrap's address is the served triton-ext API's (`MetalBuffer.gpu_address()`), not a
-    function of a retired commit. Until 2026-10-04 the scope called `metal_native.retain_resident`, which
-    the served build never had: every mixture-of-experts model died at its first band on Apple
-    (granite-3.1-1b-a400m: "module 'triton_apple_backend.metal_native' has no attribute 'retain_resident'")."""
-    drv = _metal_or_skip()
-    src = NBXTensor.from_numpy(np.arange(1, N + 1, dtype=np.float32))
-    with drv.pinned_addresses(src):
-        ((base, _), (wrap, count, gpu_va)), = drv._RESIDENT_WRAPS.items()      # keyed by (base, size)
-        assert count == 1 and gpu_va == wrap.gpu_address()
-        assert drv.pinned_gpu_address(src.data_ptr()) == gpu_va + (src.data_ptr() - base)
-    assert not drv._RESIDENT_WRAPS, "the scope exited and still holds a whole-allocation wrap"
 
 
 def test_the_address_flags_of_a_compilation_reach_its_kernel_call():

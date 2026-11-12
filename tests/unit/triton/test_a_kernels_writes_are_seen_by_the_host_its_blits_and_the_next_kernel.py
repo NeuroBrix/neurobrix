@@ -1,32 +1,15 @@
-"""Two queues, one device: what the host and our blits see of a kernel's writes.
+"""What the host, our blits and the next kernel see of a kernel's writes on Metal.
 
-triton-ext dispatches kernels on ITS OWN MTLCommandQueue. NeuroBrix's allocator
-has another, on which it enqueues device-to-device blits. Metal orders command
-buffers WITHIN a queue (commit order) and orders NOTHING across two of them
-without an explicit event or a host wait.
+Three crossings, one test each:
+  kernel -> host    a kernel writes, the host reads the same memory
+  kernel -> blit    a kernel writes, our blit copies it, the host reads the copy
+  blit -> kernel    our blit writes, and a kernel reads what it wrote
 
-The driver pays for that ordering today with a host wait after EVERY launch
-(`_native().synchronize()`), which is measured at 82% of a decode's wall time.
-Anything that replaces it must carry the same guarantee, and this file is what
-says whether it does.
-
-THREE CROSSINGS, one test each:
-  ext -> host    a kernel writes, the host reads the same memory
-  ext -> blit    a kernel writes, our queue copies it, the host reads the copy
-  blit -> ext    OUR queue's blit writes, and THEIR kernel reads what it wrote
-
-The third was missing until 2026-09-18 and is the one the pre-launch
-`_nbx_queue_drain()` exists for. Its absence was not harmless: with only the
-first two, stripping the drain and keeping the synchronize left the file GREEN,
-which would have licensed removing a guard that is load-bearing. D2D copies are
-blits on our queue — 1086 of them in an 8-token decode — so this crossing is
-taken on every real run.
-
-All three are written so they FAIL when the ordering is removed, and that is
-checked HERE rather than asserted: `test_the_drain_is_what_makes_the_third_pass`
-removes the drain and requires the third crossing to go wrong. Until 2026-09-18
-this docstring named a test of that kind which did not exist in the file — the
-claim was made and never kept.
+Until 2026-11-12 triton-ext ran the kernels on a queue of its own, and these crossings were ordered by a drain of our
+queue before every launch and a whole-device wait after it (82 % of a decode's wall time). Now nbxtensor encodes
+kernels and blits on ONE serial stream (`nbxtensor/backend/metal_dispatch.py`): Metal orders them, and the host waits
+only where it reads. This file says whether the three still hold; each was seen red when its ordering was removed
+(nbxtensor/tests/test_a_metal_kernel_runs_on_nbxtensors_own_stream.py removes them one by one).
 """
 from __future__ import annotations
 
@@ -55,7 +38,7 @@ def _backend_or_skip():
     try:
         from nbxtensor.backend.runtime import gpu_backend
         if gpu_backend() != "metal":
-            pytest.skip("the two-queue hazard is Metal's; there is one queue elsewhere")
+            pytest.skip("these crossings are checked on Metal")
     except Exception:
         pytest.skip("no GPU backend the engine can resolve")
 
@@ -134,33 +117,3 @@ def test_their_kernel_sees_what_our_blit_just_wrote():
         assert int((got != value).sum()) == 0, (
             f"rep {rep}: their kernel read {int((got != value).sum())} of {N} "
             f"elements our blit had already written — the queues are not ordered")
-
-
-def test_the_drain_is_what_makes_the_third_pass(monkeypatch):
-    """A test that cannot fail proves nothing — so remove the guard and require
-    the failure.
-
-    `_nbx_queue_drain` is replaced with a no-op for the duration. If the third
-    crossing still comes out clean, then either Metal has begun ordering the two
-    queues on this machine or the blit is completing too fast to catch, and in
-    EITHER case the test above has stopped proving what it claims. That is worth
-    a failure here, because the guard it licenses costs 2.25 s of a 17.5 s
-    decode and should not be kept on an assumption.
-    """
-    _backend_or_skip()
-    from nbxtensor.backend import triton_ext_driver as drv
-    monkeypatch.setattr(drv, "_nbx_queue_drain", lambda: None)
-    corrupted = 0
-    for rep in range(REPS):
-        value = 0x22220000 | rep
-        src = NBXTensor.from_numpy(np.full(N, value, dtype=np.int32))
-        mid = NBXTensor.from_numpy(np.zeros(N, dtype=np.int32))
-        out = NBXTensor.from_numpy(np.zeros(N, dtype=np.int32))
-        DeviceAllocator.memcpy(mid.data_ptr(), src.data_ptr(), N * 4, 3)
-        launch(_sum_into, (triton.cdiv(N, BLOCK),), mid, out, N, BLOCK=BLOCK)
-        if int((out.numpy() != value).sum()):
-            corrupted += 1
-    assert corrupted, (
-        "with the drain removed, all %d reps still read what our blit wrote: "
-        "the third crossing is no longer falsifiable and the guard it licenses "
-        "needs re-justifying" % REPS)

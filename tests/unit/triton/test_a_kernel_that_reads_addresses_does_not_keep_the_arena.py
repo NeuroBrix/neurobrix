@@ -110,7 +110,7 @@ def test_the_arena_leaves_the_footprint_after_a_kernel_read_through_its_address(
     del t
     _settle()
     kept = _footprint_mb() - before
-    assert not drv._RESIDENT_WRAPS and not drv._PIN_COUNTS
+    assert not drv._PIN_COUNTS
     assert kept < KEPT_MB, (
         f"{kept} MB of a {ARENA_MB} MB arena are still in the footprint after it was freed: the launch that read "
         f"through its address left the exposed buffer retained")

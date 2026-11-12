@@ -1,9 +1,10 @@
 """The in-place expert store (unified memory) never holds more of the experts' pages than the slots Prism granted it,
 counting EVERY holder: the store's own bindings (`DeviceAllocator.bind_mapped`, one Metal buffer per projection) and the
-whole-allocation wraps the cached pointer tables pin (`pointer_tables.build_ptr_tables` -> `pinned_addresses`,
-`triton_ext_driver._RESIDENT_WRAPS`). A pin is a second Metal buffer over the same pages and keeps them resident as long
-as the table lives in its 256-entry LRU, so a pin that outlives its binding, or more pins than bound experts, holds
-pages the grant does not count.
+allocations the cached pointer tables pin (`pointer_tables.build_ptr_tables` -> `pinned_addresses`,
+`triton_ext_driver._PIN_COUNTS`). A pin holds its tensors, and so their pages, as long as the table lives in its
+256-entry LRU, so a pin that outlives its binding, or more pins than bound experts, holds pages the grant does not
+count. (Until 2026-11-12 a pin was also a second Metal buffer over the same pages, a wrap; nbxtensor binds its own
+buffers now and makes none.)
 
 Why: DeepSeek-Coder-V2-Lite triton on the M4 Pro (2026-11-08, RUN 81) wired 2.7 -> 16.2 GB in 46 s against a 614-slot
 (10 131 MB) grant, while the driver's pinned-wrap ledger grew to 2 370 entries. This gate says whether the store and its
@@ -63,7 +64,7 @@ def _held(spans):
     ours = lambda a: any(s // page * page <= a < e for s, e in spans)
     bound = {s: e[2] for s, e in rt._host_buffers.items() if isinstance(e[1], _MappedView) and ours(s)}
     pinned = {}
-    for b in [b for b, _ in drv._RESIDENT_WRAPS if ours(b)]:        # the wraps are keyed by (base, size)
+    for b in [b for b in drv._PIN_COUNTS if ours(b)]:              # the pins are keyed by their allocation's base
         hit = DA.containing(b)
         pinned[b] = hit[1] if hit is not None else -1          # -1: a pin whose range nobody records any more
     return bound, pinned

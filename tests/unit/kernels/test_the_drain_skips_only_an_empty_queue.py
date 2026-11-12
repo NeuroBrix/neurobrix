@@ -1,14 +1,9 @@
-"""The drain's fast path must skip an empty queue and never a busy one.
+"""`has_pending_gpu_writes()` must say False for an idle stream and True for a busy one.
 
-`_nbx_queue_drain()` calls `runtime().sync()` only when
-`has_pending_gpu_writes()` says this queue holds work that could be writing
-memory. That predicate carries the whole saving and the whole risk:
-
-  * if it wrongly says True, the optimisation quietly stops working and the
-    decode goes back to paying 0.458 ms per launch with nobody noticing;
-  * if it wrongly says False while a blit is in flight, a kernel reads memory
-    our queue has not finished writing — which is the defect
-    `test_the_two_queues_are_ordered`'s third crossing exists to catch.
+It decides whether the host must flush before reading memory it did not copy (`metal_device.host_reads`, a tensor
+already on "cpu" that a kernel may write: a unified card's cache alias). Wrongly True, every such read waits for
+nothing; wrongly False while work is in flight, the host reads memory a kernel has not finished writing. (Until
+2026-11-12 it gated the drain of our queue before each triton-ext launch; that second queue is gone.)
 
 Both directions are asserted here, so neither can rot silently.
 """

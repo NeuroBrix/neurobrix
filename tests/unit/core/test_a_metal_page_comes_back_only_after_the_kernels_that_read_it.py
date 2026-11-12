@@ -2,12 +2,12 @@
 free list only after the work that read it completed.
 
 Triton branch: the Apple vendor files declare `memory.async_release: false` — a page comes back AT ONCE — and what makes
-that true is the launch, not a fence: nbxtensor's launcher drains NeuroBrix's own queue before every kernel and waits
-for the kernel after it (`_nbx_queue_drain()` / `_native().synchronize()`, nbxtensor/backend/triton_ext_driver.py), so
-no kernel is running when the host or that queue touches a page. The test that holds the declaration launches a kernel
-long enough to be caught running and reads its output from the host at the instant the launch returns: complete, or
-the declaration is false. Seen red with the post-launch synchronize() made a no-op (0 of 4096 values written). The day
-the launch stops waiting, the backend's fence (nbxtensor.memory.pages.MetalStateFence, docs/nbxtensor/BACKENDS.md) becomes mandatory.
+that true is the order of every write that can reuse it, not a fence: nbxtensor runs every kernel and blit on one
+serial stream (`backend/metal_dispatch.py`), so a later one runs after the kernels that read the page, and the host
+writes through a copy that flushes that stream first. (Until 2026-11-12 it was true because every launch waited for
+the device; that wait is gone.) The test that holds the declaration rewrites from the host, at once, a page a kernel
+long enough to be caught running is still reading: the kernel must read the old contents, or the declaration is false
+and the backend's fence (nbxtensor.memory.pages.MetalStateFence, docs/nbxtensor/BACKENDS.md) becomes mandatory.
 
 Compiled branch: through MPS events (core/state/mps_fence.py). A backend without a fence is refused by name.
 """
@@ -60,7 +60,7 @@ def test_the_apple_vendor_files_release_a_page_at_once():
     for f in sorted(_APPLE.glob("*.yml")):
         memory = (yaml.safe_load(f.read_text()) or {}).get("memory") or {}
         if "async_release" in memory:
-            assert memory["async_release"] is False, f"{f.name}: a page is released at once on Metal (the launch waits)"
+            assert memory["async_release"] is False, f"{f.name}: a page is released at once on Metal (one serial stream)"
     pool = PagePool(num_pages=2, tokens_per_page=16, async_release=False)
     t = PageTable(pool)
     t.reserve(32)
@@ -68,29 +68,36 @@ def test_the_apple_vendor_files_release_a_page_at_once():
     assert pool.free_pages == 2 and pool.pending_pages == 0
 
 
-def test_a_triton_launch_on_metal_returns_only_once_its_kernel_completed():
+def test_a_page_a_running_kernel_reads_is_rewritten_only_after_it():
+    """The page a kernel is still reading, released and rewritten at once from the host through the engine's copy
+    path (`DeviceAllocator.memcpy`, what a page refill takes): the kernel reads the OLD contents. Every write that can
+    reuse a page is ordered after the kernels before it: a kernel or a blit by the one serial stream they share, the
+    host because a copy flushes that stream first."""
     triton = pytest.importorskip("triton")
     import triton.language as tl
     from nbxtensor.backend.launcher import launch
+    from nbxtensor.memory.allocator import DeviceAllocator
     from nbxtensor.tensor import NBXTensor
 
     @triton.jit
-    def _spin(out_ptr, steps, BLOCK: tl.constexpr):
+    def _slow_copy(src_ptr, out_ptr, steps, BLOCK: tl.constexpr):
         off = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         x = off.to(tl.float32) * 0.0
         for _ in range(steps):
-            x = x * 0.5 + 1.0
-        tl.store(out_ptr + off, x)
+            x = x * 0.5 + 1.0                        # 2.0 after enough steps: the time a kernel takes to run
+        tl.store(out_ptr + off, tl.load(src_ptr + off) + x - 2.0)
 
-    launch(_spin, (_N // _BLOCK,), NBXTensor.from_numpy(np.zeros(_N, dtype=np.float32)), 8, BLOCK=_BLOCK)  # compiled
+    page = NBXTensor.from_numpy(np.full(_N, 7.0, dtype=np.float32))
     out = NBXTensor.from_numpy(np.zeros(_N, dtype=np.float32))
-    launch(_spin, (_N // _BLOCK,), out, 200000, BLOCK=_BLOCK)
-    # The host's view of the buffer, read with no synchronize of its own (numpy() would copy through a path that may wait).
-    got = np.ctypeslib.as_array((ctypes.c_float * _N).from_address(out.data_ptr())).copy()
-    assert int((got == 2.0).sum()) == _N, (
-        f"{int((got == 2.0).sum())} of {_N} values written when the launch returned: the kernel was still running, so "
-        f"memory.async_release: false on Apple is false — keep the post-launch wait, or release pages past the "
-        f"backend's fence (nbxtensor.memory.pages.MetalStateFence)")
+    launch(_slow_copy, (_N // _BLOCK,), page, out, 8, BLOCK=_BLOCK)                    # compiled
+    launch(_slow_copy, (_N // _BLOCK,), page, out, 200000, BLOCK=_BLOCK)               # still running on return
+    refill = np.full(_N, -1.0, dtype=np.float32)
+    DeviceAllocator.memcpy(page.data_ptr(), refill.ctypes.data, refill.nbytes, kind=1)  # the page, rewritten at once
+    got = out.to_cpu().numpy()
+    assert int((got == 7.0).sum()) == _N, (
+        f"{int((got == 7.0).sum())} of {_N} values read the page's old contents: the host rewrote a page a kernel was "
+        f"still reading, so memory.async_release: false on Apple is false — release pages past the backend's fence "
+        f"(nbxtensor.memory.pages.MetalStateFence)")
 
 
 def test_the_compiled_branch_frees_a_page_past_its_mps_event():
