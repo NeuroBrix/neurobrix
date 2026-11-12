@@ -23,7 +23,10 @@ into its library.
   arithmetic, the speech-to-text decoder's joint network (now on the device), the certification harness and the
   census's stand-in device all live in the library now; the engine calls it. 83 477 -> 80 938 code lines
   and 321 -> 172 places doing tensor work in the engine (measured, 0.6.11 -> 0.6.13), outputs unchanged.
-- A tensor handed from PyTorch to the Triton engine enters through the library's DLPack reader, in its own layout.
+- **A tensor handed from PyTorch to the Triton engine** (an input image, a conditioning, a tokenizer's ids) **arrives as
+  the values it shows:** a bfloat16 tensor on the CPU no longer fails, a tensor on an Apple GPU no longer fails in the
+  image and video flows, and a non-contiguous one (an image in channels-last order) is copied in the order it shows on
+  every backend.
 
 ## [0.6.12] - 2026-11-12
 
