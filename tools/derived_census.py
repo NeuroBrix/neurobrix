@@ -2645,8 +2645,8 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
         ic = _dc.replace(ic, flow=ic.flow.split_guidance(plan["cfg_split_components"]))
     loop_comps = set((flow.get("loop") or {}).get("components") or [])
     if flow.get("type") == "rnnt":
-        # the rnnt flow executes its forward stages' graphs; the greedy decoder and the joint run
-        # on the host from their weights (`_run_lstm_np`, `_run_joint_np`) — no launch
+        # the rnnt flow executes its forward stages' graphs; the greedy decoder and the joint run from their
+        # weights one step at a time, outside their graphs — their launches are derived below (`derive_keys`)
         runs = {st["component"] for st in ((flow.get("audio") or {}).get("stages") or [])
                 if st.get("execution", "forward") == "forward"}
     if flow.get("type") == "vlm" and vlm_contract(a.model, topo) is not None:
@@ -2743,6 +2743,21 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
                 for q_, key in LK_.lstm_launches(1, 1, I_, H_, int(args_[4].get("value")),
                                                  bool(args_[7].get("value")), _Dt.float32,
                                                  prof.has_native_bf16):
+                    derived.add((None, q_, C.key_repr(key)))
+        # the joint network runs one encoder frame beside one predictor frame on the device through `linear_wrapper`
+        # (`TritonRNNTEngine._run_joint`: float32, one row): a launch per projection, the [N, K] weights its graph
+        # transposes (`aten::t`), each a [1, K] x [K, N] product
+        for st in (flow.get("audio") or {}).get("stages") or []:
+            if st.get("execution") != "rnnt_joint":
+                continue
+            g = runtime_graph(a.model, st["component"])
+            for o in (g.get("ops") or {}).values():
+                w_ = g["tensors"][(o.get("input_tensor_ids") or [None])[0]]["shape"] \
+                    if o.get("op_type") == "aten::t" else None
+                if not w_ or len(w_) != 2:
+                    continue
+                for q_, key in LK_.matmul_launches([1, w_[1]], [w_[1], w_[0]], _Dt.float32, _Dt.float32,
+                                                   prof.has_native_bf16):
                     derived.add((None, q_, C.key_repr(key)))
     return derived, plan, P, unhandled
 
