@@ -72,6 +72,28 @@ class Arena:
                 held[i >= self._num_weights] += t.nbytes()
         return held[0], held[1]
 
+    def census(self, large: int) -> dict:
+        """What the slots hold, by region: {"weights" | "inputs" | "intermediates": [tensors, bytes], "empty": slots
+        holding None, "other": slots holding a value without bytes, "types": {class name: slots}, "large": [(slot,
+        tensor)] of the intermediates of at least `large` bytes}."""
+        out = {"weights": [0, 0], "inputs": [0, 0], "intermediates": [0, 0], "empty": 0, "other": 0, "types": {},
+               "large": []}
+        first = self._num_weights + self._num_inputs
+        for i, t in enumerate(self._slots):
+            if t is None:
+                out["empty"] += 1
+                continue
+            out["types"][type(t).__name__] = out["types"].get(type(t).__name__, 0) + 1
+            if not hasattr(t, "nbytes"):
+                out["other"] += 1
+                continue
+            region = out["weights" if i < self._num_weights else "inputs" if i < first else "intermediates"]
+            region[0] += 1
+            region[1] += t.nbytes()
+            if i >= first and t.nbytes() >= large:
+                out["large"].append((i, t))
+        return out
+
     def clear_intermediates(self):
         """Free intermediate slots (keep weights + inputs)."""
         start = self._num_weights + self._num_inputs

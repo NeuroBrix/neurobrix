@@ -249,6 +249,7 @@ def append_counts(path) -> None                # append this process's line
 class Arena
     # O(1) tensor storage via integer-indexed list.
     # bytes_on(device_idx) -> (weights, rest): the bytes its slots hold on the device, each allocation once
+    # census(large) -> {weights|inputs|intermediates: [tensors, bytes], empty, other, types, large: [(slot, tensor)]}
 ```
 
 `nbxtensor.memory.device_memory`
@@ -323,6 +324,10 @@ def what_would_have_fit(oom, shape: Optional[Sequence]=None)
     # One sentence naming what would have made the refused allocation fit.
 def annotate(message: str, cause, shape: Optional[Sequence]=None)
     # Append the advice to an op-failure message when the cause is an OOM.
+def held_memory_report(named=(), big=1 << 30, bucket=100 MB) -> List[str]
+    # who holds the device memory, as log lines: blocks in use by size per device, a cycle collection's effect on the
+    # big blocks, the tensors on them named from (name, tensor) pairs or ORPHAN with their referrers, autotuners
+    # still holding tensors
 ```
 
 `nbxtensor.memory.pointer_tables`

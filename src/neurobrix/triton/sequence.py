@@ -3422,6 +3422,32 @@ class TritonSequence(SequenceSteps):
         except Exception as e:
             _log.debug(f"[NBX_OP_FINGERPRINT] failed at {op.op_uid}: {e}")
 
+    def _dump_live_on_oom(self, op, op_idx: int, arena, frees) -> None:
+        """NBX_LIVE_DUMP_ON_OOM=1, after `op` was refused memory: what the arena holds by region, each large
+        intermediate with the op that produced it and its last reader (a last use at or before `op_idx` is a kill the
+        liveness pass missed), then who holds the device's memory (nbxtensor's `held_memory_report`: blocks in use,
+        the tensors on the large ones, ORPHAN for one no slot names, and what refers to them). Never raises."""
+        try:
+            from nbxtensor.memory.oom_advice import held_memory_report
+            c = arena.census(100 * 2**20)
+            region = " ".join(f"{k}={c[k][0]}/{c[k][1] / 2**20:.0f}MB" for k in ("weights", "inputs", "intermediates"))
+            _log.debug(f"[LIVE_DUMP at {op.op_uid}] arena_size={len(arena)} {region} none_slots={c['empty']} "
+                       f"other_slots={c['other']} types={c['types']} "
+                       f"deferred_queue={len(frees)}/{frees.nbytes / 2**20:.0f}MB")
+            slot_tid = {s: t for t, s in self._tid_to_slot.items()}
+            producer = {s: o.op_uid for o in self._ops for s in o.output_slots}
+            last_use = getattr(self, "_slot_last_use", {})
+            for s, t in c["large"]:
+                _log.debug(f"[LIVE_DUMP_SLOT slot={s} tid={slot_tid.get(s, '?')} nbytes={t.nbytes() / 2**20:.0f}MB "
+                           f"shape={tuple(t.shape)} producer={producer.get(s, '?')} last_use={last_use.get(s, '?')} "
+                           f"current_op_idx={op_idx}]")
+            named = [(slot_tid.get(s, f"slot::{s}"), t) for s, t in enumerate(arena.slots) if t is not None]
+            for line in held_memory_report(named):
+                _log.debug(line)
+            _log.debug(f"  [DIAG] _seq_constant_originals dict size: {len(getattr(self, '_seq_constant_originals', {}))}")
+        except Exception as dump_e:                         # said, never silent
+            _log.debug(f"[LIVE_DUMP failed: {dump_e}]")
+
     def _run_single_device(self, skip_kills: bool = False,
                             pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
         """Single-device fast path — no device switching.
@@ -3531,339 +3557,8 @@ class TritonSequence(SequenceSteps):
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
-                    import os as _os_oom
-                    if _os_oom.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1" and "malloc failed" in str(e):
-                        try:
-                            w_n = self._num_weights
-                            i_n = self._num_inputs
-                            n_w = n_i = n_m = n_other = n_none = 0
-                            b_w = b_i = b_m = 0
-                            type_counts: Dict[str, int] = {}
-                            for s, t in enumerate(arena):
-                                if t is None:
-                                    n_none += 1
-                                    continue
-                                tn = type(t).__name__
-                                type_counts[tn] = type_counts.get(tn, 0) + 1
-                                if not hasattr(t, '_nbytes'):
-                                    n_other += 1
-                                    continue
-                                nb = t._nbytes
-                                if s < w_n:
-                                    n_w += 1; b_w += nb
-                                elif s < w_n + i_n:
-                                    n_i += 1; b_i += nb
-                                else:
-                                    n_m += 1; b_m += nb
-                            _log.debug(f"[LIVE_DUMP at {op.op_uid}] arena_size={len(arena)} "
-                                       f"weights={n_w}/{b_w/1024/1024:.0f}MB "
-                                       f"inputs={n_i}/{b_i/1024/1024:.0f}MB "
-                                       f"intermediates={n_m}/{b_m/1024/1024:.0f}MB "
-                                       f"none_slots={n_none} other_slots={n_other} "
-                                       f"types={type_counts} "
-                                       f"deferred_queue={len(_frees)}/{_frees.nbytes/1024/1024:.0f}MB")
-                            # P-TRITON-LIVE-WATERMARK-AUDIT L2: per-intermediate
-                            # detail. For every non-None, non-weight, non-input
-                            # slot at OOM, log: slot id, nbytes, shape, tid,
-                            # producing op_uid, slot_last_use (from the liveness
-                            # pass cached on self), and current op_idx. This
-                            # is the dispositive fact: if last_use <= op_idx
-                            # the liveness analysis missed a kill; if
-                            # last_use > op_idx the tensor is legitimately
-                            # needed downstream.
-                            try:
-                                if not hasattr(self, '_slot_to_tid'):
-                                    self._slot_to_tid = {
-                                        sl: t for t, sl in self._tid_to_slot.items()}
-                                # Build slot -> producing op_uid map
-                                if not hasattr(self, '_slot_to_producer'):
-                                    _p_map: Dict[int, str] = {}
-                                    for _o_idx, _o in enumerate(self._ops):
-                                        for _s_p in _o.output_slots:
-                                            _p_map[_s_p] = _o.op_uid
-                                    self._slot_to_producer = _p_map
-                                for _s_l, _t_l in enumerate(arena):
-                                    if _t_l is None:
-                                        continue
-                                    if _s_l < w_n or _s_l < w_n + i_n:
-                                        continue
-                                    _nb_l = getattr(_t_l, '_nbytes', 0)
-                                    if _nb_l < 100 * 1024 * 1024:
-                                        continue  # only large slots
-                                    _sh_l = tuple(getattr(_t_l, '_shape', ()))
-                                    _tid_l = self._slot_to_tid.get(_s_l, "?")
-                                    _prod_l = self._slot_to_producer.get(
-                                        _s_l, "?")
-                                    _lu_l = getattr(
-                                        self, '_slot_last_use', {}).get(_s_l, "?")
-                                    _log.debug(f"[LIVE_DUMP_SLOT slot={_s_l} "
-                                               f"tid={_tid_l} "
-                                               f"nbytes={_nb_l/1024/1024:.0f}MB "
-                                               f"shape={_sh_l} "
-                                               f"producer={_prod_l} "
-                                               f"last_use={_lu_l} "
-                                               f"current_op_idx={op_idx}]")
-                            except Exception as _slot_e:
-                                _log.debug(f"[LIVE_DUMP_SLOT error] {_slot_e}")
-                            # Walk DeviceAllocator._cuda_ptr_size directly
-                            # to show ALL live cudaMalloc blocks per device,
-                            # bucketed by size. Exposes blocks that NBX
-                            # allocated but no NBXTensor in this arena
-                            # references (the 21 GB gap mystery).
-                            from nbxtensor.memory.allocator import DeviceAllocator as _DAW
-                            from collections import Counter as _Counter
-                            per_dev_buckets: Dict[int, "_Counter[int]"] = {}
-                            per_dev_total: Dict[int, int] = {}
-                            for _ptr, _nb in _DAW._cuda_ptr_size.items():
-                                _d = _DAW._cuda_ptr_device.get(_ptr, -1)
-                                bucket = (_nb // (1024 * 1024)) * 1024 * 1024
-                                if bucket >= 100 * 1024 * 1024:  # only buckets >= 100 MB
-                                    per_dev_buckets.setdefault(_d, _Counter())[bucket] += 1
-                                per_dev_total[_d] = per_dev_total.get(_d, 0) + _nb
-                            for _d, _t in sorted(per_dev_total.items()):
-                                buckets = per_dev_buckets.get(_d, _Counter())
-                                top = sorted(buckets.items(), key=lambda x: -x[0]*x[1])[:8]
-                                _log.debug("%s", f"[LIVE_BLOCKS dev={_d}] total={_t/1024/1024:.0f}MB "
-                                                 f"big_blocks(>=100MB): "
-                                                 + " ".join(f"{c}x{sz/1024/1024:.0f}MB" for sz, c in top))
-                            # Walk gc.get_objects() to find NBXTensor objects
-                            # whose data_ptr matches the >= 1 GB allocations.
-                            # Reports the type/repr of OTHER referrers (besides
-                            # the tensor itself) — the source of the leak.
-                            try:
-                                import gc as _gc_h
-                                from nbxtensor.tensor import NBXTensor as _NBX_H
-                                # Force a cycle-collecting gc.collect() BEFORE the
-                                # scan. If the ORPHAN tensors are part of a Python
-                                # ref cycle that prevents __del__ from firing,
-                                # this resolves them. Compare big-block count
-                                # before/after to confirm cycle vs leak.
-                                pre_collect_big = sum(
-                                    1 for p in _DAW._cuda_ptr_size
-                                    if _DAW._cuda_ptr_size[p] >= 1024*1024*1024)
-                                _collected = _gc_h.collect()
-                                post_collect_big = sum(
-                                    1 for p in _DAW._cuda_ptr_size
-                                    if _DAW._cuda_ptr_size[p] >= 1024*1024*1024)
-                                _log.debug(f"  [GC_COLLECT_TEST] gc.collect() collected {_collected} cycle objects, "
-                                           f"big_blocks(>=1GB) before={pre_collect_big} after={post_collect_big}")
-                                big_ptrs = {p: _DAW._cuda_ptr_size[p]
-                                            for p in _DAW._cuda_ptr_size
-                                            if _DAW._cuda_ptr_size[p] >= 1024*1024*1024}
-                                big_tensors = []
-                                for o in _gc_h.get_objects():
-                                    if isinstance(o, _NBX_H) and getattr(o, '_data_ptr', 0) in big_ptrs:
-                                        big_tensors.append(o)
-                                _log.debug(f"[BIG_TENSORS] {len(big_tensors)} NBXTensors with data_ptr in big blocks (>=1GB)")
-                                # Build reverse arena lookup: data_ptr -> tid
-                                # so each big tensor can be identified by its
-                                # graph tensor_id (or "ORPHAN" if not in arena).
-                                ptr_to_tid: Dict[int, str] = {}
-                                if arena is not None:
-                                    if not hasattr(self, '_slot_to_tid'):
-                                        self._slot_to_tid = {
-                                            s: tid for tid, s in self._tid_to_slot.items()}
-                                    for slot_idx, arena_t in enumerate(arena):
-                                        if arena_t is not None and hasattr(arena_t, '_data_ptr'):
-                                            ptr_to_tid.setdefault(arena_t._data_ptr,
-                                                self._slot_to_tid.get(slot_idx, f"slot::{slot_idx}"))
-                                for i, t in enumerate(big_tensors):
-                                    refs = _gc_h.get_referrers(t)
-                                    refs_summary = []
-                                    for r in refs[:5]:
-                                        rt = type(r).__name__
-                                        info = ""
-                                        if rt == "list":
-                                            info = f"[len={len(r)}]"
-                                            # For small lists/tuples, sample their contents
-                                            # to identify the data structure (NBXTensor count,
-                                            # other types). Useful for ORPHAN diagnosis.
-                                            if len(r) <= 10:
-                                                contents = [type(item).__name__
-                                                            for item in r]
-                                                info += f" contents={contents}"
-                                        elif rt == "dict":
-                                            info = f"{{len={len(r)}}}"
-                                            if len(r) <= 10:
-                                                key_types = [(type(k).__name__,
-                                                              type(v).__name__)
-                                                             for k, v in list(r.items())[:5]]
-                                                info += f" sample_kv={key_types}"
-                                        elif rt == "tuple":
-                                            info = f"(len={len(r)})"
-                                            if len(r) <= 10:
-                                                contents = [type(item).__name__
-                                                            for item in r]
-                                                info += f" contents={contents}"
-                                        elif rt == "frame":
-                                            # Frame referrer — try to get the function name
-                                            try:
-                                                fname = r.f_code.co_name
-                                                fline = r.f_lineno
-                                                ffile = r.f_code.co_filename.split('/')[-1]
-                                                info = f"@{fname}:{ffile}:{fline}"
-                                            except Exception:
-                                                pass
-                                        refs_summary.append(f"{rt}{info}")
-                                    tid = ptr_to_tid.get(t._data_ptr, "ORPHAN(not in arena)")
-                                    # Refcount + gc.is_tracked diagnostic
-                                    import sys as _sys_rc
-                                    rc = _sys_rc.getrefcount(t)
-                                    is_tracked = _gc_h.is_tracked(t)
-                                    _log.debug(f"  tensor#{i} tid={tid} shape={tuple(t._shape)} "
-                                               f"nbytes={t._nbytes/1024/1024:.0f}MB "
-                                               f"owns={t._owns_data} "
-                                               f"data_ptr={t._data_ptr} "
-                                               f"refcount={rc} gc_tracked={is_tracked} "
-                                               f"referrers({len(refs)}): {refs_summary}")
-                                    # For ORPHAN tensors specifically, walk one
-                                    # level deeper: who holds the list[len=3]
-                                    # and tuple(len=2) referrers? That gives the
-                                    # actual data structure name.
-                                    if tid.startswith("ORPHAN"):
-                                        for j, r in enumerate(refs[:5]):
-                                            grand = _gc_h.get_referrers(r)
-                                            grand_summary = []
-                                            for gr in grand[:3]:
-                                                grt = type(gr).__name__
-                                                ginfo = ""
-                                                if grt == "frame":
-                                                    try:
-                                                        ginfo = f"@{gr.f_code.co_name}:{gr.f_code.co_filename.split('/')[-1]}:{gr.f_lineno}"
-                                                    except Exception:
-                                                        pass
-                                                elif grt in ("list", "tuple", "dict"):
-                                                    ginfo = f"[len={len(gr)}]"
-                                                elif hasattr(gr, '__class__') and gr.__class__.__module__ != 'builtins':
-                                                    ginfo = f"<{gr.__class__.__module__}.{grt}>"
-                                                grand_summary.append(f"{grt}{ginfo}")
-                                            _log.debug(f"    └─ ref#{j} {type(r).__name__} held by ({len(grand)}): {grand_summary}")
-                                        # Find any 'cell' referrer and trace it
-                                        for r in refs:
-                                            if type(r).__name__ != 'cell':
-                                                continue
-                                            # Verify cell.cell_contents IS the tensor
-                                            try:
-                                                cc = r.cell_contents
-                                                cc_match = (cc is t)
-                                            except Exception:
-                                                cc_match = False
-                                            cell_holders = _gc_h.get_referrers(r)
-                                            _log.debug(f"    [CELL_TRACE] cell.cell_contents is t: {cc_match}, "
-                                                       f"cell id={id(r)}, cell holders ({len(cell_holders)}):")
-                                            for ch in cell_holders[:5]:
-                                                cht = type(ch).__name__
-                                                cinfo = f" id={id(ch)} len={len(ch) if hasattr(ch,'__len__') else '?'}"
-                                                # Identify if this list/tuple is our diagnostic structures
-                                                if ch is big_tensors:
-                                                    cinfo += " [DIAG=big_tensors]"
-                                                # Print first few elements
-                                                try:
-                                                    sample = [type(x).__name__ for x in list(ch)[:5]]
-                                                    cinfo += f" sample={sample}"
-                                                except Exception:
-                                                    pass
-                                                # Find who holds this cell_holder
-                                                gh = _gc_h.get_referrers(ch)
-                                                gh_summary = []
-                                                for ghi in gh[:5]:
-                                                    ght = type(ghi).__name__
-                                                    if ght == "function":
-                                                        try:
-                                                            gh_summary.append(f"fn:{ghi.__name__}@{ghi.__code__.co_filename.split('/')[-1]}:{ghi.__code__.co_firstlineno}")
-                                                        except Exception:
-                                                            gh_summary.append("fn:?")
-                                                    elif ght == "frame":
-                                                        try:
-                                                            gh_summary.append(f"frame@{ghi.f_code.co_name}:{ghi.f_code.co_filename.split('/')[-1]}:{ghi.f_lineno}")
-                                                        except Exception:
-                                                            gh_summary.append("frame:?")
-                                                    elif ght == "module":
-                                                        gh_summary.append(f"module:{getattr(ghi,'__name__','?')}")
-                                                    elif ght in ("list", "tuple", "dict"):
-                                                        gh_summary.append(f"{ght}[{len(ghi) if hasattr(ghi,'__len__') else '?'}]")
-                                                    else:
-                                                        gh_summary.append(ght)
-                                                cinfo += f" holders={gh_summary}"
-                                                _log.debug(f"      cell_holder: {cht}{cinfo}")
-                                        # EXHAUSTIVE scan: walk ALL gc.get_objects
-                                        # to find any object that refers to t via
-                                        # any attribute (including __slots__).
-                                        # gc.get_referrers might miss C-extension
-                                        # or slot-based refs; this walks every
-                                        # object's __dict__/__slots__/contents.
-                                        candidate_holders = []
-                                        for obj in _gc_h.get_objects():
-                                            if obj is t or obj is refs:
-                                                continue
-                                            if isinstance(obj, (list, tuple, dict, set, frozenset)):
-                                                continue  # already covered
-                                            try:
-                                                # Check __dict__
-                                                d = getattr(obj, '__dict__', None)
-                                                if d is not None and t in d.values():
-                                                    # Find the specific attr name
-                                                    attr_names = [k for k, v in d.items() if v is t]
-                                                    obj_label = type(obj).__name__
-                                                    # If obj is a module, get its name
-                                                    if obj_label == 'module':
-                                                        obj_label = f"module:{getattr(obj, '__name__', '?')}"
-                                                    candidate_holders.append(
-                                                        (type(obj).__module__, obj_label,
-                                                         f'attr:{attr_names[:3]}'))
-                                                    continue
-                                                # Check __slots__
-                                                slots = getattr(type(obj), '__slots__', ())
-                                                if isinstance(slots, str):
-                                                    slots = (slots,)
-                                                for slot in slots:
-                                                    try:
-                                                        if getattr(obj, slot, None) is t:
-                                                            candidate_holders.append(
-                                                                (type(obj).__module__, type(obj).__name__, f'slot:{slot}'))
-                                                            break
-                                                    except Exception:
-                                                        pass
-                                            except Exception:
-                                                pass
-                                        _log.debug(f"    [EXHAUSTIVE] {len(candidate_holders)} non-container holders:")
-                                        for mod, cls, where in candidate_holders[:10]:
-                                            _log.debug(f"      {mod}.{cls} via {where}")
-                                # Print _seq_constant_originals size for context
-                                try:
-                                    sco_size = len(getattr(self, '_seq_constant_originals', {}))
-                                    _log.debug(f"  [DIAG] _seq_constant_originals dict size: {sco_size}")
-                                except Exception:
-                                    pass
-                                # Scan Triton Autotuner instances for nargs leaks
-                                # (autotune's self.nargs = None is only reached
-                                # on success; on exception, args dict persists
-                                # holding tensor refs as C-level hidden refs).
-                                try:
-                                    from triton.runtime.autotuner import Autotuner as _AT
-                                    autotuners = [o for o in _gc_h.get_objects()
-                                                  if isinstance(o, _AT)]
-                                    leaks = []
-                                    for at_inst in autotuners:
-                                        nargs = getattr(at_inst, 'nargs', None)
-                                        if nargs is not None and isinstance(nargs, dict):
-                                            tensor_count = sum(1 for v in nargs.values()
-                                                               if isinstance(v, _NBX_H))
-                                            if tensor_count > 0:
-                                                fn_name = getattr(getattr(at_inst, 'base_fn', None),
-                                                                  '__name__', '?')
-                                                leaks.append((fn_name, len(nargs), tensor_count))
-                                    _log.debug(f"  [AUTOTUNE_LEAK_SCAN] {len(autotuners)} Autotuner instances; "
-                                               f"{len(leaks)} with non-None nargs holding NBXTensors:")
-                                    for fn_name, n_args, n_tensors in leaks:
-                                        _log.debug(f"    LEAK: kernel={fn_name} nargs_count={n_args} "
-                                                   f"nbxtensor_count={n_tensors}")
-                                except Exception as _e:
-                                    _log.debug(f"  [AUTOTUNE_LEAK_SCAN failed: {_e}]")
-                            except Exception as _ge:
-                                _log.debug(f"[BIG_TENSORS scan failed: {_ge}]")
-                        except Exception as _dump_e:
-                            _log.debug(f"[LIVE_DUMP failed: {_dump_e}]")
+                    if os.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1" and "malloc failed" in str(e):
+                        self._dump_live_on_oom(op, op_idx, arena, _frees)
                     _none_pos = [i for i, a in enumerate(args) if a is None]
                     # Per-arg NBX placement: "cannot be accessed from
                     # Triton" is raised for CPU-resident AND freed/foreign
