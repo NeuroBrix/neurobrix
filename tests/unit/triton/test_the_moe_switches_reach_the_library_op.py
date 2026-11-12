@@ -1,7 +1,7 @@
 """The Triton engine's fused MoE call (`triton/moe.execute_moe_fused`) hands the library's op
 (`nbxtensor.ops.moe_fused.fused_moe`) its arguments as given and the engine's switches as read at the call:
 NBX_MOE_VEC=0 refuses the int4 one-token band, NBX_MOEV_DSPLIT=0 its split down projection, unset or "1" keeps each;
-NBX_Z3_TRITON_DIAG=1 asks the memory log; NBX_MOE_DIAG unset attaches no dump, "1" dumps every call, another value
+NBX_Z3_TRITON_DIAG=1 asks the memory log — all three read once, at import; NBX_MOE_DIAG unset attaches no dump, "1" dumps every call, another value
 only the calls whose key contains it.
 
 What this test would do if the code were wrong: a switch read once at import (the cell flips it between two calls), a
@@ -20,8 +20,8 @@ def recorded(monkeypatch):
     import neurobrix.triton.moe as M
     seen = []
     monkeypatch.setattr(M, "fused_moe", lambda *a, **k: seen.append((a, k)) or "out")
-    for name in ("NBX_MOE_VEC", "NBX_MOEV_DSPLIT", "NBX_Z3_TRITON_DIAG"):
-        monkeypatch.delenv(name, raising=False)
+    for name, default in (("_INT4_BAND", True), ("_SPLIT_DOWN", True), ("_LOG_MEMORY", False)):
+        monkeypatch.setattr(M, name, default)
     return M, seen
 
 
@@ -38,21 +38,29 @@ def test_the_arguments_reach_the_op_as_given(recorded):
 
 
 @pytest.mark.parametrize("value,taken", [(None, True), ("1", True), ("0", False)])
-@pytest.mark.parametrize("switch,arg", [("NBX_MOE_VEC", "int4_band"), ("NBX_MOEV_DSPLIT", "split_down")])
-def test_a_switch_is_read_at_each_call(recorded, monkeypatch, switch, arg, value, taken):
+@pytest.mark.parametrize("switch,const,arg", [("NBX_MOE_VEC", "_INT4_BAND", "int4_band"),
+                                              ("NBX_MOEV_DSPLIT", "_SPLIT_DOWN", "split_down")])
+def test_a_switch_is_read_once_at_import_and_reaches_the_op(recorded, monkeypatch, switch, const, arg, value, taken):
+    import importlib
     M, seen = recorded
-    M.execute_moe_fused(None, None, [], [], [], 2, 4)
+    monkeypatch.delenv(switch, raising=False)
     if value is not None:
         monkeypatch.setenv(switch, value)
-    M.execute_moe_fused(None, None, [], [], [], 2, 4)
-    assert seen[0][1][arg] is True, "unset keeps the adopted path"
-    assert seen[1][1][arg] is taken, (switch, value, seen[1][1][arg])
+    fresh = importlib.reload(M)
+    try:
+        assert getattr(fresh, const) is taken, (switch, value)
+        monkeypatch.setattr(fresh, "fused_moe", lambda *a, **k: seen.append((a, k)) or "out")
+        fresh.execute_moe_fused(None, None, [], [], [], 2, 4)
+        assert seen[-1][1][arg] is taken
+    finally:
+        monkeypatch.undo()
+        importlib.reload(M)
 
 
 def test_the_memory_log_is_asked_by_its_switch(recorded, monkeypatch):
     M, seen = recorded
     M.execute_moe_fused(None, None, [], [], [], 2, 4)
-    monkeypatch.setenv("NBX_Z3_TRITON_DIAG", "1")
+    monkeypatch.setattr(M, "_LOG_MEMORY", True)
     M.execute_moe_fused(None, None, [], [], [], 2, 4)
     assert [k["log_memory"] for _, k in seen] == [False, True]
 
