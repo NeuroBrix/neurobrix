@@ -13,7 +13,8 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.backend import runtime as _rt
-from nbxtensor.memory.pool import (SegmentPool, LARGE, range_add, range_extend, range_unmapped, range_reclaimable)
+from nbxtensor.memory.pool import (SegmentPool, LARGE, range_add, range_extend, range_unmapped, range_reclaimable,
+                                   enabled as _pool_switch)
 import logging
 _log = logging.getLogger(__name__)
 
@@ -527,7 +528,7 @@ class DeviceAllocator:
         """One-shot read of the NBX_ALLOC_POOL env var (default on;
         `0` disables the pool). Cached on the class."""
         if not hasattr(DeviceAllocator, '_pool_enabled_init'):
-            DeviceAllocator._pool_enabled = os.environ.get("NBX_ALLOC_POOL", "1") != "0"
+            DeviceAllocator._pool_enabled = _pool_switch()
             DeviceAllocator._pool_enabled_init = True
             if os.environ.get("NBX_ALLOC_STATS", "0") == "1":
                 _atexit.register(DeviceAllocator.print_alloc_stats)

@@ -26,6 +26,7 @@ Torch-free, device-free: the driver is reached only through the callable a calle
 from __future__ import annotations
 
 import bisect
+import os
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -39,6 +40,28 @@ POOL_SMALL_BYTES = 1 << 20
 POOL_SMALL_SEGMENT_BYTES = 1 << 21
 
 LARGE, SMALL = 0, 1
+
+
+def enabled() -> bool:
+    """Whether the allocator parks a freed block in the pool (`NBX_ALLOC_POOL`, on unless "0"): the switch's one
+    reading, for the allocator and for a planner pricing what it holds."""
+    return os.environ.get("NBX_ALLOC_POOL", "1") != "0"
+
+
+def parked_cap_bytes(vendor: str, architecture: str, total_bytes: float) -> int:
+    """The bytes the pool may keep parked on a device of `total_bytes` described by `vendor/architecture` (0:
+    unbounded): its file's `memory.alloc_pool_parked_cap_fraction` of the device, unbounded where it states none or
+    0. A block freed under the cap stays parked; past it, wholly free segments return to the driver."""
+    from nbxtensor.backend.device_files import param
+    frac = float(param(vendor, architecture, "memory", "alloc_pool_parked_cap_fraction", 0.0) or 0.0)
+    return int(total_bytes * frac) if frac > 0 else 0
+
+
+def fit_slack(vendor: str, architecture: str) -> float:
+    """The most the pool hands out beyond a request on `vendor/architecture`, as a fraction of the request (its
+    file's `memory.alloc_pool_fit_slack_fraction`): 0, exact-size hits only, where it states none."""
+    from nbxtensor.backend.device_files import param
+    return max(0.0, float(param(vendor, architecture, "memory", "alloc_pool_fit_slack_fraction", 0.0) or 0.0))
 
 
 def _no_report(ptr: int, size: Optional[int], dev: int) -> None:

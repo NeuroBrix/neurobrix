@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every device holding it synchronised (the library's bias and pointer-table caches dropped, the pool emptied), a
   second load's arenas joined to the first's, an arena cleared after its devices drain. The engine did each itself
   (its arena clears synchronised only the current device).
+- `memory.pool.enabled`, `parked_cap_bytes`, `fit_slack`: the pool's rules for a device, from its file — the
+  allocator's own switch, and what a planner prices the pool by. Prism read the same keys and switch again itself.
 
 ### Changed
 - The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,

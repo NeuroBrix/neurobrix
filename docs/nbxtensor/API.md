@@ -371,6 +371,12 @@ class HeldExperts(device_idx: int, layers)
 `nbxtensor.memory.pool`
 
 ```python
+def enabled() -> bool
+    # whether the allocator parks freed blocks (NBX_ALLOC_POOL, on unless "0"): the switch's one reading
+def parked_cap_bytes(vendor, architecture, total_bytes) -> int
+    # the bytes the pool may keep parked on such a device (0: unbounded), its file's alloc_pool_parked_cap_fraction
+def fit_slack(vendor, architecture) -> float
+    # the most the pool hands out beyond a request, as a fraction of it (alloc_pool_fit_slack_fraction; 0 absent)
 class SegmentPool
     # The free blocks of every device's segments, and the blocks in use inside them.
 class Simulation

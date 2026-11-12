@@ -54,6 +54,7 @@ from neurobrix.core.config import get_prism_defaults
 from nbxtensor.dtype import itemsize as _itemsize
 from neurobrix.core.config.system import PRISM_DEFAULTS
 from nbxtensor.ops import tiling_sizes as _ts
+from nbxtensor.memory import pool as _alloc_pool
 
 if TYPE_CHECKING:
     from nbx import NBXContainer, ComponentData
@@ -183,6 +184,12 @@ def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None)
             return int(peak_loaded_bytes)
         return int(plan.total_memory_mb * 2**20)
     return 0
+
+
+def _vendor_arch(spec) -> tuple:
+    """(vendor, architecture) naming a device's file."""
+    brand = getattr(spec, "brand", None)
+    return getattr(brand, "value", brand), spec.architecture
 
 
 def _device_is_unified(device_string: str, profile) -> bool:
@@ -2053,41 +2060,24 @@ class PrismSolver:
         return why
 
     def _parked_cap_mb(self, dev: "DeviceState", profile) -> Optional[float]:
-        """What the Triton allocator's pool may keep PARKED on `dev` beside a new allocation, in MB,
-        or None where a parked block never sits beside one.
-
-        A freed block stays allocated in the pool when it is at most the cap
-        (`DeviceAllocator.free`): `memory.alloc_pool_parked_cap_fraction` of the arch yml times the
-        device's memory, unbounded (`math.inf`) where the fraction is 0 or absent — the allocator's
-        own reading of the same key. It sits beside the next allocation only where nothing flushes it
-        first: a discrete card's driver refuses what it cannot serve and the pool is flushed and the
-        request retried (`malloc_cuda`), while a UNIFIED device serves the request beside it. So None
-        on a discrete device, under the compiled engine (no arena, no such pool), and with the pool
-        off (`NBX_ALLOC_POOL=0`, the allocator's own door)."""
+        """What the Triton allocator's pool may keep PARKED on `dev` beside a new allocation, in MB (the pool's
+        answer, `nbxtensor.memory.pool.parked_cap_bytes`; `math.inf` unbounded), or None where a parked block never
+        sits beside one: a discrete card's driver refuses what it cannot serve and the pool is flushed and the request
+        retried, while a UNIFIED device serves the request beside it. So None on a discrete device, under the
+        compiled engine (no such pool), and with the pool off (`nbxtensor.memory.pool.enabled`)."""
         import math
-        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
-            return None
-        if os.environ.get("NBX_ALLOC_POOL", "1") == "0":
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton" or not _alloc_pool.enabled():
             return None
         if not _device_is_unified(dev.device_string, profile):
             return None
-        from neurobrix.core.config.loader import get_vendor_config
-        spec = dev.spec
-        brand = getattr(spec, "brand", None)
-        frac = float((get_vendor_config(getattr(brand, "value", brand), spec.architecture)
-                      .get("memory", {}) or {}).get("alloc_pool_parked_cap_fraction", 0.0) or 0.0)
-        return frac * float(spec.memory_mb) if frac > 0 else math.inf
+        cap = _alloc_pool.parked_cap_bytes(*_vendor_arch(dev.spec), float(dev.spec.memory_mb) * (1 << 20))
+        return cap / (1 << 20) if cap else math.inf
 
     @staticmethod
     def _pool_fit_slack(dev: "DeviceState") -> float:
-        """The most the Triton allocator's pool hands out beyond a request, as a fraction of it — the
-        allocator's own reading (`DeviceAllocator._pool_fit_slack`) of the arch yml's
-        `memory.alloc_pool_fit_slack_fraction`: exact-size hits only where it is absent."""
-        from neurobrix.core.config.loader import get_vendor_config
-        spec = dev.spec
-        brand = getattr(spec, "brand", None)
-        return max(0.0, float((get_vendor_config(getattr(brand, "value", brand), spec.architecture)
-                               .get("memory", {}) or {}).get("alloc_pool_fit_slack_fraction", 0.0) or 0.0))
+        """The most the Triton allocator's pool hands out beyond a request, as a fraction of it: the pool's answer
+        (`nbxtensor.memory.pool.fit_slack`)."""
+        return _alloc_pool.fit_slack(*_vendor_arch(dev.spec))
 
     def _arena_door(self, container, strat_name: str, allocs, devices, component_memory) -> Optional[str]:
         """Why the plan `strat_name` proposes asks some device for one arena over its largest
@@ -2158,29 +2148,26 @@ class PrismSolver:
         """The device allocator's rules a walk is replayed through — the pool's (the keywords of
         `nbxtensor.memory.pool.simulate`) and the Triton hot loop's deferred queue (`drain_cliff`,
         `drain_count`: dead tensors are freed together when either is reached) — or None where the
-        plan's engine has neither (the compiled engine). The parked cap is the allocator's own reading: the arch yml's
-        `memory.alloc_pool_parked_cap_fraction` of the device (of the imposed rung where one is,
-        `DeviceAllocator._pool_parked_cap`), on the profile's smallest device — the one the walk is
-        budgeted against. `NBX_ALLOC_POOL=0` (the allocator's own door): no pool."""
+        plan's engine has neither (the compiled engine). The parked cap is the pool's answer
+        (`nbxtensor.memory.pool.parked_cap_bytes`) for the profile's smallest device — the one the walk is budgeted
+        against — of the imposed rung where one is. The pool off (`nbxtensor.memory.pool.enabled`): no pool."""
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return None
-        if os.environ.get("NBX_ALLOC_POOL", "1") == "0":
+        if not _alloc_pool.enabled():
             return {"pooled": False}
         if profile is None or not getattr(profile, "devices", None):
             return {"parked_cap": 0}
         from neurobrix.core.config.loader import get_vendor_config
         spec = min(profile.devices, key=lambda d: d.memory_mb)
-        brand = getattr(spec, "brand", None)
-        memory = (get_vendor_config(getattr(brand, "value", brand), spec.architecture).get("memory", {}) or {})
-        frac = float(memory.get("alloc_pool_parked_cap_fraction", 0.0) or 0.0)
+        memory = (get_vendor_config(*_vendor_arch(spec)).get("memory", {}) or {})
         total_mb = float(spec.memory_mb)
         from neurobrix.core.prism.memory_budget import _door_mb, deferred_drain_retained_bytes
         door = _door_mb()
         if door is not None:
             total_mb = min(total_mb, float(door))
         from neurobrix.triton.sequence import _DEFERRED_DRAIN_COUNT_DEFAULT
-        return {"parked_cap": int(total_mb * (1 << 20) * frac) if frac > 0 else 0,
-                # the hot loop's deferred queue: dead tensors freed together at the cliff or the count (`_drain_now`)
+        return {"parked_cap": _alloc_pool.parked_cap_bytes(*_vendor_arch(spec), total_mb * (1 << 20)),
+                # the hot loop's deferred queue: dead tensors freed together at the cliff or the count (`DeferredFrees`)
                 "drain_cliff": int(deferred_drain_retained_bytes(memory)),
                 "drain_count": int(_DEFERRED_DRAIN_COUNT_DEFAULT)}
 
