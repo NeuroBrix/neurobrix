@@ -16,6 +16,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
+from nbxtensor.random.seeded_draw import draw_from_probabilities as _sample_token_np   # a census shadow replaces it
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
@@ -187,7 +188,7 @@ class TritonDualAREngine(ComponentFlowHandler):
                     masked[im_end_id] = slow_logits[im_end_id]
                 slow_token = _sample_token_np(masked, temperature, top_p=top_p,
                                               repetition_penalty=rep_pen,
-                                              generated_ids=slow_history[-rep_window:],
+                                              seen_ids=slow_history[-rep_window:],
                                               rng=sampler_rng)
                 if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
                     _log.debug(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}")
@@ -209,7 +210,7 @@ class TritonDualAREngine(ComponentFlowHandler):
                     cb_logits = flogits_np[0, read_pos, :acoustic_cb_size]
                     from neurobrix.triton.flow.decode_topk import log_topk as _log_topk
                     _log_topk(cb_logits, len(slow_history), tag=f"codebook:{read_pos}")
-                    sampled = _sample_token_np(cb_logits, temperature, top_p=top_p,
+                    sampled = _sample_token_np(cb_logits.astype(np.float64), temperature, top_p=top_p,
                                                rng=sampler_rng)
                     ctx.append(sampled)
 
@@ -422,53 +423,3 @@ class TritonDualAREngine(ComponentFlowHandler):
 
         return True
 
-
-# -----------------------------------------------------------------
-# Module-level helpers (zero torch)
-# -----------------------------------------------------------------
-
-def _sample_token_np(
-    logits_1d: np.ndarray, temperature: float,
-    top_p: float = 1.0,
-    generated_ids: Optional[List[int]] = None,
-    repetition_penalty: float = 1.0,
-    rng=None,
-) -> int:
-    """Sample next token from logits (NumPy).
-
-    `rng` is a deterministic `np.random.RandomState` seeded once per run from
-    `global.seed` (R27/R28): it makes the decode reproducible per mode AND, since
-    the pytorch dual_ar path seeds an identical RandomState (same seed, same
-    algorithm), the 4 modes draw the same randoms — so at equal (fp16-close)
-    logits they pick the same tokens. Falls back to global np.random only if no
-    rng is threaded (legacy callers)."""
-    _draw = rng if rng is not None else np.random
-    logits = logits_1d.copy().astype(np.float64)
-
-    if repetition_penalty != 1.0 and generated_ids:
-        for tid in set(generated_ids):
-            if 0 <= tid < len(logits):
-                if logits[tid] > 0:
-                    logits[tid] /= repetition_penalty
-                else:
-                    logits[tid] *= repetition_penalty
-
-    if temperature == 0.0:
-        return int(np.argmax(logits))
-
-    logits = logits / temperature
-    logits -= logits.max()
-    exp_logits = np.exp(logits)
-    probs = exp_logits / exp_logits.sum()
-
-    if top_p < 1.0:
-        sorted_idx = np.argsort(-probs)
-        sorted_probs = probs[sorted_idx]
-        cumsum = np.cumsum(sorted_probs)
-        cutoff = np.searchsorted(cumsum, top_p) + 1
-        mask = np.ones_like(probs, dtype=bool)
-        mask[sorted_idx[:cutoff]] = False
-        probs[mask] = 0.0
-        probs = probs / probs.sum()
-
-    return int(_draw.choice(len(probs), p=probs))

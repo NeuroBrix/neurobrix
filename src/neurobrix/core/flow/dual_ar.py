@@ -14,6 +14,8 @@ import torch
 import numpy as np
 from typing import Any, Dict, List
 
+from nbxtensor.random.seeded_draw import draw_from_probabilities   # the host draw both engines share (R30)
+
 from .base import ComponentFlowHandler, register_flow
 
 # The rule and its history live in core.runtime_values.
@@ -26,41 +28,6 @@ _log = logging.getLogger(__name__)
 # (triton/flow/dual_ar.py:_DUALAR_SEED) so the two separate code paths draw
 # identical randoms when --seed is not passed.
 _DUALAR_SEED = 1234
-
-
-def _sample_token_np_core(logits_1d, temperature, top_p=1.0,
-                          generated_ids=None, repetition_penalty=1.0, rng=None):
-    """Numpy seeded sampler — byte-for-byte the same algorithm as the triton
-    dual_ar `_sample_token_np`, so that at equal seed + equal (fp16-close) logits
-    the pytorch and triton paths sample identical tokens. The pytorch path feeds
-    it logits converted to fp64 numpy. R30 parity is the whole point; the two
-    implementations are kept deliberately identical, not shared (R33 keeps the
-    triton file torch-free, so it cannot import this torch-importing module)."""
-    _draw = rng if rng is not None else np.random
-    logits = np.asarray(logits_1d, dtype=np.float64).copy()
-    if repetition_penalty != 1.0 and generated_ids:
-        for tid in set(generated_ids):
-            if 0 <= tid < len(logits):
-                if logits[tid] > 0:
-                    logits[tid] /= repetition_penalty
-                else:
-                    logits[tid] *= repetition_penalty
-    if temperature == 0.0:
-        return int(np.argmax(logits))
-    logits = logits / temperature
-    logits -= logits.max()
-    exp_logits = np.exp(logits)
-    probs = exp_logits / exp_logits.sum()
-    if top_p < 1.0:
-        sorted_idx = np.argsort(-probs)
-        sorted_probs = probs[sorted_idx]
-        cumsum = np.cumsum(sorted_probs)
-        cutoff = np.searchsorted(cumsum, top_p) + 1
-        mask = np.ones_like(probs, dtype=bool)
-        mask[sorted_idx[:cutoff]] = False
-        probs[mask] = 0.0
-        probs = probs / probs.sum()
-    return int(_draw.choice(len(probs), p=probs))
 
 
 @register_flow("dual_ar")
@@ -216,9 +183,9 @@ class DualAREngine(ComponentFlowHandler):
             mask[:, sem_lo:sem_hi] = slow_logits[:, sem_lo:sem_hi]
             if im_end_id is not None:
                 mask[:, im_end_id] = slow_logits[:, im_end_id]
-            slow_token = _sample_token_np_core(
-                mask[0].detach().float().cpu().numpy(), temperature, top_p=top_p,
-                repetition_penalty=rep_pen, generated_ids=slow_history[-rep_window:],
+            slow_token = draw_from_probabilities(
+                mask[0].detach().float().cpu().numpy().astype(np.float64), temperature, top_p=top_p,
+                repetition_penalty=rep_pen, seen_ids=slow_history[-rep_window:],
                 rng=sampler_rng)
             import os as _os_dbg
             if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
@@ -241,8 +208,8 @@ class DualAREngine(ComponentFlowHandler):
                 read_pos = len(ctx)  # depth position predicting the next codebook
                 cb_logits = flogits[:, read_pos, :acoustic_cb_size]
                 log_topk(cb_logits, len(slow_history), tag=f"codebook:{read_pos}")
-                sampled = _sample_token_np_core(
-                    cb_logits[0].detach().float().cpu().numpy(), temperature,
+                sampled = draw_from_probabilities(
+                    cb_logits[0].detach().float().cpu().numpy().astype(np.float64), temperature,
                     top_p=top_p, rng=sampler_rng)
                 ctx.append(sampled)
 

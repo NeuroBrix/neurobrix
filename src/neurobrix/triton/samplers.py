@@ -18,6 +18,7 @@ from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # t
 from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import random_wrappers as _nbx_random_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.ops import reduction_wrappers as _nbx_reduction_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor.ops.token_filters import outside_nucleus, penalize_repeats
 
 
 # =============================================================================
@@ -160,41 +161,6 @@ class CombinedSampler:
         self.repetition_penalty = validated["repetition_penalty"]
         self.min_tokens_to_keep = validated["min_tokens_to_keep"]
 
-    def _apply_repetition_penalty(self, logits: NBXTensor,
-                                  input_ids: Optional[NBXTensor]) -> NBXTensor:
-        """Apply repetition penalty by reading token IDs from GPU."""
-        if input_ids is None or self.repetition_penalty == 1.0:
-            return logits
-
-        # The ids and the logits read on the host (the logits always arrive in fp32: sample_next_id and the
-        # TritonGenerator cast them once), the penalty applied there, the row written back in place.
-        ids = input_ids.numpy().reshape(-1)
-        vocab = logits.shape[-1]
-        logits_np = logits.to(NBXDtype.float32).numpy().reshape(-1)
-
-        for token_id in set(ids.tolist()):
-            if 0 <= token_id < vocab:
-                if logits_np[token_id] > 0:
-                    logits_np[token_id] /= self.repetition_penalty
-                else:
-                    logits_np[token_id] *= self.repetition_penalty
-
-        logits.copy_(NBXTensor.from_numpy(logits_np.reshape(logits.shape), device=logits._device_idx))
-        return logits
-
-    def _shift_mask_right(self, mask: NBXTensor) -> NBXTensor:
-        """Shift the top-p mask right by one and clear position 0.
-
-        Guarantees the highest-probability token is never masked
-        (HuggingFace/PyTorch convention). Without it, a peaked
-        distribution whose top probability already exceeds top_p masks
-        every token, softmax returns NaN, and the sampler yields 0.
-        """
-        arr = mask.numpy().copy()
-        arr[..., 1:] = arr[..., :-1]
-        arr[..., 0] = False
-        return NBXTensor.from_numpy(arr, device=mask._device_idx)
-
     def _sample_from_candidates(self, logits: NBXTensor) -> NBXTensor:
         """Sample from the top-k candidates, working at width k.
 
@@ -226,7 +192,7 @@ class CombinedSampler:
         if self.top_p < 1.0:
             probs = _nbx_attention_wrappers.softmax(cand_logits, dim=-1)
             cum = _nbx_reduction_wrappers.cumsum_wrapper(probs, dim=-1)
-            mask = self._shift_mask_right(_nbx_elementwise_wrappers.gt(cum, self.top_p))
+            mask = outside_nucleus(cum, self.top_p)
             cand_logits = _nbx_index_wrappers.masked_fill(cand_logits, mask, float('-inf'))
 
         probs = _nbx_attention_wrappers.softmax(cand_logits, dim=-1)
@@ -236,8 +202,8 @@ class CombinedSampler:
 
     def __call__(self, logits: NBXTensor,
                  input_ids: Optional[NBXTensor] = None, **kwargs) -> NBXTensor:
-        # 1. Repetition penalty
-        logits = self._apply_repetition_penalty(logits, input_ids)
+        # 1. Repetition penalty (in place: the caller hands a row of its own)
+        logits = penalize_repeats(logits, input_ids, self.repetition_penalty)
 
         # 2. Temperature scaling
         if self.temperature != 1.0 and self.temperature > 0:
@@ -257,7 +223,7 @@ class CombinedSampler:
                 logits.to(NBXDtype.float32), dim=-1, descending=True)
             sorted_probs = _nbx_attention_wrappers.softmax(sorted_logits, dim=-1)
             cum_probs = _nbx_reduction_wrappers.cumsum_wrapper(sorted_probs, dim=-1)
-            sorted_mask = self._shift_mask_right(_nbx_elementwise_wrappers.gt(cum_probs, self.top_p))
+            sorted_mask = outside_nucleus(cum_probs, self.top_p)
             indices_to_remove = _nbx_index_wrappers.scatter_wrapper(
                 sorted_mask, -1, sorted_indices, sorted_mask)
             logits = _nbx_index_wrappers.masked_fill(logits, indices_to_remove, float('-inf'))

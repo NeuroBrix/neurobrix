@@ -38,7 +38,8 @@ import os
 import numpy as np
 
 __all__ = ["SeededDrawStream", "apply_repetition_penalty",
-           "seeded_gaussian"]
+           "seeded_gaussian", "draw_from_probabilities",
+           "draw_from_masked_logits"]
 
 # NBX_DRAW_DIAG=<jsonl path>: per-draw top-4 candidate ids/logits + the
 # top-2 margin + the chosen id, appended as one JSON line. The speech
@@ -60,6 +61,56 @@ def apply_repetition_penalty(logits: np.ndarray, seen_ids, penalty: float) -> np
     vals = logits[ids]
     logits[ids] = np.where(vals > 0, vals / penalty, vals * penalty)
     return logits
+
+
+def _softmax(z: np.ndarray) -> np.ndarray:
+    e = np.exp(z - z.max())
+    return e / e.sum()
+
+
+def draw_from_probabilities(logits: np.ndarray, temperature: float, *, top_p: float = 1.0, seen_ids=None,
+                            repetition_penalty: float = 1.0, rng=None) -> int:
+    """One token id from a 1-D logits row, on the host in the row's own dtype (a float32 row is computed in float32):
+    repetition penalty, then greedy argmax at temperature 0, else the softmax of logits / temperature, the nucleus
+    (the highest probabilities whose running sum first reaches `top_p`, sorted by `argsort`) kept and renormalised,
+    and one `rng.choice` (`numpy.random`'s global stream when `rng` is None)."""
+    z = np.array(logits, copy=True)
+    apply_repetition_penalty(z, seen_ids, repetition_penalty)
+    if temperature == 0.0:
+        return int(np.argmax(z))
+    probs = _softmax(z / temperature)
+    if top_p < 1.0:
+        order = np.argsort(-probs)
+        cut = np.searchsorted(np.cumsum(probs[order]), top_p) + 1
+        outside = np.ones_like(probs, dtype=bool)
+        outside[order[:cut]] = False
+        probs[outside] = 0.0
+        probs = probs / probs.sum()
+    return int((rng if rng is not None else np.random).choice(len(probs), p=probs))
+
+
+def draw_from_masked_logits(logits: np.ndarray, temperature: float, *, top_p: float = 1.0, min_p: float = 0.0,
+                            seen_ids=None, repetition_penalty: float = 1.0, rng=None) -> int:
+    """One token id from a 1-D logits row, on the host in the row's own dtype: repetition penalty, greedy argmax at
+    temperature 0, else logits / temperature (a temperature of 1 or below 0 divides nothing), the logits below
+    `min_p` x the highest probability and those past the nucleus (sorted by logit) set to -inf, then the softmax
+    renormalised once more and one `rng.choice` (`numpy.random`'s global stream when `rng` is None)."""
+    z = np.array(logits, copy=True)
+    apply_repetition_penalty(z, seen_ids, repetition_penalty)
+    if temperature == 0.0:
+        return int(np.argmax(z))
+    if temperature != 1.0 and temperature > 0:
+        z = z / temperature
+    if min_p > 0:
+        probs = _softmax(z)
+        z[probs < min_p * probs.max()] = -np.inf
+    if top_p < 1.0:
+        order = np.argsort(-z)
+        cut = np.searchsorted(np.cumsum(_softmax(z[order])), top_p) + 1
+        z[order[cut:]] = -np.inf
+    probs = np.maximum(_softmax(z), 0)
+    probs = probs / probs.sum()
+    return int((rng if rng is not None else np.random).choice(len(probs), p=probs))
 
 
 class SeededDrawStream:

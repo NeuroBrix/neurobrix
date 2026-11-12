@@ -21,6 +21,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
+from nbxtensor.random.seeded_draw import apply_repetition_penalty, draw_from_probabilities
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
 _log = logging.getLogger(__name__)
@@ -438,15 +439,7 @@ def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalt
     if last_logits_np.ndim > 1:
         last_logits_np = last_logits_np[0]  # First batch
 
-    # Repetition penalty
-    if repetition_penalty != 1.0 and generated_ids:
-        for tid in set(generated_ids):
-            if 0 <= tid < len(last_logits_np):
-                if last_logits_np[tid] > 0:
-                    last_logits_np[tid] /= repetition_penalty
-                else:
-                    last_logits_np[tid] *= repetition_penalty
-
+    apply_repetition_penalty(last_logits_np, generated_ids, repetition_penalty)
     _maybe_log_topk(last_logits_np, len(generated_ids or []), "triton", "raw")
     if defaults is not None and (timestamps or defaults.get("suppress_tokens")
                                  or defaults.get("begin_suppress_tokens")):
@@ -456,16 +449,7 @@ def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalt
                                   begin, timestamps=timestamps)
         _maybe_log_topk(last_logits_np, len(generated_ids or []), "triton", "rules")
 
-    if temperature == 0.0:
-        return int(np.argmax(last_logits_np))
-
-    # Softmax in numpy
-    logits_scaled = last_logits_np / temperature
-    logits_scaled -= logits_scaled.max()  # numerical stability
-    exp_logits = np.exp(logits_scaled)
-    probs = exp_logits / exp_logits.sum()
-
-    return int(np.random.choice(len(probs), p=probs))
+    return draw_from_probabilities(last_logits_np, temperature)        # greedy at 0, else numpy's global stream
 
 
 def _to_numpy(tensor) -> np.ndarray:

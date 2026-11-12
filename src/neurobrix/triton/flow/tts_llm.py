@@ -29,6 +29,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
+from nbxtensor.random.seeded_draw import draw_from_masked_logits
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
@@ -332,12 +333,11 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
                                    uncond_logits_np, logits_np)
                 next_token = _forced_seq[step]
             else:
-                next_token = _sample_token_np(
-                    logits_np[0, 0, :], temperature, top_p, min_p,
-                    generated_ids=generated_ids,
-                    repetition_penalty=repetition_penalty,
-                    rng=rng,
-                )
+                from neurobrix.kernels import census as _census
+                # a census shadow has no values: the draw is token 0 (a softmax over its logits drew NaN, 2026-09-22)
+                next_token = 0 if _census.active() else draw_from_masked_logits(
+                    logits_np[0, 0, :].astype(np.float64), temperature, top_p=top_p, min_p=min_p,
+                    seen_ids=generated_ids, repetition_penalty=repetition_penalty, rng=rng)
             generated_ids.append(next_token)
 
             if next_token == eos_token_id and not _teacher:
@@ -682,71 +682,6 @@ def _dump_t3_logits_np(path, step, cond, uncond, comb) -> None:
         _j.dump({"step": step, "cond": _st(cond),
                  "uncond": _st(uncond), "comb": _st(comb)}, _fh)
         _fh.write("\n")
-
-
-def _sample_token_np(
-    logits_1d: np.ndarray, temperature: float,
-    top_p: float = 1.0, min_p: float = 0.0,
-    generated_ids: Optional[list] = None,
-    repetition_penalty: float = 1.0,
-    rng: Optional[np.random.RandomState] = None,
-) -> int:
-    """Sample next token from logits (NumPy). `rng` makes it deterministic."""
-    from neurobrix.kernels import census as _census
-    if _census.active():
-        # A census shadow has no values: the draw is token 0 and no host math runs (a
-        # softmax over a shadow's logits drew NaN probabilities, 2026-09-22).
-        return 0
-    logits = logits_1d.copy().astype(np.float64)
-
-    # Repetition penalty
-    if generated_ids and repetition_penalty != 1.0:
-        for tid in set(generated_ids):
-            if 0 <= tid < len(logits):
-                if logits[tid] > 0:
-                    logits[tid] /= repetition_penalty
-                else:
-                    logits[tid] *= repetition_penalty
-
-    # Greedy floor (dual_ar discipline, R30 mirror of core): deterministic argmax
-    # → all four modes pick identical tokens (logits agree to fp16), the true
-    # cross-mode reconciliation with no runaway. Used by --temperature 0.
-    if temperature == 0.0:
-        return int(np.argmax(logits))
-
-    # Temperature
-    if temperature != 1.0 and temperature > 0:
-        logits = logits / temperature
-
-    # Min-p filtering
-    if min_p > 0:
-        logits_shifted = logits - logits.max()
-        exp_logits = np.exp(logits_shifted)
-        probs = exp_logits / exp_logits.sum()
-        max_prob = probs.max()
-        threshold = min_p * max_prob
-        mask = probs < threshold
-        logits[mask] = -np.inf
-
-    # Top-p (nucleus) sampling
-    if top_p < 1.0:
-        sorted_idx = np.argsort(-logits)
-        sorted_logits = logits[sorted_idx]
-        sorted_shifted = sorted_logits - sorted_logits.max()
-        sorted_probs = np.exp(sorted_shifted) / np.exp(sorted_shifted).sum()
-        cumsum = np.cumsum(sorted_probs)
-        cutoff = np.searchsorted(cumsum, top_p) + 1
-        logits[sorted_idx[cutoff:]] = -np.inf
-
-    # Final softmax + sample
-    logits_shifted = logits - logits.max()
-    exp_logits = np.exp(logits_shifted)
-    probs = exp_logits / exp_logits.sum()
-    probs = np.maximum(probs, 0)  # Ensure non-negative
-    probs = probs / probs.sum()  # Re-normalize
-
-    _rng = rng if rng is not None else np.random
-    return int(_rng.choice(len(probs), p=probs))
 
 
 def _save_audio_np(audio_tensor, sample_rate: int) -> None:

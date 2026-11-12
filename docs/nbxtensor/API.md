@@ -562,6 +562,15 @@ def token_bitmask(allowed, vocab) -> np.ndarray
     # the [1, ceil(vocab / 32)] int32 mask allowing exactly `allowed`
 ```
 
+### `nbxtensor.ops.token_filters` — a sampler's filters on a decode step's device row
+
+```python
+def penalize_repeats(logits, seen_ids, penalty)    # every seen id's logit / penalty when > 0, x penalty otherwise;
+                                                   # in place (computed in float32), returned
+def outside_nucleus(cumulative, top_p)             # bool mask over descending probabilities' running sums: True where
+                                                   # the sum before the token exceeds top_p (the first token never)
+```
+
 ### `nbxtensor.inspection` — a tensor's values read on the host for a diagnostic
 
 ```python
@@ -3406,6 +3415,12 @@ def set_run_seed(seed)   # Arm (or disarm with None) the run stream; resets the 
 class SeededDrawStream   # One seeded uniform stream; the draw ORDER is the R30 contract.
 def apply_repetition_penalty(logits: np.ndarray, seen_ids, penalty: float) -> np.ndarray   # RepetitionPenaltyLogitsProcessor semantics on fp64 logits (in place).
 def seeded_gaussian(seed: int, shape) -> np.ndarray   # Seeded fp32 standard-normal draw — the latent-init twin of
+def draw_from_probabilities(logits, temperature, *, top_p=1.0, seen_ids=None, repetition_penalty=1.0, rng=None) -> int
+    # one id from a 1-D host row in its own dtype: penalty, argmax at temperature 0, else softmax(logits / temperature)
+    # with the nucleus kept and renormalised, one rng.choice (numpy's global stream when rng is None)
+def draw_from_masked_logits(logits, temperature, *, top_p=1.0, min_p=0.0, seen_ids=None, repetition_penalty=1.0,
+                            rng=None) -> int
+    # the same, the min-p and top-p cuts written as -inf on the logits, the softmax renormalised once more
 ```
 
 ### `nbxtensor.shape`

@@ -29,6 +29,8 @@ from neurobrix.core.device_utils import device_multinomial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from nbxtensor.random.seeded_draw import draw_from_masked_logits   # the host draw both engines share (R30)
+
 from .base import ComponentFlowHandler, register_flow
 from .table_gather import gather_rows
 
@@ -71,56 +73,6 @@ def _dump_t3_logits(path: str, step: int, cond, uncond, comb) -> None:
         _j.dump({"step": step, "cond": _st(cond),
                  "uncond": _st(uncond), "comb": _st(comb)}, _fh)
         _fh.write("\n")
-
-
-def _sample_token_np_core(
-    logits_1d: np.ndarray, temperature: float,
-    top_p: float = 1.0, min_p: float = 0.0,
-    generated_ids: Optional[list] = None,
-    repetition_penalty: float = 1.0,
-    rng: Optional[np.random.RandomState] = None,
-) -> int:
-    """Numpy speech-token sampler — byte-identical algorithm to the triton
-    handler's _sample_token_np so both engines pick the same token from the same
-    logits + seed (this is what reconciles top_p/min_p across modes). Replaces
-    the previous torch.multinomial path, which used a different top_p formula and
-    was unseeded (non-reproducible)."""
-    logits = logits_1d.copy().astype(np.float64)
-    if generated_ids and repetition_penalty != 1.0:
-        for tid in set(generated_ids):
-            if 0 <= tid < len(logits):
-                if logits[tid] > 0:
-                    logits[tid] /= repetition_penalty
-                else:
-                    logits[tid] *= repetition_penalty
-    if temperature == 0.0:
-        # Greedy floor (dual_ar discipline): deterministic argmax → the four
-        # modes pick identical tokens (logits agree to fp16), i.e. true
-        # cross-mode reconciliation, no runaway. Used by --temperature 0.
-        return int(np.argmax(logits))
-    if temperature != 1.0 and temperature > 0:
-        logits = logits / temperature
-    if min_p > 0:
-        logits_shifted = logits - logits.max()
-        exp_logits = np.exp(logits_shifted)
-        probs = exp_logits / exp_logits.sum()
-        threshold = min_p * probs.max()
-        logits[probs < threshold] = -np.inf
-    if top_p < 1.0:
-        sorted_idx = np.argsort(-logits)
-        sorted_logits = logits[sorted_idx]
-        sorted_shifted = sorted_logits - sorted_logits.max()
-        sorted_probs = np.exp(sorted_shifted) / np.exp(sorted_shifted).sum()
-        cumsum = np.cumsum(sorted_probs)
-        cutoff = np.searchsorted(cumsum, top_p) + 1
-        logits[sorted_idx[cutoff:]] = -np.inf
-    logits_shifted = logits - logits.max()
-    exp_logits = np.exp(logits_shifted)
-    probs = exp_logits / exp_logits.sum()
-    probs = np.maximum(probs, 0)
-    probs = probs / probs.sum()
-    _rng = rng if rng is not None else np.random
-    return int(_rng.choice(len(probs), p=probs))
 
 
 @register_flow("tts_llm")
@@ -455,12 +407,9 @@ class TTSLLMEngine(ComponentFlowHandler):
                 # Sample via the shared seeded numpy sampler (identical algorithm to
                 # the triton handler → reconciles top_p across modes).
                 logits_np = logits[:, -1, :].float().detach().cpu().numpy()[0]
-                next_token = _sample_token_np_core(
-                    logits_np, temperature, top_p, min_p,
-                    generated_ids=generated_ids,
-                    repetition_penalty=repetition_penalty,
-                    rng=_sampler_rng,
-                )
+                next_token = draw_from_masked_logits(
+                    logits_np.astype(np.float64), temperature, top_p=top_p, min_p=min_p,
+                    seen_ids=generated_ids, repetition_penalty=repetition_penalty, rng=_sampler_rng)
             generated_ids.append(next_token)
 
             if next_token == eos_token_id and not _teacher:

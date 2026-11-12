@@ -128,6 +128,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `synchronize_named(device)`: a device name ("cuda:1", "hip:0", "mps:0", "cpu") read once for every backend, a tensor
   moved to the device it names, the named device waited for with the current device restored. The engine's Triton
   strategies and its parked values each read device names themselves.
+- `random.seeded_draw.draw_from_probabilities` and `draw_from_masked_logits`: one token drawn on the host from a logits
+  row in its own dtype (repetition penalty, greedy at temperature 0, top-p on the probabilities; or min-p and top-p
+  written on the logits), and `ops.token_filters.penalize_repeats` / `outside_nucleus` on a device row. The engine
+  held the same arithmetic six times (its Triton sampler, the encoder-decoder, dual-AR and TTS flows, and the
+  compiled twins of the last two); every copy draws the same tokens through these.
 
 ### Changed
 - The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
