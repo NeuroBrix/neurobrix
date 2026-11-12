@@ -181,6 +181,8 @@ import math
 
 # Block sizes for fused MoE kernel (tuned for decode batch=1)
 _MOE_BM = 16
+#: the row block the grouped kernel runs at — the block a caller aligns the routing by (`moe_align_block_size`)
+MOE_BLOCK_M = _MOE_BM
 _MOE_BN = 64
 _MOE_BK = 32
 _MOE_GROUP = 8
@@ -343,3 +345,92 @@ def invoke_fused_moe_wna16(
         TOPK_DIVIDE=topk_divide,
         num_warps=4, num_stages=2,
     )
+
+
+# ===========================================================================
+# The routing's alignment and the one-token half band (launchers)
+# ===========================================================================
+
+def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx, pairs=None):
+    """Sort tokens by expert, pad to block_size alignment — ON DEVICE.
+
+    Three constant-tuple Triton kernels (ops/moe_align.py) replace a host path (D2H of topk_ids -> numpy sort -> H2D
+    of tables): the routing tables are recomputed from the CURRENT router output at every launch, which removes one
+    D2H sync per MoE layer per step AND makes the MoE band replay-eligible (the host D2H was a structural plan-breaker
+    at recording). The deterministic pairwise rank in stage 3 preserves the host sort's exact token order — the swap
+    was byte-gated against the removed implementation.
+
+    Outputs are sized on the shape-derived worst case min(n*BS, n + E*(BS-1)) rounded up to BS; the TRUE total lives
+    only in the device scalar (every fused variant early-exits on it — the launch grids depend on host shapes alone,
+    never on routing data).
+
+    Args:
+        topk_ids_flat: NBXTensor [M * top_k] — flat expert indices
+        block_size: BLOCK_SIZE_M for the fused kernel
+        num_experts: total number of experts
+        device_idx: GPU device for output tensors
+        pairs: the layer's (token, expert) pairs, the key's length class (`launch_keys.moe_align_launches`) — the ids'
+            count unless this is one card's share of a layer split across cards
+
+    Returns:
+        sorted_token_ids: NBXTensor [max_total] — token indices sorted by expert (sentinel n beyond each expert's
+            true count)
+        expert_ids: NBXTensor [max_blocks] — expert id per block (-1 pad)
+        num_tokens_post_padded: NBXTensor [1] — total entries after padding
+    """
+    from nbxtensor.ops.moe_align import moe_align_stage1_kernel, moe_align_stage2_kernel, moe_align_stage3_kernel
+    from nbxtensor.ops.launch_keys import moe_align_classes
+
+    n = topk_ids_flat.numel()
+    bs = int(block_size)
+    bound = min(n * bs, n + num_experts * (bs - 1))
+    max_total = ((bound + bs - 1) // bs) * bs
+    max_blocks = max_total // bs
+
+    DeviceAllocator.set_device(device_idx)
+    dev = f"cuda:{device_idx}"
+    sorted_ids = NBXTensor.empty((max_total,), dtype=NBXDtype.int64, device=dev)
+    expert_ids = NBXTensor.empty((max_blocks,), dtype=NBXDtype.int64, device=dev)
+    num_post_pad = NBXTensor.empty((1,), dtype=NBXDtype.int64, device=dev)
+    offsets_ws = NBXTensor.empty((num_experts,), dtype=NBXDtype.int64, device=dev)
+    padded_ws = NBXTensor.empty((num_experts,), dtype=NBXDtype.int64, device=dev)
+
+    ids = topk_ids_flat.contiguous()
+    set_device(sorted_ids)
+    # the chunk widths and warps of each stage are its key's certified configuration (ops/moe_align.py), keyed by
+    # the layer's pairs (`launch_keys.moe_align_launches`)
+    BE, nb = moe_align_classes(num_experts, n if pairs is None else pairs)
+    moe_align_stage1_kernel[(1,)](
+        ids, offsets_ws, padded_ws, num_post_pad, n, nb, BS=bs, BE=BE, E=num_experts)
+    moe_align_stage2_kernel[lambda META: (triton.cdiv(max_total, META["BLK"]),)](
+        offsets_ws, padded_ws, sorted_ids, expert_ids, n, max_total, nb, BS=bs, BE=BE, E=num_experts)
+    moe_align_stage3_kernel[lambda META: (triton.cdiv(n, META["BLKT"]),)](
+        ids, offsets_ws, sorted_ids, n, nb, E=num_experts)
+
+    return sorted_ids, expert_ids, num_post_pad
+
+
+def moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate, bf16):
+    """The SIMT decode band for half-precision experts (`moe_decode_vec` half kernels): gateup with SwiGLU, the down
+    projection with the expert axis on the grid writing router-weighted partials, their fixed-order sum. hidden [1, K]
+    -> [1, K] in hidden's dtype. `tables`: the experts' pointer tables and strides per device (`gate_ptrs[dev]`,
+    `up_ptrs[dev]`, `down_ptrs[dev]`, `gate_stride_bk/bn[dev]`, `down_stride_bk/bn[dev]`), indexed by what
+    `flat_indices` holds — an expert's number, or its slot."""
+    from nbxtensor.ops.moe_decode_vec import (
+        moe_gateup_vec_half_kernel, moe_down_split_vec_half_kernel, moe_part_reduce_kernel)
+
+    dt = hidden_states.nbx_dtype
+    x = hidden_states.reshape(K)
+    h = NBXTensor.empty((top_k, N_gate), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    part = NBXTensor.empty((top_k, K), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    out32 = NBXTensor.empty((K,), dtype=NBXDtype.float32, device=f"cuda:{dev}")
+    set_device(h)
+    # the tiles are each key's certified configuration (`moe_decode_vec._HALF_VEC_CONFIGS`, `_PART_REDUCE_CONFIGS`)
+    moe_gateup_vec_half_kernel[lambda META: (top_k, triton.cdiv(N_gate, META["BLOCK_N"]))](
+        x, flat_indices, tables.gate_ptrs[dev], tables.up_ptrs[dev], h, K, N_gate,
+        tables.gate_stride_bk[dev], tables.gate_stride_bn[dev], top_k, W_BF16=bool(bf16))
+    moe_down_split_vec_half_kernel[lambda META: (top_k, triton.cdiv(K, META["BLOCK_N"]))](
+        h, flat_indices, flat_scores, tables.down_ptrs[dev], part, N_gate, K,
+        tables.down_stride_bk[dev], tables.down_stride_bn[dev], top_k, W_BF16=bool(bf16))
+    moe_part_reduce_kernel[lambda META: (triton.cdiv(K, META["BLOCK_N"]),)](part, out32, K, TOP_K=top_k)
+    return out32.to(dt).reshape(1, K)

@@ -195,7 +195,7 @@ class NBXExpertStore:
         import triton as _tr
         from types import SimpleNamespace
         from nbxtensor.ops.moe_device_residency import expert_slot_assign_kernel, expert_miss_copy_kernel
-        from neurobrix.triton.moe import _moe_decode_vec_half_pass
+        from nbxtensor.ops.moe_wrappers import moe_decode_vec_half_pass
         self._host_tables_for(layer, host)
         if not self._dev_valid:
             self._sync_device_from_host()
@@ -221,7 +221,7 @@ class NBXExpertStore:
             gate_stride_bk={dev: s0[0].stride(1)}, gate_stride_bn={dev: s0[0].stride(0)},
             down_stride_bk={dev: s0[2].stride(1)}, down_stride_bn={dev: s0[2].stride(0)})
         self._host_dirty = True
-        return _moe_decode_vec_half_pass(hidden, tables, dev, slot_ids, flat_scores, top_k, K, N_gate, bf16)
+        return moe_decode_vec_half_pass(hidden, tables, dev, slot_ids, flat_scores, top_k, K, N_gate, bf16)
 
     def _copy_launch(self):
         """(block, warps) of the miss copy on this store's card: the profile's measured `expert_copy` (measured at the

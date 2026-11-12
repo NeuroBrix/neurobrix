@@ -1950,6 +1950,12 @@ def invoke_fused_moe_m8n8k4(hidden_states, expert_ptrs, output, topk_weights, so
     # invoke_fused_moe on the m8n8k4 matrix unit at `tile`, the routing aligned at the tile's rows
 def invoke_fused_moe_wna16(hidden_states, qw_ptrs, sc_ptrs, mn_ptrs, output, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_padded, N, K, stride_qk, stride_qn, stride_sg, stride_sn, top_k, mul_routed_weight=False, topk_divide=True)
     # Launch the W4 fused MoE grouped GEMM (int4-g128-asym experts, in-register dequant — byte-gated vs fused_moe_fp32b_kernel).
+def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx, pairs=None)
+    # Sort a layer's (token, expert) pairs by expert and pad each expert's run to `block_size`, ON the device (the three `moe_align` stages): (sorted_token_ids, expert_ids, num_tokens_post_padded); `pairs` is the layer's pair count when the ids are one device's share of it (the launch key's length class)
+def moe_decode_vec_half_pass(hidden_states, tables, dev, flat_indices, flat_scores, top_k, K, N_gate, bf16)
+    # One token through a routed layer of half-precision experts: gate/up with SwiGLU, the down partials weighted by the scores, their fixed-order sum; [1, K] -> [1, K]. `tables` carries the pointer tables and strides per device, indexed by what `flat_indices` holds (an expert's number, or its slot)
+MOE_BLOCK_M
+    # The row block the grouped kernel runs at: the block a caller aligns the routing by
 ```
 
 `nbxtensor.ops.mse_loss`

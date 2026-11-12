@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `memory.pages.MetalStateFence`: the release fence of the Triton kernels' queue on Metal (`record`, `completed`,
   `drain(pool)`), for the day launches stop waiting for their kernel; not in use today. It was the engine's
   `triton/state_fence.py`, which nothing called.
+- `ops.moe_wrappers.moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx, pairs=None)`: a routed
+  layer's (token, expert) pairs sorted by expert and padded to the kernel's row block, on the device — the launcher of
+  the three `ops.moe_align` stages, which the engine carried. `MOE_BLOCK_M` names the block to align by.
+- `ops.moe_wrappers.moe_decode_vec_half_pass(...)`: one decode token through a routed layer of half-precision experts
+  (the `ops.moe_decode_vec` half kernels' three launches), which the engine carried.
 
 ### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's

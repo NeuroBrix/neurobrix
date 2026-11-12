@@ -1347,10 +1347,10 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         return (lambda: fn(to(x), -1)), (_row_reduce_oracle_fn(x, red) if values else None), "output_ptr"
     if short in ("moe_align_stage1_kernel", "moe_align_stage2_kernel", "moe_align_stage3_kernel"):
         # ((BS, BE,) E, N_BUCKET, ids/tables): the class's (token, expert) pairs at its floor, routed uniformly at random
-        # over the key's experts, through the engine's own `moe_align_block_size` (stage 3, whose key names no block,
+        # over the key's experts, through the library's own `moe_align_block_size` (stage 3, whose key names no block,
         # at the FMA kernel's block); the oracle is the host sort it replaced, compared EXACTLY (integers: one wrong
         # index is a wrong routing, never a small deviation)
-        from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+        from nbxtensor.ops.moe_wrappers import moe_align_block_size, MOE_BLOCK_M as _BLOCK_SIZE_M
         from nbxtensor.ops.autotune_bucket import class_floor
         stage = int(short[len("moe_align_stage")])
         bs, n_exp, nb = (_BLOCK_SIZE_M, int(key[0]), int(key[1])) if stage == 3 else (int(key[0]), int(key[2]), int(key[3]))
@@ -1381,10 +1381,10 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
     if short == "fused_moe_kernel":
         # (N, K, NV_BUCKET, NUM_EXPERTS, MUL_ROUTED_WEIGHT, TOPK_DIVIDE, dtypes): the bucket's valid (token, expert)
         # pairs at its top, one expert per token (top_k 1: the key does not name it), the key's experts of [N, K] weights
-        # routed uniformly at random and aligned by the engine's own `moe_align_block_size`, through `invoke_fused_moe`;
+        # routed uniformly at random and aligned by the library's own `moe_align_block_size`, through `invoke_fused_moe`;
         # the fp64 oracle per pair
         from nbxtensor.ops import moe_wrappers as _nbx_moe_wrappers
-        from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+        from nbxtensor.ops.moe_wrappers import moe_align_block_size, MOE_BLOCK_M as _BLOCK_SIZE_M
         N, K, nv, n_exp, mul, divide = int(key[0]), int(key[1]), int(key[2]), int(key[3]), bool(key[4]), bool(key[5])
         w_dt = dts[0] if dts else "fp16"
         _refuse_oversize(card_bytes, [((nv, K), w_dt), ((n_exp * N, K), w_dt), ((nv, N), w_dt)], short)
@@ -1405,7 +1405,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
             return out
         return run, (_moe_oracle_fn(x, ws, score, route, mul) if values else None), "c_ptr"
     if short in ("moe_gateup_vec_half_kernel", "moe_down_split_vec_half_kernel", "moe_part_reduce_kernel"):
-        # the one-token MoE band (`triton/moe._moe_decode_vec_half_pass`), each launch on its own: TOP_K experts (a
+        # the one-token MoE band (`nbxtensor.ops.moe_wrappers.moe_decode_vec_half_pass`), each launch on its own: TOP_K experts (a
         # permutation of as many) of [N, K] half weights, the routed rows fp32; the fp64 oracle per expert row
         from nbxtensor.ops import moe_decode_vec as _mv
         import triton as _tr
@@ -2543,13 +2543,13 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
 def _fused_moe_unit_runs(tuner, args, kwargs) -> List[Tuple[Dict[str, Any], Any]]:
     """(tile, run) for each `matrix_unit.mm` tile of the profile for a `fused_moe_kernel` launch on experts of the
     unit's operand dtype: the routing the launch's alignment holds, read back and aligned again at the tile's rows by
-    the engine's own `moe_align_block_size`, each run writing the launch's output through `invoke_fused_moe_m8n8k4`
+    the library's own `moe_align_block_size`, each run writing the launch's output through `invoke_fused_moe_m8n8k4`
     (the route `_fused_moe_pass` takes when the certificate names the unit). Empty for any other launch."""
     if getattr(getattr(tuner, "base_fn", None), "__name__", None) != "fused_moe_kernel":
         return []
     from nbxtensor.ops import moe_wrappers as MW
     from nbxtensor.tensor import NBXTensor
-    from neurobrix.triton.moe import moe_align_block_size, _BLOCK_SIZE_M
+    from nbxtensor.ops.moe_wrappers import moe_align_block_size, MOE_BLOCK_M as _BLOCK_SIZE_M
     from nbxtensor.memory.allocator import DeviceAllocator
     named = dict(zip(tuner.arg_names, args))
     a = named["a_ptr"]
