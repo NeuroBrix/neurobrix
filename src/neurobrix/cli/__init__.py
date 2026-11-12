@@ -742,16 +742,17 @@ def _fail_path(e) -> None:
     _fail(f"{e} Create or mount that directory, or change the setting that names it.", trace=False, exc=e)
 
 
-def _fail(e, trace: bool = True, unexpected: bool = False, exc=None, what: str = "") -> None:
+def _fail(e, trace: bool = True, unexpected: bool = False, exc=None, what: str = "", drain=None) -> None:
     """An error said once on stderr, `Error: <cause>` (its remedy in the cause's text, or a missing compiler named:
-    nbxtensor's install_help); the traceback under -vv. Exit 1."""
-    import logging
+    nbxtensor's install_help); the traceback under -vv. Exit 1. `drain`: the engine's device drained first, so a device
+    error reported late (Metal) is said here, once, not raised by torch's allocator at exit (SIGABRT)."""
+    try: drain and drain()
+    except Exception as late: e = RuntimeError(f"{e} — the device then reported: {late}")
     from nbxtensor import terminal
     from nbxtensor.backend.install_help import compiler_missing
-    log = logging.getLogger("neurobrix.cli")
+    log = __import__("logging").getLogger("neurobrix.cli")
     named = None if isinstance(e, str) else compiler_missing(e)
-    kind = f"{type(e).__name__}: " if unexpected and not isinstance(e, str) else ""
-    log.error(f"Error: {named or what + kind + str(e)}")
+    log.error(f"Error: {named or what + (type(e).__name__ + ': ' if unexpected and not isinstance(e, str) else '') + str(e)}")
     if terminal.tracebacks() and (exc or not isinstance(e, str)):
         log.debug("Traceback:", exc_info=exc or e)
     elif trace and not named and not isinstance(e, str):

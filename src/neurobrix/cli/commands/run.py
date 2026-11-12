@@ -1093,7 +1093,7 @@ def cmd_run(args):
     except Exception as e:
         _record_compiled_growth(_sampled_peak, cache_path, hw_profile)
         from neurobrix.cli import _fail     # one line; the traceback under -vv / NBX_LOG=debug (the gate's row reads it)
-        _fail(e, what="the pipeline failed: ")
+        _fail(e, what="the pipeline failed: ", drain=_drain_device)
 
     log.info(f"[Timing] Total execution: {t_exec_total:.2f}s")
     # The run's four timings on one parseable line (core/runtime/run_timings.py), read by the gate (NBX_LOG=debug).
