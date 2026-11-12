@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`neurobrix run` refuses by name a prompt longer than the model's context**, before anything loads, with the
   prompt's token count and the model's context, as `neurobrix serve` does. It used to fail in a GPU kernel (`--triton`)
   or abort the process (`--compiled`).
+- **`neurobrix run --turns` states each turn's own timings.** From the second turn on, the `[Timings]` line repeated the
+  first turn's time to first token and load time, and its rate and time per token were wrong.
 
 ## [0.6.9] - 2026-11-12
 

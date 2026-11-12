@@ -60,8 +60,10 @@ def open_container() -> None:
 
 
 def begin_request() -> None:
-    """Stamp the request's start, the engine's device already drained."""
-    decode_progress.reset_tally()
+    """Stamp the request's start, the engine's device already drained. A later request of the same process (a turn of
+    `run --turns`) opens its own ledger, its load time the loads inside it: the ledger keeps each mark's FIRST instant,
+    so every turn read turn 1's start and first token (the Dell's D10, 2026-11-12)."""
+    (open_container if phase_trace.first(BEGIN) is not None else decode_progress.reset_tally)()
     phase_trace.mark(BEGIN)
 
 
