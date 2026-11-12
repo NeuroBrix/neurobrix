@@ -172,6 +172,22 @@ def test_every_marker_a_dialect_reads_is_kept_by_the_decode():
         '[TOOL_CALLS]shell[ARGS]{"cmd": "ls"}'
 
 
+def test_the_xml_inner_markers_change_nothing_the_decode_keeps_where_they_are_ordinary_text():
+    """The xml parser's inner markers join what the served decode keeps; the decode keeps a token only when the
+    tokenizer calls it special AND its text is a kept marker, so a token spelling `<parameter=` as ordinary text
+    (Qwen3-Coder's tokenizer: none of its special tokens is an xml inner marker) decodes as it did before."""
+    parser = XmlToolCallParser()
+    assert parser.kept_markers() == ("<tool_call>", "</tool_call>", *parser.inner_markers)
+    pieces = ["<|im_end|>", "<tool_call>", "</tool_call>", "\n", "<function=", "f>", "<parameter=", "x>\n1\n",
+              "</parameter>", "</function>"]
+    ids = [1, 3, 4, 5, 3, 6, 7, 8, 3, 9, 3, 2, 0]
+    for special in ([0], [0, 1, 2]):
+        tok = PieceTokenizer(pieces, special=special)
+        text = MarkerDecoder(tok, parser.kept_markers()).decode(ids)
+        assert text == MarkerDecoder(tok, ("<tool_call>", "</tool_call>")).decode(ids)
+        assert parser.parse(text).calls[0].arguments == {"x": "1"}
+
+
 def _stream(parser, tok, ids):
     reader = TurnReader(tok, parser=parser)
     deltas = []

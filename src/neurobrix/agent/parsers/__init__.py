@@ -38,7 +38,7 @@ def select_parser(template_text: str) -> Optional[ToolCallParser]:
         return None
     if GlmToolCallParser.inner_markers[0] in template_text:     # before <tool_call>: GLM's template holds both
         return GlmToolCallParser()
-    if "<function=" in template_text:
+    if XmlToolCallParser.inner_markers[0] in template_text:
         return XmlToolCallParser()
     if "<tool_call>" in template_text:
         return JsonToolCallParser()

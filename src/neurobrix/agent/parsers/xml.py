@@ -20,9 +20,10 @@ import re
 
 from neurobrix.agent.parsers.base import ParseResult, ToolCall, ToolCallParser
 
+_INNER = ("<function=", "</function>", "<parameter=", "</parameter>")     # the envelope writes these same markers
 _BLOCK_RE = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
-_FUNCTION_RE = re.compile(r"<function=([^>\n]+)>(.*)</function>", re.DOTALL)
-_PARAMETER_RE = re.compile(r"<parameter=([^>\n]+)>(.*?)</parameter>", re.DOTALL)
+_FUNCTION_RE = re.compile(re.escape(_INNER[0]) + r"([^>\n]+)>(.*)" + re.escape(_INNER[1]), re.DOTALL)
+_PARAMETER_RE = re.compile(re.escape(_INNER[2]) + r"([^>\n]+)>(.*?)" + re.escape(_INNER[3]), re.DOTALL)
 
 
 def _trim_value(raw: str) -> str:
@@ -38,6 +39,7 @@ class XmlToolCallParser(ToolCallParser):
     format_name = "xml"
     start_marker = "<tool_call>"
     end_marker = "</tool_call>"
+    inner_markers = _INNER
 
     def parse(self, text: str) -> ParseResult:
         result = ParseResult()
@@ -72,7 +74,7 @@ class XmlToolCallParser(ToolCallParser):
         # Surface it as malformed so the format-reminder recovery fires
         # (proven cross-engine: a decode near-tie can drop the <tool_call>
         # opener while keeping the function block + closer intact).
-        for _marker in ("<function=", "</tool_call>"):
+        for _marker in (_INNER[0], "</tool_call>"):
             if _marker in prose:
                 head, _, tail = prose.partition(_marker)
                 result.malformed.append((_marker + tail).strip())

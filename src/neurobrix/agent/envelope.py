@@ -59,24 +59,24 @@ def _free_text(name: str, sch: Dict[str, Any], dialect: str) -> None:
         raise ValueError(f"parameter {name!r}: {sorted(extra)} cannot be enforced on a raw {dialect} string value")
 
 
-def _xml_call(tool: Dict[str, Any]) -> Dict[str, Any]:
+def _xml_call(tool: Dict[str, Any], inner) -> Dict[str, Any]:
+    """A call's body after its name: each required parameter in its declared order between the parser's `inner`
+    parameter markers, then the function's close (`inner`: function open, function close, parameter open, parameter
+    close)."""
     p = _params(tool)
     props, required = p.get("properties") or {}, list(p.get("required") or [])
-    parts: List[Dict[str, Any]] = [{"lit": "\n"}]
-    for name in [k for k in props if k in required]:
-        sch = props[name]
-        parts.append({"lit": f"<parameter={name}>\n"})
+    parts, close = [{"lit": "\n"}], "\n" + inner[3]      # the close in an enum's literal: "a", "ab" stay distinct
+    for name, sch in [(k, props[k]) for k in props if k in required]:
+        parts.append({"lit": f"{inner[2]}{name}>\n"})
         if {"enum", "const"} & set(sch):        # the bare alternatives, never their JSON literals (the Dell's D3)
             values = [sch["const"]] if "const" in sch else list(sch["enum"])
-            close = "\n</parameter>"            # in the literal: "a" and "ab" stay distinct alternatives
             parts.append({"choice": [{"lit": _raw(v) + close, "then": {"lit": "\n"}} for v in values]})
         elif sch.get("type") == "string":
             _free_text(name, sch, "xml")
-            parts.append({"until": "\n</parameter>\n"})
+            parts.append({"until": close + "\n"})
         else:
-            parts += [{"schema": sch}, {"lit": "\n</parameter>\n"}]
-    parts.append({"lit": "</function>\n"})
-    return {"seq": parts}
+            parts += [{"schema": sch}, {"lit": close + "\n"}]
+    return {"seq": parts + [{"lit": inner[1] + "\n"}]}
 
 
 def _bare_choice(options, what: str) -> Dict[str, Any]:
@@ -163,9 +163,10 @@ def envelope(parser, tools: List[Dict[str, Any]], encode: Callable[[str], List[i
             {"lit": "\"arguments\": "}, {"schema": _params(t)}, {"lit": "}\n"}, close]}} for n, t in zip(names, chosen)]
         return {"repeat": {"seq": [open_, {"lit": "\n{\"name\": "}, {"choice": choice}]}, **rep, "sep": "\n"}
     if dialect == "xml":
-        open_, close = marker(parser.start_marker, encode), marker(parser.end_marker, encode)
-        choice = [{"lit": f"{n}>", "then": {"seq": [_xml_call(t), close]}} for n, t in zip(names, chosen)]
-        return {"repeat": {"seq": [open_, {"lit": "\n<function="}, {"choice": choice}]}, **rep, "sep": "\n"}
+        inner, close = parser.inner_markers, marker(parser.end_marker, encode)
+        choice = [{"lit": f"{n}>", "then": {"seq": [_xml_call(t, inner), close]}} for n, t in zip(names, chosen)]
+        head = [marker(parser.start_marker, encode), {"lit": "\n" + inner[0]}]
+        return {"repeat": {"seq": [*head, {"choice": choice}]}, **rep, "sep": "\n"}
     if dialect == "json_list":
         choice = [{"lit": "{\"name\": " + json.dumps(n) + ", ", "then": {"seq": [
             {"lit": "\"arguments\": "}, {"schema": _params(t)}, {"lit": "}"}]}} for n, t in zip(names, chosen)]

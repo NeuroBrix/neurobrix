@@ -123,6 +123,23 @@ def test_an_xml_enum_parameter_is_written_bare_as_the_parser_reads_it():
 
 
 
+class _XmlWithOtherInnerMarkers(XmlToolCallParser):
+    inner_markers = ("<fn=", "</fn>", "<p=", "</p>")
+
+
+def test_the_xml_envelope_writes_the_inner_markers_its_parser_carries():
+    """The envelope reads the xml function and parameter markers from the parser, never from its own copy: a parser
+    carrying other markers gets an envelope written with them, for a string, an integer and an enum value alike."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {
+        "city": {"type": "string"}, "days": {"type": "integer"}, "unit": {"enum": ["c", "f"]}},
+        "required": ["city", "days", "unit"]}}}]
+    call = "<tool_call>\n{0}f>\n{2}city>\nParis\n{3}\n{2}days>\n2\n{3}\n{2}unit>\nc\n{3}\n{1}\n</tool_call>"
+    d = envelope(_XmlWithOtherInnerMarkers(), tools, encode)
+    assert _walk(d, call.format("<fn=", "</fn>", "<p=", "</p>")), "the parser's markers"
+    assert not _walk(d, call.format(*XmlToolCallParser.inner_markers)), "not the xml dialect's own"
+
+
+
 def test_a_reasoning_closes_with_the_end_token_the_model_was_trained_on():
     """Qwen3's `</think>` is one special id with no bytes: the forced call's reasoning must close by that id, never only
     by spelling the marker in plain bytes (the rack's Thinking request could not emit it; 2026-11-10)."""
