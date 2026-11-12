@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nbxtensor.interop.from_dlpack(obj, device=None)`: take in another library's array through DLPack (a torch tensor,
   a numpy array): host memory is copied in the order it shows, strided views and bfloat16 included; this backend's own
   device memory is used in place; another vendor's device memory is refused with its name.
+- `backend.triton_ext_driver.kernel_name(kernel)`: the name a Metal kernel was loaded under. The sync counter
+  (`NBX_SYNC_TIMING=1`) now ranks Metal kernels by their own names; every launch was counted as `MetalKernel`.
 - `ops.moe_fused.fused_moe(gate_scores, hidden_states, gate_weights, up_weights, down_weights, top_k, num_experts,
   ...)`: a whole mixture-of-experts layer in one call — the routing (top-k and renormalisation, or a blended routing
   taken as given), host experts promoted for the call, the experts' pointer tables, and the path the call's shape and

@@ -54,6 +54,15 @@ def _ext():
 _SYNC_TIMING = __import__("os").environ.get("NBX_SYNC_TIMING", "0") == "1"
 _SYNC_ACC = [0.0, 0.0, 0.0, 0]   # drain, submit, synchronize, count
 _SYNC_PER_KERNEL = {}            # name -> [calls, seconds inside synchronize]
+_KERNEL_NAMES = {}               # id(kernel) -> (kernel, its metallib function name); filled only when counting
+
+
+def kernel_name(function) -> str:
+    """The name a loaded Metal kernel was asked for (`load`). triton-ext's `MetalKernel` keeps it but does not expose
+    it, so without this every row of the sync counter read `MetalKernel` (the Mac, 2026-11-12). Held only while
+    `NBX_SYNC_TIMING=1`; the kernel is kept with its name so its id is never reused."""
+    held = _KERNEL_NAMES.get(id(function))
+    return held[1] if held else (getattr(function, "name", None) or type(function).__name__)
 if _SYNC_TIMING:                                       # pragma: no cover
     import atexit as _ax
 
@@ -171,6 +180,8 @@ class TritonExtDriver(Driver):
     def load(self, binary: bytes, name: str, shared: int):
         module = _native().load_metallib(bytes(binary))
         fn = module.get_function(name)
+        if _SYNC_TIMING:
+            _KERNEL_NAMES[id(fn)] = (fn, name)
         import os as _os
         if _os.environ.get("NBX_EXT_DEBUG"):
             _log.debug(f"[ext] load name={name!r} metallib={len(bytes(binary))}B "
@@ -333,7 +344,7 @@ class TritonExtDriver(Driver):
                 _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
                 _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
                 _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
-                _kn = getattr(function, "name", None) or type(function).__name__
+                _kn = kernel_name(function)
                 _row = _SYNC_PER_KERNEL.get(_kn)
                 if _row is None:
                     _SYNC_PER_KERNEL[_kn] = [1, _d - _c]
