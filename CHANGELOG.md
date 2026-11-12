@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-11-12
+
+A corrective version (nbxtensor stays 0.1.4).
+
 ### Fixed
 
 - **A large mixture-of-experts model served on one 32 GB card no longer runs out of memory from its second request.**
