@@ -5882,11 +5882,10 @@ class GraphExecutor:
         the weights bound. A caller that has consumed a run's outputs and runs the executor again (a temporal
         stream's chunks) frees the run's memory here: an arena keeps its slots to the next run, and two chunk
         executors each kept a whole chunk's tensors (CogVideoX-5b-I2V's VAE: 8.3 GB held after its first chunk)."""
-        for seq in (self._compiled_seq, getattr(self, "_triton_seq", None)):
-            arena = getattr(seq, "_arena", None) if seq is not None else None
-            if arena is not None:
-                arena.clear_intermediates()
-                arena.clear_inputs()
+        if self._compiled_seq is not None:
+            self._compiled_seq.drop_slots(weights=False)
+        if getattr(self, "_triton_seq", None) is not None and self._triton_seq.slot_store is not None:
+            _nbx_memory.end_store_request(self._triton_seq.slot_store)       # the library decides what a request leaves
         # the run's context and its resolver hold the run's tensor store (its outputs included), and the Triton
         # sequential path its captured tensors
         self._ctx = None
@@ -5900,7 +5899,7 @@ class GraphExecutor:
         so `__del__` -> free_cuda cannot race an async kernel still reading the memory, and its
         recorded replay plans (slabs + captured graphs), which the weak registry does not. The
         next triton run compiles anew (`_ensure_triton_compiled`)."""
-        self._triton_seq._arena.release()  # type: ignore[attr-defined]
+        _nbx_memory.release_store(self._triton_seq.slot_store)
         from neurobrix.triton.replay import retire_sequence_plans
         retire_sequence_plans(self._triton_seq)
         self._triton_seq = None
@@ -5926,7 +5925,7 @@ class GraphExecutor:
         # Step 1a: Clear native compiled sequence arena (torch.Tensor refs).
         if self._compiled_seq is not None:
             assert hasattr(self._compiled_seq, '_arena')
-            self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
+            self._compiled_seq.drop_slots(weights=True)
             self._compiled_seq = None
 
         # Step 1b: Clear triton sequence arena (NBXTensor refs).
@@ -5991,9 +5990,9 @@ class GraphExecutor:
             # Persistent mode: clear per-request state only, keep weights
             # + compiled sequence (both native and triton).
             if self._compiled_seq is not None:
-                self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
+                self._compiled_seq.drop_slots(weights=True)
             if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-                self._triton_seq._arena.release()  # type: ignore[attr-defined]
+                _nbx_memory.release_store(self._triton_seq.slot_store)
             if hasattr(self, '_tritonseq_captured'):
                 self._tritonseq_captured = {}
             if self._pieces_capture is not None:
@@ -6007,12 +6006,12 @@ class GraphExecutor:
         # Only the arena (tensor data) and weights need clearing.
         if self._compiled_seq is not None:
             assert hasattr(self._compiled_seq, '_arena')
-            self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
+            self._compiled_seq.drop_slots(weights=True)
             # Keep _compiled_seq alive — R2 rebinds fresh weights into same slots
             # Keep _persistent_tensor_ids — slot mappings remain valid in same sequence
 
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-            self._triton_seq._arena.release()  # type: ignore[attr-defined]
+            _nbx_memory.release_store(self._triton_seq.slot_store)
             # Keep _triton_seq alive — R2 rebinds fresh weights into same slots
 
         # Per-request state: drop the triton_sequential capture refs (mirror

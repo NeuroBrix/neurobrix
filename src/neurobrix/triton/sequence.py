@@ -31,7 +31,6 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.backend.runtime import invalidate_current_device_cache
 from neurobrix.core.prism.memory_budget import DEFERRED_DRAIN_COUNT, deferred_drain_policy
 
-from nbxtensor.memory.arena import Arena
 from nbxtensor.memory.deferred_frees import DeferredFrees
 from nbxtensor.memory.memory_pool import break_aliases
 from .symbols import SymbolResolver, impossible_extent_context
@@ -177,7 +176,7 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
         dev = _nbx_device.current()
         live, pool = _nbx_memory.memory_allocated(dev), _nbx_memory.pool_cached_bytes(dev)
         drv_free, drv_total = _nbx_device.mem_info(dev)
-        held = arena.bytes_on(dev)
+        held = _nbx_memory.store_held_bytes(arena, dev)
         mb = 1 << 20
         rec = {"op_idx": op_idx, "op_uid": op.op_uid, "op_type": getattr(op, "op_type", ""),
                "nbx_live_mb": live / mb, "nbx_pool_cached_mb": pool / mb,
@@ -339,7 +338,7 @@ class TritonSequence(SequenceSteps):
         self._config_constants = set(config_constants or ())
         self.device_idx = device_idx
         self._ops: List[CompiledOp] = []
-        self._arena: Optional[Arena] = None
+        self._arena = None            # the library's slot store (nbxtensor.memory.slot_store), taken at compile
 
         # Mappings (built during compile)
         self._tid_to_slot: Dict[str, int] = {}
@@ -587,7 +586,7 @@ class TritonSequence(SequenceSteps):
 
         # Phase 5: Allocate arena
         total_slots = len(self._tid_to_slot)
-        self._arena = Arena(total_slots, self._num_weights, self._num_inputs)
+        self._arena = _nbx_memory.slot_store(total_slots, self._num_weights, self._num_inputs)
 
         # Phase 6: Identify seq-dependent constants (RoPE cos/sin buffers)
         self._seq_dependent_constants = []
@@ -3421,7 +3420,7 @@ class TritonSequence(SequenceSteps):
         the tensors on the large ones, ORPHAN for one no slot names, and what refers to them). Never raises."""
         try:
             from nbxtensor.memory.oom_advice import held_memory_report
-            c = arena.census(100 * 2**20)
+            c = _nbx_memory.store_contents(arena, 100 * 2**20)
             region = " ".join(f"{k}={c[k][0]}/{c[k][1] / 2**20:.0f}MB" for k in ("weights", "inputs", "intermediates"))
             _log.debug(f"[LIVE_DUMP at {op.op_uid}] arena_size={len(arena)} {region} none_slots={c['empty']} "
                        f"other_slots={c['other']} types={c['types']} "
@@ -3991,6 +3990,8 @@ class TritonSequence(SequenceSteps):
     @property
     def num_ops(self) -> int:
         return len(self._ops)
+
+    slot_store = property(lambda self: self._arena, doc="the library's slot store the executor ends and releases")
 
 
 def _with_k_layout(func, k_pre_transposed: bool):

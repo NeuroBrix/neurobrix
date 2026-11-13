@@ -151,6 +151,13 @@ def window_start(token: int) -> Optional[int]                  # what was held w
 def close_window(device_idx: int, token: int) -> Optional[int] # the most held since it opened; the window closed
 def register_idle_reclaimer(reclaim) -> None                   # `reclaim(dev) -> bytes` when a malloc is refused
 def weight_arenas() -> WeightArenas                            # a weight set's memory to count, allocate and pin
+# a compiled sequence's slot memory and its lifecycle (`memory.slot_stores`, 2026-11-13):
+SlotStore                                                      # the slot store ([weights | inputs | intermediates])
+def slot_store(size, num_weights=0, num_inputs=0) -> SlotStore # the store a sequence takes at compile
+def end_store_request(store) -> None                           # a request ended: inputs and intermediates dropped
+def release_store(store) -> None                               # an unload: devices synchronised, then every slot dropped
+def store_held_bytes(store, device_idx) -> tuple               # (weights, the rest) bytes it holds on a device
+def store_contents(store, large: int) -> dict                  # what it holds by region, its large intermediates
 ```
 
 `nbxtensor.memory.allocator`
