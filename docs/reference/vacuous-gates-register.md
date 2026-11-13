@@ -2075,7 +2075,7 @@ whose census names two interpreters has measured nothing attributable.
 ### 79 — three guards and a debt that outlived their premise by seventeen days
 
 **Where.** `tests/regression/test_serve_warm.py` (module guard, `e5efd52c`, 2026-08-27),
-`tests/regression/test_upscale_offtrace.py` (the same guard ported, 2026-08-29),
+`tests/regression/test_upscale_offbuild.py` (the same guard ported, 2026-08-29),
 `tests/regression/warm_cell_runner.py` (the comment), and `DETTE.md`
 D-AUTODETECT-VISIBLE-MASK (filed 2026-08-26, fourth facet 2026-09-01).
 

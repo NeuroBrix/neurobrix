@@ -30,7 +30,7 @@ def test_the_cell_command_is_certified_only(tmp_path, monkeypatch):
     monkeypatch.setattr(R.Z, "family_of", lambda model: "llm")
     monkeypatch.setattr(R.Z, "output_ext", lambda family, req: ".txt")
     monkeypatch.setattr(R, "cell_request", lambda model: ["--prompt", "x"])
-    monkeypatch.setattr(R, "off_trace_size", lambda model, family: None)
+    monkeypatch.setattr(R, "off_build_size", lambda model, family: None)
     for mode in R.MODES:
         R._run_cell("M", mode, "0", tmp_path, 60, tmp_path / "src")
         assert "--certified-only" in seen["cmd"], (mode, seen["cmd"])

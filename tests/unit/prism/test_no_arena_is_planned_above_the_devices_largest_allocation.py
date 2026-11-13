@@ -49,7 +49,7 @@ from tests.unit.prism.test_layer_partition import _chain
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 sys.path.insert(0, str(TOOLS))
-import trace_request as TR  # noqa: E402
+import container_request as TR  # noqa: E402
 
 MB = 1024 * 1024
 #: this M4 Pro's MTLDevice.maxBufferLength in MB, as its profile publishes it (d441a237, 2026-10-04)

@@ -32,34 +32,34 @@ from neurobrix.triton.symbols import SymbolResolver
 
 HEADS, HEAD_DIM = 70, 32
 HIDDEN = HEADS * HEAD_DIM          # 2240 — a weight extent
-TRACE_LATENT = 32                  # 1024 px / vae scale 32
+BUILD_LATENT = 32                  # 1024 px / vae scale 32
 RUN_LATENT = 128                   # a 4096 px request
-TRACE_TOKENS = TRACE_LATENT * TRACE_LATENT
+BUILD_TOKENS = BUILD_LATENT * BUILD_LATENT
 RUN_TOKENS = RUN_LATENT * RUN_LATENT
 
 
 def _tok(trace):
     return {"type": "mul", "trace": trace,
-            "left": {"type": "symbol", "id": "s6", "trace": TRACE_LATENT},
-            "right": {"type": "symbol", "id": "s7", "trace": TRACE_LATENT}}
+            "left": {"type": "symbol", "id": "s6", "trace": BUILD_LATENT},
+            "right": {"type": "symbol", "id": "s7", "trace": BUILD_LATENT}}
 
 
 def _dag():
     t = lambda tid: {"type": "tensor", "tensor_id": tid}
     lst = lambda v: {"type": "list", "value": v}
     batch = {"type": "symbol", "id": "s5", "trace": 2}
-    height = {"type": "symbol", "id": "s6", "trace": TRACE_LATENT}
+    height = {"type": "symbol", "id": "s6", "trace": BUILD_LATENT}
     return {
         "symbolic_context": {"symbols": {
             "s5": {"name": "batch", "trace_value": 2,
                    "source": "input::hidden_states::dim_0"},
-            "s6": {"name": "height", "trace_value": TRACE_LATENT,
+            "s6": {"name": "height", "trace_value": BUILD_LATENT,
                    "source": "input::hidden_states::dim_2"},
-            "s7": {"name": "width", "trace_value": TRACE_LATENT,
+            "s7": {"name": "width", "trace_value": BUILD_LATENT,
                    "source": "input::hidden_states::dim_3"},
         }},
         "tensors": {
-            "input::hidden_states": {"shape": [2, 32, TRACE_LATENT, TRACE_LATENT]},
+            "input::hidden_states": {"shape": [2, 32, BUILD_LATENT, BUILD_LATENT]},
             "param::qkv": {"shape": [HIDDEN, HIDDEN], "weight_name": "qkv"},
         },
         "ops": {
@@ -67,18 +67,18 @@ def _dag():
                 "op_type": "aten::mm",
                 "input_tensor_ids": ["input::hidden_states", "param::qkv"],
                 "output_tensor_ids": ["aten.mm::2::out_0"],
-                "input_shapes": [[2 * TRACE_TOKENS, HIDDEN], [HIDDEN, HIDDEN]],
-                "output_shapes": [[2 * TRACE_TOKENS, HIDDEN]],
+                "input_shapes": [[2 * BUILD_TOKENS, HIDDEN], [HIDDEN, HIDDEN]],
+                "output_shapes": [[2 * BUILD_TOKENS, HIDDEN]],
                 "attributes": {"args": [t("input::hidden_states"), t("param::qkv")]}},
             # the split into heads: entry 2 is the HEAD DIM, bound to height by coincidence
             "aten.view::12": {
                 "op_type": "aten::view",
                 "input_tensor_ids": ["aten.mm::2::out_0"],
                 "output_tensor_ids": ["aten.view::12::out_0"],
-                "input_shapes": [[2, HIDDEN, TRACE_TOKENS]],
-                "output_shapes": [[2, HEADS, HEAD_DIM, TRACE_TOKENS]],
+                "input_shapes": [[2, HIDDEN, BUILD_TOKENS]],
+                "output_shapes": [[2, HEADS, HEAD_DIM, BUILD_TOKENS]],
                 "attributes": {"args": [t("aten.mm::2::out_0"),
-                                        lst([batch, HEADS, height, _tok(TRACE_TOKENS)])]}},
+                                        lst([batch, HEADS, height, _tok(BUILD_TOKENS)])]}},
         },
         "execution_order": ["aten.mm::2", "aten.view::12"],
     }
@@ -138,19 +138,19 @@ def test_the_whole_view_keeps_the_element_count(resolved):
 def _lone_vs_pair_dag():
     t = lambda tid: {"type": "tensor", "tensor_id": tid}
     lst = lambda v: {"type": "list", "value": v}
-    h = {"type": "symbol", "id": "s6", "trace": TRACE_LATENT}
-    w = {"type": "symbol", "id": "s7", "trace": TRACE_LATENT}
+    h = {"type": "symbol", "id": "s6", "trace": BUILD_LATENT}
+    w = {"type": "symbol", "id": "s7", "trace": BUILD_LATENT}
     return {
         "symbolic_context": {"symbols": {
             "s5": {"name": "batch", "trace_value": 1,
                    "source": "input::sample::dim_0"},
-            "s6": {"name": "height", "trace_value": TRACE_LATENT,
+            "s6": {"name": "height", "trace_value": BUILD_LATENT,
                    "source": "input::sample::dim_2"},
-            "s7": {"name": "width", "trace_value": TRACE_LATENT,
+            "s7": {"name": "width", "trace_value": BUILD_LATENT,
                    "source": "input::sample::dim_3"},
         }},
         "tensors": {
-            "input::sample": {"shape": [1, 32, TRACE_LATENT, TRACE_LATENT]},
+            "input::sample": {"shape": [1, 32, BUILD_LATENT, BUILD_LATENT]},
             # HEAD_DIM is also a weight extent, which is the whole trap
             "param::attn": {"shape": [HEAD_DIM, HEAD_DIM], "weight_name": "attn"},
         },
@@ -159,18 +159,18 @@ def _lone_vs_pair_dag():
             "aten.view::0": {
                 "op_type": "aten::view", "input_tensor_ids": ["input::sample"],
                 "output_tensor_ids": ["aten.view::0::out_0"],
-                "input_shapes": [[1, 32, 32, TRACE_LATENT, TRACE_LATENT]],
-                "output_shapes": [[1, TRACE_TOKENS, TRACE_LATENT, TRACE_LATENT]],
+                "input_shapes": [[1, 32, 32, BUILD_LATENT, BUILD_LATENT]],
+                "output_shapes": [[1, BUILD_TOKENS, BUILD_LATENT, BUILD_LATENT]],
                 "attributes": {"args": [t("input::sample"),
-                                        lst([1, _tok(TRACE_TOKENS), h, w])]}},
+                                        lst([1, _tok(BUILD_TOKENS), h, w])]}},
             # MISATTRIBUTED: a lone height standing in for the head dim
             "aten.view::6": {
                 "op_type": "aten::view", "input_tensor_ids": ["input::sample"],
                 "output_tensor_ids": ["aten.view::6::out_0"],
-                "input_shapes": [[1, 64, TRACE_TOKENS, HEAD_DIM]],
-                "output_shapes": [[64, TRACE_TOKENS, HEAD_DIM]],
+                "input_shapes": [[1, 64, BUILD_TOKENS, HEAD_DIM]],
+                "output_shapes": [[64, BUILD_TOKENS, HEAD_DIM]],
                 "attributes": {"args": [t("input::sample"),
-                                        lst([64, _tok(TRACE_TOKENS), dict(h)])]}},
+                                        lst([64, _tok(BUILD_TOKENS), dict(h)])]}},
         },
         "execution_order": ["aten.view::0", "aten.view::6"],
     }

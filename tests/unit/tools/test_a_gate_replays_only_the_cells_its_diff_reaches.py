@@ -160,9 +160,9 @@ def _scope(cfg, **kw):
     return G.compute(pairs, MQ24, cfg, log=lambda s: None)
 
 
-def _retraced(res, cls):
+def _rebuilt(res, cls):
     """The cells of containers retraced since the gate ran: replayed whatever the diff."""
-    return {c for c in res["cells"].cells[cls] if c[0] in res["cells"].retraced}
+    return {c for c in res["cells"].cells[cls] if c[0] in res["cells"].rebuilt}
 
 
 @backtest
@@ -170,7 +170,7 @@ def test_a_daemon_only_range_replays_no_model_cell(cfg):
     if not _have("192a41cf", "6ce86b39"):
         pytest.skip("gate or commits absent")
     res = _scope(cfg, rng="192a41cf..6ce86b39")
-    assert all(set(s) == _retraced(res, cls) for cls, s in res["sel"].items()), res["report"]["selected"]
+    assert all(set(s) == _rebuilt(res, cls) for cls, s in res["sel"].items()), res["report"]["selected"]
 
 
 @backtest
@@ -185,8 +185,8 @@ def test_a29261aa_selects_the_triton_cells_whose_graphs_pass_bool(cfg, tmp_path)
         for cls, pl in (p.get("plans") or {}).items():
             plans.setdefault(cls, set()).update(tuple(k.split("/")) for k in pl["which"])
     for cls, s in res["sel"].items():
-        rest = set(s) - plans.get(cls, set()) - _retraced(res, cls)
-        must = cells.of(cls, bool_models, {"triton"}) - _retraced(res, cls)
+        rest = set(s) - plans.get(cls, set()) - _rebuilt(res, cls)
+        must = cells.of(cls, bool_models, {"triton"}) - _rebuilt(res, cls)
         may = cells.of(cls, bool_models, {"triton", "native"})
         assert must <= rest <= may, (cls, sorted(must - rest), sorted(rest - may))
     # every other cell is carried, with the gate and row it comes from
@@ -225,8 +225,8 @@ def test_68333e77_selects_only_integer_division_holders_in_triton(cfg):
         return False
     want_models = {m for m in cells.models if int_div(m)}
     for cls, s in res["sel"].items():
-        s = set(s) - _retraced(res, cls)
-        must = cells.of(cls, want_models, {"triton"}) - _retraced(res, cls)
+        s = set(s) - _rebuilt(res, cls)
+        must = cells.of(cls, want_models, {"triton"}) - _rebuilt(res, cls)
         may = cells.of(cls, want_models, {"triton", "native"})
         assert must <= s <= may, (cls, sorted(must - s), sorted(s - may))
 

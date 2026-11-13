@@ -32,7 +32,7 @@ class SymInt:
     Represents concrete values, symbol references, or expression trees.
     At runtime, call .resolve({"s0": 4, "s1": 5}) to evaluate.
     """
-    __slots__ = ('_op', '_left', '_right', '_symbol_id', '_const_val', '_trace_val')
+    __slots__ = ('_op', '_left', '_right', '_symbol_id', '_const_val', '_build_val')
 
     def __init__(self, value: Optional[Union[int, 'SymInt']] = None):
         if isinstance(value, SymInt):
@@ -41,21 +41,21 @@ class SymInt:
             self._right = value._right
             self._symbol_id = value._symbol_id
             self._const_val = value._const_val
-            self._trace_val = value._trace_val
+            self._build_val = value._build_val
         elif isinstance(value, int):
             self._op = SymExprOp.CONST
             self._left = None
             self._right = None
             self._symbol_id = None
             self._const_val = value
-            self._trace_val = value
+            self._build_val = value
         elif value is None:
             self._op = SymExprOp.CONST
             self._left = None
             self._right = None
             self._symbol_id = None
             self._const_val = 0
-            self._trace_val = 0
+            self._build_val = 0
         else:
             raise TypeError(f"SymInt cannot be created from {type(value)}")
 
@@ -67,29 +67,29 @@ class SymInt:
         sym._right = None
         sym._symbol_id = symbol_id
         sym._const_val = None
-        sym._trace_val = trace_value
+        sym._build_val = trace_value
         return sym
 
     @classmethod
-    def _binary(cls, op: SymExprOp, left: 'SymInt', right: 'SymInt', trace_val: int) -> 'SymInt':
+    def _binary(cls, op: SymExprOp, left: 'SymInt', right: 'SymInt', build_val: int) -> 'SymInt':
         node = cls.__new__(cls)
         node._op = op
         node._left = left
         node._right = right
         node._symbol_id = None
         node._const_val = None
-        node._trace_val = trace_val
+        node._build_val = build_val
         return node
 
     @classmethod
-    def _unary(cls, op: SymExprOp, operand: 'SymInt', trace_val: int) -> 'SymInt':
+    def _unary(cls, op: SymExprOp, operand: 'SymInt', build_val: int) -> 'SymInt':
         node = cls.__new__(cls)
         node._op = op
         node._left = operand
         node._right = None
         node._symbol_id = None
         node._const_val = None
-        node._trace_val = trace_val
+        node._build_val = build_val
         return node
 
     def _coerce(self, other: Union['SymInt', int]) -> 'SymInt':
@@ -101,7 +101,7 @@ class SymInt:
 
     @property
     def trace_value(self) -> int:
-        return self._trace_val
+        return self._build_val
 
     def is_concrete(self) -> bool:
         return self._op == SymExprOp.CONST
@@ -124,7 +124,7 @@ class SymInt:
         if (self.is_concrete() and self._const_val == 0) or \
            (other.is_concrete() and other._const_val == 0):
             return SymInt(0)
-        return SymInt._binary(SymExprOp.MUL, self, other, self._trace_val * other._trace_val)
+        return SymInt._binary(SymExprOp.MUL, self, other, self._build_val * other._build_val)
 
     def __rmul__(self, other: Union['SymInt', int]) -> 'SymInt':
         return self.__mul__(other)
@@ -137,7 +137,7 @@ class SymInt:
             return other
         if self.is_concrete() and other.is_concrete():
             return SymInt(self._const_val + other._const_val)
-        return SymInt._binary(SymExprOp.ADD, self, other, self._trace_val + other._trace_val)
+        return SymInt._binary(SymExprOp.ADD, self, other, self._build_val + other._build_val)
 
     def __radd__(self, other: Union['SymInt', int]) -> 'SymInt':
         return self.__add__(other)
@@ -148,7 +148,7 @@ class SymInt:
             return self
         if self.is_concrete() and other.is_concrete():
             return SymInt(self._const_val - other._const_val)
-        return SymInt._binary(SymExprOp.SUB, self, other, self._trace_val - other._trace_val)
+        return SymInt._binary(SymExprOp.SUB, self, other, self._build_val - other._build_val)
 
     def __rsub__(self, other: Union['SymInt', int]) -> 'SymInt':
         other = self._coerce(other)
@@ -174,7 +174,7 @@ class SymInt:
             raise ZeroDivisionError("SymInt floor division by zero")
         return SymInt._binary(
             SymExprOp.FLOORDIV, self, other,
-            self._trace_val // other._trace_val if other._trace_val != 0 else 0
+            self._build_val // other._build_val if other._build_val != 0 else 0
         )
 
     def __rfloordiv__(self, other: Union['SymInt', int]) -> 'SymInt':
@@ -191,7 +191,7 @@ class SymInt:
             raise ZeroDivisionError("SymInt modulo by zero")
         return SymInt._binary(
             SymExprOp.MOD, self, other,
-            self._trace_val % other._trace_val if other._trace_val != 0 else 0
+            self._build_val % other._build_val if other._build_val != 0 else 0
         )
 
     def __rmod__(self, other: Union['SymInt', int]) -> 'SymInt':
@@ -201,7 +201,7 @@ class SymInt:
     def __neg__(self) -> 'SymInt':
         if self.is_concrete():
             return SymInt(-self._const_val)
-        return SymInt._unary(SymExprOp.NEG, self, -self._trace_val)
+        return SymInt._unary(SymExprOp.NEG, self, -self._build_val)
 
     def __pos__(self) -> 'SymInt':
         return self
@@ -303,16 +303,16 @@ class SymInt:
             return self._const_val
         if self._op == SymExprOp.SYMBOL:
             assert self._symbol_id is not None
-            return {"type": "symbol", "id": self._symbol_id, "trace": self._trace_val}
+            return {"type": "symbol", "id": self._symbol_id, "trace": self._build_val}
         if self._op == SymExprOp.NEG:
             assert self._left is not None
-            return {"type": "neg", "operand": self._left.to_json(), "trace": self._trace_val}
+            return {"type": "neg", "operand": self._left.to_json(), "trace": self._build_val}
         assert self._left is not None and self._right is not None
         return {
             "type": self._op.name.lower(),
             "left": self._left.to_json(),
             "right": self._right.to_json(),
-            "trace": self._trace_val,
+            "trace": self._build_val,
         }
 
 
@@ -337,8 +337,8 @@ class SymInt:
         if self._op == SymExprOp.CONST:
             return f"SymInt({self._const_val})"
         if self._op == SymExprOp.SYMBOL:
-            return f"SymInt({self._symbol_id}={self._trace_val})"
-        return f"SymInt({self.to_expr_string()}={self._trace_val})"
+            return f"SymInt({self._symbol_id}={self._build_val})"
+        return f"SymInt({self.to_expr_string()}={self._build_val})"
 
     def __str__(self) -> str:
         return self.to_expr_string()

@@ -201,7 +201,7 @@ def test_the_float32_edges_are_the_vendors(grid):
     assert torch.equal(got, ref)
 
 
-def test_the_recorded_trace_is_what_the_tree_gives_at_the_trace():
+def test_the_recorded_build_is_what_the_tree_gives_at_the_build():
     env = _env(TRACE)
     for node in BOUNDS.values():
         assert read_triton_resolver(node, env) == node["trace"]

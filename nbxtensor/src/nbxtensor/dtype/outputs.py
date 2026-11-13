@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, FrozenSet, Optional
 
-__all__ = ["COMPLEX_DTYPE_NAMES", "traced_output_dtype_name", "traced_output_is_complex", "amp_fp32_output_dtype"]
+__all__ = ["COMPLEX_DTYPE_NAMES", "built_output_dtype_name", "built_output_is_complex", "amp_fp32_output_dtype"]
 
 COMPLEX_DTYPE_NAMES: FrozenSet[str] = frozenset({"complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble"})
 _GRAPH_FLOAT_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16", "float32", "float64"})
@@ -18,7 +18,7 @@ def _name(dtype) -> str:
     return str(dtype).rsplit(".", 1)[-1]
 
 
-def traced_output_dtype_name(record: Optional[Dict[str, Any]]) -> Optional[str]:
+def built_output_dtype_name(record: Optional[Dict[str, Any]]) -> Optional[str]:
     """The plain name of the op's first built output dtype (`output_dtypes[0]` at the record's TOP level), or None
     when the record states none."""
     if not isinstance(record, dict):
@@ -27,7 +27,7 @@ def traced_output_dtype_name(record: Optional[Dict[str, Any]]) -> Optional[str]:
     return _name(dts[0]) if dts else None
 
 
-def traced_output_is_complex(record: Optional[Dict[str, Any]]) -> bool:
+def built_output_is_complex(record: Optional[Dict[str, Any]]) -> bool:
     """True when the op's built record types an output complex.
 
     The built OUTPUT dtype is the only signal: an op's name cannot answer (a plain `mul` by the scalar `1j` produces

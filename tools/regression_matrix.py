@@ -73,7 +73,7 @@ import precision_zoo_campaign as Z  # noqa: E402  the judged request, the output
 from judge_artefact import image_degeneracy, text_degeneracy, video_degeneracy  # noqa: E402
 # The request a cell runs at is DERIVED from the current container's build, in ONE place the
 # certification census imports too: a census and the verification it serves ask for one request.
-from trace_request import derived_request, gate_request, off_trace_size  # noqa: E402
+from container_request import derived_request, gate_request, off_build_size  # noqa: E402
 
 from container_renames import by_current_name, current_name  # noqa: E402
 
@@ -503,7 +503,7 @@ REQUEST_KIND = "gate"
 
 def cell_request(model: str) -> list:
     """The request a cell runs, and the one its plan is asked for: THE shared derivation, which the census covers
-    too, so the table holds what a cell forms. A gate run makes tools/trace_request.gate_request (the model's floor
+    too, so the table holds what a cell forms. A gate run makes tools/container_request.gate_request (the model's floor
     where its container states gate values, else the family's confirmation request at its confirmation size); a
     judging run makes derived_request — the request quality is judged at, the container's own confirmation values
     (registry, with their source) over the family's — so the judged artefact is a row like every other, with its
@@ -662,7 +662,7 @@ def keep_superseded(d: Path, mode: str) -> list:
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
     family = Z.family_of(model)
     req = cell_request(model)
-    size = off_trace_size(model, family)
+    size = off_build_size(model, family)
     ext = Z.output_ext(family, req)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)

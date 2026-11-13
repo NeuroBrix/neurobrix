@@ -3573,7 +3573,7 @@ KEYS of pass A and pass B correctly — 856 + 2 259 = 3 106, byte-identical befo
 fix — and took the BOOKKEEPING from the first source only. Two bugs, both silent:
 
 1. `merged = {k: v for k, v in d.items() if k != "entries"}` copied every non-entries field
-   from pass A, so `failed`, `probe_failed` and `retrace_queue` were pass A's alone.
+   from pass A, so `failed`, `probe_failed` and `rebuild_queue` were pass A's alone.
 2. `models` is a **dict** in these files, so `isinstance(d.get("models"), list)` was False,
    the accumulator stayed empty, and pass A's 30-model map survived while pass B's 29 were
    discarded.
@@ -4724,7 +4724,7 @@ rendered from (`PixArt-XL-1024`, the 2026-05-20 build, a second build of the sam
 under an invented name) was refused at 14 420 MB — its transformer declared `seq_len` at two
 symbol ids and the reserve followed. Batch 8 at 2048x1024 and batch 2 at 4096x2048 are refused
 under every strategy. The cell that holds it:
-`tests/unit/prism/test_a_refusal_names_why_layer_streaming_declined.py::test_the_retraced_container_plans_what_the_old_one_refused`
+`tests/unit/prism/test_a_refusal_names_why_layer_streaming_declined.py::test_the_rebuilt_container_plans_what_the_old_one_refused`
 (branch `dedup-references-2026-09-26`). The hub's `PixArt/PixArt-XL-1024` record is being
 replaced with this container on the same day.
 

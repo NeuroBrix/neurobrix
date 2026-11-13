@@ -122,8 +122,8 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
     #    registered as buffer).
     #  - An intermediate produced by aten::cos / aten::sin over an inline
     #    position-based computation (DeepSeek-MoE pattern — RoPE recomputed
-    #    per forward; source shape's seq dim equals trace_seq_len).
-    # In both cases, the slice's build-time `end` argument is trace_seq_len
+    #    per forward; source shape's seq dim equals build_seq_len).
+    # In both cases, the slice's build-time `end` argument is build_seq_len
     # and must stay pinned to the full source dim so position_ids > runtime
     # seq_len can still index correctly.
     consumers: Dict[str, list] = {}
@@ -139,8 +139,8 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
                 return True
         return False
 
-    # trace_seq_len values we might see as slice end
-    trace_seq_lens = set(seq_len_syms.values())
+    # build_seq_len values we might see as slice end
+    build_seq_lens = set(seq_len_syms.values())
 
     def _tensor_is_weightlike(tid: str) -> bool:
         td = tensors.get(tid, {})
@@ -177,13 +177,13 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
         #      cos/sin_cached pre-registered at max_pos; slice trims to
         #      runtime seq_len, index reads arbitrary positions).
         #  (b) Source is an intermediate whose seq-axis dim equals
-        #      trace_seq_len (DeepSeek-MoE pattern — RoPE recomputed per
+        #      build_seq_len (DeepSeek-MoE pattern — RoPE recomputed per
         #      forward from arange(seq_len); the seq dim shrinks to
         #      runtime seq_len without pinning).
         # Either case: pin the slice end to the static source dim so the
         # downstream index with position_ids stays in bounds during decode.
         _is_weight = _tensor_is_weightlike(_ins[0])
-        _is_seq_dim = _src_shape[_dim] in trace_seq_lens
+        _is_seq_dim = _src_shape[_dim] in build_seq_lens
         if not (_is_weight or _is_seq_dim):
             continue
         rope_slice_full_size[_uid] = _src_shape[_dim]
@@ -200,7 +200,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
     # runtime seq_len=1 during decode, cos/sin become (1, head_dim) and
     # position_ids > 0 read OOB → garbage RoPE → gibberish tokens from
     # the second decode step onward. Pinning arange keeps the chain at
-    # trace_seq_len so positions up to trace_seq_len-1 index correctly.
+    # build_seq_len so positions up to build_seq_len-1 index correctly.
     # Backward-trace from each rope slice's input through transparent-shape
     # ops (mul/add/sub/cos/sin/cat/view/reshape/unsqueeze/expand/outer/etc.)
     # until the aten::arange that generated the axis.
@@ -250,11 +250,11 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
     # regenerates cos/sin per forward from arange(N); N must cover every
     # ABSOLUTE position the downstream index(position_ids) will read —
     # i.e. the runtime TOTAL length (prompt + generated so far), which
-    # GROWS past trace_seq_len during decode. A static pin at
-    # trace_seq_len (the previous behaviour) made positions >=
-    # trace_seq_len read out of the table's bounds: garbage rotations,
+    # GROWS past build_seq_len during decode. A static pin at
+    # build_seq_len (the previous behaviour) made positions >=
+    # build_seq_len read out of the table's bounds: garbage rotations,
     # degenerate logits from that step on (deepseek-moe-16b, first bad
-    # token exactly at position trace_seq_len=23; 2026-08-26). Mirror of
+    # token exactly at position build_seq_len=23; 2026-08-26). Mirror of
     # the compiled engine's _recompute_rope_constant, which regenerates
     # the table at the needed length.
     # Mechanism: a value-sourced symbol bound per forward from the LAST
@@ -266,7 +266,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
     # bytes and only exists on graphs that carry this chain.
     _ROPE_LEN_SYM = "nbx_rope_len"
     if rope_arange_uids:
-        _sym_tv = next(iter(trace_seq_lens))
+        _sym_tv = next(iter(build_seq_lens))
         dag.setdefault("symbolic_context", {}).setdefault("symbols", {})[
             _ROPE_LEN_SYM] = {
             "name": _ROPE_LEN_SYM,
@@ -298,7 +298,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
                     return arg
                 tv = arg.get("trace_value")
                 if isinstance(tv, int):
-                    if rope_arange_uids and tv in trace_seq_lens:
+                    if rope_arange_uids and tv in build_seq_lens:
                         return _rope_len_ref(tv)
                     return {"type": "scalar", "value": tv}
             elif t == "product":
@@ -359,8 +359,8 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
             # absolute position the index reads. Neither of the two static
             # choices is correct: runtime seq_len shrinks to 1 at decode
             # (positions > 0 OOB from the second token), and the previous
-            # static trace_seq_len pin went OOB the moment total length
-            # crossed trace_seq_len (deepseek-moe wall at position 23).
+            # static build_seq_len pin went OOB the moment total length
+            # crossed build_seq_len (deepseek-moe wall at position 23).
             if op_uid in rope_arange_uids:
                 a0 = args[0]
                 if _is_rope_len_ref(a0):
@@ -370,11 +370,11 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
                     if isinstance(tv, int):
                         args[0] = _rope_len_ref(tv)
                 elif isinstance(a0, dict) and a0.get("type") == "scalar" \
-                        and a0.get("value") in trace_seq_lens:
+                        and a0.get("value") in build_seq_lens:
                     # A static pin left by an earlier run of the pre-fix
                     # pass — upgrade it to the dynamic form.
                     args[0] = _rope_len_ref(a0["value"])
-                elif isinstance(a0, int) and a0 in trace_seq_lens:
+                elif isinstance(a0, int) and a0 in build_seq_lens:
                     args[0] = _rope_len_ref(a0)
             elif isinstance(args[0], dict):
                 r = _promote_scalar_dict(args[0])
@@ -475,7 +475,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
     # above turns `view([23, 1])` into `view([s1, 1])`; at decode with
     # runtime seq_len=1 this shrinks the RoPE position basis to a single
     # row and position_ids > 0 index OOB on the downstream cos/sin.
-    # Leaving these shape args at trace_seq_len keeps the chain sized for
+    # Leaving these shape args at build_seq_len keeps the chain sized for
     # absolute position indexing during decode.
     for _uid in rope_chain_op_uids:
         _op_data = ops_meta.get(_uid)
@@ -586,7 +586,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     return True
         return False
 
-    def _expr_trace(expr):
+    def _expr_build(expr):
         if isinstance(expr, int):
             return expr
         if isinstance(expr, dict):
@@ -595,7 +595,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     return expr[k]
         return None
 
-    tok_expr = tok_trace = None            # the token count, e.g. 4096
+    tok_expr = tok_build = None            # the token count, e.g. 4096
     tok_h = tok_w = None                   # its two sides, e.g. 64 and 64
     if h_sym and w_sym:
         for _od in ops_meta.values():
@@ -610,11 +610,11 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                         continue
                     if _expr_refs(_l, w_sym[0]) or _expr_refs(_r, h_sym[0]):
                         continue            # not a clean (H-side, W-side) product
-                    _t = _expr_trace(_e)
+                    _t = _expr_build(_e)
                     if _t is None or _t == hw_product or _t <= 1:
                         continue            # H*W itself is already covered above
-                    if tok_trace is None or _t > tok_trace:
-                        tok_expr, tok_trace = copy.deepcopy(_e), _t
+                    if tok_build is None or _t > tok_build:
+                        tok_expr, tok_build = copy.deepcopy(_e), _t
                         tok_h, tok_w = copy.deepcopy(_l), copy.deepcopy(_r)
                 if tok_expr is not None:
                     break
@@ -724,7 +724,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
             return _scaled_hw_product_dict(val, s), True
         return val, False
 
-    def _expr_trace_value(expr):
+    def _expr_build_value(expr):
         """Get the build-time value of an expression (for trace_value lookups)."""
         if isinstance(expr, int):
             return expr
@@ -801,7 +801,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
             return expr, False
 
         # Look up build value
-        tv = _expr_trace_value(expr)
+        tv = _expr_build_value(expr)
         if tv is None or not isinstance(tv, int):
             return expr, False
 
@@ -809,7 +809,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
             return _h_sym_dict(tv), True
         if w_sym and tv == w_sym[1]:
             return _w_sym_dict(tv), True
-        # Multi-scale: tv == k * h_trace?
+        # Multi-scale: tv == k * h_build?
         for s in _SPATIAL_SCALES:
             if h_sym and tv == h_sym[1] * s:
                 return _scaled_h_dict(tv, s), True
@@ -925,7 +925,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         # hides every wrong promotion.
         if tok_expr is not None:
             for i in range(len(out) - 1):
-                if out[i] == tok_trace:
+                if out[i] == tok_build:
                     out[i] = copy.deepcopy(tok_expr)
                     changed = True
 
@@ -937,13 +937,13 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         # dimension", not "infer it", so writing one there would silently change
         # the op's meaning instead of its extent.
         if (op_type in ("aten::view", "aten::_unsafe_view", "aten::reshape")
-                and tok_trace is not None and in_shape and len(in_shape) >= 2
+                and tok_build is not None and in_shape and len(in_shape) >= 2
                 and -1 not in out and len(out) >= 2
-                and isinstance(out[0], int) and tok_trace in tuple(in_shape)[:-1]):
+                and isinstance(out[0], int) and tok_build in tuple(in_shape)[:-1]):
             _collapsed = 1
             for _d in tuple(in_shape)[:-1]:
                 _collapsed *= _d
-            if out[0] == _collapsed and out[0] != tok_trace:
+            if out[0] == _collapsed and out[0] != tok_build:
                 out[0] = -1
                 changed = True
 
@@ -951,7 +951,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         # It already carries a -1 for the batch, so the sides cannot be left
         # to inference — they need the harvested expressions by name.
         if tok_h is not None and tok_w is not None:
-            _ht, _wt = _expr_trace(tok_h), _expr_trace(tok_w)
+            _ht, _wt = _expr_build(tok_h), _expr_build(tok_w)
             if _ht and _wt:
                 for i in range(len(out) - 1):
                     if out[i] == _ht and out[i + 1] == _wt:

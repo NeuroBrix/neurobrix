@@ -18,12 +18,12 @@ def _profiler():
     return ActivationProfiler(dag)
 
 
-def test_a_bare_integer_dim_that_contradicts_the_trace_is_refused():
+def test_a_bare_integer_dim_that_contradicts_the_build_is_refused():
     meta = {"shape": [1, 256, 2560], "symbolic_shape": {"dims": [15361, 256, 2560], "concrete": [1, 256, 2560]}}
     assert _profiler()._resolve_shape(meta, {}) == [1, 256, 2560]
 
 
-def test_a_bare_integer_dim_that_matches_the_trace_passes():
+def test_a_bare_integer_dim_that_matches_the_build_passes():
     meta = {"shape": [1, 256, 2560], "symbolic_shape": {"dims": [1, 256, 2560], "concrete": [1, 256, 2560]}}
     assert _profiler()._resolve_shape(meta, {}) == [1, 256, 2560]
 

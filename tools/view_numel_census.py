@@ -83,8 +83,8 @@ def census_one(graph: dict) -> dict:
     ops = graph.get("ops") or {}
     ops = ops if isinstance(ops, list) else list(ops.values())
     symbols = (graph.get("symbolic_context") or {}).get("symbols") or {}
-    at_trace = {sid: int((meta or {}).get("trace_value") or 1) for sid, meta in symbols.items()}
-    off_trace = second_point(symbols)
+    at_build = {sid: int((meta or {}).get("trace_value") or 1) for sid, meta in symbols.items()}
+    off_build = second_point(symbols)
     out = {"evaluated": 0, "misbound": [], "corrupted": 0, "unevaluable": 0}
     for op in ops:
         if op.get("op_type") not in VIEW_OPS:
@@ -105,18 +105,18 @@ def census_one(graph: dict) -> dict:
             continue
         slot = items.index(-1)
         try:
-            if ([evaluate(d, at_trace) for d in in_dims] != list(t_in.get("shape") or [])
-                    or [evaluate(d, at_trace) for d in out_dims] != list(t_out.get("shape") or [])):
+            if ([evaluate(d, at_build) for d in in_dims] != list(t_in.get("shape") or [])
+                    or [evaluate(d, at_build) for d in out_dims] != list(t_out.get("shape") or [])):
                 out["corrupted"] += 1
                 continue
             numel = 1
             for d in in_dims:
-                numel *= evaluate(d, off_trace)
+                numel *= evaluate(d, off_build)
             known = 1
             for j, d in enumerate(out_dims):
                 if j != slot:
-                    known *= evaluate(d, off_trace)
-            implied = evaluate(out_dims[slot], off_trace)
+                    known *= evaluate(d, off_build)
+            implied = evaluate(out_dims[slot], off_build)
         except (KeyError, TypeError, ZeroDivisionError):
             out["unevaluable"] += 1
             continue
@@ -125,8 +125,8 @@ def census_one(graph: dict) -> dict:
             out["misbound"].append({
                 "op": op.get("op_uid"), "slot": slot,
                 "trace_in": list(t_in.get("shape") or []), "trace_out": list(t_out.get("shape") or []),
-                "off_trace_in": [evaluate(d, off_trace) for d in in_dims],
-                "off_trace_out": [evaluate(d, off_trace) for d in out_dims],
+                "off_trace_in": [evaluate(d, off_build) for d in in_dims],
+                "off_trace_out": [evaluate(d, off_build) for d in out_dims],
                 "element_count_implies": (numel // known) if known else None,
                 "recorded": out_dims[slot],
             })

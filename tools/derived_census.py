@@ -343,8 +343,8 @@ def _reads_key(reads: dict):
     return tuple(sorted((u, tuple(sorted((t, str(d)) for t, d in m.items()))) for u, m in reads.items()))
 
 
-def traced_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
-    """The ops `TritonDtypeEngine.wrap_op` wraps fp32 for the TRACE's own fp32 island (core/dtype/traced_island,
+def built_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
+    """The ops `TritonDtypeEngine.wrap_op` wraps fp32 for the TRACE's own fp32 island (core/dtype/built_island,
     2026-10-25) — in wrap_op's order: under a half compute dtype, an op that is no self-managed wrapper, in the
     AMP_FP16 class, whose built floating inputs and output are all float32 inside a half graph. The wrap is the one a
     contract island gets (`_wrap_fp32`: every float operand cast to fp32, `_NBX_COMPUTE_DTYPE` fp32 for the call), so
@@ -353,20 +353,20 @@ def traced_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
     the launcher formed depthwise_conv2d_kernel fp32 (chain52, 2026-10-25 08:25; the Apple class alike)."""
     if cdtype not in ("float16", "bfloat16"):
         return frozenset()
-    from neurobrix.core.dtype.traced_island import is_traced_fp32_island
+    from neurobrix.core.dtype.built_island import is_built_fp32_island
     from neurobrix.triton import dtype as _tdt
     out = set()
     for uid, op in ops.items():
         name = op.get("op_type", "").split("::")[-1].split(".")[0]
         if name in _tdt._SELF_MANAGED_OPS or name not in _tdt.AMP_FP16_OPS:
             continue
-        if is_traced_fp32_island(op, graph_dtype):
+        if is_built_fp32_island(op, graph_dtype):
             out.add(uid)
     return frozenset(out)
 
 
 #: {(graph id, compute dtype): (the graph, its built fp32 island)} — served only to that very graph object
-_TRACED: dict = {}
+_BUILT: dict = {}
 #: {graph id: (the graph, its attention op uids)}
 _SDPA_UIDS: dict = {}
 
@@ -430,9 +430,9 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     # one answer per graph and compute dtype (the graph's ops are its own): read again at every binding it was a third of
     # a session continuation's derivation (DeepSeek-Coder-V2-Lite, 2026-11-08)
     _tk = (id(g), str(cdtype))
-    if _TRACED.get(_tk, (None,))[0] is not g:
-        _TRACED[_tk] = (g, traced_island_uids(ops, g.get("torch_dtype"), str(cdtype)))
-    traced = _TRACED[_tk][1]
+    if _BUILT.get(_tk, (None,))[0] is not g:
+        _BUILT[_tk] = (g, built_island_uids(ops, g.get("torch_dtype"), str(cdtype)))
+    traced = _BUILT[_tk][1]
     if traced:
         import dataclasses as _dc
         contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | traced,
@@ -2763,7 +2763,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
 
 
 def compare(a) -> int:
-    from trace_request import derived_request
+    from container_request import derived_request
     request = derived_request(a.model)
     rung = None if a.rung == "profile" else int(a.rung)
     derived, plan, P, unhandled = derive_keys(a.model, a.hardware, a.mode, rung, request)

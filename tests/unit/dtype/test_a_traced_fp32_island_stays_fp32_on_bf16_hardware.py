@@ -1,5 +1,5 @@
 """In a half-precision graph, an op the build computed entirely in float32 is the vendor's own fp32 island; both
-engines' dtype policies keep it fp32 on ANY hardware (core/dtype/traced_island.is_traced_fp32_island, one predicate).
+engines' dtype policies keep it fp32 on ANY hardware (core/dtype/built_island.is_built_fp32_island, one predicate).
 Sana_1600M_1024px_MultiLing on the M4 Pro, 2026-10-25: the compiled branch input-cast the Gemma rotary GEMM
 (`inv_freq @ position_ids`, built fp32 in a float16 graph) to bf16 — "bf16 range = fp32 range" — and the angles of
 506 positions lost ~2 rad; the image was a different composition from the Triton branch's (19.8 dB).
@@ -13,7 +13,7 @@ import pytest
 import torch
 
 from neurobrix.core.dtype.engine import DtypeEngine
-from neurobrix.core.dtype.traced_island import is_traced_fp32_island
+from neurobrix.core.dtype.built_island import is_built_fp32_island
 
 ISLAND = {"input_dtypes": ["float32", "float32"], "output_dtypes": ["float32"]}
 HALF = {"input_dtypes": ["float16", "float16"], "output_dtypes": ["float16"]}
@@ -21,11 +21,11 @@ CAST_OUT = {"input_dtypes": ["float32"], "output_dtypes": ["float16"]}
 
 
 def test_the_predicate():
-    assert is_traced_fp32_island(ISLAND, "float16") and is_traced_fp32_island(ISLAND, "bfloat16")
-    assert not is_traced_fp32_island(ISLAND, "float32")          # an fp32 graph has no island: it IS fp32
-    assert not is_traced_fp32_island(HALF, "float16")
-    assert not is_traced_fp32_island(CAST_OUT, "float16")        # the cast out of the island
-    assert not is_traced_fp32_island({"input_dtypes": ["int64"], "output_dtypes": ["float32"]}, "float16")
+    assert is_built_fp32_island(ISLAND, "float16") and is_built_fp32_island(ISLAND, "bfloat16")
+    assert not is_built_fp32_island(ISLAND, "float32")          # an fp32 graph has no island: it IS fp32
+    assert not is_built_fp32_island(HALF, "float16")
+    assert not is_built_fp32_island(CAST_OUT, "float16")        # the cast out of the island
+    assert not is_built_fp32_island({"input_dtypes": ["int64"], "output_dtypes": ["float32"]}, "float16")
 
 
 def _picked(compute, hardware, record, monkeypatch):
@@ -35,11 +35,11 @@ def _picked(compute, hardware, record, monkeypatch):
     return eng.compile_op("aten::bmm", torch.ops.aten.bmm.default, record, op_uid="aten.bmm::0")
 
 
-def test_the_compiled_policy_keeps_a_traced_fp32_gemm_fp32_under_bf16(monkeypatch):
+def test_the_compiled_policy_keeps_a_built_fp32_gemm_fp32_under_bf16(monkeypatch):
     assert _picked(torch.bfloat16, ("apple", "apple_m4_pro"), ISLAND, monkeypatch) == "fp32"
 
 
-def test_a_half_traced_gemm_is_still_cast_under_bf16(monkeypatch):
+def test_a_half_built_gemm_is_still_cast_under_bf16(monkeypatch):
     assert _picked(torch.bfloat16, ("apple", "apple_m4_pro"), HALF, monkeypatch) == "lower"
 
 

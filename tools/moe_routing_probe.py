@@ -44,7 +44,7 @@ def _first_axis(shapes: Any) -> Optional[int]:
     return None
 
 
-def frozen_expert_slices(dag: Dict[str, Any], trace_seq_len: int) -> List[Dict[str, Any]]:
+def frozen_expert_slices(dag: Dict[str, Any], build_seq_len: int) -> List[Dict[str, Any]]:
     """Axis-0 slices whose literal bounds can only come from the trace's routing.
 
     A per-expert slice cuts the gathered buffer [seq_len * top_k, dim] at the
@@ -68,9 +68,9 @@ def frozen_expert_slices(dag: Dict[str, Any], trace_seq_len: int) -> List[Dict[s
         if end > 2 ** 40:  # sys.maxsize sentinel = "to the end", not frozen
             continue
         buf = _first_axis(op.get("input_shapes"))
-        if buf is None or buf == trace_seq_len:
+        if buf is None or buf == build_seq_len:
             continue
-        if buf % trace_seq_len != 0:
+        if buf % build_seq_len != 0:
             continue
         found.append({"uid": uid, "start": start, "end": end, "buffer": buf,
                       "parent": op.get("parent_module", "")})
@@ -109,12 +109,12 @@ def probe(graph_path: str, family: str, norm_topk_prob: bool) -> Dict[str, Any]:
     # A component can carry several seq_len symbols (one per input); the expert
     # gather is indexed by the LM's own sequence, so take the widest — a wrong
     # divisor below would silently reclassify every slice.
-    trace_seq_lens = sorted({
+    build_seq_lens = sorted({
         m.get("trace_value") for m in (sym.get("symbols") or {}).values()
         if isinstance(m, dict) and m.get("name") == "seq_len"
         and isinstance(m.get("trace_value"), int)})
-    trace_seq_len = trace_seq_lens[-1] if trace_seq_lens else None
-    if trace_seq_len is None:
+    build_seq_len = build_seq_lens[-1] if build_seq_lens else None
+    if build_seq_len is None:
         return {"graph": graph_path, "trace_seq_len": None, "symbolic_context": sym,
                 "topk_ops_by_k": {}, "moe_layer_candidates": 0,
                 "frozen_expert_slices_before": 0, "frozen_expert_slices_after": 0,
@@ -135,21 +135,21 @@ def probe(graph_path: str, family: str, norm_topk_prob: bool) -> Dict[str, Any]:
         if isinstance(k, int):
             topk_k[k] += 1
 
-    before = frozen_expert_slices(dag, trace_seq_len)
+    before = frozen_expert_slices(dag, build_seq_len)
     sums = sum_consumption(dag)
     order_before = len(dag.get("execution_order", []))
 
     from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
     dag = detect_and_fuse_moe(dag, family, norm_topk_prob=norm_topk_prob, declared=True)
 
-    after = frozen_expert_slices(dag, trace_seq_len)
+    after = frozen_expert_slices(dag, build_seq_len)
     fused = [u for u, o in dag.get("ops", {}).items()
              if (o or {}).get("op_type") == "custom::moe_fused"]
     fused_in_order = [u for u in dag.get("execution_order", []) if u in set(fused)]
 
     return {
         "graph": graph_path,
-        "trace_seq_len": trace_seq_len,
+        "trace_seq_len": build_seq_len,
         "symbolic_context": sym,
         "topk_ops_by_k": dict(topk_k),
         "moe_layer_candidates": sum(n for k, n in topk_k.items() if k > 1),

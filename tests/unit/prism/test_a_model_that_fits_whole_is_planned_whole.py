@@ -59,7 +59,7 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 sys.path.insert(0, str(TOOLS))
-import trace_request as TR  # noqa: E402
+import container_request as TR  # noqa: E402
 
 MB = 1024 * 1024
 TRITON_MODES = ["triton", "triton_sequential"]
@@ -68,7 +68,7 @@ WHOLE = {"single_gpu", "single_gpu_lifecycle", "lazy_sequential"}
 
 
 def _plan(model: str, mode: str):
-    """The model's DERIVED request (tools/trace_request.derived_request) planned on the Mac's profile."""
+    """The model's DERIVED request (tools/container_request.derived_request) planned on the Mac's profile."""
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
     flag = {"triton": "--triton", "triton_sequential": "--triton-sequential", "compiled": "--compiled"}[mode]

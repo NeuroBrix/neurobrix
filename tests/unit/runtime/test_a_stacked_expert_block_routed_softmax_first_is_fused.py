@@ -335,7 +335,7 @@ def test_the_renormalisation_is_read_off_the_graph():
 
 
 @pytest.mark.parametrize("renorm", [True, False])
-def test_a_registry_that_contradicts_the_trace_is_named(renorm):
+def test_a_registry_that_contradicts_the_build_is_named(renorm):
     with pytest.raises(RuntimeError, match="the registry declares"):
         _fuse(qwen3vl_block(renorm=renorm), norm=not renorm)
     # and the executor's patch loop names it on an op the first pass fused

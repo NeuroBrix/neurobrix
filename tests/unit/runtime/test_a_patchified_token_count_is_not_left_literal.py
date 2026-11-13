@@ -34,8 +34,8 @@ import pytest
 from neurobrix.triton.promotion import promote_seq_len_scalars
 from neurobrix.triton.symbols import SymbolResolver
 
-TRACE_LATENT = 128          # 1024 px / vae scale 8
-TRACE_TOKENS = 64 * 64      # patch 2 -> 4096
+BUILD_LATENT = 128          # 1024 px / vae scale 8
+BUILD_TOKENS = 64 * 64      # patch 2 -> 4096
 RUN_LATENT = 512            # a 4096 px request
 RUN_TOKENS = 256 * 256      # 65536
 BATCH = 2                   # CFG
@@ -50,43 +50,43 @@ def _h_expr(sid, trace):
 
 
 def _dag():
-    tok = {"type": "mul", "trace": TRACE_TOKENS,
-           "left": _h_expr("s4", TRACE_LATENT), "right": _h_expr("s5", TRACE_LATENT)}
+    tok = {"type": "mul", "trace": BUILD_TOKENS,
+           "left": _h_expr("s4", BUILD_LATENT), "right": _h_expr("s5", BUILD_LATENT)}
     t = lambda tid: {"type": "tensor", "tensor_id": tid}
     lst = lambda v: {"type": "list", "value": v}
     return {
         "symbolic_context": {"symbols": {
             "s3": {"name": "batch", "trace_value": BATCH,
                    "source": "input::hidden_states::dim_0"},
-            "s4": {"name": "height", "trace_value": TRACE_LATENT,
+            "s4": {"name": "height", "trace_value": BUILD_LATENT,
                    "source": "input::hidden_states::dim_2"},
-            "s5": {"name": "width", "trace_value": TRACE_LATENT,
+            "s5": {"name": "width", "trace_value": BUILD_LATENT,
                    "source": "input::hidden_states::dim_3"},
         }},
         "tensors": {
-            "input::hidden_states": {"shape": [BATCH, 4, TRACE_LATENT, TRACE_LATENT]},
+            "input::hidden_states": {"shape": [BATCH, 4, BUILD_LATENT, BUILD_LATENT]},
             "input::encoder_hidden_states": {"shape": [BATCH, 120, 4096]},
             "param::proj": {"shape": [1152, 4, 2, 2], "weight_name": "proj"},
         },
         "ops": {
             # the correctly-symbolised sibling the container already carries
             "aten.view::0": {"op_type": "aten::view",
-                             "input_shapes": [[BATCH, 1152, TRACE_LATENT // 2, TRACE_LATENT // 2]],
+                             "input_shapes": [[BATCH, 1152, BUILD_LATENT // 2, BUILD_LATENT // 2]],
                              "attributes": {"args": [t("aten.convolution::0::out_0"),
                                                      lst([{"type": "symbol", "id": "s3",
                                                            "trace": BATCH}, 1152, tok])]}},
             # flatten / unflatten around the attention out-projection — the defect
             "aten.view::21": {"op_type": "aten::view",
-                              "input_shapes": [[BATCH, TRACE_TOKENS, 1152]],
+                              "input_shapes": [[BATCH, BUILD_TOKENS, 1152]],
                               "attributes": {"args": [t("aten.view::20::out_0"),
-                                                      lst([BATCH * TRACE_TOKENS, 1152])]}},
+                                                      lst([BATCH * BUILD_TOKENS, 1152])]}},
             "aten.view::22": {"op_type": "aten::view",
-                              "input_shapes": [[BATCH * TRACE_TOKENS, 1152]],
+                              "input_shapes": [[BATCH * BUILD_TOKENS, 1152]],
                               "attributes": {"args": [t("aten.addmm::12::out_0"),
-                                                      lst([BATCH, TRACE_TOKENS, 1152])]}},
+                                                      lst([BATCH, BUILD_TOKENS, 1152])]}},
             # the unpatchify: already carries a -1, so the two 64s must promote themselves
             "aten.view::880": {"op_type": "aten::view",
-                               "input_shapes": [[BATCH, TRACE_TOKENS, 32]],
+                               "input_shapes": [[BATCH, BUILD_TOKENS, 32]],
                                "attributes": {"args": [t("aten.view::879::out_0"),
                                                        lst([-1, 64, 64, 2, 2, 8])]}},
             # the T5 stream: 4096 here is a FEATURE width and must stay literal

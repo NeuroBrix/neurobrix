@@ -716,14 +716,14 @@ class Cells:
         self.gone = sorted(m for m, r in self.recs.items() if r.get("gone"))
         # a container whose graphs are newer than the gate's row of it was retraced after the gate ran: the gate
         # judged another container, so every cell of it is replayed, whatever the diff
-        self.retraced = {}
+        self.rebuilt = {}
         for cls in sorted(self.gated):                     # a class the gate never judged says nothing
             for (m, mo) in self.cells[cls]:
                 r = self.rows[cls].get((m, mo))
                 t = RM._row_time(r) if r else 0.0
                 newest = max((st[2] for st in self.recs[m]["stamp"]), default=0)
                 if r is None or newest > t:
-                    self.retraced.setdefault(m, "no gate row" if r is None else
+                    self.rebuilt.setdefault(m, "no gate row" if r is None else
                                              f"graphs of {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(newest))}"
                                              f" newer than its gate row ({r.get('recorded_as', m)}, {r['date']})")
         self.argv = {}
@@ -1911,12 +1911,12 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
         for c in cs:
             sel[cls].setdefault(c, []).append(why)
 
-    report["retraced"] = cells.retraced
+    report["retraced"] = cells.rebuilt
     report["gated_classes"] = sorted(cells.gated)
     for cls in cfg["classes"]:
         if cls not in cells.gated:
             log(f"class {cls}: the gate {cells.dir} holds no rows for it — not gated here, no cell of it is queued")
-    for m, why in sorted(cells.retraced.items()):
+    for m, why in sorted(cells.rebuilt.items()):
         log(f"container changed since the gate ran: {m} ({why}): every cell of it")
         for cls in sorted(cells.gated):
             pick(cls, {c for c in cells.cells[cls] if c[0] == m}, f"container changed since the gate ran: {why}")

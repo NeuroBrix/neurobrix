@@ -815,15 +815,15 @@ class GraphExecutor:
                 # dynamic lengths).
                 import base64
                 import numpy as np
-                traced_shape = spec.get("traced_shape")
-                traced_data = spec.get("traced_data")
-                if not traced_data or not traced_shape:
+                built_shape = spec.get("traced_shape")
+                built_data = spec.get("traced_data")
+                if not built_data or not built_shape:
                     raise RuntimeError(
                         f"ZERO FALLBACK: traced_buffer spec for '{weight_name}' "
-                        f"missing traced_data/traced_shape.")
+                        f"missing traced_data/built_shape.")
                 arr = np.frombuffer(
-                    base64.b64decode(traced_data), dtype=np.float32
-                ).reshape(traced_shape)
+                    base64.b64decode(built_data), dtype=np.float32
+                ).reshape(built_shape)
                 self._weights[weight_name] = self._maybe_to_nbx(arr.copy())
                 computed_count += 1
             elif method == "interpolate_learned_pos_embed":
@@ -832,10 +832,10 @@ class GraphExecutor:
                     weight_name=weight_name,
                     runtime_height=self._runtime_height,
                     runtime_width=self._runtime_width,
-                    traced_grid_h=params.get("traced_grid_h"),
-                    traced_grid_w=params.get("traced_grid_w"),
+                    built_grid_h=params.get("traced_grid_h"),
+                    built_grid_w=params.get("traced_grid_w"),
                     embed_dim=params.get("embed_dim"),
-                    traced_data=spec.get("traced_data"),  # Base64-encoded built tensor
+                    built_data=spec.get("traced_data"),  # Base64-encoded built tensor
                     patch_size=params.get("patch_size", 2),  # Transformer patch size
                 )
                 self._weights[weight_name] = self._maybe_to_nbx(tensor)
@@ -919,10 +919,10 @@ class GraphExecutor:
         weight_name: str,
         runtime_height: int,
         runtime_width: int,
-        traced_grid_h: int,
-        traced_grid_w: int,
+        built_grid_h: int,
+        built_grid_w: int,
         embed_dim: int,
-        traced_data: Optional[str] = None,
+        built_data: Optional[str] = None,
         patch_size: int = 2,
     ) -> torch.Tensor:
         """
@@ -964,52 +964,52 @@ class GraphExecutor:
         runtime_grid_w = runtime_width // vae_scale // patch_size
 
         # Check if interpolation is needed
-        traced_seq = traced_grid_h * traced_grid_w
+        built_seq = built_grid_h * built_grid_w
         runtime_seq = runtime_grid_h * runtime_grid_w
 
-        if traced_seq == runtime_seq:
+        if built_seq == runtime_seq:
             # No interpolation needed - load built tensor directly
             if weight_name in self._weights:
                 return self._weights[weight_name]
             # Buffer not in safetensors (e.g., pos_embed.pos_embed is a computed buffer).
-            # Decode from traced_data stored in graph.json.
-            if traced_data is not None:
+            # Decode from built_data stored in graph.json.
+            if built_data is not None:
                 import base64
                 import numpy as np
-                traced_bytes = base64.b64decode(traced_data)
-                traced_np = np.frombuffer(traced_bytes, dtype=np.float32).reshape(1, traced_seq, embed_dim)
-                if np.any(traced_np != 0):
-                    return traced_np.copy()
-                # traced_data is all zeros (VMM pool artifact) — recompute from sincos
+                built_bytes = base64.b64decode(built_data)
+                built_np = np.frombuffer(built_bytes, dtype=np.float32).reshape(1, built_seq, embed_dim)
+                if np.any(built_np != 0):
+                    return built_np.copy()
+                # built_data is all zeros (VMM pool artifact) — recompute from sincos
                 return self._compute_sincos_2d_pos_embed(
                     runtime_height=runtime_height,
                     runtime_width=runtime_width,
                     embed_dim=embed_dim,
-                    base_size=traced_grid_h,  # base_size = grid_size at build resolution
+                    base_size=built_grid_h,  # base_size = grid_size at build resolution
                     interpolation_scale=1.0,
                     vae_scale=vae_scale,
                     patch_size=patch_size,
                 )
 
         # Get the built positional embedding
-        traced_embed = None
+        built_embed = None
 
-        # Try to load from traced_data (base64 encoded)
-        if traced_data is not None:
+        # Try to load from built_data (base64 encoded)
+        if built_data is not None:
             import base64
             import numpy as np
-            traced_bytes = base64.b64decode(traced_data)
-            traced_np = np.frombuffer(traced_bytes, dtype=np.float32).reshape(1, traced_seq, embed_dim)
-            if not np.any(traced_np != 0):
-                traced_np = None  # VMM pool artifact — skip zero data
+            built_bytes = base64.b64decode(built_data)
+            built_np = np.frombuffer(built_bytes, dtype=np.float32).reshape(1, built_seq, embed_dim)
+            if not np.any(built_np != 0):
+                built_np = None  # VMM pool artifact — skip zero data
             else:
-                traced_embed = traced_np
+                built_embed = built_np
 
         # Try to load from weights file
-        if traced_embed is None and weight_name in self._weights:
-            traced_embed = self._weights[weight_name]
+        if built_embed is None and weight_name in self._weights:
+            built_embed = self._weights[weight_name]
 
-        if traced_embed is None:
+        if built_embed is None:
             raise RuntimeError(
                 f"ZERO FALLBACK: Cannot interpolate {weight_name} - "
                 f"no build-time tensor found. Need traced_data in spec or loaded weight."
@@ -1023,22 +1023,22 @@ class GraphExecutor:
             from nbxtensor.tensor import NBXTensor
             from nbxtensor.dtype.nbx_dtype import NBXDtype
             from nbxtensor.ops.linalg_wrappers import upsample_bilinear2d_wrapper
-            if isinstance(traced_embed, np.ndarray):
-                src_np = traced_embed
+            if isinstance(built_embed, np.ndarray):
+                src_np = built_embed
             else:  # a loaded NBXTensor weight
-                src_np = (traced_embed.to(NBXDtype.float32)
-                          if traced_embed.nbx_dtype != NBXDtype.float32 else traced_embed).numpy()
+                src_np = (built_embed.to(NBXDtype.float32)
+                          if built_embed.nbx_dtype != NBXDtype.float32 else built_embed).numpy()
             src_np = np.ascontiguousarray(
-                src_np.reshape(traced_grid_h, traced_grid_w, embed_dim).transpose(2, 0, 1)[None].astype(np.float32))
+                src_np.reshape(built_grid_h, built_grid_w, embed_dim).transpose(2, 0, 1)[None].astype(np.float32))
             scaled = upsample_bilinear2d_wrapper(
                 NBXTensor.from_numpy(src_np), (runtime_grid_h, runtime_grid_w), align_corners=False)
             out = scaled.numpy().reshape(embed_dim, runtime_seq).T[None]
             return np.ascontiguousarray(out)
         import torch
         import torch.nn.functional as F
-        if not is_torch_tensor(traced_embed):  # the built array, placed as before
-            traced_embed = torch.from_numpy(traced_embed).to(dtype=self._placement_torch_dtype(), device=self.device)
-        pos_2d = traced_embed.squeeze(0).transpose(0, 1).reshape(1, embed_dim, traced_grid_h, traced_grid_w)
+        if not is_torch_tensor(built_embed):  # the built array, placed as before
+            built_embed = torch.from_numpy(built_embed).to(dtype=self._placement_torch_dtype(), device=self.device)
+        pos_2d = built_embed.squeeze(0).transpose(0, 1).reshape(1, embed_dim, built_grid_h, built_grid_w)
 
         # Bilinear interpolation
         pos_2d_scaled = F.interpolate(
@@ -2846,7 +2846,7 @@ class GraphExecutor:
 
         # Shape vs bytes reconciliation. Some graphs declare the FULL shape
         # of a seq-dependent buffer (e.g. DeepSeek RoPE cos/sin_cached:
-        # declared (max_position, head_dim) but bytes stored at (trace_seq_len,
+        # declared (max_position, head_dim) but bytes stored at (build_seq_len,
         # head_dim)). The native path gets the build shape for free via
         # torch.load's pickled metadata; we have to derive it from bytes.
         # Find the dim to shrink so that the shape matches byte count.
@@ -2856,8 +2856,8 @@ class GraphExecutor:
             declared_elems *= d
         actual_elems = len(tensor_bytes) // dtype_bytes
         if shape and declared_elems != actual_elems and actual_elems > 0:
-            # Look up trace_seq_len from symbolic_context; if any dim, replaced
-            # by trace_seq_len, makes the element count match, use that.
+            # Look up build_seq_len from symbolic_context; if any dim, replaced
+            # by build_seq_len, makes the element count match, use that.
             dag = self._dag
             if dag is None:
                 raise RuntimeError(
@@ -2865,20 +2865,20 @@ class GraphExecutor:
                     f"({declared_elems} elems) but bytes hold {actual_elems} "
                     f"elems and no symbolic_context to reconcile.")
             sym_ctx = dag.get("symbolic_context", {})
-            trace_seq_len = None
+            build_seq_len = None
             for sid, sinfo in sym_ctx.get("symbols", {}).items():
                 if sinfo.get("name") == "seq_len":
-                    trace_seq_len = sinfo.get("trace_value")
+                    build_seq_len = sinfo.get("trace_value")
                     break
             fixed = None
-            # Strategy A: a single dim swapped with trace_seq_len reconciles
+            # Strategy A: a single dim swapped with build_seq_len reconciles
             # (DeepSeek per-block RoPE cache pattern).
-            if trace_seq_len:
+            if build_seq_len:
                 for axis in range(len(shape)):
                     other = declared_elems // shape[axis] if shape[axis] else 0
-                    if other and other * trace_seq_len == actual_elems:
+                    if other and other * build_seq_len == actual_elems:
                         fixed = list(shape)
-                        fixed[axis] = trace_seq_len
+                        fixed[axis] = build_seq_len
                         break
             # Strategy B: 1-D constant whose ZIP storage holds a different element
             # count than the declared shape. torch.load (native path) reconstructs
@@ -2901,7 +2901,7 @@ class GraphExecutor:
                     f"Constant '{weight_name}' declared shape {shape} "
                     f"({declared_elems} elems) but bytes hold {actual_elems} "
                     f"elems; no single dim swap with trace_seq_len="
-                    f"{trace_seq_len} reconciles.")
+                    f"{build_seq_len} reconciles.")
             shape = tuple(fixed)
 
         # bf16 decoded to the compute dtype, fp64/complex128 held as the branch holds them (fp32/complex64 where its
@@ -4258,11 +4258,11 @@ class GraphExecutor:
                 self._last_symbols = bound  # Store for CFG batch inference
 
             # Sequential mode: adapt seq-dependent constant weights.
-            # constant_T_* tensors (RoPE cos/sin) have trace_seq_len in their shape.
+            # constant_T_* tensors (RoPE cos/sin) have build_seq_len in their shape.
             # Slice to match actual runtime seq_len to prevent index out of bounds.
             # Compiled mode does this in update_seq_dependent_constants().
             if self.mode in ("sequential", "triton_sequential"):
-                # Sequential modes: patch ops that reference trace_seq_len in shape args
+                # Sequential modes: patch ops that reference build_seq_len in shape args
                 self._patch_seq_len_in_ops(bound)
                 # Adapt constant_T_* RoPE cos/sin tables to runtime seq_len
                 # (mirrors CompiledSequence.update_seq_dependent_constants).
@@ -4285,19 +4285,19 @@ class GraphExecutor:
         symbolic_context = self._dag.get("symbolic_context", {})
         symbols = symbolic_context.get("symbols", {})
 
-        # Build trace_val → runtime_val map for seq_len symbols
-        seq_trace_vals = set()
+        # Build build_val → runtime_val map for seq_len symbols
+        seq_build_vals = set()
         runtime_map = {}  # trace_value → runtime_value
         for sym_id, sym_info in symbols.items():
             if sym_info.get("name") != "seq_len":
                 continue
-            trace_val = sym_info.get("trace_value")
+            build_val = sym_info.get("trace_value")
             runtime_val = bound_symbols.get(sym_id)
-            if trace_val is not None and runtime_val is not None:
-                seq_trace_vals.add(trace_val)
-                runtime_map[trace_val] = runtime_val
+            if build_val is not None and runtime_val is not None:
+                seq_build_vals.add(build_val)
+                runtime_map[build_val] = runtime_val
 
-        if not seq_trace_vals:
+        if not seq_build_vals:
             return
 
         # Save original args on first call (AR loop will re-patch each step)
@@ -4423,12 +4423,12 @@ class GraphExecutor:
         #
         # The AXIS is remembered with the original, and for the same reason.
         # It used to be rediscovered on every call by scanning the CURRENT
-        # weight for a dim equal to trace_seq_len — but the current weight is
+        # weight for a dim equal to build_seq_len — but the current weight is
         # the one the previous call narrowed, so from the second call on no
-        # dim equalled trace_seq_len any more, no axis matched, and the
+        # dim equalled build_seq_len any more, no axis matched, and the
         # constant stayed at the LENGTH OF THE PREVIOUS STEP while the graph
         # asked for this one. First forward right, every one after it stale:
-        # the compiled arm resolves `(slot, axis, sym_id, trace_val)` once at
+        # the compiled arm resolves `(slot, axis, sym_id, build_val)` once at
         # plan time and never rediscovers it, which is why only this arm
         # carried the fault.
         if not hasattr(self, "_seq_constant_originals_native"):
@@ -4439,12 +4439,12 @@ class GraphExecutor:
         for sym_id, sym_info in symbols.items():
             if sym_info.get("name") != "seq_len":
                 continue
-            trace_val = sym_info.get("trace_value")
+            build_val = sym_info.get("trace_value")
             runtime_val = bound_symbols.get(sym_id)
-            if trace_val is None or runtime_val is None:
+            if build_val is None or runtime_val is None:
                 continue
 
-            # Scan weights for constant_T_* tensors with trace_seq_len in shape
+            # Scan weights for constant_T_* tensors with build_seq_len in shape
             for wname, weight in list(self._weights.items()):
                 if not wname.startswith("constant_T_"):
                     continue
@@ -4456,7 +4456,7 @@ class GraphExecutor:
                     # First encounter: the weight IS the original, so its
                     # shape is the one to read the axis from.
                     axis = next((a for a, dim in enumerate(weight.shape)
-                                 if dim == trace_val), None)
+                                 if dim == build_val), None)
                     if axis is None:
                         continue
                     original = weight

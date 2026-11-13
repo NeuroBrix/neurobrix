@@ -1171,7 +1171,7 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
     return prep, bound_args
 
 
-_TRACE = os.environ.get("NBX_LAUNCH_TRACE")     # a file: one line per launch, "<kernel>\t<grid>"
+_BUILD = os.environ.get("NBX_LAUNCH_TRACE")     # a file: one line per launch, "<kernel>\t<grid>"
 
 
 # The decode replay (`neurobrix.triton.replay`) records one step's FINAL launches and
@@ -1204,8 +1204,8 @@ def launch(kernel, grid, *args, **kwargs):
     if not callable(grid) and 0 in tuple(int(g) for g in grid):
         return None
     prep, bound_args = prepare(kernel, args, kwargs)
-    if _TRACE:
-        with open(_TRACE, "a") as fh:
+    if _BUILD:
+        with open(_BUILD, "a") as fh:
             fh.write(f"{kernel.__name__}\t{grid if not callable(grid) else 'callable'}\n")
     if callable(grid):
         grid = grid(bound_args)

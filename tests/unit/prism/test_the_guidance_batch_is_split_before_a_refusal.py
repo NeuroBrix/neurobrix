@@ -51,7 +51,7 @@ from tests.unit.prism.test_the_plan_binds_what_the_flow_runs import _container
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 sys.path.insert(0, str(TOOLS))
-import trace_request as TR  # noqa: E402
+import container_request as TR  # noqa: E402
 
 MODES = ["triton", "triton_sequential", "compiled"]
 FLAG = {"triton": "--triton", "triton_sequential": "--triton-sequential", "compiled": "--compiled"}

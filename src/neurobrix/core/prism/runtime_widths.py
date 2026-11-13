@@ -46,11 +46,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
 from neurobrix.core.dtype.config import compiled_constant_dtype, compiled_weight_dtype
-from neurobrix.core.dtype.entry_width import enters_at_traced_width
+from neurobrix.core.dtype.entry_width import enters_at_built_width
 from neurobrix.core.prism.layer_partition import is_seam_tensor
 from neurobrix.kernels.classification import canonical_aten
 from neurobrix.triton import dtype as _tdt
-from neurobrix.core.dtype.traced_island import is_traced_fp32_island   # the engines' one predicate
+from neurobrix.core.dtype.built_island import is_built_fp32_island   # the engines' one predicate
 from neurobrix.triton.weight_loader import stored_dtype_in_compute
 from nbxtensor.dtype import itemsize as _itemsize
 
@@ -406,11 +406,11 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             raise ValueError(f"runtime_widths: tensor {tid!r} is not in the graph's tensor table")
         return _name(meta.get("dtype"))
 
-    def traced_shape(tid: str) -> List[int]:
+    def built_shape(tid: str) -> List[int]:
         return list((tensors.get(tid) or {}).get("shape") or [])
 
-    rule.shape_of = shape_of or traced_shape
-    rule.traced_shape = traced_shape
+    rule.shape_of = shape_of or built_shape
+    rule.built_shape = built_shape
     rule.attention_operands = attention_operands
 
     out: Dict[str, str] = {}
@@ -432,7 +432,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                 out[tid] = (seams or {}).get(tid, name)
             else:
                 out[tid] = (_itemsize.storage_dtype(name, stores_fp64)
-                            if enters_at_traced_width(_itemsize.itemsize(name), _itemsize.itemsize(c), tensors) else c)
+                            if enters_at_built_width(_itemsize.itemsize(name), _itemsize.itemsize(c), tensors) else c)
         else:
             out[tid] = rule.weight_dtype(tid, name)
 
@@ -533,7 +533,7 @@ class _Rules:
         for t in ins:
             d = w[t]
             if d in _FLOAT:
-                r.append((t, d, len(self.traced_shape(t)) == 0))
+                r.append((t, d, len(self.built_shape(t)) == 0))
         return r
 
     def widest(self, fl) -> Optional[str]:
@@ -693,7 +693,7 @@ class _TritonRules(_Rules):
         # a tuple result (a `native_*_norm`) is cast back like a tensor since 2026-10-25 (`_cast_floats_to` in the
         # fp32-internal wrap under fp16 too): no tuple rule
         return _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, narrowed,
-                                          _tdt.traced_output_dtype_name(op))
+                                          _tdt.built_output_dtype_name(op))
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c
@@ -761,7 +761,7 @@ class _TritonRules(_Rules):
             return []
         if (name in _tdt._SELF_MANAGED_OPS and name in _tdt.AMP_FP16_OPS and c == "bfloat16"
                 and self.native_bf16):
-            if is_traced_fp32_island(op, self.graph_dtype):
+            if is_built_fp32_island(op, self.graph_dtype):
                 return self._copies(fl, "float32")
             return self._copies(fl, c)                              # the one precision contract: operands at C
         if name in _tdt._SELF_MANAGED_OPS:
@@ -771,7 +771,7 @@ class _TritonRules(_Rules):
         if name in _tdt.AMP_FP32_OPS:
             return self._copies(fl, "float32")
         if name in _tdt.AMP_FP16_OPS:
-            if is_traced_fp32_island(op, self.graph_dtype):
+            if is_built_fp32_island(op, self.graph_dtype):
                 return self._copies(fl, "float32")                      # `_wrap_fp32`'s casts
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
                 return self._copies(fl, "float32")
@@ -812,7 +812,7 @@ class _TritonRules(_Rules):
                 and self.native_bf16):
             # the one precision contract: a self-managed GEMM / conv under native bf16 takes its operands at C
             # (`_wrap_lower_precision`) and stores by the launcher's rule — an island keeps fp32 (handled above)
-            if is_traced_fp32_island(op, self.graph_dtype):
+            if is_built_fp32_island(op, self.graph_dtype):
                 return "float32"
             return self._lower_precision(uid, op, name, [(t, c, z) for t, _d, z in fl], ins)
         if name in _tdt._SELF_MANAGED_OPS:                                  # :551-552
@@ -827,7 +827,7 @@ class _TritonRules(_Rules):
                 r = _wider(r, self.first(fl) or r)
             return r
         if name in _tdt.AMP_FP16_OPS:                                       # :566-573
-            if is_traced_fp32_island(op, self.graph_dtype):
+            if is_built_fp32_island(op, self.graph_dtype):
                 return "float32"            # the trace's own fp32 island: `_wrap_fp32`, fp32 compute and store
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
                 return self.amp_fp32_out(op)
@@ -874,7 +874,7 @@ class _TritonRules(_Rules):
             # matmul_wrapper (wrappers.py:2432-2475): 2-D x 2-D -> mm; 2-D x 1-D -> mv
             # (M = 1, fp32 for a half); every batched form -> bmm (force_fp32).
             # linear_wrapper (:2540-2560) goes through matmul_wrapper with a 2-D weight.
-            ranks = [len(self.traced_shape(t)) for t in ins[:2]]
+            ranks = [len(self.built_shape(t)) for t in ins[:2]]
             if name == "linear" and ranks and ranks[0] == 2:
                 return self.mm_store(c, c, self.rows(ins[0]))
             if name == "matmul" and ranks == [2, 2]:
@@ -982,7 +982,7 @@ class _AtenRules(_Rules):
         if name in ATEN_AMP_FP32_OPS:
             return to(c) if (contract and name in ATEN_FP32_OPS_HALF_IO) else to("float32")
         if name in ATEN_AMP_FP16_OPS:
-            if is_traced_fp32_island(op, self.graph_dtype):                 # compile_op's rule: `_make_fp32_wrapper`
+            if is_built_fp32_island(op, self.graph_dtype):                 # compile_op's rule: `_make_fp32_wrapper`
                 return to("float32")
             if c == "float16" and name in ATEN_FP16_NEED_FP32:
                 if contract and (name in ATEN_FP16_GEMM_OPS or uid in self.contract.narrow_op_uids):
@@ -1047,7 +1047,7 @@ class _AtenRules(_Rules):
                 return _tdt.amp_fp32_output_dtype(
                     c, self.graph_dtype, False, contract and uid in self.contract.narrow_op_uids)
             if name in ATEN_AMP_FP16_OPS:                                   # :754-791
-                if is_traced_fp32_island(op, self.graph_dtype):
+                if is_built_fp32_island(op, self.graph_dtype):
                     return "float32"        # the trace's own fp32 island: `_make_fp32_wrapper`, fp32 kept
                 if c == "float16" and name in ATEN_FP16_NEED_FP32:
                     if contract and name in ATEN_FP16_GEMM_OPS:

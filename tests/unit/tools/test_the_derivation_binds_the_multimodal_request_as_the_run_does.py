@@ -64,7 +64,7 @@ def _request_sites(model, cache_len=None):
     """The census's own request for `model`, parsed by the CLI's parser, through `extent_sites`
     at a plan naming every component in fp16 (the dtypes only feed the chain's outputs)."""
     import json
-    from trace_request import derived_request
+    from container_request import derived_request
     from neurobrix.cli import create_parser
     root = D.CACHE / model
     if not (root / "topology.json").exists():

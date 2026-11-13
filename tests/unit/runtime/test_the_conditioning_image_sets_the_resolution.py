@@ -65,7 +65,7 @@ def test_a_zero_extent_is_silence():
         {"global.image": np.zeros((3, 0, 16), dtype=np.uint8)}) is None
 
 
-def test_the_image_outranks_the_traced_latent():
+def test_the_image_outranks_the_built_latent():
     """The measured Allegro case: a 448x448 image against a 18x26 built latent.
 
     Without this the pipeline runs at 144x208 while the processor hands it a

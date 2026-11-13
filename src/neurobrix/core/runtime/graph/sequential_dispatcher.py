@@ -407,7 +407,7 @@ class NativeATenDispatcher:
 
         # [MULTI-RESOLUTION FIX — 1D] Same for 1D upsample (Kokoro prosody
         # predictor F0/N branches upsample the duration-expanded sequence x2).
-        # The built output_size froze 2*trace_len (e.g. [68]); at a different
+        # The built output_size froze 2*build_len (e.g. [68]); at a different
         # runtime sum(durations) the frozen size mismatches the actual input
         # (124 vs 68 → add broadcast crash). The compiled/triton paths already
         # resolve the length from the actual tensor; recompute here from the

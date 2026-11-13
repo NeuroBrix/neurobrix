@@ -90,31 +90,31 @@ def main() -> int:
           f"{'agree':>6}  text (ours)")
     print("-" * 112)
     for r in rows:
-        mark = " <= BUILD LENGTH" if r["len"] == args.trace_len else ""
+        mark = " <= BUILD LENGTH" if r["len"] == args.build_len else ""
         print(f"{r['len']:>4} {r['rc']:>3} {str(r['identical']):>6} "
               f"{r['common_prefix_words']:>7} {r['our_words']:>6} "
               f"{r['agree_ratio']:>6}  {r['ours'][:56]!r}{mark}")
 
     ok = [r for r in rows if r["rc"] == 0]
     ident = [r for r in ok if r["identical"]]
-    at_trace = [r for r in ok if r["len"] == args.trace_len]
-    off_trace = [r for r in ok if r["len"] != args.trace_len]
+    at_build = [r for r in ok if r["len"] == args.build_len]
+    off_build = [r for r in ok if r["len"] != args.build_len]
     print()
     print(f"rows run            : {len(ok)}/{len(rows)}")
     print(f"exact match         : {len(ident)}/{len(ok)} "
           f"(a Q4 vendor vs our fp16 — casing counts as a miss here)")
     full = [r for r in ok if r["agree_ratio"] == 1.0]
     print(f"every word agrees   : {len(full)}/{len(ok)}")
-    if off_trace:
-        mean_off = sum(r['common_prefix_words'] for r in off_trace) / len(off_trace)
+    if off_build:
+        mean_off = sum(r['common_prefix_words'] for r in off_build) / len(off_build)
         print(f"mean vendor prefix  : off-build {mean_off:.1f} words"
-              + (f" · at build {at_trace[0]['common_prefix_words']} words"
-                 if at_trace else ""))
+              + (f" · at build {at_build[0]['common_prefix_words']} words"
+                 if at_build else ""))
     # The discriminator: a frozen-routing defect is coherent at the build length
     # ALONE. If the build length is not distinguished, the defect is not there.
-    if at_trace and off_trace:
-        singled_out = all(r["common_prefix_words"] < at_trace[0]["common_prefix_words"] / 2
-                          for r in off_trace)
+    if at_build and off_build:
+        singled_out = all(r["common_prefix_words"] < at_build[0]["common_prefix_words"] / 2
+                          for r in off_build)
         print(f"build length singled out: {singled_out} "
               f"(True would mean the routing is frozen)")
 

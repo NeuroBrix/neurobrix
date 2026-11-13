@@ -369,19 +369,19 @@ def _reshape(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     # NOTE: For proper seq_len handling, rebuild with symbolic_tracker that marks
     # seq_len as dynamic at SOURCE - not patched at runtime.
     if len(shape_list) == 2 and data.ndim == 2:
-        trace_batch = shape_list[0]  # e.g., 2
-        trace_features = shape_list[1]  # e.g., 768
+        build_batch = shape_list[0]  # e.g., 2
+        build_features = shape_list[1]  # e.g., 768
         runtime_dim0 = data.shape[0]  # e.g., 2
         runtime_dim1 = data.shape[1]  # e.g., 384
 
         # Check if this is a merge pattern: dim1 doubles, dim0 halves
-        if trace_features > 0 and runtime_dim1 > 0 and trace_features % runtime_dim1 == 0:
-            k = trace_features // runtime_dim1  # merge factor (e.g., 2)
+        if build_features > 0 and runtime_dim1 > 0 and build_features % runtime_dim1 == 0:
+            k = build_features // runtime_dim1  # merge factor (e.g., 2)
             if k > 1 and runtime_dim0 % k == 0:
                 # This is a merge pattern
                 runtime_batch = runtime_dim0 // k  # e.g., 2/2 = 1
                 try:
-                    return data.reshape(runtime_batch, trace_features)
+                    return data.reshape(runtime_batch, build_features)
                 except RuntimeError:
                     pass  # Fall through
 

@@ -115,8 +115,8 @@ def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str   #
 
 ```python
 COMPLEX_DTYPE_NAMES = frozenset({"complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble"})
-def traced_output_dtype_name(record: dict) -> Optional[str]   # output_dtypes[0] at the record's top level, plain name
-def traced_output_is_complex(record: dict) -> bool            # any recorded output dtype complex (never the op's name or inputs)
+def built_output_dtype_name(record: dict) -> Optional[str]   # output_dtypes[0] at the record's top level, plain name
+def built_output_is_complex(record: dict) -> bool            # any recorded output dtype complex (never the op's name or inputs)
 def amp_fp32_output_dtype(compute_dtype, graph_dtype, safe, narrowed, traced=None) -> str
     # the output of an op computed float32 inside a half forward: bfloat16 follows the graph dtype,
     # float16 narrows only under `safe` / `narrowed`; a float32 island recorded in the graph only under `narrowed`

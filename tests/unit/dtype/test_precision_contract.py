@@ -242,7 +242,7 @@ def test_executor_resolver_islands_from_the_calibration_record(tmp_path, monkeyp
     assert ex._resolve_fp16_activation_policy(torch.bfloat16) == (False, frozenset(), frozenset())
 
 
-def test_a_record_from_another_trace_is_ignored_and_the_env_switch_rules(tmp_path, monkeypatch):
+def test_a_record_from_another_build_is_ignored_and_the_env_switch_rules(tmp_path, monkeypatch):
     from neurobrix.core.dtype import calibration as cal
     monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
     dag = _dag_with_over_range_down_projection()

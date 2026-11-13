@@ -18,7 +18,7 @@ from nbxtensor.dtype.itemsize import itemsize
 _FLOATING_NAMES = ("float16", "bfloat16", "float32", "float64", "half", "float", "double")
 
 
-def traced_parameter_width(graph_tensors: Mapping[str, Any]) -> Optional[int]:
+def built_parameter_width(graph_tensors: Mapping[str, Any]) -> Optional[int]:
     """Bytes per element of the widest floating parameter the graph was built with, or None when it has none."""
     widest = None
     for tid, meta in (graph_tensors or {}).items():
@@ -32,10 +32,10 @@ def traced_parameter_width(graph_tensors: Mapping[str, Any]) -> Optional[int]:
     return widest
 
 
-def enters_at_traced_width(input_itemsize: int, compute_itemsize: int, graph_tensors: Mapping[str, Any]) -> bool:
+def enters_at_built_width(input_itemsize: int, compute_itemsize: int, graph_tensors: Mapping[str, Any]) -> bool:
     """True when a floating input of `input_itemsize` bytes enters at its built width: wider than the graph's
     parameters, or — a graph without a floating parameter — wider than the compute dtype."""
-    reference = traced_parameter_width(graph_tensors)
+    reference = built_parameter_width(graph_tensors)
     if reference is None:
         reference = compute_itemsize
     return int(input_itemsize) > int(reference)

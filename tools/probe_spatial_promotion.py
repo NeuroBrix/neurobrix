@@ -96,7 +96,7 @@ def runtime_rewrites(dag) -> int:
                if before[uid].get(p) != after[uid].get(p))
 
 
-def traced_symbolic(dag):
+def built_symbolic(dag):
     """Symbolic vs baked census over shape-producing ops."""
     sym = collections.Counter()
     baked_windows = 0
@@ -125,7 +125,7 @@ def report(model: str) -> None:
         syms = (dag.get("symbolic_context") or {}).get("symbols") or {}
         named = {i.get("name"): i.get("trace_value") for i in syms.values()}
         rewrites = runtime_rewrites(dag)
-        sym, baked = traced_symbolic(dag)
+        sym, baked = built_symbolic(dag)
         label = f"{model}/{g.parent.name}"
         print(f"{label:46s} ops={len(dag['ops']):6d} symbols={named}")
         print(f"{'':46s} runtime promotion rewrites : {rewrites}")

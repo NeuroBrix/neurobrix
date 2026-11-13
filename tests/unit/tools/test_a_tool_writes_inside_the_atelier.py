@@ -66,8 +66,8 @@ def test_an_interpreter_is_resolved_at_use_not_at_import(atelier):
 
 
 def test_an_interpreter_compares_as_the_path_it_resolves_to(monkeypatch):
-    """`retrace_zoo.PY == "/…/ml/venv/bin/python"` (its door test) read the object, not the path: red if an
-    Interpreter is unequal to the path string it resolves to."""
+    """`rebuild_zoo.PY == "/…/ml/venv/bin/python"` (its door test) read the object, not the path: red if an
+    Interpreter is unequal to the path string it resolves to."""""
     import atelier as A
     monkeypatch.setattr(A, "python", lambda name: f"/venvs/{name}/bin/python")
     assert A.interpreter("forge") == "/venvs/forge/bin/python"

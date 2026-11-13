@@ -118,7 +118,7 @@ def test_the_plan_records_the_split_and_prices_the_encoder_per_pass(monkeypatch)
     from neurobrix.cli.commands.run import request_input_config
     import sys
     sys.path.insert(0, "tools")
-    from trace_request import derived_request
+    from container_request import derived_request
     c = NBXContainer.load(str(root)); man = c.get_manifest() or {}
     args = create_parser().parse_args(["run", "--model", "Wan2.1-VACE-1.3B", *derived_request("Wan2.1-VACE-1.3B"), "--compiled"])
     ic = request_input_config(args, man, man.get("family"), c.cache_path)

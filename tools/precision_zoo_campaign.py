@@ -1893,15 +1893,15 @@ def has_verdict(model_out: Path) -> bool:
     return bool((record.get("gate") or {}).get("ran"))
 
 
-def held_by_retrace(retrace_out: Path) -> set:
+def held_by_rebuild(rebuild_out: Path) -> set:
     """Every model of a rebuild campaign whose recorded gate is not a PASS: listed in its
     models file (phase lists) or holding a state.json without a PASS gate — its cache slot may
     change under a measurement (a restore of the previous object, an install of the new
     build), so a lever or a proof must not measure it until it is gated."""
     held = set()
-    for lst in retrace_out.glob("*_models.txt"):
+    for lst in rebuild_out.glob("*_models.txt"):
         held |= {m.strip() for m in lst.read_text().replace("\n", ",").split(",") if m.strip()}
-    for st in retrace_out.glob("*/state.json"):
+    for st in rebuild_out.glob("*/state.json"):
         try:
             steps = json.loads(st.read_text()).get("steps") or {}
         except (json.JSONDecodeError, OSError):
@@ -2034,7 +2034,7 @@ def main():
     except OffProtocol as exc:
         ap.error(str(exc))
 
-    held = held_by_retrace(Path(args.hold_from)) if args.hold_from else set()
+    held = held_by_rebuild(Path(args.hold_from)) if args.hold_from else set()
     for m in models:
         if args.skip_done:
             if has_verdict(out / m):

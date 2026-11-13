@@ -4,7 +4,7 @@ import itertools
 
 import pytest
 
-from nbxtensor.dtype.outputs import amp_fp32_output_dtype, traced_output_dtype_name, traced_output_is_complex
+from nbxtensor.dtype.outputs import amp_fp32_output_dtype, built_output_dtype_name, built_output_is_complex
 
 _GRAPHS = ("float16", "bfloat16", "float32", "float64")
 
@@ -15,15 +15,15 @@ _GRAPHS = ("float16", "bfloat16", "float32", "float64")
     ({"output_dtypes": ["float32", "complex64"]}, True), ({"output_dtypes": ["float32"]}, False),
     ({"output_dtypes": []}, False), ({"input_dtypes": ["complex64"]}, False),
     ({"attributes": {"output_dtypes": ["complex64"]}}, False), (None, False), ("x", False)])
-def test_a_complex_output_is_read_from_the_traced_output_only(record, expected):
-    assert traced_output_is_complex(record) is expected
+def test_a_complex_output_is_read_from_the_built_output_only(record, expected):
+    assert built_output_is_complex(record) is expected
 
 
-def test_the_traced_output_name_is_the_first_outputs_plain_name():
-    assert traced_output_dtype_name({"output_dtypes": ["torch.float16", "float32"]}) == "float16"
-    assert traced_output_dtype_name({"output_dtypes": []}) is None
-    assert traced_output_dtype_name({"attributes": {"output_dtypes": ["float32"]}}) is None
-    assert traced_output_dtype_name(None) is None
+def test_the_built_output_name_is_the_first_outputs_plain_name():
+    assert built_output_dtype_name({"output_dtypes": ["torch.float16", "float32"]}) == "float16"
+    assert built_output_dtype_name({"output_dtypes": []}) is None
+    assert built_output_dtype_name({"attributes": {"output_dtypes": ["float32"]}}) is None
+    assert built_output_dtype_name(None) is None
 
 
 def test_under_bfloat16_the_output_follows_the_graph():

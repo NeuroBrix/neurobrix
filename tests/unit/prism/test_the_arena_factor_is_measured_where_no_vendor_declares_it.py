@@ -192,7 +192,7 @@ def test_the_probe_scales_only_what_the_priced_request_scales():
     assert A.scaled_names(llm) == ("seq_len",)
 
 
-def test_a_graph_with_nothing_to_scale_is_probed_at_its_traced_extents():
+def test_a_graph_with_nothing_to_scale_is_probed_at_its_built_extents():
     from neurobrix.core.prism import arena_probe as A
     calls = []
 

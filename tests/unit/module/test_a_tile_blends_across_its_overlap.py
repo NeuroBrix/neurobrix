@@ -15,7 +15,7 @@ from neurobrix.core.module.tiling_engine import TilingEngine
 
 
 def _run(h, w, video=False):
-    eng = TilingEngine(trace_size=8, overlap=4, scale_factor=2, tile_size=8)
+    eng = TilingEngine(build_size=8, overlap=4, scale_factor=2, tile_size=8)
     x = torch.zeros((1, 1, 3, h, w) if video else (1, 1, h, w))
     calls = []
 

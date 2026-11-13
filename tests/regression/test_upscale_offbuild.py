@@ -21,7 +21,7 @@ pair (DETTE: D-RETRACE-SWIN2SR-SYMBOLIC; the class covers the seven
 Swin-window artifacts — see
 models/_agents/archives/dell/validation_outputs_pre_2026_09_01/spatial_freeze_census_2026_08_27/VERDICT.md).
 
-Runnable: python3 -m pytest tests/regression/test_upscale_offtrace.py -q
+Runnable: python3 -m pytest tests/regression/test_upscale_offbuild.py -q
 
 REQUIRES THE FULL UNMASKED RIG, for the same reason the warm suite
 does (test_serve_warm.py, 2026-08-27): every cell shells out to
@@ -55,7 +55,7 @@ from one_name import cli_name  # noqa: E402  (the one name a command line passes
 
 REPO = Path(__file__).resolve().parents[2]
 CACHE = _atelier.root("cache")
-OFF_TRACE_HW = (448, 448)  # the committed bench asset's size
+OFF_BUILD_HW = (448, 448)  # the committed bench asset's size
 # A RECTANGULAR off-build size, multiples of every family window (8, 16).
 # The square 448 is structurally blind to any H<->W confusion: nH == nW,
 # so a half-symbolized window_reverse renders perfectly there and shreds
@@ -63,7 +63,7 @@ OFF_TRACE_HW = (448, 448)  # the committed bench asset's size
 # full square gate was green and both artifacts republished). A shape
 # PROPERTY the gate cannot express is a path-coverage hole exactly like a
 # size it never runs.
-OFF_TRACE_RECT_HW = (240, 320)
+OFF_BUILD_RECT_HW = (240, 320)
 
 CELLS = [
     pytest.param("Real-ESRGAN-x4", id="realesrgan"),
@@ -85,10 +85,10 @@ CELLS = [
 # broken while every aligned size was green (2026-08-29): pad_size was
 # a hardcoded 8 (HAT crashed at H=200) and the crop did not exist (the
 # pad's mirrored rows shipped in the user's image).
-OFF_TRACE_UNALIGNED_HW = (200, 300)
+OFF_BUILD_UNALIGNED_HW = (200, 300)
 
 
-def _trace_hw(model: str) -> tuple[int, int]:
+def _build_hw(model: str) -> tuple[int, int]:
     """The artifact's OWN build spatial size, read from its container."""
     for graph in sorted((CACHE / model / "components").glob("*/graph.json")):
         tensors = (json.loads(graph.read_text()) or {}).get("tensors", {})
@@ -136,9 +136,9 @@ def test_upscale_two_sizes(model: str, size: str, mode: str,
     except Exception:
         pytest.skip(f"{model} not in the local cache")
 
-    hw = {"trace": None, "offtrace": OFF_TRACE_HW,
-          "offtrace_unaligned": OFF_TRACE_UNALIGNED_HW}[size] or _trace_hw(model)
-    if size != "trace" and hw == _trace_hw(model):
+    hw = {"trace": None, "offtrace": OFF_BUILD_HW,
+          "offtrace_unaligned": OFF_BUILD_UNALIGNED_HW}[size] or _build_hw(model)
+    if size != "trace" and hw == _build_hw(model):
         pytest.skip("off-trace size coincides with the build size — "
                     "pick a different off-build size")
     if mode == "triton" and model == "hat-l-x4":
@@ -265,9 +265,9 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
     # off-build half is where a shape-dependent value defect shows.
     from PIL import Image
 
-    hw = {"trace": None, "offtrace": OFF_TRACE_HW,
-          "offtrace_rect": OFF_TRACE_RECT_HW}[size] or _trace_hw(model)
-    if size != "trace" and hw == _trace_hw(model):
+    hw = {"trace": None, "offtrace": OFF_BUILD_HW,
+          "offtrace_rect": OFF_BUILD_RECT_HW}[size] or _build_hw(model)
+    if size != "trace" and hw == _build_hw(model):
         pytest.skip("off-trace size coincides with the build size")
     src = tmp_path / f"tone_in_{model}_{size}.png"
     Image.open(asset).convert("RGB").resize(

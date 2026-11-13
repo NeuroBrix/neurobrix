@@ -15,7 +15,7 @@ attempt is a red that names its importer.
 THE STEPS (each one's verdict and log in --out):
   library   the library's own tests, README examples included (`nbxtensor/tests`)
   models    the small reference models through the entry point (`neurobrix run --triton`, the request the gate
-            derives, `tools/trace_request.gate_request`); an output's sha is compared with `--expect` when given
+            derives, `tools/container_request.gate_request`); an output's sha is compared with `--expect` when given
   sweep     an uncertified runtime autotune sweep: `NBX_AUTOTUNE_CERTIFIED=off`, an EMPTY replay cache
             (`NEUROBRIX_REPLAY_CACHE`), one model; red unless its run says it swept at least one key
   command   any further command (`--command`, repeatable: the card-less coverage, a backend's own suite)
@@ -86,7 +86,7 @@ def _sha16(path: Path) -> str:
 
 
 def _gate_request(py: str, tree: Path, out: Path, model: str) -> list:
-    code = ("import sys, json; sys.path.insert(0, 'tools'); import trace_request as TR; "
+    code = ("import sys, json; sys.path.insert(0, 'tools'); import container_request as TR; "
             f"print(json.dumps(TR.gate_request({model!r})))")
     r = subprocess.run([py, "-c", code], cwd=tree, env=_env(tree, out), capture_output=True, text=True)
     if r.returncode != 0:

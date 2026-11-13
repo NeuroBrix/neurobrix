@@ -55,16 +55,16 @@ NORM = "norm"
 # Monomials: an integer coefficient times atoms (a symbol id, or an opaque expression without S)
 # ---------------------------------------------------------------------------------------------
 
-def _strip_trace(node: Any) -> Any:
+def _strip_build(node: Any) -> Any:
     if isinstance(node, dict):
-        return {k: _strip_trace(v) for k, v in node.items() if k != "trace"}
+        return {k: _strip_build(v) for k, v in node.items() if k != "trace"}
     if isinstance(node, list):
-        return [_strip_trace(v) for v in node]
+        return [_strip_build(v) for v in node]
     return node
 
 
 def _canon(node: Any) -> str:
-    return json.dumps(_strip_trace(node), sort_keys=True, separators=(",", ":"))
+    return json.dumps(_strip_build(node), sort_keys=True, separators=(",", ":"))
 
 
 def _symbol_id(node: Any) -> Optional[str]:

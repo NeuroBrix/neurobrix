@@ -56,18 +56,18 @@ def stubs(monkeypatch):
     monkeypatch.setattr(RM, "cell_argv", lambda m, mo, out, req=None: ["run", "--model", m])
 
 
-def test_a_32g_only_base_marks_no_model_retraced_for_its_absent_16g_row(tmp_path, stubs):
+def test_a_32g_only_base_marks_no_model_rebuilt_for_its_absent_16g_row(tmp_path, stubs):
     g, cfg = _gate(tmp_path, ["32g"])
     cells = G.Cells(g, cfg, REPO / "src")
     assert cells.gated == {"32g"}
-    assert cells.retraced == {}, cells.retraced
+    assert cells.rebuilt == {}, cells.rebuilt
 
 
-def test_a_row_missing_from_a_gated_class_is_still_a_retrace(tmp_path, stubs):
+def test_a_row_missing_from_a_gated_class_is_still_a_rebuild(tmp_path, stubs):
     g, cfg = _gate(tmp_path, ["16g", "32g"], missing={("16g", "ModelB", "triton")})
     cells = G.Cells(g, cfg, REPO / "src")
     assert cells.gated == {"16g", "32g"}
-    assert cells.retraced == {"ModelB": "no gate row"}
+    assert cells.rebuilt == {"ModelB": "no gate row"}
 
 
 def test_a_gate_with_no_rows_at_all_is_refused_by_name(tmp_path, stubs):

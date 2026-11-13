@@ -63,7 +63,7 @@ def _stub_cell(monkeypatch, log_text, rc=1):
     monkeypatch.setattr(R.Z, "family_of", lambda model: "llm")
     monkeypatch.setattr(R.Z, "output_ext", lambda family, req: ".txt")
     monkeypatch.setattr(R, "cell_request", lambda model: ["--prompt", "x"])
-    monkeypatch.setattr(R, "off_trace_size", lambda model, family: None)
+    monkeypatch.setattr(R, "off_build_size", lambda model, family: None)
 
 
 def _cache(tmp_path, names):

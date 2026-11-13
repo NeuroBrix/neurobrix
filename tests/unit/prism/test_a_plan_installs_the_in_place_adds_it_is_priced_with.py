@@ -78,25 +78,25 @@ def test_an_add_the_estimate_prices_out_of_place_installs_nothing():
     assert _detect(g) == {}
 
 
-def _symbolic_graph(trace_h: int, trace_w: int, scale: int) -> dict:
+def _symbolic_graph(build_h: int, build_w: int, scale: int) -> dict:
     """The same residual add, its spatial dims SYMBOLIC (latent height/width x scale), built small."""
     def dim(sym, trace):
         return {"type": "mul", "left": {"type": "symbol", "id": sym, "trace": trace}, "right": scale,
                 "trace": trace * scale}
-    shape = [1, 128, trace_h * scale, trace_w * scale]
-    sym = {"dims": [{"type": "symbol", "id": "s0", "trace": 1}, 128, dim("s1", trace_h), dim("s2", trace_w)],
+    shape = [1, 128, build_h * scale, build_w * scale]
+    sym = {"dims": [{"type": "symbol", "id": "s0", "trace": 1}, 128, dim("s1", build_h), dim("s2", build_w)],
            "concrete": shape}
     g = _graph(shape[2], shape[3])
     for t in g["tensors"].values():
         t["symbolic_shape"] = sym
     g["symbolic_context"] = {"symbols": {
         "s0": {"name": "batch", "trace_value": 1},
-        "s1": {"name": "height", "trace_value": trace_h},
-        "s2": {"name": "width", "trace_value": trace_w}}}
+        "s1": {"name": "height", "trace_value": build_h},
+        "s2": {"name": "width", "trace_value": build_w}}}
     return g
 
 
-def test_an_add_is_sized_at_the_request_not_at_the_trace():
+def test_an_add_is_sized_at_the_request_not_at_the_build():
     g = _symbolic_graph(7, 10, 32)         # built at 224x320: 36 MiB fp32-equivalent, under 1 GiB
     request = InputConfig(batch_size=1, height=3072, width=4096, dtype="float16", vae_scale=32)
     solver = PrismSolver()

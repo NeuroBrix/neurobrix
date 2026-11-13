@@ -170,7 +170,7 @@ def test_the_pinned_authority_reads_across_command_buffers():
     assert list(got) == [100.0 + e for e in range(8)], got
 
 
-def test_the_resolver_slices_stacked_experts_by_the_traced_law():
+def test_the_resolver_slices_stacked_experts_by_the_built_law():
     """gate = rows 0:F of W_in[e], up = rows F:2F, down = W_out[e] — the
     exact halves the built granite block splits at (aten.split at F on
     the mm output's last dim)."""

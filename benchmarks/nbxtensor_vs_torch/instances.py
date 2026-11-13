@@ -5,7 +5,7 @@ Source of truth, in this order:
 - the census table of the device (`config/census/<vendor>/<profile>/<rung>.jsonl`): which ops of which model the
   Triton engine launches a kernel for (its rows' `ops`);
 - the model's container: each op's type, arguments and attributes (`components/<c>/graph.json`);
-- the request the census derives at (`tools/trace_request.gate_request`), bound to each component's symbols the way
+- the request the census derives at (`tools/container_request.gate_request`), bound to each component's symbols the way
   the census binds them (`run.request_input_config` -> `ActivationProfiler.build_symbol_map`; an autoregressive
   language model at its prompt's length), and each tensor's runtime dtype from the census's own derivation
   (`tools/derived_census.derive_component(..., out_dtypes=)`).
@@ -141,7 +141,7 @@ def _component_bindings(model: str, hardware: str):
     component — the census's own binding rule for every flow it binds from the request, each component at the
     compute dtype the engine's plan gives it on `hardware` (`plan_dtypes`)."""
     import derived_census as DC
-    import trace_request as TR
+    import container_request as TR
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
     from neurobrix.core.prism.profiler import ActivationProfiler

@@ -162,16 +162,16 @@ def analyse(graph: dict, symbol_id: str, ceiling: int = 512) -> dict:
     for tid, i, node in variable_dims(graph):
         reads = symbols_of(node)
         try:
-            at_trace = evaluate(node, base)
+            at_build = evaluate(node, base)
         except UnknownNode as exc:
             raise UnknownNode(f"{tid} dim{i}: {exc}") from exc
         if symbol_id in reads:
             reachable.append((tid, i, node))
         elif reads:
             # Another axis owns it. Its own run of this tool adjudicates it.
-            elsewhere += at_trace in ZONE
-        elif at_trace in ZONE:
-            plateau.append((tid, i, at_trace))
+            elsewhere += at_build in ZONE
+        elif at_build in ZONE:
+            plateau.append((tid, i, at_build))
 
     def clear_at(value: int) -> bool:
         env = dict(base, **{symbol_id: value})
@@ -182,12 +182,12 @@ def analyse(graph: dict, symbol_id: str, ceiling: int = 512) -> dict:
         return True
 
     chosen = next((v for v in range(1, ceiling + 1) if clear_at(v)), None)
-    at_trace_ok = clear_at(base[symbol_id])
+    at_build_ok = clear_at(base[symbol_id])
     return {
         "symbol": symbol_id,
         "name": table[symbol_id][0],
         "trace_value": base[symbol_id],
-        "trace_value_is_clear": at_trace_ok,
+        "trace_value_is_clear": at_build_ok,
         "recommended": chosen,
         "reachable_dims": len(reachable),
         "plateau_dims": len(plateau),

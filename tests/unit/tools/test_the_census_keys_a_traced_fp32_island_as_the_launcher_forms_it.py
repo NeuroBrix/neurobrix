@@ -10,7 +10,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "tools"))
-from derived_census import traced_island_uids  # noqa: E402
+from derived_census import built_island_uids  # noqa: E402
 
 
 def _op(uid, op_type, ins, outs):
@@ -30,10 +30,10 @@ OPS = {
 
 def test_the_island_set_is_wrap_op_s_order():
     for graph, c in (("float16", "float16"), ("bfloat16", "bfloat16"), ("float16", "bfloat16")):
-        got = traced_island_uids(OPS, graph, c)
+        got = built_island_uids(OPS, graph, c)
         assert got == {"aten.convolution::1", "aten.matmul::0"}, (graph, c, got)
 
 
 def test_no_island_under_an_fp32_compute_or_graph():
-    assert traced_island_uids(OPS, "float16", "float32") == frozenset()
-    assert traced_island_uids(OPS, "float32", "float16") == frozenset()
+    assert built_island_uids(OPS, "float16", "float32") == frozenset()
+    assert built_island_uids(OPS, "float32", "float16") == frozenset()

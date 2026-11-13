@@ -80,7 +80,7 @@ census:
 
 # Confirmation request (tools/regression_matrix.py)
 gate:
-  # The request a GATE cell runs (tools/trace_request.gate_request; the validation regime, Hocine Benkelaya 2026-10-13 and
+  # The request a GATE cell runs (tools/container_request.gate_request; the validation regime, Hocine Benkelaya 2026-10-13 and
   # 2026-10-21 02:47): a gate proves rc 0, zero certified miss and the arms' agreement, not quality — two steps run
   # every op of the denoising loop (its first step and a step that reads the scheduler's state) and the classifier-
   # free guidance's branches. Quality is judged once per model and branch at the confirmation request below.
@@ -92,7 +92,7 @@ confirmation:
   # steps run every op of the loop; half the container's size, away from the trace.
   # A model these values do not judge carries its own (extracted_values._global.confirmation,
   # written by the build from the registry with its source), read over these by
-  # tools/trace_request.model_confirmation — a key it names must be named here first.
+  # tools/container_request.model_confirmation — a key it names must be named here first.
   steps: 4
   size_fraction: 0.5
   # A model whose vendor renders only at its documented size carries that size and a frame count

@@ -97,14 +97,14 @@ class DualAREngine(ComponentFlowHandler):
 
         # Slow model input shape [B, N+1, T]
         dag = getattr(slow_exec, '_dag', None)
-        n_rows, trace_seq_len = 11, 64
+        n_rows, build_seq_len = 11, 64
         if dag:
             for _tid, spec in dag.get("tensors", {}).items():
                 if spec.get("input_name") == "inp":
                     shape = spec.get("shape", [])
                     if len(shape) >= 3:
                         n_rows = shape[1] if isinstance(shape[1], int) else 11
-                        trace_seq_len = shape[2] if isinstance(shape[2], int) else 64
+                        build_seq_len = shape[2] if isinstance(shape[2], int) else 64
                     break
         num_codebooks = n_rows - 1  # acoustic codebooks (semantic + residual)
         acoustic_cb_size = 1024     # residual codebook size (codec quantizer)

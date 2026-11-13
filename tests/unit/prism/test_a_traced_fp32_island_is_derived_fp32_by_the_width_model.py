@@ -1,5 +1,5 @@
 """The width model (Prism's plan prices, the DERIVED census's keys) mirrors the engines' dtype policies op by op.
-Both policies keep a vendor's fp32 island inside a half graph in fp32 (`core/dtype/traced_island`, 2026-10-25): an
+Both policies keep a vendor's fp32 island inside a half graph in fp32 (`core/dtype/built_island`, 2026-10-25): an
 AMP_FP16 op whose built floating inputs and output are all float32 computes and stores fp32 on any hardware. The
 mirror must say the same, or the census derives the half key the launcher never forms — Allegro-TI2V's conditioning
 conv (`aten.convolution::0`, built fp32) missed its fp32 depthwise key at the gate of 2026-10-25 08:25 (chain52).

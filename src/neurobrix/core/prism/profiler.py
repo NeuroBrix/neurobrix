@@ -213,15 +213,15 @@ def temporal_downscale_ratio(dag: Dict) -> Optional[tuple]:
     """
     tensors = dag.get("tensors", {})
     t_symbol = None
-    t_in_trace = None
+    t_in_build = None
     for iid in dag.get("input_tensor_ids", []):
         dims = _symbolic_dims(tensors, iid)
         if len(dims) == 5 and isinstance(dims[2], dict) \
                 and dims[2].get("type") == "symbol":
             t_symbol = dims[2].get("id")
-            t_in_trace = dims[2].get("trace")
+            t_in_build = dims[2].get("trace")
             break
-    if t_symbol is None or not isinstance(t_in_trace, int) or t_in_trace <= 1:
+    if t_symbol is None or not isinstance(t_in_build, int) or t_in_build <= 1:
         return None
 
     for oid in dag.get("output_tensor_ids", []):
@@ -232,15 +232,15 @@ def temporal_downscale_ratio(dag: Dict) -> Optional[tuple]:
             expr = dims[axis]
             if not isinstance(expr, dict):
                 continue
-            if _eval_symbolic_expr(expr, t_symbol, t_in_trace) is None:
+            if _eval_symbolic_expr(expr, t_symbol, t_in_build) is None:
                 continue  # not a function of the temporal symbol alone
-            t_out_trace = _eval_symbolic_expr(expr, t_symbol, t_in_trace)
-            if not isinstance(t_out_trace, int) or t_out_trace <= 0 \
-                    or t_out_trace >= t_in_trace:
+            t_out_build = _eval_symbolic_expr(expr, t_symbol, t_in_build)
+            if not isinstance(t_out_build, int) or t_out_build <= 0 \
+                    or t_out_build >= t_in_build:
                 continue  # not a downscale along this axis
-            if t_in_trace % t_out_trace != 0:
+            if t_in_build % t_out_build != 0:
                 return None  # non-integral build ratio — declined
-            ratio = t_in_trace // t_out_trace
+            ratio = t_in_build // t_out_build
             if ratio <= 1:
                 return None
             linear = all(
@@ -854,7 +854,7 @@ class ActivationProfiler:
                     symbol_map[sid] = int(input_config.cut_extents[info["name"]])
         return symbol_map
 
-    def trace_symbol_map(self) -> Dict[str, int]:
+    def sample_symbol_map(self) -> Dict[str, int]:
         """{symbol id: the extent this graph was BUILT at}.
 
         The only configuration a container is known to have witnessed. It is the
@@ -1040,7 +1040,7 @@ class ActivationProfiler:
             dtype_bytes = _itemsize.itemsize(input_config.dtype or "float32")
 
         if binding == "trace":
-            symbol_map = self.trace_symbol_map()
+            symbol_map = self.sample_symbol_map()
         else:
             # Build symbol map for shape resolution (positional base + this
             # graph's name-driven symbol overrides — video time/height/width).

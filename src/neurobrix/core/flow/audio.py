@@ -158,16 +158,16 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
         # with non-symbolic position ops (relative PE, repeat, etc.)
         if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
             for dim_idx in range(1, len(input_shape)):  # Skip batch dim
-                trace_size = input_shape[dim_idx]
+                build_size = input_shape[dim_idx]
                 actual_size = features.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
+                if actual_size != build_size:
+                    if actual_size > build_size:
                         slices = [slice(None)] * len(features.shape)
-                        slices[dim_idx] = slice(None, trace_size)
+                        slices[dim_idx] = slice(None, build_size)
                         features = features[tuple(slices)]
                     else:
                         pad_shape = list(features.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
+                        pad_shape[dim_idx] = build_size - actual_size
                         pad = torch.zeros(pad_shape, device=features.device, dtype=features.dtype)
                         features = torch.cat([features, pad], dim=dim_idx)
 

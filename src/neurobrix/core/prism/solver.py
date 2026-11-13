@@ -5044,7 +5044,7 @@ class PrismSolver:
             # Put the request into the SYMBOL's unit before dividing. A model
             # with a VAE declares its spatial symbols in latent rows/columns:
             # measured 2026-09-17, Sana-1600M declares height/width with a build
-            # value of 32 and a `trace_resolution` of 1024 — the symbol counts
+            # value of 32 and a `build_resolution` of 1024 — the symbol counts
             # latents, the request counts pixels, and 1024/32 is the VAE's own
             # compression, not a change of size. Taken raw it multiplied the
             # estimate by 32 per axis and Prism then refused a model that runs:
@@ -5291,8 +5291,8 @@ class PrismSolver:
             return activation_bytes, 0, False
 
         patch = PRISM_DEFAULTS.get("default_patch_size", 2)
-        trace_seq = (h // patch) * (w // patch)
-        runtime_seq = trace_seq  # Same resolution for now
+        build_seq = (h // patch) * (w // patch)
+        runtime_seq = build_seq  # Same resolution for now
 
         num_blocks = manifest.get('components', {}).get('transformer', {}).get('blocks', 20)
         num_heads = max(1, channels * 2)
@@ -5313,7 +5313,7 @@ class PrismSolver:
             attn_dominates = True
 
         # Resolution and safety scaling
-        raw_scale = runtime_seq / trace_seq if trace_seq > 0 else 1.0
+        raw_scale = runtime_seq / build_seq if build_seq > 0 else 1.0
         resolution_scale = max(1.0, raw_scale ** 0.7)
         safety = 1.2
         total_mult = resolution_scale * safety
@@ -6890,10 +6890,10 @@ class PrismSolver:
             self._tile_only_if_exact(comp_name, graph, profile_j, 0, int(tile_rung_mb))   # records the exception
             return self._vendor_tiling(container, comp_name, int(int(tile_rung_mb) * 1024 * 1024))
 
-        # Spatial input: 4D NCHW or 5D NCDHW; trace_size = H (index -2).
+        # Spatial input: 4D NCHW or 5D NCDHW; build_size = H (index -2).
         tensors = graph.get("tensors", {})
-        trace_size, in_spatial_w = _spatial_input(graph)          # H, and the W beside it for the scale derivation
-        if not trace_size:
+        build_size, in_spatial_w = _spatial_input(graph)          # H, and the W beside it for the scale derivation
+        if not build_size:
             return self._tiling_decline(comp_name, "its graph has no rank-4 or rank-5 input to tile")
 
         # Downsampler guard (data-driven, no name/family match): a component
@@ -6927,7 +6927,7 @@ class PrismSolver:
         rung_mb = int(tile_rung_mb)
         budget_bytes = int(rung_mb * 0.40 * 1024 * 1024)
 
-        if out_spatial is not None and out_spatial < trace_size:
+        if out_spatial is not None and out_spatial < build_size:
             # D2-ENCODER: the guard is lifted ONLY for the class the engine
             # can tile exactly — 5D encoders whose temporal map is
             # LINEAR-DOWN (t_out = t_in / r on the r-lattice, no causal
@@ -6939,7 +6939,7 @@ class PrismSolver:
             # to the decode-side AFFINE decline).
             return self._encode_component_tiling(
                 comp_name, graph, profile_j, mem, budget_bytes, rung_mb,
-                trace_size, out_spatial)
+                build_size, out_spatial)
 
         # Scale factor: what the graph MEASURES first — its built input and output extents —
         # then a declared upscale, then the block-count heuristic. The heuristic
@@ -6951,7 +6951,7 @@ class PrismSolver:
         # cache the two disagree on that one container only.
         config = profile_j.get("config", {})
         scale_factor = None
-        if out_spatial and trace_size:
+        if out_spatial and build_size:
             # THE GRAPH SAYS IT, so ask the graph. Every upscaler in this
             # machine's cache carries an EMPTY `config` in profile.json --
             # real-esrgan x2/x4/x8, swin2SR-x4, hat-l-x4, all of them -- and
@@ -6964,7 +6964,7 @@ class PrismSolver:
             # Both axes must agree and the ratio must be exact: a component
             # that scales H and W differently, or by a fraction, is not a
             # uniform spatial upscale and this sizing does not describe it.
-            _ih, _iw = trace_size, in_spatial_w
+            _ih, _iw = build_size, in_spatial_w
             _oh, _ow = out_spatial, out_spatial_w
             if _ih and _iw and _oh and _ow and _oh % _ih == 0 and _ow % _iw == 0:
                 _rh, _rw = _oh // _ih, _ow // _iw
@@ -6974,7 +6974,7 @@ class PrismSolver:
         if declared is not None and scale_factor is not None and int(declared) != int(scale_factor):
             raise ValueError(
                 f"ZERO FALLBACK: {comp_name} declares upscale {declared} and its graph measures "
-                f"{scale_factor} (build-time {trace_size}x{in_spatial_w} -> {out_spatial}x{out_spatial_w}); "
+                f"{scale_factor} (build-time {build_size}x{in_spatial_w} -> {out_spatial}x{out_spatial_w}); "
                 f"a tile plan cannot choose between a declaration and a measurement that disagree")
         if scale_factor is None:
             scale_factor = declared
@@ -7123,7 +7123,7 @@ class PrismSolver:
             "scale_factor": int(scale_factor),
             "overlap": int(overlap),
             "window_alignment": int(window_alignment),
-            "trace_size": int(trace_size),
+            "trace_size": int(build_size),
             "tiled_activation_bytes": int(tiled_act),
             # the rung this sizing stood on, so the plan's own record says
             # which one and a reader can rederive every number above
@@ -7144,7 +7144,7 @@ class PrismSolver:
 
     def _encode_component_tiling(
         self, comp_name: str, graph: Dict, profile_j: Dict, mem: ComponentMemory,
-        budget_bytes: int, rung_mb: int, trace_size: int, out_spatial: int,
+        budget_bytes: int, rung_mb: int, build_size: int, out_spatial: int,
     ) -> Optional[Dict[str, Any]]:
         """D2-ENCODER: TilingEngine spec for a DOWNSAMPLING component (VAE
         encoder: pixel video -> compressed latent) that overflows the budget
@@ -7219,23 +7219,23 @@ class PrismSolver:
                   or config.get("decoder_block_out_channels"))
         if blocks:
             sp_ratio = 2 ** (len(blocks) - 1)
-        elif out_spatial and trace_size % out_spatial == 0:
+        elif out_spatial and build_size % out_spatial == 0:
             # No block list in this component's profile: an ENCODE alias of the VAE (Wan's
             # `vae_encoder`, module=vae, method=encode) whose configuration was written on the
             # decode component. The ratio is then the graph's own built in/out extent — a fact of
             # this graph, which the check below would have held the config to anyway.
-            sp_ratio = trace_size // out_spatial
+            sp_ratio = build_size // out_spatial
         else:
             return self._tiling_decline(
-                comp_name, f"no block list in its profile, and its build-time extents {trace_size} -> "
+                comp_name, f"no block list in its profile, and its build-time extents {build_size} -> "
                            f"{out_spatial} do not divide")
         # Build coherence: the graph's own in/out spatial builds must agree
         # with the config-derived ratio, else decline (never guess geometry).
-        if sp_ratio <= 1 or trace_size % sp_ratio != 0 \
-                or trace_size // sp_ratio != out_spatial:
+        if sp_ratio <= 1 or build_size % sp_ratio != 0 \
+                or build_size // sp_ratio != out_spatial:
             return self._tiling_decline(
                 comp_name, f"its profile's spatial ratio {sp_ratio} disagrees with its build-time extents "
-                           f"{trace_size} -> {out_spatial}")
+                           f"{build_size} -> {out_spatial}")
 
         height = getattr(ic, "height", None)
         width = getattr(ic, "width", None)
@@ -7314,7 +7314,7 @@ class PrismSolver:
             "scale_factor": int(sp_ratio),
             "overlap": int(overlap),
             "window_alignment": int(window_alignment),
-            "trace_size": int(trace_size),
+            "trace_size": int(build_size),
             "tiled_activation_bytes": int(tiled_act),
             "budget_rung_mb": int(rung_mb),
             "downscale": True,

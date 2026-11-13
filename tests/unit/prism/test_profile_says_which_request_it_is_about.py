@@ -20,7 +20,7 @@ import pytest
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 
 
-def _graph(trace_time: int, coefficient: int):
+def _graph(build_time: int, coefficient: int):
     """A minimal encoder whose temporal extent follows `k*s - (k-1)`.
 
     `k = 1` is the sound rule: the extent IS the axis. A large k is the
@@ -36,21 +36,21 @@ def _graph(trace_time: int, coefficient: int):
     # concrete dim at the same index. A fixture without it is silently resolved
     # from the concrete shape, so the profile does not move with the request and
     # the test measures the fallback instead of the feature.
-    time = {"type": "symbol", "id": "s1", "trace": trace_time}
+    time = {"type": "symbol", "id": "s1", "trace": build_time}
     if coefficient == 1:
         dim = time
     else:
         dim = {"type": "add",
                "left": {"type": "mul", "left": time, "right": coefficient,
-                        "trace": trace_time * coefficient},
+                        "trace": build_time * coefficient},
                "right": -(coefficient - 1),
-               "trace": trace_time * coefficient - (coefficient - 1)}
-    extent = trace_time * coefficient - (coefficient - 1)
+               "trace": build_time * coefficient - (coefficient - 1)}
+    extent = build_time * coefficient - (coefficient - 1)
     return {
         "version": "0.1",
         "symbolic_context": {"symbols": {
             "s0": {"name": "batch", "trace_value": 1},
-            "s1": {"name": "time", "trace_value": trace_time},
+            "s1": {"name": "time", "trace_value": build_time},
         }},
         "tensors": {
             "input::x": {"shape": [1, 8, extent, 64, 64],
@@ -78,28 +78,28 @@ def _profiler(tmp_path, graph):
     return ActivationProfiler.from_path(p)
 
 
-def test_no_config_binds_to_the_trace_and_says_so(tmp_path):
-    prof = _profiler(tmp_path, _graph(trace_time=9, coefficient=1))
+def test_no_config_binds_to_the_build_and_says_so(tmp_path):
+    prof = _profiler(tmp_path, _graph(build_time=9, coefficient=1))
     result = prof.estimate_peak_memory()
     assert result.binding == "trace"
     assert result.symbol_map == {"s0": 1, "s1": 9}
 
 
 def test_a_supplied_config_is_marked_as_a_request(tmp_path):
-    prof = _profiler(tmp_path, _graph(trace_time=9, coefficient=1))
+    prof = _profiler(tmp_path, _graph(build_time=9, coefficient=1))
     result = prof.estimate_peak_memory(InputConfig(num_frames=33, temporal_compression=4))
     assert result.binding == "request"
 
 
 def test_the_repr_carries_the_binding(tmp_path):
     """A number travels; it must not travel without its request."""
-    prof = _profiler(tmp_path, _graph(trace_time=9, coefficient=1))
+    prof = _profiler(tmp_path, _graph(build_time=9, coefficient=1))
     assert "trace-bound" in repr(prof.estimate_peak_memory())
 
 
-def test_a_graph_with_no_trace_value_is_refused_not_guessed(tmp_path):
+def test_a_graph_with_no_build_value_is_refused_not_guessed(tmp_path):
     """A partial symbol map is completed by a positional guess downstream."""
-    graph = _graph(trace_time=9, coefficient=1)
+    graph = _graph(build_time=9, coefficient=1)
     graph["symbolic_context"]["symbols"]["s1"].pop("trace_value")
     prof = _profiler(tmp_path, graph)
     with pytest.raises(ValueError, match="no build-time value"):

@@ -1,6 +1,6 @@
 """Model level of the nbxtensor benchmark: the gate cells through the engine's entry point, per device.
 
-Each model runs its gate request (`tools/trace_request.gate_request`) through `python -m neurobrix run` with the
+Each model runs its gate request (`tools/container_request.gate_request`) through `python -m neurobrix run` with the
 machine's own profile, alone, once per engine:
 - `torch_eager`: the engine's ATen branch (the default mode: torch's eager kernels, one call per op);
 - `nbxtensor`: the Triton branch (`--triton`), the engine that becomes nbxtensor.
@@ -47,7 +47,7 @@ _EXT = {"image": "png", "video": "mp4", "audio": "wav", "tts": "wav", "upscaler"
 
 
 def _family(model: str) -> str:
-    import trace_request as TR
+    import container_request as TR
     return TR.Z.family_of(model)
 
 
@@ -92,7 +92,7 @@ def _agreement(a: Path, b: Path) -> str:
 
 def run_cell(model: str, contender: str, outdir: Path, python: str, label: str = "") -> dict:
     """One gate cell through the entry point, in `python`'s environment, this tree's engine and library first."""
-    import trace_request as TR
+    import container_request as TR
     request = TR.gate_request(model)
     fam = _family(model)
     ext = _EXT.get(fam, "txt")

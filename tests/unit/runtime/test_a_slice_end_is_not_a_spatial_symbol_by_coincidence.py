@@ -30,23 +30,23 @@ import pytest
 from neurobrix.triton.promotion import promote_seq_len_scalars
 from neurobrix.triton.symbols import SymbolResolver
 
-TRACE_LATENT = 128
+BUILD_LATENT = 128
 RUN_LATENT = 512
 
 
 def _dag():
     t = lambda tid: {"type": "tensor", "tensor_id": tid}
     sc = lambda v: {"type": "scalar", "value": v}
-    h = {"type": "symbol", "id": "s4", "trace": TRACE_LATENT}
+    h = {"type": "symbol", "id": "s4", "trace": BUILD_LATENT}
     return {
         "symbolic_context": {"symbols": {
-            "s4": {"name": "height", "trace_value": TRACE_LATENT,
+            "s4": {"name": "height", "trace_value": BUILD_LATENT,
                    "source": "input::hidden_states::dim_2"},
-            "s5": {"name": "width", "trace_value": TRACE_LATENT,
+            "s5": {"name": "width", "trace_value": BUILD_LATENT,
                    "source": "input::hidden_states::dim_3"},
         }},
         "tensors": {
-            "input::hidden_states": {"shape": [2, 4, TRACE_LATENT, TRACE_LATENT]},
+            "input::hidden_states": {"shape": [2, 4, BUILD_LATENT, BUILD_LATENT]},
             "input::timestep": {"shape": [2]},
         },
         "ops": {
@@ -67,15 +67,15 @@ def _dag():
                 "op_type": "aten::convolution",
                 "input_tensor_ids": ["input::hidden_states"],
                 "output_tensor_ids": ["aten.convolution::0::out_0"],
-                "input_shapes": [[2, 4, TRACE_LATENT, TRACE_LATENT]],
-                "output_shapes": [[2, 1152, TRACE_LATENT, TRACE_LATENT]],
+                "input_shapes": [[2, 4, BUILD_LATENT, BUILD_LATENT]],
+                "output_shapes": [[2, 1152, BUILD_LATENT, BUILD_LATENT]],
                 "attributes": {"args": [t("input::hidden_states")]}},
             "aten.slice::9": {
                 "op_type": "aten::slice",
                 "input_tensor_ids": ["aten.convolution::0::out_0"],
                 "output_tensor_ids": ["aten.slice::9::out_0"],
-                "input_shapes": [[2, 1152, TRACE_LATENT, TRACE_LATENT]],
-                "output_shapes": [[2, 1152, TRACE_LATENT, TRACE_LATENT]],
+                "input_shapes": [[2, 1152, BUILD_LATENT, BUILD_LATENT]],
+                "output_shapes": [[2, 1152, BUILD_LATENT, BUILD_LATENT]],
                 "attributes": {"args": [t("aten.convolution::0::out_0"), sc(2), sc(0),
                                         dict(h)]}},
         },
@@ -107,7 +107,7 @@ def resolved():
 def test_the_timestep_slice_keeps_its_own_extent(resolved):
     """The half-split of a sinusoidal embedding does not grow with the image."""
     got = resolved("aten.slice::5")
-    assert got == TRACE_LATENT, (
+    assert got == BUILD_LATENT, (
         f"the embedding half was resolved to {got} — it followed the image height, "
         "so cat() returns 384 instead of 256 and addmm::0 dies")
 

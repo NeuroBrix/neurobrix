@@ -73,7 +73,7 @@ plan with the measured margin.
 ## 3. One precision contract (the owner, 15:26)
 
 On hardware that computes in bf16 (fp16 on V100) the model's tensors are half, weights and activations; fp32 only
-where (a) the container's graph records the op fp32 inside a half graph, as the vendor computes it (`core/dtype/traced_island`, 06:30), (b) the calibration
+where (a) the container's graph records the op fp32 inside a half graph, as the vendor computes it (`core/dtype/built_island`, 06:30), (b) the calibration
 measured an overflow (`fp32_op_uids`), (c) a kernel accumulates in fp32 internally without storing it. The Triton
 branch today keeps fp32 downstream of an island because its self-managed GEMMs and convolutions (`mm`, `bmm`,
 `addmm`, `conv2d`, `_convolution` in `_SELF_MANAGED_OPS`) take their operands as they come and store wide: 2 017

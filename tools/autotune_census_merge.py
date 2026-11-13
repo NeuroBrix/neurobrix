@@ -8,7 +8,7 @@ seen. This merges every replay cache found under the given roots (and the machin
 one census; a key present in several caches keeps the first config seen (the census carries
 keys, the certifier measures the configs itself).
 
-    python tools/autotune_census_merge.py --out /path/census.json [--roots validation_outputs/retrace_2026_09_07 ...]
+    python tools/autotune_census_merge.py --out /path/census.json [--roots validation_outputs/rebuild_2026_09_07 ...]
 """
 from __future__ import annotations
 

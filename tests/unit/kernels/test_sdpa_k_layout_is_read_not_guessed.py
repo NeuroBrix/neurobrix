@@ -24,7 +24,7 @@ def _dag(*, transposed: bool, seq: int, head_dim: int = 64, heads: int = 32):
     """A minimal q/k/v -> SDPA graph, with or without the decomposition's
     transpose on K's chain."""
     q_shape = [1, heads, seq, head_dim]
-    k_traced = [1, heads, head_dim, seq] if transposed else [1, heads, seq, head_dim]
+    k_built = [1, heads, head_dim, seq] if transposed else [1, heads, seq, head_dim]
     ops = {
         "q_src::0": {"op_type": "aten::clone", "input_tensor_ids": [],
                      "output_tensor_ids": ["q::0"], "attributes": {}},
@@ -40,7 +40,7 @@ def _dag(*, transposed: bool, seq: int, head_dim: int = 64, heads: int = 32):
         "q::0": {"shape": q_shape},
         "v::0": {"shape": q_shape},
         "k_base::0": {"shape": [1, heads, seq, head_dim]},
-        "k::0": {"shape": k_traced},
+        "k::0": {"shape": k_built},
         "out::0": {"shape": q_shape},
     }
     if transposed:

@@ -81,7 +81,7 @@ def test_a_wide_constant_is_narrowed_only_where_the_device_lacks_fp64(stores_fp6
 
 
 @pytest.mark.parametrize("stores_fp64,expected", [(False, torch.float32), (True, torch.float64)])
-def test_a_traced_float64_creation_lands_in_the_device_s_widest(stores_fp64, expected):
+def test_a_built_float64_creation_lands_in_the_device_s_widest(stores_fp64, expected):
     fn = _engine(stores_fp64).compile_op("aten::arange", torch.ops.aten.arange.start,
                                       {"output_dtypes": ["float64"]})
     assert fn(0, 8, dtype=torch.float64).dtype == expected

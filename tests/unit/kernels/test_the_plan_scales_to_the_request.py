@@ -53,7 +53,7 @@ def test_scaling_is_derived_from_the_graph_and_the_request():
     assert scaled > base * 22
 
 
-def test_a_request_at_or_below_the_trace_is_not_shrunk():
+def test_a_request_at_or_below_the_build_is_not_shrunk():
     """A smaller request does not get a smaller promise than the profiler made."""
     from neurobrix.core.prism.solver import PrismSolver
 

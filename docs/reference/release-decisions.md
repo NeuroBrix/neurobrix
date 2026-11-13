@@ -38,7 +38,7 @@ serve only to that one — the directory gate without the cache gate is half a d
 
 A user in a container, on a shared server or under a scheduler runs masked as the normal
 case. Three regression guards (`test_serve_warm.py`, `warm_cell_runner.py`,
-`test_upscale_offtrace.py`, 2026-08-27) and debt entry D-AUTODETECT-VISIBLE-MASK say the
+`test_upscale_offbuild.py`, 2026-08-27) and debt entry D-AUTODETECT-VISIBLE-MASK say the
 engine mis-places under a mask; `_apply_visible_filter` (`7a307287`, 2026-09-03) re-indexes
 the visible set and the profile is keyed by it since. Whether a facet remains — the profile
 index against the runtime ordinal — was measured the same day: red on the tree before the

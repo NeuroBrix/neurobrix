@@ -18,7 +18,7 @@ def _components(backbone_shape, vae_shape):
             "vae": {"shapes": {"z": vae_shape}}}
 
 
-def test_the_backbones_traced_latent_times_the_scale_is_the_output_size():
+def test_the_backbones_built_latent_times_the_scale_is_the_output_size():
     comps = _components([1, 16, 21, 60, 104], [1, 16, 9, 14, 22])
     assert vae_scale_factor({}, {"spatial_compression_ratio": 8}, comps) == 8
     assert container_output_size({}, {"spatial_compression_ratio": 8}, comps) == (480, 832)

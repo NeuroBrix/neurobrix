@@ -40,10 +40,10 @@ from neurobrix.core.prism.layer_partition import LayerPartitioner
 from neurobrix.core.runtime.graph_executor import GraphExecutor
 from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
 
-B, T_TRACE, D = 2, 6, 4
+B, T_BUILD, D = 2, 6, 4
 COMPONENT = "transformer"
 S0 = {"type": "symbol", "id": "s0", "trace": B}
-S1 = {"type": "symbol", "id": "s1", "trace": T_TRACE}
+S1 = {"type": "symbol", "id": "s1", "trace": T_BUILD}
 X = "input::hidden_states"
 
 
@@ -72,7 +72,7 @@ def _op(uid, typ, args):
 def _graph():
     """h = x*wp (the piece before) | q = h*wq; kv = q^T @ h (over the tokens); y = q @ kv;
     z = y + h; out = z*wo — a linear-attention block fed by a seam."""
-    bsd, bds, bdd = [B, T_TRACE, D], [B, D, T_TRACE], [B, D, D]
+    bsd, bds, bdd = [B, T_BUILD, D], [B, D, T_BUILD], [B, D, D]
     sbsd, sbds, sbdd = [S0, S1, D], [S0, D, S1], [S0, D, D]
     tensors = {X: _t(X, bsd, sbsd, is_input=True, input_name="hidden_states")}
     for w in ("wp", "wq", "wo"):
@@ -98,7 +98,7 @@ def _graph():
         "output_tensor_ids": ["aten.mul::2::out_0"],
         "symbolic_context": {"symbols": {
             "s0": {"name": "batch", "trace_value": B, "source": f"{X}::dim_0"},
-            "s1": {"name": "seq_len", "trace_value": T_TRACE, "source": f"{X}::dim_1"}},
+            "s1": {"name": "seq_len", "trace_value": T_BUILD, "source": f"{X}::dim_1"}},
             "expressions": {}},
     }
 
@@ -168,7 +168,7 @@ def _streamed(mode, chunk):
 
 def _chunk(slice_):
     return {"first_op": FIRST, "last_op": LAST, "symbol": "s1", "slice": slice_,
-            "count": -(-T_TRACE // slice_), "passes": _passes(), "peak_bytes": 0}
+            "count": -(-T_BUILD // slice_), "passes": _passes(), "peak_bytes": 0}
 
 
 def test_the_stretch_plans_two_passes_the_contraction_between_them():
@@ -183,7 +183,7 @@ def test_the_sliced_stretch_returns_what_the_whole_one_does(mode):
     whole = _executor(mode)
     whole.load_weights(None, COMPONENT)
     strategy = _streamed(mode, _chunk(2))
-    for seq_len in (T_TRACE, 4 * T_TRACE + 1):      # the build, and far from it, a short last slice
+    for seq_len in (T_BUILD, 4 * T_BUILD + 1):      # the build, and far from it, a short last slice
         x = torch.randn(B, seq_len, D)
         want = whole.run({"hidden_states": x})
         got = strategy.execute_component(COMPONENT, "loop", {"hidden_states": x})
@@ -316,7 +316,7 @@ def test_a_contraction_s_slices_are_summed_in_the_engine_s_accumulator(mode, mon
     monkeypatch.setattr(sys.modules[__name__], "_executor", ex)
     whole = ex(mode)
     whole.load_weights(None, COMPONENT)
-    x = torch.randn(B, 4 * T_TRACE + 1, D).to(torch.bfloat16)
+    x = torch.randn(B, 4 * T_BUILD + 1, D).to(torch.bfloat16)
     want = whole.run({"hidden_states": x})
     got = _streamed(mode, _chunk(2)).execute_component(COMPONENT, "loop", {"hidden_states": x})
     assert seen["acc"], "the stitch summed no contraction"
@@ -388,9 +388,9 @@ def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype
     ex, card = _on_card(monkeypatch, "float16")
     whole = ex(mode)
     whole.load_weights(None, COMPONENT)
-    whole.run({"hidden_states": card(torch.randn(B, T_TRACE, D))})
+    whole.run({"hidden_states": card(torch.randn(B, T_BUILD, D))})
     kv = whole.tensors_of_last_run(["aten.bmm::0::out_0"]).get("aten.bmm::0::out_0")
-    x = torch.randn(B, 4 * T_TRACE + 1, D)
+    x = torch.randn(B, 4 * T_BUILD + 1, D)
     want = whole.run({"hidden_states": card(x)})["sample"].numpy().astype("float64")
     got = _streamed(mode, _chunk(2)).execute_component(COMPONENT, "loop", {"hidden_states": card(x)})["sample"]
     assert seen["acc"], "the stitch summed no contraction"
@@ -415,7 +415,7 @@ def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch
             pytest.skip("the Triton modes live on a card")
         request.getfixturevalue("declared_profile")      # a Triton sequence runs under the declared profile, on a card
         ex, card = _on_card(monkeypatch, "float16")
-        half, x = "float16", card(torch.randn(B, T_TRACE, D))
+        half, x = "float16", card(torch.randn(B, T_BUILD, D))
         from nbxtensor.dtype.nbx_dtype import parse_dtype
         name = lambda d: parse_dtype(d).name
     else:
@@ -429,7 +429,7 @@ def test_a_pinned_op_computes_and_keeps_fp32_from_the_next_run(mode, monkeypatch
                              dtype="bfloat16", mode=m)
             e.load_graph_from_dict(_graph())
             return e
-        half, x = "bfloat16", torch.randn(B, T_TRACE, D).to(torch.bfloat16)
+        half, x = "bfloat16", torch.randn(B, T_BUILD, D).to(torch.bfloat16)
         name = lambda d: str(d).replace("torch.", "")
     q = FIRST + "::out_0"                 # an elementwise op: half under the half compute dtype
     e = ex(mode)

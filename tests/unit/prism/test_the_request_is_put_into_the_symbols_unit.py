@@ -62,7 +62,7 @@ def test_a_model_without_a_vae_scales_on_the_raw_pixels(solver):
     assert got == pytest.approx(22.4), "(448/112) x (448/80) and nothing else"
 
 
-def test_a_latent_model_at_its_trace_resolution_does_not_scale(solver):
+def test_a_latent_model_at_its_build_resolution_does_not_scale(solver):
     # Sana-1600M: symbols count latents (32), request counts pixels (1024),
     # vae_scale 32. 1024/32 == 32 == the build, so the request IS the build.
     got = scale(solver, _comp(("height", 32), ("width", 32)),

@@ -60,7 +60,7 @@ def test_the_inputs_are_deterministic_and_an_index_stays_in_its_extent():
     assert emb[1].max() < 10
 
 
-def test_the_nbxtensor_side_runs_the_dtype_the_engine_runs_never_the_trace_record():
+def test_the_nbxtensor_side_runs_the_dtype_the_engine_runs_never_the_build_record():
     # Allegro's patch-embedding conv as the Apple census derived it: a bf16 component whose graph recorded the op's
     # output as float16 (its build dtype). The engine dispatches it at bf16 (census key ... 'bf16', 'bf16', 'bf16');
     # the bench once took the recorded float16 and timed an fp16 key no certificate holds, swept at runtime (03/11)

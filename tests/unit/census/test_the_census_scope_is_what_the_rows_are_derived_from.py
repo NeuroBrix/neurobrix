@@ -127,7 +127,7 @@ def _cache_has(model):
                     reason="the rack's profile is an ignored file")
 def test_the_derivation_reads_no_room_field():
     import derived_census as D
-    from trace_request import derived_request
+    from container_request import derived_request
     if not _cache_has(MODEL):
         pytest.fail(f"{MODEL} is not in the catalogue")
     req = derived_request(MODEL)

@@ -73,7 +73,7 @@ def test_a_batch_frozen_to_one_in_the_target_is_named():
     assert len(one["misbound"]) == 1 and one["misbound"][0]["element_count_implies"] == 12288
 
 
-def test_a_site_corrupted_at_the_trace_is_counted_not_evaluated():
+def test_a_site_corrupted_at_the_build_is_counted_not_evaluated():
     m = _tool()
     g = _graph([S0, S1, 4096], [1, 31, 4096], [S0, S1, SUM, 128], [1, 31, 40, 128], [S0, S1, -1, 128])
     assert m.census_one(g) == {"evaluated": 0, "misbound": [], "corrupted": 1, "unevaluable": 0}

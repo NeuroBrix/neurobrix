@@ -36,7 +36,7 @@ from neurobrix.core.runtime.graph_executor import GraphExecutor
 
 TABLE_LEN = 2048
 HEAD_DIM = 64
-TRACE_SEQ = 23
+BUILD_SEQ = 23
 
 
 def _make_executor(end_arg):
@@ -64,7 +64,7 @@ def _make_executor(end_arg):
     }
     dag = {
         "symbolic_context": {
-            "symbols": {"s1": {"name": "seq_len", "trace_value": TRACE_SEQ}},
+            "symbols": {"s1": {"name": "seq_len", "trace_value": BUILD_SEQ}},
         },
         "tensors": {param: {"shape": [TABLE_LEN, HEAD_DIM]}},
         "ops": ops,
@@ -82,7 +82,7 @@ def test_symbol_end_forced_to_full_table():
     """SYMBOL end (the TinyLlama crash case): a decode bind of seq_len=1 must
     NOT narrow the table; end is rewritten to the full table size."""
     ex, ops = _make_executor(
-        {"type": "symbol", "id": "s1", "trace": TRACE_SEQ}
+        {"type": "symbol", "id": "s1", "trace": BUILD_SEQ}
     )
     # Decode step: runtime seq_len bound to 1.
     ex._patch_seq_len_in_ops({"s1": 1})
@@ -99,7 +99,7 @@ def test_symbol_end_forced_to_full_table():
 def test_scalar_end_forced_to_full_table():
     """SCALAR end (pre-existing behavior) is preserved: still forced to the
     full table size, never left at the runtime seq_len."""
-    ex, ops = _make_executor({"type": "scalar", "value": TRACE_SEQ})
+    ex, ops = _make_executor({"type": "scalar", "value": BUILD_SEQ})
     ex._patch_seq_len_in_ops({"s1": 1})
 
     end = _end_of(ops)
@@ -110,7 +110,7 @@ def test_ar_safe_across_decode_steps():
     """Autoregressive re-invocation must re-derive the full size from the
     restored ORIGINAL args each call — never compound or drift to seq_len."""
     ex, ops = _make_executor(
-        {"type": "symbol", "id": "s1", "trace": TRACE_SEQ}
+        {"type": "symbol", "id": "s1", "trace": BUILD_SEQ}
     )
     # Prefill (seq_len=22), then several decode steps (seq_len=1).
     for bound in ({"s1": 22}, {"s1": 1}, {"s1": 1}, {"s1": 1}):

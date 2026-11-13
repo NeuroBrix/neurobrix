@@ -69,7 +69,7 @@ class TilingEngine:
 
     def __init__(
         self,
-        trace_size: int,
+        build_size: int,
         overlap: int,
         scale_factor: int,
         window_alignment: int = 1,
@@ -120,8 +120,8 @@ class TilingEngine:
                     mode only; encoders may permute the latent layout, e.g.
                     Allegro's [B, T, C, H, W]). Default 2 = the NCTHW law.
         """
-        self.trace_size = trace_size
-        self.tile_size = tile_size if tile_size is not None else trace_size
+        self.build_size = build_size
+        self.tile_size = tile_size if tile_size is not None else build_size
         self.overlap = overlap
         self.scale_factor = scale_factor
         self.window_alignment = window_alignment
@@ -246,7 +246,7 @@ class TilingEngine:
                 if isinstance(dim_spec, dict) and dim_spec.get("type") == "symbol":
                     return None  # spatial-adaptive graph — no tiling
 
-        trace_size = None
+        build_size = None
         for input_id in input_ids:
             tensor = tensors.get(str(input_id), {})
             shape = tensor.get("shape", [])
@@ -254,10 +254,10 @@ class TilingEngine:
             # H is the second-to-last axis in both layouts — tiling is over the
             # trailing (H, W) pair, the temporal axis carried through.
             if len(shape) in (4, 5):
-                trace_size = shape[-2]
+                build_size = shape[-2]
                 break
 
-        if trace_size is None:
+        if build_size is None:
             # No 4D/5D spatial input — tiling not applicable
             return None
 
@@ -284,7 +284,7 @@ class TilingEngine:
             if len(osh) in (4, 5):
                 out_spatial = osh[-2]
                 break
-        if out_spatial is not None and out_spatial < trace_size:
+        if out_spatial is not None and out_spatial < build_size:
             return None  # downsampler (encoder) — not a tiling target
 
         # --- Step 2: Read scale factor and window config from profile ---
@@ -308,20 +308,20 @@ class TilingEngine:
         window_alignment = config.get("window_size", 1)
 
         # Overlap: the TilingEngine's proportional law (`tiling_sizes.spatial_overlap`)
-        overlap = _tsz.spatial_overlap(trace_size)
+        overlap = _tsz.spatial_overlap(build_size)
 
         # Align overlap to window_alignment
         if window_alignment > 1:
             overlap = ((overlap + window_alignment - 1) // window_alignment) * window_alignment
 
         logger.debug(
-            f"[TilingEngine] Data-driven init: trace_size={trace_size}, "
+            f"[TilingEngine] Data-driven init: trace_size={build_size}, "
             f"scale_factor={scale_factor}, overlap={overlap}, "
             f"window_alignment={window_alignment}"
         )
 
         return cls(
-            trace_size=trace_size,
+            build_size=build_size,
             overlap=overlap,
             scale_factor=scale_factor,
             window_alignment=window_alignment,
@@ -556,7 +556,7 @@ class TilingEngine:
     def __repr__(self) -> str:
         return (
             f"TilingEngine("
-            f"trace_size={self.trace_size}, "
+            f"trace_size={self.build_size}, "
             f"tile_size={self.tile_size}, "
             f"stride={self.stride}, "
             f"overlap={self.overlap}, "

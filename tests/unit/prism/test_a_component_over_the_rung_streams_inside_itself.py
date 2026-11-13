@@ -61,7 +61,7 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impo
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 sys.path.insert(0, str(TOOLS))
-import trace_request as TR  # noqa: E402
+import container_request as TR  # noqa: E402
 
 MB = 1024 * 1024
 MODES = ["triton", "triton_sequential", "compiled"]
@@ -76,11 +76,11 @@ STREAMED = ["CogVideoX-5b-I2V", "Wan2.2-I2V-A14B-Diffusers",
 #: the plan holds them on the device, never streamed, never refused, never on the host.
 WHOLE_AT_THE_IMAGE = ["Ming-Lite-Omni-1.5"]
 #: The encoders the door named, now rebuilt: their time axis is ONE symbol (asserted below).
-RETRACED_ENCODER = ["Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
+REBUILT_ENCODER = ["Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
 
 
 def _input_config(model: str, mode: str):
-    """The model's DERIVED request (tools/trace_request.derived_request), resolved by the run's own
+    """The model's DERIVED request (tools/container_request.derived_request), resolved by the run's own
     `request_input_config` — the request the census plans."""
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config

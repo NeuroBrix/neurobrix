@@ -123,7 +123,7 @@ def test_a_stale_table_is_refused_by_name(census):
     assert row["status"] == "refused", row
     msg = row.get("refusal", "")
     assert MODEL in msg and "768x1024" in msg and "320x512" in msg, msg
-    assert "trace_request.py" in msg, f"the refusal does not say how to regenerate the table: {msg}"
+    assert "container_request.py" in msg, f"the refusal does not say how to regenerate the table: {msg}"
 
 
 def test_a_table_without_a_size_is_refused_for_a_spatial_model(census):

@@ -23,7 +23,7 @@ def _name(d: Any) -> str:
     return str(d or "").replace("torch.", "")
 
 
-def is_traced_fp32_island(op_record: Optional[Mapping[str, Any]], graph_dtype: Optional[str]) -> bool:
+def is_built_fp32_island(op_record: Optional[Mapping[str, Any]], graph_dtype: Optional[str]) -> bool:
     """True when `op_record` (the op's graph entry: `input_dtypes`, `output_dtypes` at its top level) is an op of a
     half graph (`graph_dtype`, the container's built torch_dtype) whose every floating input and floating output
     was built float32 — at least one floating input. A cast out of the island (`_to_copy` fp32 -> half) is not

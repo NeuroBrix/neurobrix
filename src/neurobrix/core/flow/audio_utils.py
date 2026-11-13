@@ -71,19 +71,19 @@ def preprocess_audio_input(
     # (byte-identical short clips). NBX_DISABLE_STT_CHUNKING=1 restores
     # the truncating path for diagnosis.
     import os as _os_sw
-    def _fit_to_trace(feats):  # noqa: E306 (defined before first use below)
+    def _fit_to_build(feats):  # noqa: E306 (defined before first use below)
         if input_shape and len(input_shape) == len(feats.shape) and len(input_shape) >= 3:
             for dim_idx in range(1, len(input_shape)):
-                trace_size = input_shape[dim_idx]
+                build_size = input_shape[dim_idx]
                 actual_size = feats.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
+                if actual_size != build_size:
+                    if actual_size > build_size:
                         slices = [slice(None)] * len(feats.shape)
-                        slices[dim_idx] = slice(None, trace_size)
+                        slices[dim_idx] = slice(None, build_size)
                         feats = feats[tuple(slices)]
                     else:
                         pad_shape = list(feats.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
+                        pad_shape[dim_idx] = build_size - actual_size
                         pad = torch.zeros(pad_shape, device=feats.device, dtype=feats.dtype)
                         feats = torch.cat([feats, pad], dim=dim_idx)
         return feats
@@ -100,7 +100,7 @@ def preprocess_audio_input(
         _seek = _mel_dsp.whisper_seek_context(
             str(audio_path), find_model_config_path(ctx), input_shape)
         if _seek is not None:
-            _seek["build"] = (lambda mel_np: _fit_to_trace(
+            _seek["build"] = (lambda mel_np: _fit_to_build(
                 torch.from_numpy(_np_sw.ascontiguousarray(mel_np)).to(
                     device=device, dtype=dtype)))
             ctx._stt_seek = _seek
@@ -123,7 +123,7 @@ def preprocess_audio_input(
             str(audio_path), find_model_config_path(ctx), input_shape)
         if _wins is not None:
             ctx._audio_windows = [
-                _fit_to_trace(torch.from_numpy(_np_sw.ascontiguousarray(w[None])).to(
+                _fit_to_build(torch.from_numpy(_np_sw.ascontiguousarray(w[None])).to(
                     device=device, dtype=dtype)) for w in _wins]
             features = ctx._audio_windows[0]
     if features is None:
@@ -137,7 +137,7 @@ def preprocess_audio_input(
         )
 
     # Pad/truncate to match build-time dimensions
-    features = _fit_to_trace(features)
+    features = _fit_to_build(features)
 
     _log.debug("%s", f"   [Audio] Features: {features.shape} ({preprocessing})"
                      + (" (long-form: timestamp seek)" if ctx._stt_seek else "")

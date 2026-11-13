@@ -368,7 +368,7 @@ class CompiledSequence(SequenceSteps):
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
         '_sdpa_kv_layout',  # op_uid -> (k_pre_transposed, v_pre_transposed), read from the graph at compile
-        '_seq_dependent_constants',  # Constants with build-time seq_len dim: [(slot, axis, sym_id, trace_val)]
+        '_seq_dependent_constants',  # Constants with build-time seq_len dim: [(slot, axis, sym_id, build_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
         '_op_blocks_cache',  # Cache for get_op_blocks() — immutable post-compile
@@ -1199,9 +1199,9 @@ class CompiledSequence(SequenceSteps):
         seq_len_symbols: Dict[str, int] = {}
         for sym_id, sym_info in symbols.items():
             if sym_info.get("name") == "seq_len":
-                trace_val = sym_info.get("trace_value")
-                if trace_val is not None:
-                    seq_len_symbols[sym_id] = trace_val
+                build_val = sym_info.get("trace_value")
+                if build_val is not None:
+                    seq_len_symbols[sym_id] = build_val
 
         if not seq_len_symbols:
             # No seq_len symbols (diffusion models, audio): skip the LLM
@@ -1233,18 +1233,18 @@ class CompiledSequence(SequenceSteps):
 
         weight_dims |= set(getattr(self, "_config_constants", ()) or ())
         safe_symbols: Dict[str, int] = {}
-        for sym_id, trace_val in seq_len_symbols.items():
-            if trace_val not in weight_dims:
-                safe_symbols[sym_id] = trace_val
+        for sym_id, build_val in seq_len_symbols.items():
+            if build_val not in weight_dims:
+                safe_symbols[sym_id] = build_val
 
-        # Skip promotion for trace_values shared by multiple seq_len symbols.
-        # When s1, s3, s6 all have trace_value=23 (e.g., built with trace_seq_len=23
+        # Skip promotion for build_values shared by multiple seq_len symbols.
+        # When s1, s3, s6 all have trace_value=23 (e.g., built with build_seq_len=23
         # for all inputs), we can't determine which symbol a concrete "23" refers to.
         # Promoting to the wrong symbol causes runtime shape mismatches.
-        trace_val_counts: Dict[int, int] = {}
+        build_val_counts: Dict[int, int] = {}
         for _sid, tv in safe_symbols.items():
-            trace_val_counts[tv] = trace_val_counts.get(tv, 0) + 1
-        ambiguous_vals = {tv for tv, count in trace_val_counts.items() if count > 1}
+            build_val_counts[tv] = build_val_counts.get(tv, 0) + 1
+        ambiguous_vals = {tv for tv, count in build_val_counts.items() if count > 1}
         if ambiguous_vals:
             distinct_vals = set(safe_symbols.values())
             if len(distinct_vals) == 1:
@@ -1270,13 +1270,13 @@ class CompiledSequence(SequenceSteps):
         for i, (sid_a, tv_a) in enumerate(seq_len_list):
             for sid_b, tv_b in seq_len_list[i+1:]:
                 if tv_a != tv_b:
-                    sum_trace = tv_a + tv_b
-                    if sum_trace not in weight_dims:
+                    sum_build = tv_a + tv_b
+                    if sum_build not in weight_dims:
                         sum_id = f"_sum_{sid_a}_{sid_b}"
-                        safe_symbols[sum_id] = sum_trace
+                        safe_symbols[sum_id] = sum_build
 
         # Pre-computed RoPE table fix (runs regardless of safe_symbols).
-        # TinyLlama-style models have cos_cached[2048,64] sliced to [trace_seq_len, 64]
+        # TinyLlama-style models have cos_cached[2048,64] sliced to [build_seq_len, 64]
         # at build time. The slice end must be replaced with the full table size so the
         # table is always available for absolute position indexing during decode.
         for op_uid, op_data in ops_metadata.items():
@@ -1352,8 +1352,8 @@ class CompiledSequence(SequenceSteps):
             val = arg.get("value")
             if not isinstance(val, int):
                 return None
-            for sym_id, trace_val in safe_symbols.items():
-                offset = val - trace_val
+            for sym_id, build_val in safe_symbols.items():
+                offset = val - build_val
                 if 0 <= offset <= (0 if exact else _max_offset(sym_id)):
                     return {
                         "type": "symbol",
@@ -1367,8 +1367,8 @@ class CompiledSequence(SequenceSteps):
             """Try to promote a raw int value (not wrapped in dict) to symbolic."""
             if not isinstance(val, int):
                 return None
-            for sym_id, trace_val in safe_symbols.items():
-                offset = val - trace_val
+            for sym_id, build_val in safe_symbols.items():
+                offset = val - build_val
                 if 0 <= offset <= (0 if exact else _max_offset(sym_id)):
                     return {
                         "type": "symbol",
@@ -1479,18 +1479,18 @@ class CompiledSequence(SequenceSteps):
             # has symbol refs). The tracer's algebraic propagation is authoritative:
             # it derives symbolic dims from input shapes, so concrete values in the
             # shape list were intentionally left concrete (e.g., head_dim=128 that
-            # happens to match trace_seq_len=128 but is NOT dynamic).
+            # happens to match build_seq_len=128 but is NOT dynamic).
             elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view") and len(args) >= 2:
                 shape_arg = args[1]
                 is_wrapped = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
                 shape_items = shape_arg.get("value", []) if is_wrapped else shape_arg
                 if isinstance(shape_items, (list, tuple)):
                     # Check if builder already symbolized this op (has symbol refs)
-                    has_tracer_symbols = any(
+                    has_builder_symbols = any(
                         isinstance(elem, dict) and elem.get("type") == "symbol"
                         for elem in shape_items
                     )
-                    if has_tracer_symbols:
+                    if has_builder_symbols:
                         pass  # Tracer's algebraic symbolization is authoritative
                     else:
                         # Legacy graph without algebraic symbolization — fall back
@@ -1556,15 +1556,15 @@ class CompiledSequence(SequenceSteps):
         seq_len_info: Dict[str, int] = {}
         for sym_id, sym_info in symbols.items():
             if sym_info.get("name") == "seq_len":
-                trace_val = sym_info.get("trace_value")
-                if trace_val is not None:
-                    seq_len_info[sym_id] = trace_val
+                build_val = sym_info.get("trace_value")
+                if build_val is not None:
+                    seq_len_info[sym_id] = build_val
 
         if not seq_len_info:
             return
 
         # Use the first seq_len symbol (all share the same build value)
-        sym_id, trace_seq_len = next(iter(seq_len_info.items()))
+        sym_id, build_seq_len = next(iter(seq_len_info.items()))
 
         self._seq_dependent_constants = []
 
@@ -1578,10 +1578,10 @@ class CompiledSequence(SequenceSteps):
                 continue
             shape = tdata.get("shape", [])
             for axis, dim in enumerate(shape):
-                if dim == trace_seq_len:
+                if dim == build_seq_len:
                     slot = self._tensor_id_to_slot.get(tid)
                     if slot is not None:
-                        self._seq_dependent_constants.append((slot, axis, sym_id, trace_seq_len))
+                        self._seq_dependent_constants.append((slot, axis, sym_id, build_seq_len))
                     break
 
     def update_seq_dependent_constants(self) -> None:
@@ -1609,9 +1609,9 @@ class CompiledSequence(SequenceSteps):
         runtime_vals = self._shape_resolver.get_bound_symbols()
         arena = self._arena
 
-        for slot, axis, sym_id, trace_val in self._seq_dependent_constants:
+        for slot, axis, sym_id, build_val in self._seq_dependent_constants:
             runtime_seq_len = runtime_vals.get(sym_id)
-            if runtime_seq_len is None or runtime_seq_len == trace_val:
+            if runtime_seq_len is None or runtime_seq_len == build_val:
                 # Restore original if it was previously narrowed
                 if slot in self._seq_constant_originals:
                     arena[slot] = self._seq_constant_originals[slot]

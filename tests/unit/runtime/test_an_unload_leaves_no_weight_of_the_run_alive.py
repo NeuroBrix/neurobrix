@@ -25,7 +25,7 @@ import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime impo
 from neurobrix.core.runtime.graph_executor import GraphExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism"))
-from test_a_streamed_component_returns_what_it_would_whole import B, D, T_TRACE  # noqa: E402
+from test_a_streamed_component_returns_what_it_would_whole import B, D, T_BUILD  # noqa: E402
 from test_a_streamed_component_returns_what_it_would_whole import _graph as graph  # noqa: E402
 
 
@@ -50,7 +50,7 @@ def test_no_weight_of_the_last_run_survives_the_unload(mode):
     ex.load_graph_from_dict(graph())
     ex.load_weights(None, "c")
     refs = [weakref.ref(t) for t in ex._weights.values()]
-    out = ex.run({"inputs_embeds": torch.randn(B, T_TRACE, D)})
+    out = ex.run({"inputs_embeds": torch.randn(B, T_BUILD, D)})
     assert out, "the run returned nothing"
     assert set(ex._weights) == {"layers.0.w", "layers.1.w", "head.weight"}, \
         f"the reconcile did not rebind the loader's keys: {sorted(ex._weights)}"

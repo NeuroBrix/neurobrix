@@ -42,7 +42,7 @@ run reads — so a derivation and the run it describes can never look at two dif
 Writing a request table (for a tool that takes one, e.g. `certified_census.py --requests-json`)
 from the containers as they are NOW:
 
-    python tools/trace_request.py --models A,B --out requests.json
+    python tools/container_request.py --models A,B --out requests.json
 """
 from __future__ import annotations
 
@@ -152,7 +152,7 @@ def gate_request(model: str, family: Optional[str] = None) -> list:
     return req
 
 
-def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
+def off_build_size(model: str, family: str) -> Optional[Tuple[int, int]]:
     """(height, width) for an image or video request: the container's own size scaled by the
     family's `confirmation.size_fraction`, then the height at three quarters, both on the family's
     lattice — a smaller, NON-SQUARE request away from the build, the one class that catches a
@@ -235,7 +235,7 @@ def derived_request(model: str, family: Optional[str] = None) -> list:
             raise ValueError(f"{model}: the container's confirmation states height {own[0]!r} and width {own[1]!r} — "
                              "a judging size names both, as positive integers")
         return req + ["--height", str(own[0]), "--width", str(own[1])]
-    size = off_trace_size(model, family)
+    size = off_build_size(model, family)
     if size is not None:
         req = req + ["--height", str(size[0]), "--width", str(size[1])]
     return req
@@ -270,7 +270,7 @@ def main() -> int:
     table = {m: [derived_request(m)] for m in (x.strip() for x in a.models.split(",")) if m}
     Path(a.out).write_text(json.dumps(table, indent=1))
     for m, (req,) in table.items():
-        print(f"[trace_request] {m}: {size_text(requested_size(req))}  {' '.join(req)}")
+        print(f"[container_request] {m}: {size_text(requested_size(req))}  {' '.join(req)}")
     return 0
 
 

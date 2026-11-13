@@ -6,7 +6,7 @@ resolution at the model's floor). Quality is judged once per model and branch at
 landing gate Allegro-TI2V took 1.2-1.6 h per run; fourteen cells above ten minutes have been carried by record since.
 
 The model's gate values are carried by its container (`extracted_values._global.gate`, written by the container builder from the
-registry with their source), read by `trace_request.gate_request` over the judging request; the harness's cells run
+registry with their source), read by `container_request.gate_request` over the judging request; the harness's cells run
 it and the census covers it beside the judging request.
 
 What this test does if the code is wrong: the floor cell fails when the gate request does not carry the container's
@@ -28,7 +28,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
-import trace_request as T  # noqa: E402
+import container_request as T  # noqa: E402
 
 MODEL = "FakeVideo-720x1280"
 SRC = ["measured: the cell at 1 step and 9 frames runs every op of the loop in 6 min"]

@@ -2772,7 +2772,7 @@ class TritonSequence(SequenceSteps):
         if not seq_info:
             return
 
-        sym_id, trace_seq_len = next(iter(seq_info.items()))
+        sym_id, build_seq_len = next(iter(seq_info.items()))
 
         for tid in self._weight_ids:
             tdata = tensors.get(tid, {})
@@ -2785,11 +2785,11 @@ class TritonSequence(SequenceSteps):
                 continue
             shape = tdata.get("shape", [])
             for axis, dim in enumerate(shape):
-                if dim == trace_seq_len:
+                if dim == build_seq_len:
                     slot = self._tid_to_slot.get(tid)
                     if slot is not None:
                         self._seq_dependent_constants.append(
-                            (slot, axis, sym_id, trace_seq_len))
+                            (slot, axis, sym_id, build_seq_len))
                     break
 
     def update_seq_dependent_constants(self):
@@ -2802,9 +2802,9 @@ class TritonSequence(SequenceSteps):
             return
 
         arena = self._arena
-        for slot, axis, sym_id, trace_val in self._seq_dependent_constants:
+        for slot, axis, sym_id, build_val in self._seq_dependent_constants:
             runtime_val = self._symbol_resolver.get(sym_id)
-            if runtime_val is None or runtime_val == trace_val:
+            if runtime_val is None or runtime_val == build_val:
                 # Restore original if previously narrowed
                 if slot in self._seq_constant_originals:
                     arena[slot] = self._seq_constant_originals[slot]

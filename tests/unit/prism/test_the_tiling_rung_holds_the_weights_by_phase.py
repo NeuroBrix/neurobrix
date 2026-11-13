@@ -24,7 +24,7 @@ def _request(c):
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-    import trace_request as TR
+    import container_request as TR
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
     args = create_parser().parse_args(["run", "--model", MODEL, *TR.gate_request(MODEL), "--compiled"])

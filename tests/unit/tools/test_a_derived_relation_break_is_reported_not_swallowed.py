@@ -109,7 +109,7 @@ def test_they_are_reported_as_UNADJUDICATED_not_as_a_defect(rows):
         assert r["first_break"]["relation"] != "v"
 
 
-def test_the_relation_is_ARITHMETIC_on_the_trace_value(subject):
+def test_the_relation_is_ARITHMETIC_on_the_build_value(subject):
     """Whatever the relation, it must actually relate the literal to the build value. A row
     that reports `v*2` where the literal is not twice the build is a reporting bug, and that is
     checkable on any container rather than on one model's remembered numbers."""

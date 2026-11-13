@@ -30,7 +30,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.triton import dtype as T
 
 
-def test_the_rule_keeps_a_traced_fp32_op_fp32_under_the_flag():
+def test_the_rule_keeps_a_built_fp32_op_fp32_under_the_flag():
     for g in ("float16", "bfloat16"):
         assert T.amp_fp32_output_dtype("float16", g, True, False, "float32") == "float32"
         # the record's narrow set still narrows it, as the compiled engine does
@@ -38,7 +38,7 @@ def test_the_rule_keeps_a_traced_fp32_op_fp32_under_the_flag():
         assert T.amp_fp32_output_dtype("float16", g, False, True, "float32") == "float16"
 
 
-def test_the_rule_is_unchanged_for_an_op_traced_at_the_half_dtype():
+def test_the_rule_is_unchanged_for_an_op_built_at_the_half_dtype():
     for traced in ("float16", None):
         assert T.amp_fp32_output_dtype("float16", "float16", True, False, traced) == "float16"
         assert T.amp_fp32_output_dtype("float16", "float16", False, False, traced) == "float32"
@@ -46,11 +46,11 @@ def test_the_rule_is_unchanged_for_an_op_traced_at_the_half_dtype():
     assert T.amp_fp32_output_dtype("float16", "float32", True, False, "float32") == "float16"
 
 
-def test_the_traced_dtype_is_read_from_the_record_s_top_level():
-    assert T.traced_output_dtype_name({"output_dtypes": ["float32"]}) == "float32"
-    assert T.traced_output_dtype_name({"output_dtypes": ["torch.float16"]}) == "float16"
-    assert T.traced_output_dtype_name({"attributes": {"output_dtypes": ["float32"]}}) is None
-    assert T.traced_output_dtype_name(None) is None
+def test_the_built_dtype_is_read_from_the_record_s_top_level():
+    assert T.built_output_dtype_name({"output_dtypes": ["float32"]}) == "float32"
+    assert T.built_output_dtype_name({"output_dtypes": ["torch.float16"]}) == "float16"
+    assert T.built_output_dtype_name({"attributes": {"output_dtypes": ["float32"]}}) is None
+    assert T.built_output_dtype_name(None) is None
 
 
 class _Fake:
@@ -92,7 +92,7 @@ def _out(op, traced, narrow=()):
     return eng.wrap_op(op, _same, op_uid="op::0", op_record=rec)(_Fake(NBXDtype.float32)).nbx_dtype
 
 
-def test_the_triton_wrapper_keeps_a_traced_fp32_op_fp32(flag):
+def test_the_triton_wrapper_keeps_a_built_fp32_op_fp32(flag):
     # the timestep chain: div by a scalar, exp — and any AMP_FP32-class op built fp32
     for op in ("div", "exp", "rsqrt", "layer_norm"):
         assert _out(op, "float32") == NBXDtype.float32, op

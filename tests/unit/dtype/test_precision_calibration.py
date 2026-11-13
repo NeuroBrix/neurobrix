@@ -78,7 +78,7 @@ def test_an_unrecorded_op_is_treated_as_in_range():
     assert pinned == frozenset({"aten.mm::1", "aten.add::0"})
 
 
-def test_graph_signature_changes_with_the_trace_not_with_the_values():
+def test_graph_signature_changes_with_the_build_not_with_the_values():
     d = _dag()
     s1 = cal.graph_signature(d)
     d2 = _dag(); d2["ops"]["aten.mm::1"]["op_type"] = "aten::addmm"

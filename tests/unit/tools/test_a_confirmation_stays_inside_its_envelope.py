@@ -14,7 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
-import trace_request as T  # noqa: E402
+import container_request as T  # noqa: E402
 
 
 def _topo(env):

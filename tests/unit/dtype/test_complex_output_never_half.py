@@ -243,10 +243,10 @@ def test_both_branches_read_the_container_identically():
     on a plain string, a torch.dtype and an NBXDtype.
     """
     from nbxtensor.dtype import outputs
-    from neurobrix.core.dtype.engine import traced_output_is_complex as core
-    from neurobrix.triton.dtype import traced_output_is_complex as triton
+    from neurobrix.core.dtype.engine import built_output_is_complex as core
+    from neurobrix.triton.dtype import built_output_is_complex as triton
 
-    assert core is triton is outputs.traced_output_is_complex, (
+    assert core is triton is outputs.built_output_is_complex, (
         "a branch carries its own copy of the complex-output predicate")
 
     cases = [
@@ -276,8 +276,8 @@ def test_predicate_fires_on_the_real_containers_if_present():
     import os
     import pytest
 
-    from neurobrix.core.dtype.engine import traced_output_is_complex as core
-    from neurobrix.triton.dtype import traced_output_is_complex as triton
+    from neurobrix.core.dtype.engine import built_output_is_complex as core
+    from neurobrix.triton.dtype import built_output_is_complex as triton
 
     g = os.path.expanduser(
         "~/.neurobrix/cache/Kokoro-82M/components/decoder/graph.json")

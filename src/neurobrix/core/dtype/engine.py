@@ -19,7 +19,7 @@ ZERO SEMANTIC: No model/family knowledge. Only tensor dtype math.
 import os
 import torch
 
-from neurobrix.core.dtype.traced_island import is_traced_fp32_island
+from neurobrix.core.dtype.built_island import is_built_fp32_island
 from typing import Callable, Optional, Dict, Any, FrozenSet
 
 from neurobrix.core.dtype.config import device_supports_fp64, parse_dtype, strip_aten_prefix
@@ -332,9 +332,9 @@ def cpu_fp32_wrapper(func):
     return wrapper
 
 
-# `traced_output_is_complex` and `amp_fp32_output_dtype` are the library's (nbxtensor/dtype/outputs.py).
+# `built_output_is_complex` and `amp_fp32_output_dtype` are the library's (nbxtensor/dtype/outputs.py).
 from nbxtensor.dtype.outputs import (  # noqa: F401 — the library's rules, one definition for both engines
-    amp_fp32_output_dtype, traced_output_dtype_name, traced_output_is_complex)
+    amp_fp32_output_dtype, built_output_dtype_name, built_output_is_complex)
 
 
 
@@ -370,7 +370,7 @@ _OP_CLASSES = _default_classes()
 # Used in RoPE implementations (DeepSeek-V2, etc.)
 #
 # These two are the FALLBACK, not the rule. The primary protection is
-# `traced_output_is_complex`, which reads the container's own
+# `built_output_is_complex`, which reads the container's own
 # output_dtypes and therefore also covers `aten::complex`, `aten::stft`,
 # `aten::_fft_r2c` and a plain `aten::mul` — all observed producing
 # complex in the cached zoo. These names stay for a graph that carries no
@@ -633,7 +633,7 @@ class DtypeEngine:
         assert func is not None, f"ZERO FALLBACK: func cannot be None for op {op_name}"
 
         # A complex-producing op never receives a half input — decided from
-        # the container's own output_dtypes (traced_output_is_complex). FIRST,
+        # the container's own output_dtypes (built_output_is_complex). FIRST,
         # above every other rule: complex32 is not a precision trade-off, it
         # is a crash at the next `exp`/`angle`/`_fft_c2r`, which have no
         # ComplexHalf kernel. It wins over the AMP class (`view_as_complex`
@@ -641,7 +641,7 @@ class DtypeEngine:
         # over the AMP gate, and over the vendor fp32 pin — a pin is a
         # precision choice among REAL dtypes and cannot validly retype a
         # built complex128 contract to complex64.
-        if traced_output_is_complex(attrs):
+        if built_output_is_complex(attrs):
             return self._make_complex_output_wrapper(func)
 
         # Creation-fill guard: independent of the amp_enabled gate — the
@@ -706,10 +706,10 @@ class DtypeEngine:
                 # wins over every contract, on any hardware.
                 if op_uid is not None and op_uid in self.fp32_op_uids:
                     return self._make_fp32_wrapper(func)
-                # The trace's own fp32 island (core/dtype/traced_island): an op the vendor
+                # The trace's own fp32 island (core/dtype/built_island): an op the vendor
                 # computed in fp32 inside a half graph keeps fp32 on ANY hardware — bf16's
                 # range is no answer to the precision the build kept (Sana's Gemma rotary).
-                if is_traced_fp32_island(attrs, _dtype_name(self.graph_dtype)):
+                if is_built_fp32_island(attrs, _dtype_name(self.graph_dtype)):
                     return self._make_fp32_wrapper(func)
                 # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
                 # bf16 hardware: all FP16 ops run clean (bf16 range = fp32 range).
@@ -1110,7 +1110,7 @@ class DtypeEngine:
         # compile_op's `attrs`, which is the merged dict its caller builds.
         # Without it this path would let --sequential build a complex32 the
         # compiled oracle never builds (R30).
-        if traced_output_is_complex(op_record):
+        if built_output_is_complex(op_record):
             return [
                 a.float() if isinstance(a, torch.Tensor)
                 and a.dtype in (torch.float16, torch.bfloat16) else a
@@ -1184,7 +1184,7 @@ class DtypeEngine:
             # Same two exceptions as compile_op: the vendor's per-op fp32 pin,
             # and the declared-safe matmul contract.
             pinned = ((op_uid is not None and op_uid in self.fp32_op_uids)
-                      or is_traced_fp32_island(op_record, _dtype_name(self.graph_dtype)))   # compile_op's rule
+                      or is_built_fp32_island(op_record, _dtype_name(self.graph_dtype)))   # compile_op's rule
             gemm_ok = (op_name in _FP16_GEMM_OPS and contract and not pinned)
             if pinned or (self.compute_dtype == torch.float16
                           and op_name in _FP16_NEED_FP32 and not gemm_ok):

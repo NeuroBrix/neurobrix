@@ -44,13 +44,13 @@ from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_f
 from neurobrix.core.runtime.graph_executor import GraphExecutor
 from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
 
-B, T_TRACE, D, V = 2, 5, 4, 8
+B, T_BUILD, D, V = 2, 5, 4, 8
 COMPONENT = "language_model"
 HIDDEN_TID = "aten.view::0::out_0"          # the pre-head (B*T, D) view: the last mm's input
 
 S0 = {"type": "symbol", "id": "s0", "trace": B}
-S1 = {"type": "symbol", "id": "s1", "trace": T_TRACE}
-BT = {"type": "mul", "left": S0, "right": S1, "trace": B * T_TRACE}
+S1 = {"type": "symbol", "id": "s1", "trace": T_BUILD}
+BT = {"type": "mul", "left": S0, "right": S1, "trace": B * T_BUILD}
 
 
 def _t(tid, shape, sym, **kw):
@@ -76,20 +76,20 @@ def _graph():
     image-AR language model whose head is inside its graph."""
     x = "input::inputs_embeds"
     tensors = {
-        x: _t(x, [B, T_TRACE, D], [S0, S1, D], is_input=True, input_name="inputs_embeds"),
+        x: _t(x, [B, T_BUILD, D], [S0, S1, D], is_input=True, input_name="inputs_embeds"),
         "param::layers.0.w": _t("param::layers.0.w", [D], [D], is_parameter=True,
                                 weight_name="layers.0.w"),
         "param::layers.1.w": _t("param::layers.1.w", [D], [D], is_parameter=True,
                                 weight_name="layers.1.w"),
         "param::head.weight": _t("param::head.weight", [V, D], [V, D], is_parameter=True,
                                  weight_name="head.weight"),
-        "aten.mul::0::out_0": _t("aten.mul::0::out_0", [B, T_TRACE, D], [S0, S1, D]),
-        "aten.add::0::out_0": _t("aten.add::0::out_0", [B, T_TRACE, D], [S0, S1, D]),
-        "aten.mul::1::out_0": _t("aten.mul::1::out_0", [B, T_TRACE, D], [S0, S1, D]),
-        HIDDEN_TID: _t(HIDDEN_TID, [B * T_TRACE, D], [BT, D]),
+        "aten.mul::0::out_0": _t("aten.mul::0::out_0", [B, T_BUILD, D], [S0, S1, D]),
+        "aten.add::0::out_0": _t("aten.add::0::out_0", [B, T_BUILD, D], [S0, S1, D]),
+        "aten.mul::1::out_0": _t("aten.mul::1::out_0", [B, T_BUILD, D], [S0, S1, D]),
+        HIDDEN_TID: _t(HIDDEN_TID, [B * T_BUILD, D], [BT, D]),
         "aten.t::0::out_0": _t("aten.t::0::out_0", [D, V], [D, V]),
-        "aten.mm::0::out_0": _t("aten.mm::0::out_0", [B * T_TRACE, V], [BT, V]),
-        "aten._unsafe_view::0::out_0": _t("aten._unsafe_view::0::out_0", [B, T_TRACE, V],
+        "aten.mm::0::out_0": _t("aten.mm::0::out_0", [B * T_BUILD, V], [BT, V]),
+        "aten._unsafe_view::0::out_0": _t("aten._unsafe_view::0::out_0", [B, T_BUILD, V],
                                           [S0, S1, V], output_name="logits"),
     }
     ops = {
@@ -118,7 +118,7 @@ def _graph():
         "output_tensor_ids": ["aten._unsafe_view::0::out_0"],
         "symbolic_context": {"symbols": {
             "s0": {"name": "batch", "trace_value": B, "source": f"{x}::dim_0"},
-            "s1": {"name": "seq_len", "trace_value": T_TRACE, "source": f"{x}::dim_1"}},
+            "s1": {"name": "seq_len", "trace_value": T_BUILD, "source": f"{x}::dim_1"}},
             "expressions": {}},
     }
 
@@ -186,7 +186,7 @@ def test_the_streamed_base_reads_the_hidden_the_whole_executor_reads(mode):
     whole.load_weights(None, COMPONENT)
     streamed = _streamed_base(mode)
 
-    for seq_len in (T_TRACE, 3 * T_TRACE + 2):       # the build length, and one far from it
+    for seq_len in (T_BUILD, 3 * T_BUILD + 2):       # the build length, and one far from it
         embeds = torch.randn(B, seq_len, D)
         whole_out, whole_hidden = _session_read(whole, embeds)
         streamed_out, streamed_hidden = _session_read(streamed, embeds)
@@ -211,7 +211,7 @@ def test_a_protected_tid_no_piece_produces_is_refused_by_name():
     base = _streamed_base("sequential")
     base.protect_tensor_id("aten.nothing::0::out_0")
     with pytest.raises(RuntimeError, match=r"aten\.nothing::0::out_0"):
-        base.run({"inputs_embeds": torch.randn(B, T_TRACE, D)})
+        base.run({"inputs_embeds": torch.randn(B, T_BUILD, D)})
 
 
 @pytest.mark.parametrize("mode", ["triton", "triton_sequential"])
@@ -264,7 +264,7 @@ def test_a_protected_tid_a_piece_produced_and_did_not_keep_is_refused_by_name(mo
     monkeypatch.setattr(_CpuExecutor, "tensors_of_last_run", lambda self, tids: {})
     base.enable_hidden_states_capture()
     with pytest.raises(RuntimeError, match=r"did not keep"):
-        base.run({"inputs_embeds": torch.randn(B, T_TRACE, D)})
+        base.run({"inputs_embeds": torch.randn(B, T_BUILD, D)})
 
 
 @pytest.mark.parametrize("mode", ["sequential", "compiled"])
@@ -275,6 +275,6 @@ def test_a_run_keys_its_outputs_by_the_one_rule_the_strategy_and_stand_ins_use(m
     from neurobrix.core.runtime.graph_executor import output_key
     whole = _executor(mode)
     whole.load_weights(None, COMPONENT)
-    out = whole.run({"inputs_embeds": torch.randn(B, T_TRACE, D)})
+    out = whole.run({"inputs_embeds": torch.randn(B, T_BUILD, D)})
     tid = "aten._unsafe_view::0::out_0"
     assert list(out) == ["logits"] == [output_key(whole._dag["tensors"][tid], tid)]

@@ -41,11 +41,11 @@ def _meta(dtype, params=None):
     ("float16", "float32", "float16", False),
 ])
 def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compute, wide):
-    from neurobrix.core.dtype.entry_width import enters_at_traced_width, traced_parameter_width
+    from neurobrix.core.dtype.entry_width import enters_at_built_width, built_parameter_width
     from nbxtensor.dtype.itemsize import itemsize
     meta = _meta(traced, params)
-    assert traced_parameter_width(meta) == itemsize(params)
-    assert enters_at_traced_width(itemsize(traced), itemsize(compute), meta) is wide
+    assert built_parameter_width(meta) == itemsize(params)
+    assert enters_at_built_width(itemsize(traced), itemsize(compute), meta) is wide
     # the compiled resolver hands the built dtype (the executor stores it through the DtypeEngine); the Triton
     # engine hands the dtype as its branch stores it (no fp64 here)
     from neurobrix.core.runtime.graph.execution_context import ExecutionContext

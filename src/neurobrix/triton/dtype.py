@@ -41,7 +41,7 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "frobenius_norm", "nuclear_norm", "cosine_similarity",
     "poisson_nll_loss", "cosine_embedding_loss", "nll_loss",
     "mse_loss", "smooth_l1_loss", "huber_loss",
-    # FALLBACK only — the primary protection is `traced_output_is_complex`
+    # FALLBACK only — the primary protection is `built_output_is_complex`
     # (container output_dtypes). See the note in core/dtype/engine.py: do not
     # try to complete this pair, and note this set LEVELS to fp32 while the
     # complex rule is a FLOOR that preserves float64.
@@ -145,10 +145,10 @@ def _is_half(dtype) -> bool:
     return _itemsize.kind(name) == "float" and _itemsize.itemsize(name) == 2
 
 
-# `traced_output_dtype_name`, `traced_output_is_complex` and `amp_fp32_output_dtype` are the library's
+# `built_output_dtype_name`, `built_output_is_complex` and `amp_fp32_output_dtype` are the library's
 # (nbxtensor/dtype/outputs.py), one definition for both engines.
 from nbxtensor.dtype.outputs import (  # noqa: F401 — the library's rules, one definition for both engines
-    amp_fp32_output_dtype, traced_output_dtype_name, traced_output_is_complex)
+    amp_fp32_output_dtype, built_output_dtype_name, built_output_is_complex)
 
 
 def _is_float_tensor(a) -> bool:
@@ -471,8 +471,8 @@ class TritonDtypeEngine:
         if graph_dt in _FLOATING:
             # Wider than the graph's OWN parameters (core/dtype/entry_width): a model built float32
             # throughout is at its width, not wider (orpheus-3b, 2026-10-18).
-            from neurobrix.core.dtype.entry_width import enters_at_traced_width
-            if not enters_at_traced_width(_itemsize.itemsize(graph_dt), _itemsize.itemsize(self.compute_dtype),
+            from neurobrix.core.dtype.entry_width import enters_at_built_width
+            if not enters_at_built_width(_itemsize.itemsize(graph_dt), _itemsize.itemsize(self.compute_dtype),
                                           graph_tensors):
                 return self.compute_dtype
             return self.storage_dtype(graph_dt)
@@ -530,10 +530,10 @@ class TritonDtypeEngine:
         # ATen branch's first rule, ahead of the islands for the same reason:
         # an island is a precision choice among REAL dtypes and cannot retype
         # a built complex128 to complex64 by levelling its float64 input.
-        if traced_output_is_complex(op_record):
+        if built_output_is_complex(op_record):
             return self._wrap_complex_output(func)
         # The op's built output dtype — the vendor's dtype for this op (the cast-back floor).
-        traced = traced_output_dtype_name(op_record)
+        traced = built_output_dtype_name(op_record)
 
         # The calibration record's islands come FIRST: a pinned op computes
         # in fp32 and keeps its fp32 output whatever its AMP class — a
@@ -566,8 +566,8 @@ class TritonDtypeEngine:
             # fp32 through every self-managed op after it (2 017 policy sites on Sana's transformer, the Mac, 06:40).
             # An island — the trace's or the calibration's (returned above) — keeps fp32. Under fp16 compute without
             # native bf16 nothing changes: the in-kernel widening IS the compiled branch's fp32-internal rule there.
-            from neurobrix.core.dtype.traced_island import is_traced_fp32_island
-            if is_traced_fp32_island(op_record, self.graph_dtype):
+            from neurobrix.core.dtype.built_island import is_built_fp32_island
+            if is_built_fp32_island(op_record, self.graph_dtype):
                 return self._wrap_fp32(func)
             return self._wrap_lower_precision(func)
         if op_name in _SELF_MANAGED_OPS:
@@ -587,8 +587,8 @@ class TritonDtypeEngine:
 
         if op_name in AMP_FP16_OPS:
             # The trace's own fp32 island — the compiled engine's rule, one predicate (R30).
-            from neurobrix.core.dtype.traced_island import is_traced_fp32_island
-            if is_traced_fp32_island(op_record, self.graph_dtype):
+            from neurobrix.core.dtype.built_island import is_built_fp32_island
+            if is_built_fp32_island(op_record, self.graph_dtype):
                 return self._wrap_fp32(func)
             if self.compute_dtype == NBXDtype.float16 and op_name in _FP16_NEED_FP32:
                 # div is in _FP16_NEED_FP32 (FP16 op needing fp32 protection

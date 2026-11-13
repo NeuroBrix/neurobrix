@@ -34,7 +34,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
-import trace_request as T  # noqa: E402
+import container_request as T  # noqa: E402
 
 MODEL = "FakeVideo-720x1280"
 SRC = ["measured: the vendor's own pipeline is blank at 4 steps and recognisable at 10"]

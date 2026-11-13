@@ -70,7 +70,7 @@ def test_compiled_promotion_sizes_exact_slice_ends_keep_plus_one():
     _check(dag["ops"])
 
 
-def test_both_mirrors_skip_a_seq_len_whose_trace_value_is_a_config_constant():
+def test_both_mirrors_skip_a_seq_len_whose_build_value_is_a_config_constant():
     """R30: a seq_len symbol whose build value equals a profile.json config
     int is a collision on BOTH mirrors — the triton promotion (which also
     serves the PyTorch-sequential oracle) takes the same set."""

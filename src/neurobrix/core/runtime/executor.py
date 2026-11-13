@@ -627,7 +627,7 @@ class RuntimeExecutor:
                 self._component_tiling.pop(comp_name, None)
                 continue
             self._component_tiling[comp_name] = TilingEngine(
-                trace_size=spec["trace_size"],
+                build_size=spec["trace_size"],
                 overlap=spec["overlap"],
                 scale_factor=spec["scale_factor"],
                 window_alignment=spec.get("window_alignment", 1),

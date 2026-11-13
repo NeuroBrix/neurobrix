@@ -56,14 +56,14 @@ def _streamed_base(mode, before=None):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_a_band_registered_before_the_install_runs_in_its_piece(mode):
-    embeds = torch.randn(W.B, W.T_TRACE, W.D)
+    embeds = torch.randn(W.B, W.T_BUILD, W.D)
     whole = W._executor(mode)
     whole.load_weights(None, W.COMPONENT)
     want = whole.run({"inputs_embeds": embeds})
     calls = []
     base = _streamed_base(mode, before={"aten.mm::0": _recording_mm(calls)})
     got = base.run({"inputs_embeds": embeds})
-    assert calls == [(W.B * W.T_TRACE, W.D)], f"the planned interceptor ran {calls} in the pieces"
+    assert calls == [(W.B * W.T_BUILD, W.D)], f"the planned interceptor ran {calls} in the pieces"
     assert set(got) == set(want)
     for k in want:
         assert torch.equal(got[k], want[k]), k

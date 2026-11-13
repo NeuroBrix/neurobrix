@@ -247,7 +247,7 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
 # when a model gets built and lands in `~/.neurobrix/cache/`.
 #
 # (model_name, family, reason)
-TARGET_MATRIX_NOT_TRACED: List[Tuple[str, str, str]] = [
+TARGET_MATRIX_NOT_BUILT: List[Tuple[str, str, str]] = [
     # LLM gemma sub-family — the only genuine gaps left in this list.
     ("gemma-4-26B-A4B-it", "llm",
      "Gemma sub-family: snapshot present, not built (no graphs, no .nbx)."),
@@ -306,7 +306,7 @@ def discover_target_matrix() -> List[Dict[str, str | int]]:
     See `TARGET_MATRIX_NOT_TRACED` for the actual list.
     """
     out: List[Dict[str, str | int]] = []
-    for name, family, reason in TARGET_MATRIX_NOT_TRACED:
+    for name, family, reason in TARGET_MATRIX_NOT_BUILT:
         out.append({
             "name": name,
             "family": family,

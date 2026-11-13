@@ -50,11 +50,11 @@ def vae_scale_factor(manifest: Dict[str, Any], defaults: Dict[str, Any],
         if declared:
             return int(declared)
     transformer_attrs = ((components or {}).get("transformer") or {}).get("attributes") or {}
-    trace_latent_extent = transformer_attrs.get("state_extent_0")
-    if trace_latent_extent:
-        trace_pixel_res = (manifest or {}).get("trace_resolution")
-        if trace_pixel_res:
-            return int(trace_pixel_res) // int(trace_latent_extent)
+    build_latent_extent = transformer_attrs.get("state_extent_0")
+    if build_latent_extent:
+        build_pixel_res = (manifest or {}).get("trace_resolution")
+        if build_pixel_res:
+            return int(build_pixel_res) // int(build_latent_extent)
         state_channels = transformer_attrs.get("state_channels", 4)
         if state_channels >= 32:
             return 32

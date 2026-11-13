@@ -22,7 +22,7 @@ def _graph():
             "execution_order": ["op1", "op2"]})
 
 
-def test_the_trace_is_what_it_sizes_without_a_request():
+def test_the_build_is_what_it_sizes_without_a_request():
     assert max(LayerPartitioner(_graph()).live_activation_curve()) == 10 * 10 * 4   # one tensor live at a time
 
 

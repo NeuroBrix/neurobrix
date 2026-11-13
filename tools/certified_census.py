@@ -36,7 +36,7 @@ comparison here.
     python tools/certified_census.py --hardware default-c5d28c27 --models TinyLlama-1.1B-Chat-v1.0 --prove ~/.neurobrix/replay_cache/...
 
 The request each model is shadowed at is DERIVED from the current container's build, by the
-one derivation the regression matrix (the verification) uses too (`tools/trace_request.
+one derivation the regression matrix (the verification) uses too (`tools/container_request.
 derived_request`): the family's judged request — the calibration section of `config/families/
 <family>.yml` plus the campaign's media and bounds (`precision_zoo_campaign.request_args`) — at
 the container's off-build size for a family whose request names one. A request-dependent
@@ -74,7 +74,7 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as _zoo                       # noqa: E402  (run_group, CACHE)
-import trace_request as _trace                              # noqa: E402  (the request the container's build gives)
+import container_request as _trace                              # noqa: E402  (the request the container's build gives)
 import where_the_symbol_chain_breaks as _chain              # noqa: E402  (analyse)
 
 # Honor NEUROBRIX_CACHE (cache_dir's env door), so a census can run over a
@@ -319,7 +319,7 @@ class RequestRefused(Exception):
 
 
 def census_requests(model: str, fam: str, extra: list, table) -> list:
-    """The model's ordinary request(s): DERIVED from the container's build (`trace_request.
+    """The model's ordinary request(s): DERIVED from the container's build (`container_request.
     derived_request`, the regression matrix's own derivation) plus `--extra`, or the table's,
     each of which must ask for the derived size. Raises RequestRefused naming the model, both
     sizes and how to regenerate the table; nothing is taken silently from either side."""
@@ -329,7 +329,7 @@ def census_requests(model: str, fam: str, extra: list, table) -> list:
         raise RequestRefused(f"{model}: the request cannot be derived from the container's build — "
                              f"{type(e).__name__}: {e}") from e
     want = _trace.requested_size(derived)
-    regen = (f"regenerate the table from the containers as they are now (`python tools/trace_request.py "
+    regen = (f"regenerate the table from the containers as they are now (`python tools/container_request.py "
              f"--models {model} --out <requests.json>`), or drop the model's entry and let the census derive it")
     stray = [f for f in _trace.SIZE_FLAGS if f in extra]
     if stray:
@@ -337,7 +337,7 @@ def census_requests(model: str, fam: str, extra: list, table) -> list:
             f"{model}: --extra carries {', '.join(stray)} — a size is the container's trace's "
             f"({_trace.size_text(want)}), never a flag appended to every request; drop it from --extra")
     if not table:
-        # the gate cell's request too, when the model's container states gate values (trace_request.gate_request):
+        # the gate cell's request too, when the model's container states gate values (container_request.gate_request):
         # the certified-only gate forms its keys (fewer frames are other shapes)
         gate = _trace.gate_request(model, fam)
         if _trace.requested_size(gate) != want:
@@ -531,7 +531,7 @@ def main() -> int:
     ap.add_argument("--modes", default="triton", help="comma-separated served modes: triton, triton-sequential")
     ap.add_argument("--extra", nargs="*", default=[], help="flags appended to every request")
     ap.add_argument("--requests-json", default=None, help='{"<model>": [[flags...], ...]} — whole requests per model; each must ask for the size '
-                         'the current container\'s build gives (tools/trace_request.py writes such a table)')
+                         'the current container\'s build gives (tools/container_request.py writes such a table)')
     ap.add_argument("--timeout", type=int, default=3600, help="per shadow run, seconds")
     ap.add_argument("--jobs", type=int, default=2, help="shadow runs in flight (CPU-bound, no card)")
     ap.add_argument("--directory", default=None, help="<vendor>/<profile> of the certified directory to measure coverage against")
