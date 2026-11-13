@@ -9,7 +9,8 @@ replaced by a default.
 from typing import Optional, Tuple
 
 __all__ = ["count", "current", "select", "select_for_launch", "synchronize", "drain", "mem_info", "most_free",
-           "target_name", "DeviceQueryError", "NoGpuRuntime"]
+           "target_name", "DeviceQueryError", "NoGpuRuntime", "install_shadow", "DevicesVisible", "declare_target",
+           "TargetNotDeclarable"]
 
 
 def __getattr__(name):
@@ -21,6 +22,9 @@ def __getattr__(name):
     if name == "NoGpuRuntime":                # a host with no GPU runtime: the one refusal that means "no device"
         from nbxtensor.backend.runtime import NoGpuRuntime
         return NoGpuRuntime
+    if name == "DevicesVisible":              # `install_shadow` asked with a device in sight
+        from nbxtensor.memory.shadow import DevicesVisible
+        return DevicesVisible
     raise AttributeError(f"module 'nbxtensor.device' has no attribute {name!r}")
 
 
@@ -86,3 +90,51 @@ def target_name() -> str:
     from nbxtensor.backend.launcher import arch_name, target
     t = target()
     return f"{t.backend}-{arch_name(t)}"
+
+
+def install_shadow(devices: int) -> None:
+    """Turn this process into a shadow of `devices` devices, once (a second call changes nothing): no device memory,
+    no launch, no value, so an application can run its kernels' dispatch to learn every launch key it forms without a
+    card (`memory.shadow.install_shadow`). From then on `count()` answers `devices` and `current()` the device
+    `select` named last (0 before any); allocations hand out addresses that address nothing.
+
+    Refused with `DevicesVisible` while the runtime sees a device (with one in sight, a path the shadow does not cover
+    would succeed on real hardware in silence), and with `ValueError` for a count below one. Install before the
+    kernels are defined."""
+    if int(devices) < 1:
+        raise ValueError(f"install_shadow({devices!r}): a shadow stands for at least one device; name how many the "
+                         f"hardware it stands for has")
+    from nbxtensor.memory.shadow import install_shadow as install
+    install(int(devices))
+
+
+class TargetNotDeclarable(ValueError):
+    """`declare_target` was given a maker whose compile target is not formed from a capability number, or a capability
+    that is not one ("major" or "major.minor")."""
+
+
+# maker -> (compile backend, threads per warp) of a target formed from a capability number
+_TARGETS = {"nvidia": ("cuda", 32), "amd": ("hip", 64)}
+
+
+def declare_target(maker: str, capability: str) -> None:
+    """Bind this process's compile target without asking a driver, from what a hardware description states: `maker`
+    "nvidia" (backend cuda, 32 threads a warp) or "amd" (hip, 64), `capability` "major.minor" ("7.0" -> 70; "8" ->
+    80). `backend.launcher.target()` answers it from then on, and the device description in force is read again
+    under it (`backend.device_files.forget`): a derivation that compiles and launches nothing forms the keys the
+    launcher forms on that device.
+
+    Refused with `TargetNotDeclarable`, naming what was given, for any other maker (a device whose architecture is a
+    name, Apple or Intel, keeps its driver's answer) or a capability that is not digits with at most one dot."""
+    m = str(maker).strip().lower()
+    cc = str(capability).strip()
+    parts = cc.split(".")
+    if m not in _TARGETS or not 1 <= len(parts) <= 2 or not all(p.isdigit() for p in parts):
+        raise TargetNotDeclarable(f"declare_target({maker!r}, {capability!r}): a target is declared for "
+                                  f"{sorted(_TARGETS)} with a capability 'major' or 'major.minor'")
+    from triton.backends.compiler import GPUTarget
+    from nbxtensor.backend import device_files, launcher
+    backend, warp = _TARGETS[m]
+    minor = int(parts[1]) if len(parts) == 2 else 0
+    launcher.bind_target(GPUTarget(backend, int(parts[0]) * 10 + minor, warp))
+    device_files.forget()     # a description resolved before the bind is read again

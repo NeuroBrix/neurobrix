@@ -271,12 +271,12 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     """
     if _ACTIVE["census"]:
         return
-    from nbxtensor.memory import shadow as _shadow
+    from nbxtensor import device as _device
     # THE DOOR: the library's shadow refuses while a device is visible (a path it does not cover would succeed on real
     # hardware in silence). `--allow-visible-devices` does not exist: the census has no honest use for a card.
     try:
-        _shadow.install_shadow(int(os.environ.get("NBX_CENSUS_DEVICES", "1") or 1))
-    except _shadow.DevicesVisible as e:
+        _device.install_shadow(int(os.environ.get("NBX_CENSUS_DEVICES", "1") or 1))
+    except _device.DevicesVisible as e:
         raise RuntimeError(
             f"census shadow refused: {e}. Run it with no card in sight — CUDA_VISIBLE_DEVICES= NBX_CENSUS=1 "
             "NBX_CENSUS_DEVICES=<the profile's count> neurobrix run ... --hardware <profile>") from None
@@ -313,7 +313,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
             # 16 GB profile, 2026-09-21).
             dev_s = str(getattr(self, "device", "") or "")
             if not dev_s.startswith(("cuda", "hip", "mps")):
-                self.device = f"cuda:{_shadow.shadow_device()}"
+                self.device = f"cuda:{_device.current()}"
             self._weights = _shadow_params_for(self, nbx_path, component)
             return self._weights
         GE._load_weights_triton = _load_weights_triton
@@ -406,9 +406,5 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
                 f"refusing rather than recording a catalogue of exact keys a bucketed "
                 f"launcher will never ask for")
         return
-    major, minor = (cc.split(".") + ["0"])[:2]
-    from triton.backends.compiler import GPUTarget
-    from nbxtensor.backend import launcher as _launcher
-    _launcher.bind_target(GPUTarget("cuda" if brand == "nvidia" else "hip", int(major) * 10 + int(minor), 32 if brand == "nvidia" else 64))
-    from nbxtensor.backend import device_files
-    device_files.forget()     # a profile resolved empty before the bind is read again
+    from nbxtensor import device as _device
+    _device.declare_target(brand, cc)     # the target bound, a profile resolved empty before it read again

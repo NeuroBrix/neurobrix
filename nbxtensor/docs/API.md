@@ -3154,7 +3154,22 @@ def most_free() -> int                   # the device with the most free memory;
 def target_name() -> str                 # what the process compiles for, `<backend>-<arch>` (cuda-70); a driver's refusal raised
 class DeviceQueryError(RuntimeError)     # a device question the runtime refused: the call, the device, its code
 NoGpuRuntime                             # (backend.runtime) no GPU runtime on this host: the one refusal meaning no device
+def install_shadow(devices: int) -> None # the process becomes a shadow of `devices` devices, once (memory.shadow)
+DevicesVisible                           # (memory.shadow) install_shadow refused: a device is in sight
+def declare_target(maker: str, capability: str) -> None   # the compile target bound with no driver asked
+class TargetNotDeclarable(ValueError)    # declare_target refused: a maker other than nvidia / amd, or no capability number
 ```
+
+**A device with no driver asked (2026-11-13).** Two doors serve an application that derives what a run would launch
+without running it. `install_shadow(devices)` turns the process into a shadow: allocations hand out addresses that
+address nothing, no kernel launches, a value read answers a benign value (a value born on the host answers its own).
+After it, `count()` answers `devices` and `current()` answers the device `select` named last. It is refused with
+`DevicesVisible` while the runtime sees a device, and with `ValueError` for a count below one.
+`declare_target(maker, capability)` binds the compile target a hardware description states, so that
+`backend.launcher.target()` and the device description answer as on that device: `"nvidia"` is cuda with 32
+threads a warp, `"amd"` is hip with 64, and `"7.0"` becomes 70. It is refused with `TargetNotDeclarable` for any other
+maker, since a device whose architecture is a name keeps its driver's answer, and for a capability that is not
+"major" or "major.minor".
 
 No device is a fact, a refusal is an error: `count()` is 0 only on a host with no GPU runtime
 (`nbxtensor.backend.runtime.NoGpuRuntime`) or when the runtime answers its own "no device" code (the backend table's

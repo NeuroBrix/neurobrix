@@ -65,5 +65,6 @@ def test_the_door_exports_exactly_its_names():
     from nbxtensor import device
     assert sorted(device.__all__) == sorted(["count", "current", "select", "select_for_launch", "synchronize",
                                              "drain", "mem_info", "most_free", "target_name", "DeviceQueryError",
-                                             "NoGpuRuntime"])
+                                             "NoGpuRuntime", "install_shadow", "DevicesVisible", "declare_target",
+                                             "TargetNotDeclarable"])
     assert all(callable(getattr(device, n)) for n in device.__all__)
