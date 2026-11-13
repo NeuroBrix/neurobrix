@@ -23,6 +23,7 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 import logging
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
 
 
@@ -63,14 +64,13 @@ def untracked_mb(devices) -> Optional[Dict[int, float]]:
     None when the backend gives no per-process accounting — the growth is then not measured (said by `record`), never
     read from the card's free/total, which counts every other process."""
     from nbxtensor.backend.process_memory import process_device_bytes
-    from nbxtensor.memory.allocator import DeviceAllocator as DA
     out = {}
     for d in devices:
-        DA.mem_get_info(d)        # the context exists before it is read (the before-reading held it in v2 as well)
+        _nbx_device.mem_info(d)        # the context exists before it is read (the before-reading held it in v2 as well)
         held = process_device_bytes(int(d))
         if held is None:
             return None
-        out[int(d)] = (int(held) - DA.memory_allocated(int(d))) / (1024 * 1024)
+        out[int(d)] = (int(held) - _nbx_memory.memory_allocated(int(d))) / (1024 * 1024)
     return out
 
 

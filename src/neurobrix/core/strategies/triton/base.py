@@ -16,6 +16,7 @@ from typing import Dict, Any
 from nbxtensor.backend.device_names import to_named_device, synchronize_named
 
 from ..base import ExecutionStrategy
+from nbxtensor import memory as _nbx_memory
 
 
 class TritonStrategy(ExecutionStrategy):
@@ -46,8 +47,7 @@ class TritonStrategy(ExecutionStrategy):
         return result
 
     def _release_device_cache(self, device: str) -> None:
-        from nbxtensor.memory.allocator import DeviceAllocator
-        DeviceAllocator.empty_cache_pool()
+        _nbx_memory.empty_cache_pool()
 
     # wait for `device` (the current one when it names no accelerator), the current device restored after
     synchronize_device = staticmethod(synchronize_named)

@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Dict, Optional, Tuple
 
 from neurobrix.core.runtime.tensor_compat import aten
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 
 
 # R33: this module imports no torch. The device belongs to whichever engine
@@ -55,8 +56,7 @@ def device_sync(device: Optional[str] = None) -> None:
         # CPU, XPU: no explicit sync needed (operations are synchronous)
         return
     if kind == "cuda":
-        from nbxtensor.memory.allocator import DeviceAllocator
-        DeviceAllocator.device_synchronize(idx)
+        _nbx_device.drain(idx)
 
 
 def plan_devices(plan) -> list:
@@ -95,8 +95,7 @@ def device_empty_cache(device: Optional[str] = None) -> None:
         # CPU: no cache to clear
         return
     if kind == "cuda":
-        from nbxtensor.memory.allocator import DeviceAllocator
-        DeviceAllocator.empty_cache_pool()
+        _nbx_memory.empty_cache_pool()
 
 
 def device_seed(device: Optional[str], seed: int) -> None:
@@ -157,9 +156,8 @@ def device_memory_stats(device: Optional[str] = None) -> Dict[str, float]:
         # CPU / unknown: no GPU memory to report
         return empty
     if kind == "cuda":
-        from nbxtensor.memory.allocator import DeviceAllocator
-        free_b, total_b = DeviceAllocator.mem_get_info(idx)
-        allocated = DeviceAllocator.memory_allocated(idx) / (1024 * 1024)
+        free_b, total_b = _nbx_device.mem_info(idx)
+        allocated = _nbx_memory.memory_allocated(idx) / (1024 * 1024)
         total = total_b / (1024 * 1024)
         free = free_b / (1024 * 1024)
         return {

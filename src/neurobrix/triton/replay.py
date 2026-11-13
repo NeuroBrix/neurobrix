@@ -52,9 +52,9 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.slab import StepSlab
 import logging
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
 
 # THE ENGINE REPLAYS BY DEFAULT (the supervisor's order 2026-10-28 08:20, S3): a sequence that runs again with the same
@@ -203,7 +203,7 @@ def _stabilize_tick(seq) -> None:
             seq.__dict__.get("_stab_slab") is None:
         # PURE-BUMP sizing: the slab must hold the step's TOTAL carved
         # bytes (no intra-step reuse), not the live high-water.
-        slab = StepSlab.for_carved(seq.__dict__.pop("_stab_total"), DeviceAllocator.get_device())
+        slab = StepSlab.for_carved(seq.__dict__.pop("_stab_total"), _nbx_device.current())
         need = slab.size
         seq.__dict__["_stab_slab"] = slab
         comp = str((seq.dag or {}).get("component_name", "?"))
@@ -317,7 +317,7 @@ def release_idle_slabs(dev: int) -> int:
     return freed
 
 
-DeviceAllocator.register_idle_reclaimer(release_idle_slabs)
+_nbx_memory.register_idle_reclaimer(release_idle_slabs)
 
 
 def retire_sequence_plans(seq) -> int:
@@ -574,7 +574,7 @@ def _mem_diag(tag: str) -> None:
     at replay state transitions (retention forensics)."""
     if os.environ.get("NBX_REPLAY_MEM_DIAG") != "1":
         return
-    total = DeviceAllocator.memory_allocated()
+    total = _nbx_memory.memory_allocated()
     _log.debug(f"[Replay][MEM] {tag}: live_tracked={total/1e6:.0f}MB")
 
 
@@ -808,7 +808,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     # pass that runs the normal path beside it fit what the card has free — a plan that cannot is the normal path's,
     # never an out-of-memory (Allegro-TI2V's encoder tile, 2026-11-04: the measured run's 9.9 GB stayed cached under a
     # 12.7 GB slab, and the verify pass beside them, with the pipeline's resident weights, overran a 32 GB card).
-    _dev = seq.device_idx if seq.device_idx is not None else DeviceAllocator.get_device()
+    _dev = seq.device_idx if seq.device_idx is not None else _nbx_device.current()
     _verify = int((seq.__dict__.get("_replay_live_peak") or {}).get(sig, slab_bytes))
     _fits, _free = FP.room_for(_dev, slab_bytes, _verify)
     if not _fits:

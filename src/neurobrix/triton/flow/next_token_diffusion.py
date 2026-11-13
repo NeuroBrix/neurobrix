@@ -30,7 +30,6 @@ from typing import Any, Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.triton.scheduler.dpm_solver_pp import TritonDPMSolverPPScheduler
@@ -41,6 +40,7 @@ from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
+from nbxtensor import device as _nbx_device
 _log = logging.getLogger(__name__)
 
 
@@ -127,7 +127,7 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
     # ─── public entry ──────────────────────────────────────────────────────────
     def execute(self) -> Dict[str, Any]:
         defaults = self.ctx.pkg.defaults
-        DeviceAllocator.set_device(parse_device_idx(self.ctx.primary_device))
+        _nbx_device.select(parse_device_idx(self.ctx.primary_device))
 
         # Replay v1 capability gate: this flow's per-token/chunk
         # streaming contract exceeds the frozen-plan replay model
@@ -354,7 +354,7 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
         embed_w = executor.get_embed_tokens()
         if embed_w is None:
             raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
-        DeviceAllocator.set_device(parse_device_idx(self.ctx.primary_device))
+        _nbx_device.select(parse_device_idx(self.ctx.primary_device))
         valid_rows = _nbx_index_wrappers.embedding(embed_w, NBXTensor.from_numpy(np.asarray(valid_arr, dtype=np.int64)))  # [n_valid, H]
         valid_rows_t = valid_rows.to(NBXDtype.float32).transpose(0, 1).contiguous()                     # [H, n_valid]
         use_cfg = cfg_scale != 1.0

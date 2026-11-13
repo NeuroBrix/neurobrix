@@ -41,6 +41,7 @@ from neurobrix.core.module.audio.mel_dsp import (  # noqa: F401
 from neurobrix.core.flow.audio_utils import (   # torch-free: the compiled flow's own readers, the same
     get_component_input_shape, postprocess_text_output as postprocess_text_output_np, requested_voice, shipped_voices)
 import logging
+from nbxtensor import device as _nbx_device
 _log = logging.getLogger(__name__)
 
 
@@ -102,9 +103,8 @@ def _load_pt_numpy(path: str) -> np.ndarray:
 
 
 def _set_device_for(ctx):
-    from nbxtensor.memory.allocator import DeviceAllocator as _DA
     from nbxtensor.memory.device_transfer import parse_device_idx
-    _DA.set_device(parse_device_idx(getattr(ctx, "primary_device", "cuda:0")))
+    _nbx_device.select(parse_device_idx(getattr(ctx, "primary_device", "cuda:0")))
 
 
 def _load_voicepack_np(engine, phoneme_count: int) -> None:
@@ -269,9 +269,8 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
     # Place the feature tensor on the encoder's device (NBXTensor.from_numpy uses
     # the CURRENT DeviceAllocator device — without this it lands on cuda:0 while a
     # multi-GPU-placed encoder may be on another device → "cpu tensor" at conv).
-    from nbxtensor.memory.allocator import DeviceAllocator as _DA
     from nbxtensor.memory.device_transfer import parse_device_idx
-    _DA.set_device(parse_device_idx(getattr(ctx, "primary_device", "cuda:0")))
+    _nbx_device.select(parse_device_idx(getattr(ctx, "primary_device", "cuda:0")))
     nbx = NBXTensor.from_numpy(feats)
     ctx.variable_resolver.resolved[variable] = nbx
     short = variable.split(".")[-1] if "." in variable else variable

@@ -56,6 +56,7 @@ from neurobrix.core.flow.base import requests_speech
 from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
+from nbxtensor import device as _nbx_device
 _log = logging.getLogger(__name__)
 
 
@@ -625,17 +626,16 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                 # embedding, cat) to complete on EVERY device before the
                 # next executor.run's rebind/transfers (current-device
                 # sync alone is blind to the scattered placement).
-                from nbxtensor.memory.allocator import DeviceAllocator
-                _prev_d = DeviceAllocator.get_device()
+                _prev_d = _nbx_device.current()
                 try:
                     for _d in range(8):
                         try:
-                            DeviceAllocator.set_device(_d)
-                            DeviceAllocator.sync_device()
+                            _nbx_device.select(_d)
+                            _nbx_device.synchronize()
                         except Exception:
                             break
                 finally:
-                    DeviceAllocator.set_device(_prev_d)
+                    _nbx_device.select(_prev_d)
 
         _log.debug(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
                    f"{(time.perf_counter() - start) * 1000:.0f}ms")

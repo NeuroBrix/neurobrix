@@ -14,9 +14,9 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from neurobrix import decode_progress, decode_stop
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.memory.allocator import DeviceAllocator
 
 from .samplers import CombinedSampler
+from nbxtensor import device as _nbx_device
 
 
 @dataclass
@@ -114,7 +114,7 @@ class TritonGenerator:
         all_context = self._prompt_ids + self._state.generated_tokens
         if all_context:
             ctx_np = np.array([all_context], dtype=np.int64)
-            DeviceAllocator.set_device(self._state.device_idx)
+            _nbx_device.select(self._state.device_idx)
             context_ids = NBXTensor.from_numpy(ctx_np)
         else:
             context_ids = None

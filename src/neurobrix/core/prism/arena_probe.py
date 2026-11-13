@@ -12,6 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 
 MARK = "NBX-ARENA-PROBE "
 #: the allocator's refusal, word for word (nbxtensor.memory.allocator: "the message is unchanged to the byte")
@@ -110,7 +111,6 @@ def measure(container_dir: str, component: str, hardware_id: str, scale: int = 1
     from neurobrix.core.prism.solver import PrismSolver, ComponentAllocation
     from neurobrix.core.runtime.factory import ExecutorFactory
     from neurobrix.triton.dtype import declare_hardware_profile
-    from nbxtensor.memory.allocator import DeviceAllocator as DA
     container, profile = NBXContainer.load(container_dir), load_profile(hardware_id)
     declare_hardware_profile(profile)
     dag = json.loads((Path(container_dir) / "components" / component / "graph.json").read_text())
@@ -133,12 +133,12 @@ def measure(container_dir: str, component: str, hardware_id: str, scale: int = 1
     executor = ExecutorFactory.create(component, alloc, str(container_dir), dag, mode="triton")
     executor.load_weights(str(container_dir), component)
     executor.run(_inputs(dag, scale))
-    DA.give_back_cached(0)
+    _nbx_memory.give_back_cached(0)
     inputs = _inputs(dag, scale)
-    token = DA.open_window(0)
+    token = _nbx_memory.open_window(0)
     executor.run(inputs)
-    DA.device_synchronize(0)
-    start, peak = DA.window_start(token), DA.close_window(0, token)
+    _nbx_device.drain(0)
+    start, peak = _nbx_memory.window_start(token), _nbx_memory.close_window(0, token)
     return {"container": Path(container_dir).name, "component": component, "hold_bytes": int(peak) - int(start),
             "walked_bytes": walked}
 

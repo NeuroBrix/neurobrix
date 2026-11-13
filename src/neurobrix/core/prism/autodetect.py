@@ -44,6 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
 from neurobrix.core.prism import launch_lines
 import logging
+from nbxtensor import memory as _nbx_memory
 _log = logging.getLogger(__name__)
 DEFAULT_PROFILE_PATH = HARDWARE_DIR / "default.yml"
 
@@ -2410,8 +2411,7 @@ def runtime_card_facts(index: int) -> dict:
     allocator reports (cudaMemGetInfo) and this process's own context on it (`device_sharing`) — or {} when the runtime
     cannot answer (the census shadow then refuses the card by name). Read through the engine's allocator, never torch."""
     try:
-        from nbxtensor.memory.allocator import DeviceAllocator
-        total = DeviceAllocator.device_total_bytes(index)
+        total = _nbx_memory.device_total_bytes(index)
         facts = device_sharing(index)
         if total is None or total <= 0 or not facts or facts.get("own_context_mb") is None:
             return {}

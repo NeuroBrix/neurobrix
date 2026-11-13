@@ -26,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional
 from neurobrix.core.runtime.graph_executor import output_key
 from neurobrix.core.strategies.base import ExecutionStrategy
 import logging
+from nbxtensor import memory as _nbx_memory
 _log = logging.getLogger(__name__)
 
 
@@ -72,10 +73,9 @@ def _segment_memory_line(seg_exec) -> str:
     if dev:
         device_sync(dev)
     if str(getattr(seg_exec, "mode", "")).startswith("triton"):
-        from nbxtensor.memory.allocator import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
-        return (f"device live {DA.memory_allocated(idx) / 2**20:.0f} MB, "
-                f"pool cached {DA.pool_cached_bytes(idx) / 2**20:.0f} MB")
+        return (f"device live {_nbx_memory.memory_allocated(idx) / 2**20:.0f} MB, "
+                f"pool cached {_nbx_memory.pool_cached_bytes(idx) / 2**20:.0f} MB")
     from neurobrix.core.device_utils import device_allocator_figures
     f = device_allocator_figures(dev or None)
     if "allocated_mb" not in f:

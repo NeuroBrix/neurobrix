@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from nbxtensor.random.seeded_draw import draw_from_probabilities as _sample_token_np   # a census shadow replaces it
@@ -23,6 +22,7 @@ from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 from neurobrix.core.flow.shared_steps import _is_tensor, float32_host   # dual_ar and tts_llm, the same
 import logging
+from nbxtensor import device as _nbx_device
 _log = logging.getLogger(__name__)
 
 
@@ -63,7 +63,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         backbone_stage = stages[0]
         comp_name = backbone_stage["component"]
         device_idx = parse_device_idx(self.ctx.primary_device)
-        DeviceAllocator.set_device(device_idx)
+        _nbx_device.select(device_idx)
 
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
         # CLI sampling overrides (global.*) take precedence over the embedded

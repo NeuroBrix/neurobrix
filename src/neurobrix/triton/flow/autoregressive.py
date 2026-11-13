@@ -32,6 +32,7 @@ from neurobrix.core.flow.decoder_cache import _session_dag   # both branches rea
 # the prompt as the flow tokenizes it: one rule for the flow, the plan and the derived census (pure Python)
 from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output, prompt_token_ids
 import logging
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
 
 
@@ -72,17 +73,16 @@ def _phase_mem_note() -> str:
     exactly what these two stamps decide, and it could not be read.
     """
     import os as _os
-    from nbxtensor.memory.allocator import DeviceAllocator as _DA
-    d = _DA.get_device()
-    live = _DA.memory_allocated(d) / 2**20
-    pooled = _DA.pool_cached_bytes(d) / 2**20
-    free = _DA.device_free_bytes() / 2**20
+    d = _nbx_device.current()
+    live = _nbx_memory.memory_allocated(d) / 2**20
+    pooled = _nbx_memory.pool_cached_bytes(d) / 2**20
+    free = _nbx_memory.device_free_bytes() / 2**20
     note = f"live={live:.0f}MB pool={pooled:.0f}MB free={free:.0f}MB"
     if _os.environ.get("NBX_PHASE_BLOCKS") == "1":
         # The blocks BEHIND the number. A single `live=` reading says a plan and an
         # execution disagree; it never says which allocation is the difference. The
         # sizes do: a weight is recognisable by its byte count.
-        blocks = _DA.blocks_in_use(d)
+        blocks = _nbx_memory.blocks_in_use(d)
         from collections import Counter as _C
         hist = _C(blocks.values())
         top = "; ".join(f"{n}x{sz / 2**20:.2f}MB={n * sz / 2**20:.0f}MB"
@@ -196,15 +196,14 @@ class TritonAutoregressiveHandler:
         # stamp per phase boundary; the prefill stamp waits for the GPU.
         # R30 mirror of core/flow/autoregressive.py.
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
-        from nbxtensor.memory.allocator import DeviceAllocator as _DA
         from nbxtensor.memory.device_transfer import parse_device_idxs as _pdi
 
         def _dev_sync():  # every device of the (possibly compound) primary device
-            prev = _DA.get_device()
+            prev = _nbx_device.current()
             for _i in _pdi(self.ctx.primary_device):
-                _DA.set_device(_i)
-                _DA.sync_device()
-            _DA.set_device(prev)
+                _nbx_device.select(_i)
+                _nbx_device.synchronize()
+            _nbx_device.select(prev)
 
         _mem_note = _phase_mem_note      # module-level: the session stamps use it too
 
@@ -429,7 +428,7 @@ class TritonAutoregressiveHandler:
                     "ZERO FALLBACK: 'global.input_token_ids' is empty — "
                     "a zero-length prefill is never valid.")
             ids_np = np.array([token_ids], dtype=np.int64)
-            DeviceAllocator.set_device(device_idx)
+            _nbx_device.select(device_idx)
             return NBXTensor.from_numpy(ids_np)
 
         if "tokenizer" not in self.ctx.modules:
@@ -491,7 +490,7 @@ class TritonAutoregressiveHandler:
         else:
             ids_np = ids_np_cond
 
-        DeviceAllocator.set_device(device_idx)
+        _nbx_device.select(device_idx)
         return NBXTensor.from_numpy(ids_np)
 
     def _execute_score(self, strategy, hidden, input_ids) -> None:
@@ -1083,7 +1082,7 @@ class TritonImageStrategy:
 
         num_tokens = len(generated_tokens)
         ids_np = np.array(generated_tokens, dtype=np.int64)
-        DeviceAllocator.set_device(self._device_idx)
+        _nbx_device.select(self._device_idx)
         code_b = NBXTensor.from_numpy(ids_np)
 
         decoder_in = _graph_input_name(decoder, "code_b")

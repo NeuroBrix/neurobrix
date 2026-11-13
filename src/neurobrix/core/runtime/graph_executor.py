@@ -30,6 +30,7 @@ The executor mechanically plays the DAG:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 
 if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
@@ -210,9 +211,8 @@ def _left_after_release(device, mode) -> str:
     if dev:
         device_sync(dev)
     if str(mode or "").startswith("triton"):
-        from nbxtensor.memory.allocator import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
-        return f"; the device still holds {DA.memory_allocated(idx) / 2**20:.0f} MB live"
+        return f"; the device still holds {_nbx_memory.memory_allocated(idx) / 2**20:.0f} MB live"
     from neurobrix.core.device_utils import device_allocator_figures
     f = device_allocator_figures(dev or None)
     if "allocated_mb" not in f:
@@ -229,9 +229,8 @@ def _cuda_peak_since_load(device, mode, window=None) -> str:
     if str(mode or "").startswith("triton"):
         if window is None:
             return ""
-        from nbxtensor.memory.allocator import DeviceAllocator
-        start = DeviceAllocator.window_start(window[1])
-        held = DeviceAllocator.close_window(*window)
+        start = _nbx_memory.window_start(window[1])
+        held = _nbx_memory.close_window(*window)
         if held is None:
             return ""
         return (f", held at most {held / 2**20:.0f} MB from the driver since its load"
@@ -2383,7 +2382,6 @@ class GraphExecutor:
         from neurobrix.triton.weight_loader import load_component_weights
         from nbxtensor.memory import join_weights
         from nbxtensor.dtype.nbx_dtype import parse_dtype
-        from nbxtensor.memory.allocator import DeviceAllocator
 
         if ':' in str(self.device):
             device_idx = int(self.device.split(':')[1])
@@ -2394,14 +2392,14 @@ class GraphExecutor:
             # default of 0 sent the CogVideoX-5b f49 VAE decode (~19 GB
             # working set) to a 16 GB card while two 32 GB cards sat idle.
             # Persist the choice so constants and downstream loads follow.
-            device_idx = DeviceAllocator.most_free_device()
+            device_idx = _nbx_device.most_free()
             self.device = f"cuda:{device_idx}"
             _log.debug(f"   [Triton] CPU-staged '{component}' -> cuda:{device_idx} "
                        f"(most free VRAM)")
         compute_dtype = parse_dtype(self.dtype)
 
-        DeviceAllocator.set_device(device_idx)
-        DeviceAllocator.ensure_triton_device(device_idx)
+        _nbx_device.select(device_idx)
+        _nbx_device.select_for_launch(device_idx)
 
         # Bind-time fp16→fp32 weight upcast is always OFF. The in-kernel
         # PROMOTE_B path in matmul_kernel / addmm_kernel (landed Apr 2026)
@@ -2433,14 +2431,14 @@ class GraphExecutor:
         _t_load = time.perf_counter()
         if only is None:
             # what the component holds from its load to its release, said by the release line (`_cuda_peak_since_load`)
-            self._held_window = (device_idx, DeviceAllocator.open_window(device_idx))
+            self._held_window = (device_idx, _nbx_memory.open_window(device_idx))
         loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only,
             krsc=self._krsc_loader_keys(_only) if only is None else None)
         if only is None:
             # the loader measures itself (S2): the bytes it landed and the time, written into a generated profile
-            DeviceAllocator.sync_device()
+            _nbx_device.synchronize()
             _host = bool(shard_map) and all(str(v).startswith("cpu") for v in shard_map.values())
             self._note_loader_rate("triton", nbx_path, component, "host" if _host else "device",
                                    sum(t.nbytes() for k, t in loaded.items() if k != "_arenas"),
@@ -2487,12 +2485,12 @@ class GraphExecutor:
         # under NBX_ALLOC_POOL=0. (2026-09-02, xlong int4 row: the pool
         # parked the load temporaries and the first attention chunk's
         # autotune bench found 121 MiB free on a 32 GB card.)
-        DeviceAllocator.empty_cache_pool()
+        _nbx_memory.empty_cache_pool()
 
         # NBX_UNLOAD_DIAG=1: the device's memory right after the weight load committed the component's arena.
         if os.environ.get("NBX_UNLOAD_DIAG") == "1":
             try:
-                _free, _total = DeviceAllocator.mem_get_info(device_idx)
+                _free, _total = _nbx_device.mem_info(device_idx)
                 _log.debug(f"[VRAM_PROBE after_load_weights_triton[{component}]] used={(_total - _free) / 1e9:.2f}GB "
                            f"free={_free / 1e9:.2f}GB cuda:{device_idx}")
             except Exception as _e:
@@ -3060,13 +3058,12 @@ class GraphExecutor:
         import time as _time
         from nbxtensor.tensor import NBXTensor
         from nbxtensor.dtype.nbx_dtype import parse_dtype
-        from nbxtensor.memory.allocator import DeviceAllocator
 
         start = _time.perf_counter()
         device_idx = self._triton_device_index()
 
-        DeviceAllocator.set_device(device_idx)
-        DeviceAllocator.ensure_triton_device(device_idx)
+        _nbx_device.select(device_idx)
+        _nbx_device.select_for_launch(device_idx)
 
         # Build input map: name → NBXTensor (keyed by tensor ID).
         # InputSynthesizer.synthesize_missing_inputs writes dotted inputs
@@ -3490,7 +3487,6 @@ class GraphExecutor:
         # primary device. See the per-op transfer block below.
         _seq_current_dev = device_idx
         from nbxtensor.memory.device_transfer import needs_move as _needs_move_dt, transfer_tensor as _xfer_dt
-        from nbxtensor.memory.allocator import DeviceAllocator as _DA_dt
 
         _type_interceptors = getattr(self, "_pending_triton_interceptors", None) or {}
         for op_idx, op_uid in enumerate(exec_order):
@@ -3566,7 +3562,7 @@ class GraphExecutor:
                         else _x for _x in _a]
                     resolved_args[_i_a] = type(_a)(_new)
             if _target_dev != _seq_current_dev:
-                _DA_dt.ensure_triton_device(_target_dev)
+                _nbx_device.select_for_launch(_target_dev)
                 _seq_current_dev = _target_dev
 
             # Op_uid interceptor priority (matches CompiledSequence and
@@ -3720,8 +3716,7 @@ class GraphExecutor:
             import os as _os_dt
             if _os_dt.environ.get("NBX_DEVICE_TRACE") and output_tids:
                 try:
-                    from nbxtensor.memory.allocator import DeviceAllocator as _DAdt
-                    _cur = _DAdt.get_device()
+                    _cur = _nbx_device.current()
                     if _cur != device_idx:
                         _log.debug(f"[DEVTRACE] CURDRIFT after {op_uid} {op_type}: "
                                    f"cur={_cur} != component {device_idx}")
@@ -3816,10 +3811,9 @@ class GraphExecutor:
             # Per-op symmetric trace (post-cleanup, before next op runs).
             if _tsq_per > 0 and op_idx % _tsq_per == 0:
                 try:
-                    from nbxtensor.memory.allocator import DeviceAllocator as _DA_ts
                     # Sum NBX live across all devices for parity with
                     # native path.
-                    _live = _DA_ts.memory_allocated() / 1024 / 1024
+                    _live = _nbx_memory.memory_allocated() / 1024 / 1024
                     _out_ptr = "?"
                     if output_tids and output_tids[0] in store:
                         _t = store[output_tids[0]]
@@ -3954,7 +3948,6 @@ class GraphExecutor:
             # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): the op runs
             # on that card against them (no store), its inputs crossing there and its result coming back.
             from nbxtensor.memory.device_transfer import transfer_tensor
-            from nbxtensor.memory.allocator import DeviceAllocator
             from neurobrix.core.device_utils import _parse_device
             card = _parse_device(_held[0])[1]
             hidden = store.get(attrs["hidden_states_tid"])
@@ -3971,7 +3964,7 @@ class GraphExecutor:
                 topk_indices=_to_card(store.get(idx_tid)) if blended else None,
                 topk_weights=_to_card(store.get(w_tid)) if blended else None,
                 weights_per_call=False, expert_store=None, expert_layer=_layer)
-            DeviceAllocator.set_device(home)
+            _nbx_device.select(home)
             return out if out._device_idx == home else transfer_tensor(out, home)
         return execute_moe_fused(
             gate_scores=None if blended else store.get(attrs["gate_scores_tid"]),
@@ -4043,10 +4036,9 @@ class GraphExecutor:
 
         from neurobrix.triton.sequence import TritonSequence
         from nbxtensor.dtype.nbx_dtype import parse_dtype
-        from nbxtensor.memory.allocator import DeviceAllocator
 
-        DeviceAllocator.set_device(device_idx)
-        DeviceAllocator.ensure_triton_device(device_idx)
+        _nbx_device.select(device_idx)
+        _nbx_device.select_for_launch(device_idx)
 
         # Persistent tids (e.g., hidden_states for image-AR LLMs where the
         # graph output is text logits) must be added to the dag's declared

@@ -22,6 +22,7 @@ Algorithm: Accumulate-and-divide (SwinIR/Swin2SR pattern)
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 
 if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
@@ -1728,9 +1729,8 @@ class OpLevelTilingEngine:
                                     # Read DeviceAllocator live_bytes
                                     # for triton modes.
                                     if _is_triton_mode:
-                                        from nbxtensor.memory.allocator import DeviceAllocator as _DA_pre
                                         _pre = (
-                                            _DA_pre.memory_allocated(_DA_pre.get_device())
+                                            _nbx_memory.memory_allocated(_nbx_device.current())
                                             / 1024**2
                                         )
                                     else:
@@ -1748,9 +1748,8 @@ class OpLevelTilingEngine:
                                         halo=int(spec_int["halo"]),
                                     )
                                     if _is_triton_mode:
-                                        from nbxtensor.memory.allocator import DeviceAllocator as _DA_post
                                         _post = (
-                                            _DA_post.memory_allocated(_DA_post.get_device())
+                                            _nbx_memory.memory_allocated(_nbx_device.current())
                                             / 1024**2
                                         )
                                     else:
