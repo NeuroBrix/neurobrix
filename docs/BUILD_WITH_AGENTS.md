@@ -49,7 +49,7 @@ The family is read from the model, so `run` takes the inputs that family needs a
 | text generation, chat, code | `neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "..." --max-tokens 256 --output answer.txt` | text file |
 | speech-to-text | `neurobrix run --model openai/whisper-large-v3-turbo --audio meeting.wav --output transcript.txt` | text file |
 | speech understanding | `neurobrix run --model mistralai/Voxtral-Mini-3B-2507 --audio meeting.wav --prompt "Summarize this call." --output answer.txt` | text file |
-| text-to-speech | `neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello." --output speech.wav` | WAV |
+| text-to-speech | `neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello." --speaker af_heart --output speech.wav` | WAV |
 | vision-language | `neurobrix run --model zai-org/GLM-4.1V-9B-Thinking --input-image photo.jpg --prompt "What is in this image?" --output answer.txt` | text file |
 | image generation | `neurobrix run --model ostris/Flex.1-alpha --prompt "a lighthouse at dusk" --steps 20 --seed 42 --output image.png` | PNG |
 | video generation | `neurobrix run --model zai-org/CogVideoX-2b --prompt "..." --num-frames 17 --seed 42 --output clip.mp4` | MP4 |

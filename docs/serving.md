@@ -469,7 +469,7 @@ curl -s http://127.0.0.1:8765/v1/images/generations -H 'Content-Type: applicatio
 curl -s http://127.0.0.1:8765/v1/audio/transcriptions -F model=openai/whisper-large-v3-turbo -F file=@speech.wav
 
 curl -s http://127.0.0.1:8765/v1/audio/speech -H 'Content-Type: application/json' \
-  -d '{"model": "hexgrad/Kokoro-82M", "input": "Hello from NeuroBrix."}' -o hello.wav
+  -d '{"model": "hexgrad/Kokoro-82M", "input": "Hello from NeuroBrix.", "voice": "af_heart"}' -o hello.wav
 ```
 
 With the OpenAI Python client (`pip install openai`, on the client side; the engine does not need it):

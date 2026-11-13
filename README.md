@@ -51,9 +51,9 @@ neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Write a Pytho
 Three things to try, one command each:
 
 ```bash
-neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello from my own GPU." --output speech.wav   # text to speech
-neurobrix run --model openai/whisper-large-v3-turbo --audio recording.wav                        # speech to text
-neurobrix run --model ostris/Flex.1-alpha --prompt "a lighthouse at dusk" --output lighthouse.png  # text to image
+neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello from my own GPU." --speaker af_heart --output speech.wav  # text to speech
+neurobrix run --model openai/whisper-large-v3-turbo --audio recording.wav                                          # speech to text
+neurobrix run --model ostris/Flex.1-alpha --prompt "a lighthouse at dusk" --output lighthouse.png                  # text to image
 ```
 <!-- Commands and flags from "## Usage by family" below (checked against 0.6.11, 2026-11-12). -->
 
@@ -355,14 +355,13 @@ neurobrix run --model mistralai/Voxtral-Mini-3B-2507 --audio meeting.wav \
     --prompt "Summarize this call."
 
 # Text-to-speech
-neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello from NeuroBrix." --output speech.wav
+neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello from NeuroBrix." --speaker af_heart --output speech.wav
 
 # Vision-language: image plus a question
 neurobrix run --model zai-org/GLM-4.1V-9B-Thinking --input-image photo.jpg \
     --prompt "What is in this image?"
 
-# Multimodal models take --mode (text or image)
-neurobrix run --model deepseek-ai/Janus-Pro-7B --mode text --input-image photo.jpg --prompt "Describe this image."
+# Multimodal models take --mode: the mode their container was built for (Janus-Pro-7B's build: image)
 neurobrix run --model deepseek-ai/Janus-Pro-7B --mode image --prompt "a red apple on a wooden table"
 
 # Image generation
