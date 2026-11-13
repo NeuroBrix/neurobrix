@@ -2931,6 +2931,18 @@ The cache is evicted before each trial and bypassed during it (macOS `msync(MS_I
 `posix_fadvise(DONTNEED)`): the rate is the storage path's, never the page cache's. A measure whose first and last
 one-worker trials disagree is not steady and is not to be recorded.
 
+### `nbxtensor.io.mapped_shards` — weight files mapped once, the views' spans in them, their pages given back
+
+```python
+class ShardMaps(access=mmap.ACCESS_COPY)
+    # map(shard) -> the shard's one mapping (ACCESS_COPY: views a framework may wrap; ACCESS_READ: pages the GPU
+    # reads in place); note(view, shard, offset, nbytes): the span a host view is over; give_back(view) -> (start,
+    # length): that span's pages given back after a copy, found by the view's address (refused by name for a
+    # tensor over no noted span); len()
+def drop_pages(mapping, offset, nbytes) -> (start, length)
+    # the page-aligned range given back to the kernel (madvise MADV_DONTNEED); refused by name where mmap cannot advise
+```
+
 ### `nbxtensor.io.safetensors` — the host conversions of a loaded weight, split across the loader's workers
 
 ```python
