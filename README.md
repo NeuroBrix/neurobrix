@@ -200,9 +200,9 @@ through it, `run` uses it when it serves the same model, and `stop` unloads it:
 
 ```bash
 neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
-neurobrix chat                       # interactive multi-turn chat (/new, /context, /status, /quit)
-neurobrix run --prompt "Hello"       # --model can be omitted while a daemon is running
-neurobrix stop                       # stop the daemon and free GPU memory
+neurobrix chat                                # interactive multi-turn chat (/new, /context, /status, /quit)
+neurobrix run --prompt "What is a KV cache?"  # --model can be omitted while a daemon is running
+neurobrix stop                                # stop the daemon and free GPU memory
 ```
 
 Whether the weights stay on the device between requests (warm) depends on the plan Prism chooses for the machine;

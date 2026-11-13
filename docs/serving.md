@@ -7,7 +7,7 @@ that loads one model once and answers requests over a local socket until it is s
 ```bash
 neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0     # load once; returns when the model is loaded
 neurobrix chat                                      # multi-turn chat with the loaded model
-neurobrix run --prompt "Hello"                      # answered by the daemon (same model)
+neurobrix run --prompt "What is a KV cache?"        # answered by the daemon (same model)
 neurobrix stop                                      # unload and exit
 ```
 
