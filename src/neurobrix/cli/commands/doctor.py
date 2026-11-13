@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+from nbxtensor import device as _nbx_device
 
 #: the diagnosis's facts (build, driver, PCI ids) under -v; the verdicts on stdout
 log = logging.getLogger(__name__)
@@ -98,13 +99,12 @@ def _triton_engine() -> tuple[bool, str]:
             return False, f"not installed ({exc}): {_MAC_TRITON}"
         return False, f"not installed ({exc}): pip install neurobrix"
     from nbxtensor.backend.cpu_backend import triton_cpu_installed
-    from nbxtensor.memory.allocator import DeviceAllocator
     try:
         from nbxtensor.backend.runtime import gpu_backend
         backend = gpu_backend()
     except RuntimeError as exc:    # names what to install for a GPU on the bus (nbxtensor.backend.install_help)
         return False, f"no GPU runtime: {exc}"
-    if DeviceAllocator.device_count() > 0:
+    if _nbx_device.count() > 0:
         return True, f"ready on {backend} (nbxtensor {nbxtensor.__version__}, Triton {triton.__version__})"
     cpu = triton_cpu_installed()      # no device this process sees: what the engine can run on is the CPU, or nothing
     return cpu, f"no {backend} device visible{_hidden_said()}; " + ("runs on the CPU (triton-cpu)" if cpu else

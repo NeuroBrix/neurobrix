@@ -105,7 +105,7 @@ class _ReachedTheDevice(Exception):
 def _triton_load(root, monkeypatch, only=None):
     def _device(*a, **k):
         raise _ReachedTheDevice
-    monkeypatch.setattr(W.DeviceAllocator, "set_device", staticmethod(_device))
+    monkeypatch.setattr(W._nbx_device, "select", _device)
     return W.load_component_weights(str(root), COMP, 0, only=only)
 
 

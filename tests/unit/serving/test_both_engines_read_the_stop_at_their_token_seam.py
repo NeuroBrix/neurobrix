@@ -71,7 +71,7 @@ def test_the_triton_generator_stops_at_the_next_token(monkeypatch):
     from neurobrix.triton import generator as tg
     # device-touching collaborators replaced; `step`'s own logic runs as shipped
     monkeypatch.setattr(tg, "NBXTensor", SimpleNamespace(from_numpy=lambda a: a))
-    monkeypatch.setattr(tg, "DeviceAllocator", SimpleNamespace(set_device=lambda i: None))
+    monkeypatch.setattr(tg, "_nbx_device", SimpleNamespace(select=lambda i: None))
     gen = tg.TritonGenerator(dict(_CFG))
     gen._sampler = lambda logits, input_ids=None: SimpleNamespace(item=lambda: 1)
     from nbxtensor.dtype.nbx_dtype import NBXDtype

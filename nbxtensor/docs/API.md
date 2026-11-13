@@ -135,6 +135,21 @@ def join_weights(held: dict, loaded: dict) -> dict             # memory_pool.joi
 def pool_enabled() -> bool                                      # pool.parks_freed_blocks
 def pool_parked_cap_bytes(vendor, architecture, total_bytes) -> int   # pool.parked_cap_bytes
 def pool_fit_slack(vendor, architecture) -> float              # pool.fit_slack
+# the allocator's figures and the pool's controls, same arguments as `DeviceAllocator`'s (2026-11-13):
+def memory_allocated(device_idx=None) -> int                   # live bytes handed out (None: every device)
+def pool_cached_bytes(device_idx=None) -> int                  # bytes parked in the pool's free blocks
+def blocks_in_use(device_idx=None) -> dict                     # {address: bytes} of the blocks tensors hold
+def device_free_bytes(device_idx=None) -> int                  # the driver's free bytes (None: current device)
+def device_total_bytes(device_idx=None) -> int                 # the device's total memory; -1 when not known
+def free_memory_mb(index: int) -> Optional[float]              # the driver's free memory in MB; None when not known
+def peak_device_bytes() -> Optional[int]                       # the most one device held at once since the start
+def host_pinned_allocated() -> int                             # live pinned host bytes
+def empty_cache_pool() -> int                                  # the pool's parked blocks given back; bytes freed
+def give_back_cached(dev: int) -> None                         # a card's cached free memory back to the driver
+def open_window(device_idx: int) -> int                        # start watching what the process holds; a token
+def window_start(token: int) -> Optional[int]                  # what was held when the window opened
+def close_window(device_idx: int, token: int) -> Optional[int] # the most held since it opened; the window closed
+def register_idle_reclaimer(reclaim) -> None                   # `reclaim(dev) -> bytes` when a malloc is refused
 ```
 
 `nbxtensor.memory.allocator`
@@ -3049,6 +3064,20 @@ class Capabilities:          # one record per backend, today five dicts (nbx_ten
 nbxtensor.device.synchronize(device)    nbxtensor.device.mem_info(device) -> (free: int, total: int)
 ```
 
+**In the library today (`nbxtensor/device.py`, the application's door; each name answers from
+`memory.allocator.DeviceAllocator`):**
+
+```python
+def count() -> int                       # devices this process sees
+def current() -> int                     # the runtime's current device
+def select(index: int) -> None           # make `index` current (allocations, copies, synchronizations); refused by name
+def select_for_launch(index: int) -> None    # current for the next kernel launch too (the launcher's context)
+def synchronize() -> None                # the current device finished, through the interceptor in force
+def drain(index: Optional[int] = None) -> None   # every stream of a device drained; the current device restored
+def mem_info(index: Optional[int] = None) -> Tuple[int, int]   # (free, total) bytes, as the runtime reports them
+def most_free() -> int                   # the device with the most free memory; the current device restored
+```
+
 `set_backend_has_fp64` and `declare_backend_capability` (nbx_tensor.py:420,519) mutate module globals
 today. In v1 the record is built once, when the backend is detected. A device's fp64 is a fact the
 backend states (Metal: none). It is not something the engine sets afterwards.
@@ -3152,6 +3181,10 @@ the engine and is passed in.
    `saturate_scalar` in `nbxtensor.dtype.convert`.
 3. **Dependency on the launcher (still open, 2026-11-02).** The `.dtype` change (section 4) needs the launcher to stop
    reading the Triton dtype off the argument (`backend/launcher.py` reads `arg.dtype` to bind and to key).
+4. **Two device questions answer through a fallback (2026-11-13, found moving the device door).**
+   `DeviceAllocator.device_count` answers 0 for any failure of the runtime, not only its absence, and
+   `most_free_device` skips a device whose query fails and does not raise a failed restore of the current device.
+   Both should refuse by name; their own lot.
 
 ## 11. The boundary: every host service is generic in the library or goes back to the engine (Hocine Benkelaya 29/10 16:28)
 

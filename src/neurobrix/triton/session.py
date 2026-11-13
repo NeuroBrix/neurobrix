@@ -9,9 +9,9 @@ import numpy as np
 from typing import Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import index_wrappers as _nbx_index_wrappers  # the family the moved names live in (M2 split)
+from nbxtensor import device as _nbx_device
 
 
 class TritonLMSession:
@@ -60,7 +60,7 @@ class TritonLMSession:
         if stream is None:
             return
         b, s = stream.shape[0], stream.shape[1]
-        DeviceAllocator.set_device(self.device_idx)
+        _nbx_device.select(self.device_idx)
         for name, spec_shape in self.visual_stub_specs.items():
             if name in run_inputs:
                 continue
@@ -115,7 +115,7 @@ class TritonLMSession:
         pos_np = np.arange(seq_len, dtype=np.int64).reshape(1, seq_len)
         if batch_size > 1:
             pos_np = np.tile(pos_np, (batch_size, 1))
-        DeviceAllocator.set_device(self.device_idx)
+        _nbx_device.select(self.device_idx)
         position_ids = NBXTensor.from_numpy(self._lift_positions(pos_np))
 
         # Build inputs
@@ -209,7 +209,7 @@ class TritonLMSession:
         plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position)
         outputs = None
         for s, real, chunk_ids, pos in plan:
-            DeviceAllocator.set_device(self.device_idx)
+            _nbx_device.select(self.device_idx)
             input_ids = NBXTensor.from_numpy(np.asarray([chunk_ids], dtype=np.int64))
             position_ids = NBXTensor.from_numpy(self._lift_positions(np.asarray([pos], dtype=np.int64)))
             if self.uses_embeds:
@@ -269,7 +269,7 @@ class TritonLMSession:
             pos_np = np.full((batch_size, seq_len), cache_len, dtype=np.int64)
         else:
             pos_np = np.zeros((batch_size, seq_len), dtype=np.int64)
-        DeviceAllocator.set_device(self.device_idx)
+        _nbx_device.select(self.device_idx)
         position_ids = NBXTensor.from_numpy(self._lift_positions(pos_np))
 
         # Build inputs
@@ -327,7 +327,7 @@ class TritonLMSession:
         output for the sampled VQ code — re-embedding the shifted token id
         through the text table would diverge from the KV-cache path).
         """
-        DeviceAllocator.ensure_triton_device(self.device_idx)
+        _nbx_device.select_for_launch(self.device_idx)
         if new_token_ids.ndim == 1:
             new_token_ids = new_token_ids.unsqueeze(0)
         # Ensure token is on the correct device (may be on wrong GPU after lm_head run)
@@ -351,7 +351,7 @@ class TritonLMSession:
         # belt-and-braces on the op-by-op determinism reference path — one
         # sync per step is noise here and keeps the accumulator lifecycle
         # trivially auditable.
-        DeviceAllocator.sync_device()
+        _nbx_device.synchronize()
         self._accumulated_ids = acc_ids
         if self.uses_embeds:
             self._accumulated_embeds = acc_embeds

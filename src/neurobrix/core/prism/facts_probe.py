@@ -33,6 +33,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 # The device's speeds are measured by the library (its kernels, its copies); the page cache is evicted by it too.
 from nbxtensor.backend.device_measure import copies, matmul_tflops  # noqa: E402,F401  (read here as P.copies, ...)
 from nbxtensor.io.read_rate import cold_read_gbps as storage_read_gbps, evict  # noqa: E402,F401
+from nbxtensor import device as _nbx_device
 
 
 def gemv_gbps(dtype: str, engine: str, k: int, n: int, reps: int) -> float:
@@ -137,7 +138,6 @@ def stored_dtype(shards: Iterable[Path], keys: Iterable[str]) -> str:
 
 def _triton_loader(root: Path, comp: str, used: List[Path]):
     from nbxtensor.dtype.nbx_dtype import NBXDtype
-    from nbxtensor.memory.allocator import DeviceAllocator
     from neurobrix.triton.weight_loader import load_component_weights
     rel = {f"components/{comp}/weights/{sh.name}": "cpu" for sh in used}
 
@@ -145,7 +145,7 @@ def _triton_loader(root: Path, comp: str, used: List[Path]):
         def load() -> int:
             w = load_component_weights(str(root), comp, 0, NBXDtype.float16, only=only,
                                        shard_map=rel if host else None)
-            DeviceAllocator.sync_device()
+            _nbx_device.synchronize()
             n = sum(t.nbytes() for k, t in w.items() if k != "_arenas")
             del w
             return n

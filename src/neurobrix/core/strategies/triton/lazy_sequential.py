@@ -15,6 +15,7 @@ from nbxtensor.backend.device_names import ACCELERATOR_PREFIXES
 
 from .base import TritonStrategy
 from neurobrix.core.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
+from nbxtensor import memory as _nbx_memory
 
 
 def _names_accelerator(device: str) -> bool:
@@ -126,5 +127,4 @@ class LazySequentialStrategy(LazySequentialSteps, TritonStrategy):
             brick.cleanup()
         self._loaded_components.clear()
         self._pinned_components.clear()
-        from nbxtensor.memory.allocator import DeviceAllocator
-        DeviceAllocator.empty_cache_pool()
+        _nbx_memory.empty_cache_pool()

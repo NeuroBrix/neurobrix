@@ -21,6 +21,7 @@ from neurobrix.cli.utils import find_model, refuse_unread_flags
 
 from neurobrix.core.runtime_values import (MissingRuntimeValue,
                                           resolve as _resolve_runtime)
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 
 
 def _rt(name, args, container, family, **kw):
@@ -458,10 +459,9 @@ def growth_baseline(execution_mode, hw_profile):
     if execution_mode == "compiled" or _census_g.active() or not getattr(hw_profile, "devices", None) or any(
             getattr(d, "has_unified_memory", False) for d in hw_profile.devices):
         return None
-    from nbxtensor.memory.allocator import DeviceAllocator as _DAg
     from neurobrix.core.runtime import runtime_growth as _rg
     # the PROFILE's cards (rule 1): reading every visible card made the run open a context on each of them
-    _gdevs = [int(d.index) for d in hw_profile.devices if int(d.index) < _DAg.device_count()]
+    _gdevs = [int(d.index) for d in hw_profile.devices if int(d.index) < _nbx_device.count()]
     return (_rg, _gdevs, _rg.untracked_mb(_gdevs)) if _gdevs else None
 
 
@@ -1066,9 +1066,8 @@ def cmd_run(args):
             from neurobrix.core.device_utils import sync_plan
             sync_plan(execution_plan)                 # the plan's devices, never the runtime's current one
         else:
-            from nbxtensor.memory.allocator import DeviceAllocator
-            if DeviceAllocator.device_count() > 0:
-                DeviceAllocator.device_synchronize()
+            if _nbx_device.count() > 0:
+                _nbx_device.drain()
 
     if turns is not None:
         return play_turns(args, turns, executor, pkg, execution_plan, inputs, _drain_device)
@@ -1098,8 +1097,7 @@ def cmd_run(args):
         _peak = (max(process_peak_reserved(d) for d in range(torch.cuda.device_count()))
                  if torch.cuda.is_available() else (_sampled_peak.stop() if _sampled_peak is not None else None))
     else:
-        from nbxtensor.memory.allocator import DeviceAllocator
-        _peak = DeviceAllocator.peak_device_bytes()
+        _peak = _nbx_memory.peak_device_bytes()
     log.debug(run_timings.format_peak(None if _peak is None else _peak / 2**20))
     _record_compiled_growth(_sampled_peak, cache_path, hw_profile)
     _record_triton_growth(_growth, cache_path, hw_profile)

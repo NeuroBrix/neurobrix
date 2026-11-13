@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from neurobrix.core.config.system import PRISM_DEFAULTS
+from nbxtensor import memory as _nbx_memory
 
 
 @dataclass(frozen=True)
@@ -182,10 +183,9 @@ def read_device_sharing(index: int) -> DeviceReading:
 def _read_through_the_runtime(index: int, facts) -> DeviceReading:
     """The card's capacity and free memory as the runtime answers (it selects the card: a context), beside whatever
     sharing facts the seam gave."""
-    from nbxtensor.memory.allocator import DeviceAllocator
-    free = DeviceAllocator.free_memory_mb(index)
+    free = _nbx_memory.free_memory_mb(index)
     try:
-        total = DeviceAllocator.device_total_bytes(index) / (1024 * 1024)
+        total = _nbx_memory.device_total_bytes(index) / (1024 * 1024)
     except Exception:  # noqa: BLE001 — the profile supplies the capacity when the driver does not
         total = None
     if facts is None:

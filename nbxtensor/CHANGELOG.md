@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `nbxtensor.device`: the devices a process sees, the one it works on, the one the next kernel launch runs on, when
+  they drain and what each has free (`count`, `current`, `select`, `select_for_launch`, `synchronize`, `drain`,
+  `mem_info`, `most_free`).
+- `nbxtensor.memory` answers the allocator's figures and the pool's controls by name (`memory_allocated`,
+  `pool_cached_bytes`, `peak_device_bytes`, `empty_cache_pool`, the held-memory windows and others): an application
+  no longer calls the allocator class for them.
+
 ## [0.1.5] - 2026-11-12
 
 ### Changed

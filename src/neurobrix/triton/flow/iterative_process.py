@@ -16,7 +16,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
@@ -29,6 +28,7 @@ from neurobrix.core.runtime.progress import StepProgress
 from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
 import neurobrix.kernels.torch_interop as _torch_interop
 import logging
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
 
 _FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
@@ -101,9 +101,9 @@ def _vram_probe(tag: str) -> None:
     """The current device's free and total memory from its runtime, and what the allocator holds live
     (NBX_UNLOAD_DIAG=1); every backend, no vendor library loaded here."""
     try:
-        free_b, total_b = DeviceAllocator.mem_get_info()
+        free_b, total_b = _nbx_device.mem_info()
         _log.debug(f"[VRAM_PROBE {tag}] used={(total_b - free_b) / 1e9:.2f}GB free={free_b / 1e9:.2f}GB "
-                   f"total={total_b / 1e9:.2f}GB nbx_alloc={DeviceAllocator.memory_allocated() / 1e9:.2f}GB")
+                   f"total={total_b / 1e9:.2f}GB nbx_alloc={_nbx_memory.memory_allocated() / 1e9:.2f}GB")
     except Exception as _e:
         _log.debug(f"[VRAM_PROBE {tag}] failed: {_e}")
 
@@ -1009,10 +1009,9 @@ class TritonIterativeProcessHandler(IterativeSteps):
         for comp_name in list(loop_components) + pre_loop:
             import os as _os_dbg
             if _os_dbg.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1":
-                from nbxtensor.memory.allocator import DeviceAllocator as _DA
-                pre_live = _DA.memory_allocated()
+                pre_live = _nbx_memory.memory_allocated()
                 self._unload_component(comp_name, force=True)
-                post_live = _DA.memory_allocated()
+                post_live = _nbx_memory.memory_allocated()
                 _log.debug(f"[UNLOAD] {comp_name}: live {pre_live/1024/1024:.0f}MB → {post_live/1024/1024:.0f}MB "
                            f"(freed {(pre_live-post_live)/1024/1024:.0f}MB)")
             else:

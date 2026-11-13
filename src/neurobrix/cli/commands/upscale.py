@@ -19,6 +19,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from nbxtensor import device as _nbx_device
 
 log = logging.getLogger(__name__)
 
@@ -57,9 +58,8 @@ def _drain_device(execution_mode: str) -> None:
         if torch.cuda.is_available():
             torch.cuda.synchronize()
     else:
-        from nbxtensor.memory.allocator import DeviceAllocator
-        if DeviceAllocator.device_count() > 0:
-            DeviceAllocator.device_synchronize()
+        if _nbx_device.count() > 0:
+            _nbx_device.drain()
 
 
 def _load_and_preprocess_image(image_path: str, cache_path: Path):

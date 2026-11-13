@@ -23,7 +23,6 @@ from typing import Dict, Optional, Set
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.runtime import set_device
 from nbxtensor.dtype.itemsize import itemsize
 from nbxtensor.shape import numel
@@ -39,6 +38,7 @@ from neurobrix.nbx.weight_presence import (   # noqa: F401 — re-exported for t
     loader_weight_consumers, refuse_unbound_weights, read_safetensors_header,
 )
 import logging
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
 
 
@@ -182,8 +182,8 @@ def load_component_weights(
     if not weights_dir.is_dir():
         return {}           # no shard directory, and the index lists nothing this load wants
 
-    DeviceAllocator.set_device(device_idx)
-    DeviceAllocator.ensure_triton_device(device_idx)
+    _nbx_device.select(device_idx)
+    _nbx_device.select_for_launch(device_idx)
 
     # Parse shard_map. Prism uses two styles:
     #
@@ -289,7 +289,7 @@ def load_component_weights(
     weights['_arenas'] = arenas  # type: ignore
 
     if cpu_weights:
-        total_cpu_mb = DeviceAllocator.host_pinned_allocated() / (1024 * 1024)
+        total_cpu_mb = _nbx_memory.host_pinned_allocated() / (1024 * 1024)
         _log.debug(f"[weight_loader] zero3 CPU partition for {component}: "
                    f"{len(cpu_weights)} block weights on pinned host "
                    f"(~{total_cpu_mb:.0f}MB), "
@@ -384,7 +384,7 @@ def _load_shard_into_arenas(
 
             target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
             arena = arenas[target_dev]
-            DeviceAllocator.set_device(target_dev)
+            _nbx_device.select(target_dev)
 
             weights[key] = _sf.place_in_arena(raw, shape, nbx_dtype, np_dtype, target_dtype,
                                               bool(krsc) and key in krsc, arena, target_dev, _io_pool())

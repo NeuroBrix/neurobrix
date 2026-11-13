@@ -24,12 +24,12 @@ from typing import Any, Dict, List, Optional
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.memory.memory_pool import release_flow_memory
 from nbxtensor.memory.device_transfer import parse_device_idx
 from neurobrix.core.flow.shared_steps import RNNTSteps, joint_role   # the steps both branches share
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
+from nbxtensor import device as _nbx_device
 _log = logging.getLogger(__name__)
 
 # R30 mirror of core/flow/rnnt.py: the joint's linears as NeMo names them, keyed by the parser.
@@ -124,7 +124,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
             raise RuntimeError("ZERO FALLBACK: No audio_path provided.")
 
         device_idx = parse_device_idx(self.ctx.primary_device)
-        DeviceAllocator.set_device(device_idx)
+        _nbx_device.select(device_idx)
 
         _log.debug(f"   [Audio] Loading: {audio_path}")
 

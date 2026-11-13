@@ -24,11 +24,10 @@ from neurobrix.kernels.classification import kernel_for as _kernel_for
 # goes through the multi-device path — printing no advice at all (2026-09-18).
 import numpy as np
 
-from nbxtensor import inspection as _inspection
+from nbxtensor import device as _nbx_device, inspection as _inspection, memory as _nbx_memory
 from nbxtensor.memory.oom_advice import annotate as _oom_annotate
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
-from nbxtensor.memory.allocator import DeviceAllocator
 from nbxtensor.backend.runtime import invalidate_current_device_cache
 from neurobrix.core.prism.memory_budget import DEFERRED_DRAIN_COUNT, deferred_drain_policy
 
@@ -175,9 +174,9 @@ def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None
     memory) ran unseen."""
     try:
         import json as _json
-        dev = DeviceAllocator.get_device()
-        live, pool = DeviceAllocator.memory_allocated(dev), DeviceAllocator.pool_cached_bytes(dev)
-        drv_free, drv_total = DeviceAllocator.mem_get_info(dev)
+        dev = _nbx_device.current()
+        live, pool = _nbx_memory.memory_allocated(dev), _nbx_memory.pool_cached_bytes(dev)
+        drv_free, drv_total = _nbx_device.mem_info(dev)
         held = arena.bytes_on(dev)
         mb = 1 << 20
         rec = {"op_idx": op_idx, "op_uid": op.op_uid, "op_type": getattr(op, "op_type", ""),
@@ -2089,7 +2088,7 @@ class TritonSequence(SequenceSteps):
                     expert_store=None,
                     expert_layer=_layer_key,
                 )
-                DeviceAllocator.set_device(_home)
+                _nbx_device.select(_home)
                 return _out if _out._device_idx == _home else _xfer_card(_out, _home)
             if _stacked_attrs is not None:
                 from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists as _ewl
@@ -3095,7 +3094,7 @@ class TritonSequence(SequenceSteps):
         # per-launch switches (all in-run device changes go through
         # DeviceAllocator and maintain the cache invariant).
         invalidate_current_device_cache()
-        DeviceAllocator.ensure_triton_device(self.device_idx)
+        _nbx_device.select_for_launch(self.device_idx)
 
         # Phase 1 — set per-component dtype context for self-managed wrappers
         # (conv2d_wrapper reads _NBX_COMPUTE_DTYPE for output dtype, the
@@ -3118,8 +3117,8 @@ class TritonSequence(SequenceSteps):
         if _live_diag:
             self._run_live_n = getattr(self, "_run_live_n", 0) + 1
             _log.debug(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} entry "
-                       f"live={DeviceAllocator.memory_allocated(self.device_idx) / 2**20:.0f}MB "
-                       f"pool={DeviceAllocator.pool_cached_bytes(self.device_idx) / 2**20:.0f}MB")
+                       f"live={_nbx_memory.memory_allocated(self.device_idx) / 2**20:.0f}MB "
+                       f"pool={_nbx_memory.pool_cached_bytes(self.device_idx) / 2**20:.0f}MB")
         try:
             # Phase 4a frozen-plan replay (the engine's default, `replay.ENABLED`):
             # 1st run per bucket = warmup (autotune fires), 2nd =
@@ -3187,8 +3186,8 @@ class TritonSequence(SequenceSteps):
             _w.set_activations_fp16_safe(_prev_safe)
             if _live_diag:
                 _log.debug(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} exit  "
-                           f"live={DeviceAllocator.memory_allocated(self.device_idx) / 2**20:.0f}MB "
-                           f"pool={DeviceAllocator.pool_cached_bytes(self.device_idx) / 2**20:.0f}MB")
+                           f"live={_nbx_memory.memory_allocated(self.device_idx) / 2**20:.0f}MB "
+                           f"pool={_nbx_memory.pool_cached_bytes(self.device_idx) / 2**20:.0f}MB")
 
     def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
         """Scan op output(s) for Inf/NaN. Print the first offender on
@@ -3528,7 +3527,7 @@ class TritonSequence(SequenceSteps):
                 # find when leakage begins. Cheap: just a counter read.
                 # Gate hoisted to run start (C1).
                 if _live_dump_n > 0 and op_idx % _live_dump_n == 0:
-                    _live = DeviceAllocator.memory_allocated(DeviceAllocator.get_device())
+                    _live = _nbx_memory.memory_allocated(_nbx_device.current())
                     _log.debug(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB")
                 # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L1: extended
                 # periodic build. NBX_LIVE_WATERMARK_TRACE=path/to/file.jsonl
@@ -3819,8 +3818,8 @@ class TritonSequence(SequenceSteps):
                     # construction (set_device invalidates on switch,
                     # ensure_triton_device re-syncs + recaches), so the
                     # two trackers cannot desynchronize.
-                    DeviceAllocator.set_device(op.device_idx)
-                    DeviceAllocator.ensure_triton_device(op.device_idx)
+                    _nbx_device.select(op.device_idx)
+                    _nbx_device.select_for_launch(op.device_idx)
                     _current_dev = op.device_idx
                 try:
                     result = op.func(*args, **kwargs)
@@ -3840,8 +3839,8 @@ class TritonSequence(SequenceSteps):
                     if kwargs:
                         kwargs = self._transfer_kwargs(kwargs, target)
                 if target is not None and target != _current_dev:
-                    DeviceAllocator.set_device(target)
-                    DeviceAllocator.ensure_triton_device(target)
+                    _nbx_device.select(target)
+                    _nbx_device.select_for_launch(target)
                     _current_dev = target
                 try:
                     result = op.func(*args, **kwargs)
