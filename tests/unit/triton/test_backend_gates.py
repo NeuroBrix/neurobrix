@@ -32,9 +32,14 @@ def test_run_command_imports_both_gates():
     """
     import inspect
 
+    from neurobrix.cli import engine_choice
     from neurobrix.cli.commands import run as run_cmd
+    from neurobrix.cli.commands import upscale as upscale_cmd
 
-    source = inspect.getsource(run_cmd)
+    # run and upscale choose their engine through the one rule (cli/engine_choice.py), which holds the gates
+    for cmd in (run_cmd, upscale_cmd):
+        assert "choose_engine(" in inspect.getsource(cmd), cmd.__name__
+    source = inspect.getsource(engine_choice)
     assert "ensure_triton_metal_or_raise" in source
     assert "ensure_triton_cpu_or_raise" in source, (
         "cpu_backend was orphan code from its creation until 2026-09-03"
