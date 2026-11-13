@@ -1177,14 +1177,16 @@ def runtime() -> MetalRuntime:
     (shapes, dtypes, block sizes, all data), and must touch no device; a
     path that reaches for the real Metal device inside a shadow is one the
     census does not cover, and it fails LOUDLY here rather than succeeding in
-    silence on the one card an Apple host always has. `device_count()` reads
-    0 through this (its own except path), so the census gate passes; the
+    silence on the one card an Apple host always has. The refusal is
+    `NoGpuRuntime` (this process has, by declaration, no device), so
+    `device_count()` reads 0 and the census gate passes; the
     backend NAME still resolves via NBX_GPU_BACKEND=metal, which needs no
     device (`_pin_triton_backend`).
     """
     import os as _os_c
     if _os_c.environ.get("NBX_CENSUS") == "1":
-        raise RuntimeError(
+        from nbxtensor.backend.runtime import NoGpuRuntime
+        raise NoGpuRuntime(
             "census shadow: the Metal device is deliberately unreachable "
             "(NBX_CENSUS=1). Key formation is pure data and needs no device; "
             "a path that opened the Metal runtime here is uncovered by the "

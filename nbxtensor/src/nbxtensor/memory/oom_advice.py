@@ -130,9 +130,13 @@ def _holders(obj, depth: int, ignore: set) -> str:
 def _block_lines(bucket: int) -> List[str]:
     """Every device's blocks in use: the total, and the sizes of at least `bucket` bytes by their totals."""
     from collections import Counter
-    from nbxtensor.memory.allocator import DeviceAllocator as DA
+    from nbxtensor.memory.allocator import DeviceAllocator as DA, DeviceQueryError
     out = []
-    for d in range(DA.device_count()):
+    try:                                    # an out-of-memory report never hides behind a refused count: it says it
+        ndev = DA.device_count()
+    except DeviceQueryError as exc:
+        return [f"[LIVE_BLOCKS] the devices could not be counted: {exc}"]
+    for d in range(ndev):
         blocks = DA.blocks_in_use(d)
         if blocks:
             sizes = Counter(n // _MB * _MB for n in blocks.values() if n >= bucket)

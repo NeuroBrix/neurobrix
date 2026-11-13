@@ -3076,7 +3076,12 @@ def synchronize() -> None                # the current device finished, through 
 def drain(index: Optional[int] = None) -> None   # every stream of a device drained; the current device restored
 def mem_info(index: Optional[int] = None) -> Tuple[int, int]   # (free, total) bytes, as the runtime reports them
 def most_free() -> int                   # the device with the most free memory; the current device restored
+class DeviceQueryError(RuntimeError)     # a device question the runtime refused: the call, the device, its code
 ```
+
+No device is a fact, a refusal is an error: `count()` is 0 only on a host with no GPU runtime
+(`nbxtensor.backend.runtime.NoGpuRuntime`) or when the runtime answers its own "no device" code (the backend table's
+`no_device_rc`); any other refusal of a device question raises `DeviceQueryError`.
 
 `set_backend_has_fp64` and `declare_backend_capability` (nbx_tensor.py:420,519) mutate module globals
 today. In v1 the record is built once, when the backend is detected. A device's fp64 is a fact the
@@ -3181,10 +3186,10 @@ the engine and is passed in.
    `saturate_scalar` in `nbxtensor.dtype.convert`.
 3. **Dependency on the launcher (still open, 2026-11-02).** The `.dtype` change (section 4) needs the launcher to stop
    reading the Triton dtype off the argument (`backend/launcher.py` reads `arg.dtype` to bind and to key).
-4. **Two device questions answer through a fallback (2026-11-13, found moving the device door).**
-   `DeviceAllocator.device_count` answers 0 for any failure of the runtime, not only its absence, and
-   `most_free_device` skips a device whose query fails and does not raise a failed restore of the current device.
-   Both should refuse by name; their own lot.
+4. **Two device questions answered through a fallback — done (2026-11-13).** `DeviceAllocator.device_count`
+   answered 0 for any failure of the runtime, and `most_free_device` / `visible_device_memory` skipped a device whose
+   query failed and did not raise a failed restore. They now raise `DeviceQueryError`
+   (nbxtensor/tests/test_a_device_question_the_runtime_refuses_is_raised_by_name.py).
 
 ## 11. The boundary: every host service is generic in the library or goes back to the engine (Hocine Benkelaya 29/10 16:28)
 
