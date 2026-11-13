@@ -19,6 +19,7 @@ threadgroups. An argument this runtime cannot bind fails by name; there is no ot
 """
 from __future__ import annotations
 
+from nbxtensor.backend import metal_profile as _profile
 import hashlib
 import os
 import tempfile
@@ -195,6 +196,8 @@ def dispatch(pipe: Pipeline, stream: int, pointers: Sequence[int], scalars: Opti
     _cb, encoder = rt.encoder_for(stream, kind="compute")
     if encoder is None:                                 # pragma: no cover
         raise RuntimeError(f"no Metal compute encoder for stream {stream} to launch {pipe.name!r}")
+    if _profile.SESSION is not None:
+        _profile.SESSION.name(_cb, pipe.name)        # the launch's row in the kernel-time table
     encoder.setComputePipelineState_(pipe.pso)
     if shared:
         encoder.setThreadgroupMemoryLength_atIndex_(int(shared), 0)
