@@ -88,3 +88,16 @@ def test_the_alias_line_is_a_debug_line_not_the_users_terminal(capsys, caplog):
         C.say_aliased("k", _label(MAC14), _label(PUB))
     assert capsys.readouterr().out == ""                              # nothing on a plain run's terminal
     assert any("served through the generator alias" in r.getMessage() for r in caplog.records)
+
+
+def test_a_planner_is_served_what_a_launch_is_served(tmp_path, monkeypatch):
+    """`served_certification` (Prism prices a prefill chunk with it, before any kernel is loaded) takes the same one
+    alias hop as a launch's lookup: on the Mac's released generator (macOS 14 build, aliased to the published one) every
+    key certified under the published build was served to the launch but read as uncertified by the planner, and the
+    chunk was refused (2026-11-13, explain-plan on apple_m4_pro: 'ew_launch_kernel (16777216, ...) not certified')."""
+    d, cert = _dir(tmp_path, [_alias()])
+    monkeypatch.setattr(C, "_load_class", lambda *a: {"(1,)": cert})
+    monkeypatch.setattr(C, "file_for", lambda vendor, profile, kernel, dtype, root=None: d / f"k.{dtype}.json")
+    got = C.served_certification("apple", "apple_m4_pro", "x.k", "fp32", "(1,)", 18, generator=_label(MAC14))
+    assert got is not None and got["config"] == {"BLOCK": 64}
+    assert C.served_certification("apple", "apple_m4_pro", "x.k", "fp32", "(1,)", 18, generator=_label(OTHER)) is None

@@ -1271,6 +1271,10 @@ def served_certification(vendor: str, profile: str, kernel_qual: str, dtype: str
     matched = entry_for_generator(cert, gen)
     if matched is not None:
         return matched
+    # the same one alias hop a launch's lookup takes: a planner is served what the launch will be served
+    aliased = through_generator_alias(cert, gen, file_for(vendor, profile, kernel_qual, dtype).parent)
+    if aliased is not None:
+        return aliased[0]
     return cert if proof_backend(cert.get("proof")) is None else None
 
 
