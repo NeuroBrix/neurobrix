@@ -19,7 +19,8 @@ miss, which the store's byte-copy contract does not make: it is refused by name,
 silently. Only the fused MoE op reads these weights, through the store (`expert_store.py`); a view
 reaching any kernel is a defect the engines refuse (an mmap address is no device buffer).
 
-Torch-free here; each engine builds its own view from `ExpertFileSpan`. `held_dtype` is the one rule
+Torch-free here; each engine builds its own view from `ExpertFileSpan`, over the library's shard maps
+(`nbxtensor.io.mapped_shards`: each shard mapped once, the views' spans, the pages given back after a copy). `held_dtype` is the one rule
 both engines' views and Prism's plan read (it imports the triton loader's torch-free
 `stored_dtype_in_compute` for the triton engine only).
 """
@@ -30,6 +31,7 @@ import os
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, Optional, Set, Tuple
 
+from nbxtensor.io.mapped_shards import ShardMaps
 from neurobrix.core.runtime.expert_residency import routed_layers
 from neurobrix.nbx.weight_presence import AbsentWeightError, read_safetensors_header, read_weights_index
 
@@ -98,30 +100,6 @@ def locate(nbx_path, component: str, keys: Iterable[str]) -> Dict[str, ExpertFil
     return out
 
 
-class ShardMaps:
-    """Each shard mapped once, privately (MAP_PRIVATE: copy-on-write, never written), for the views'
-    lifetime. Every view keeps this object alive through its base."""
-
-    def __init__(self, access: int = mmap.ACCESS_COPY):
-        self._maps: Dict[str, mmap.mmap] = {}
-        # ACCESS_COPY (MAP_PRIVATE) where an engine's views must be writable objects (torch.frombuffer); ACCESS_READ
-        # (shared, read-only) where the GPU reads the pages in place: a no-copy Metal buffer over a PRIVATE mapping
-        # made copy-on-write anonymous copies of every page it bound (8 GB of random data bound and read in 5.5 MB
-        # experts: the compressor 0.3 -> 11.7 GB; the same over a read-only mapping: flat, the Mac 2026-10-20)
-        self._access = access
-
-    def map(self, shard: str) -> mmap.mmap:
-        m = self._maps.get(shard)
-        if m is None:
-            with open(shard, "rb") as f:
-                m = mmap.mmap(f.fileno(), 0, access=self._access)
-            self._maps[shard] = m
-        return m
-
-    def __len__(self) -> int:
-        return len(self._maps)
-
-
 def held_dtype(stored, compute, engine: str):
     """The dtype (an NBXDtype) `engine` holds a weight stored as `stored` in, under the compute dtype
     `compute` (each anything `parse_dtype` reads: a name, an NBXDtype, a torch dtype) — THE rule a
@@ -158,22 +136,3 @@ def bind_views(spans: Dict[str, ExpertFileSpan], held_as: Callable[[str], str],
                 f"a file-backed expert must be stored in its compute dtype")
         views[key] = build(maps.map(span.shard), span, key)
     return views, maps
-
-
-def drop_pages(m: mmap.mmap, offset: int, nbytes: int) -> Tuple[int, int]:
-    """Give the kernel back the pages of one expert's span in its private shard map, once its bytes
-    sit in a device slot: `madvise(MADV_DONTNEED)` over the page-aligned range (a private, never
-    written mapping re-reads the file on the next miss). The pages a copy touched otherwise stay
-    counted against the pool on a unified device: the Mac, 2026-10-14, Qwen3-30B-A3B-Thinking native —
-    the process's own footprint flat at 8.6 GB while free memory fell and swap grew 7 GB during the
-    first forward's misses over 55 GB of mapped experts. Returns (start, length) of the range given
-    back. A platform whose mmap cannot advise is refused by name, never left to swap."""
-    if not hasattr(m, "madvise") or not hasattr(mmap, "MADV_DONTNEED"):
-        raise RuntimeError("ZERO FALLBACK: this platform's mmap carries no madvise/MADV_DONTNEED — a file-backed "
-                           "expert store cannot give its pages back after a copy")
-    page = mmap.PAGESIZE
-    start = offset - offset % page
-    length = (offset + nbytes) - start
-    m.madvise(mmap.MADV_DONTNEED, start, length)
-    return start, length
-
