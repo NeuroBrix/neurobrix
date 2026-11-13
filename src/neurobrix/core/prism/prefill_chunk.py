@@ -105,3 +105,12 @@ def chunk_record(cache_dir: Path, vendor: str, profile: str, memory_gb: int, mod
     if rec is None or rec.get("container") != T.container_sha(cache_dir):
         return None
     return rec
+
+
+def card_tables(spec) -> Tuple[str, Optional[str], int]:
+    """(vendor, vendor profile, memory class) whose census tables and certified times price a card's chunk: the chip's
+    VENDOR PROFILE (`config.loader.vendor_profile_for_device`: an Apple M4 Pro reads apple_m4_pro, a V100 volta),
+    never the device's architecture field (`apple_silicon` names no table)."""
+    from neurobrix.core.config.loader import vendor_profile_for_device
+    return (spec.brand.value, vendor_profile_for_device(spec.brand.value, spec.architecture, spec.compute_capability,
+                                                        spec.name), spec.memory_class_gb)

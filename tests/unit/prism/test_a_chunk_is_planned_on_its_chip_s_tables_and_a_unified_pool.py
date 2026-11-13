@@ -38,6 +38,12 @@ def _plan(monkeypatch, tmp_path, machine, vendor, table, cls, kv_devices=None):
     from neurobrix.kernels import census_table as T
     from neurobrix.nbx import NBXContainer
     pin_no_calibration(monkeypatch)
+    if vendor == "nvidia":      # a discrete card is read by its driver: the test plans one, on any host, card-less too
+        from neurobrix.core.prism import solver as solver_mod
+        from neurobrix.core.prism.memory_budget import DeviceReading
+        monkeypatch.setattr(solver_mod, "read_device_sharing", lambda i: DeviceReading(
+            kind="device", capacity_mb=16151, free_mb=15845, own_context_mb=306, measured=True,
+            source="injected: a quiet card (the test plans; no card is read)"))
     root = container_root(MODEL)
     monkeypatch.setattr(T, "ROOT", tmp_path)
     path = T.table_path(vendor, table, cls)
