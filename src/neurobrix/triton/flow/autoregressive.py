@@ -14,8 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
-from nbxtensor.memory.allocator import DeviceAllocator
-from nbxtensor.memory.device_transfer import parse_device_idx
+from nbxtensor.memory.device_transfer import parse_device_idx, transfer_tensor
 from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers
 
 from neurobrix.triton.generator import TritonGenerator
@@ -870,12 +869,8 @@ class TritonTextStrategy:
         device dance as get_logits, no last-position select."""
         hidden_dev = getattr(hidden, '_device_idx', 0)
         head_dev = self._head_device_idx
-        if hidden_dev != head_dev:
-            dst = NBXTensor.empty(hidden._shape, hidden._dtype,
-                                  f"cuda:{head_dev}")
-            DeviceAllocator.memcpy(dst.data_ptr(), hidden.data_ptr(),
-                                   hidden._nbytes)
-            hidden = dst
+        if hidden_dev != head_dev:      # the library's card-to-card copy (a strided view materialised, source synced)
+            hidden = transfer_tensor(hidden, head_dev)
         outputs = self._head.run({"input": hidden})
         for _k, val in outputs.items():
             return val
@@ -888,12 +883,8 @@ class TritonTextStrategy:
         # Transfer hidden to lm_head's device if different (pipeline parallel)
         hidden_dev = getattr(last_hidden, '_device_idx', 0)
         head_dev = self._head_device_idx
-        if hidden_dev != head_dev:
-            dst = NBXTensor.empty(last_hidden._shape, last_hidden._dtype,
-                                  f"cuda:{head_dev}")
-            DeviceAllocator.memcpy(dst.data_ptr(), last_hidden.data_ptr(),
-                                   last_hidden._nbytes)
-            last_hidden = dst
+        if hidden_dev != head_dev:      # a [B>1] select() is a strided view: the library's copy materialises it
+            last_hidden = transfer_tensor(last_hidden, head_dev)
 
         outputs = self._head.run({"input": last_hidden})
         # Find the output tensor

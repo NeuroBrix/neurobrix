@@ -26,9 +26,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.backend.runtime import set_device
 from nbxtensor.dtype.itemsize import itemsize
 from nbxtensor.shape import numel
-from nbxtensor.memory.memory_pool import ComponentArena, HostPinnedArena
 from nbxtensor.io import safetensors as _sf
-from nbxtensor.memory.layout import aligned
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
 from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
 # The absent-weight rule lives beside the container format it guards (torch-free), one rule for
@@ -232,8 +230,7 @@ def load_component_weights(
                     weight_device[wname] = dev_str
 
     # Phase 1: Scan all shards to compute per-device bytes.
-    dev_bytes: Dict[int, int] = {}
-    host_bytes = 0          # the host-held weights' bytes, in their target dtype: ONE pinned block (HostPinnedArena)
+    memory = _nbx_memory.weight_arenas()   # bytes per device, the host-held ones in ONE pinned block (the library's)
 
     for shard_path, header, _ in shard_headers:
         # All weights in a shard FILE share the file's target device under
@@ -252,41 +249,36 @@ def load_component_weights(
             if all_cpu_component:
                 if _BLOCK_RE.search(key):
                     cpu_weights.add(key)
-                    host_bytes += aligned(_stored_bytes(info, compute_dtype), HostPinnedArena.ALIGNMENT)
+                    memory.reserve_host(_stored_bytes(info, compute_dtype))
                     continue
                 # Non-block → GPU sizing continues below.
                 target_dev = device_idx
             else:
                 target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
-            dev_bytes[target_dev] = (dev_bytes.get(target_dev, 0)
-                                     + aligned(_stored_bytes(info, compute_dtype), ComponentArena.ALIGNMENT))
+            memory.reserve(target_dev, _stored_bytes(info, compute_dtype))
 
     import os as _os
     if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
-        _dist = {f"cuda:{d}": f"{b/1e9:.2f}GB" for d, b in sorted(dev_bytes.items())}
+        _dist = {f"cuda:{d}": f"{b/1e9:.2f}GB" for d, b in sorted(memory.device_bytes().items())}
         _log.debug(f"   [NBX-DIAG-SHARD] {component}: shard_map_entries={len(shard_map or {})} "
                    f"per-device={_dist}")
 
     # Phase 2: Create one arena per device
-    arenas: Dict[int, ComponentArena] = {}
-    for dev, total in dev_bytes.items():
-        arenas[dev] = ComponentArena(total, dev)
+    memory.allocate()
 
     # Phase 3: Load tensors into arenas (GPU) or the one pinned host block.
     weights: Dict[str, NBXTensor] = {}
-    host_arena = HostPinnedArena(host_bytes) if host_bytes else None
 
     for shard_path, header, data_offset in shard_headers:
         _load_shard_into_arenas(
             shard_path, header, data_offset,
             weights, device_idx, compute_dtype,
-            weight_device, arenas, cpu_weights,
-            only=only, krsc=krsc, host_arena=host_arena)
-    if host_arena is not None:
-        host_arena.pin()        # every host weight written: page-locked in one call, before any transfer reads one
+            weight_device, memory, cpu_weights,
+            only=only, krsc=krsc)
+    memory.pin_host()        # every host weight written: page-locked in one call, before any transfer reads one
 
     # Store arenas on the dict so they stay alive (prevent GC of GPU memory)
-    weights['_arenas'] = arenas  # type: ignore
+    weights['_arenas'] = memory.devices  # type: ignore
 
     if cpu_weights:
         total_cpu_mb = _nbx_memory.host_pinned_allocated() / (1024 * 1024)
@@ -334,11 +326,10 @@ def _load_shard_into_arenas(
     device_idx: int,
     compute_dtype: NBXDtype,
     weight_device: Dict[str, int],
-    arenas: Dict[int, ComponentArena],
+    memory,
     cpu_weights: set,
     only: Optional[Set[str]] = None,
     krsc: Optional[Set[str]] = None,
-    host_arena: Optional[HostPinnedArena] = None,
 ) -> None:
     """Load tensors from one shard, sub-allocating from arenas.
 
@@ -379,11 +370,11 @@ def _load_shard_into_arenas(
             # etc.) but the final NBXTensor is CPU-backed.
             if key in cpu_weights:
                 weights[key] = _sf.load_to_pinned_host(
-                    raw, shape, nbx_dtype, target_dtype, _io_pool(), host_arena)
+                    raw, shape, nbx_dtype, target_dtype, _io_pool(), memory.host)
                 continue
 
             target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
-            arena = arenas[target_dev]
+            arena = memory.devices[target_dev]
             _nbx_device.select(target_dev)
 
             weights[key] = _sf.place_in_arena(raw, shape, nbx_dtype, np_dtype, target_dtype,

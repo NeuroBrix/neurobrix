@@ -150,6 +150,7 @@ def open_window(device_idx: int) -> int                        # start watching 
 def window_start(token: int) -> Optional[int]                  # what was held when the window opened
 def close_window(device_idx: int, token: int) -> Optional[int] # the most held since it opened; the window closed
 def register_idle_reclaimer(reclaim) -> None                   # `reclaim(dev) -> bytes` when a malloc is refused
+def weight_arenas() -> WeightArenas                            # a weight set's memory to count, allocate and pin
 ```
 
 `nbxtensor.memory.allocator`
@@ -334,6 +335,9 @@ def join_weights(held: dict, loaded: dict) -> dict
     # `loaded` with its arenas merged into `held`'s (a second arena on a device under a distinct key), to update `held`
 def break_aliases(tensors, freed) -> int
     # Before the entries of `tensors` (list or dict) at `freed` are freed: every other entry viewing one of their allocations replaced by its contiguous(); the count.
+class WeightArenas
+    # One weight set's memory: reserve(device, nbytes) / reserve_host(nbytes) at the arenas' alignment, allocate() (one
+    # ComponentArena per device, one HostPinnedArena), pin_host() once the host weights are written; .devices, .host.
 class ComponentArena
     # Single contiguous GPU memory block for one component's weights.
 class HostPinnedArena
@@ -2825,6 +2829,10 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs, make_buffer, r
 def from_dlpack(obj, device=None) -> NBXTensor
     # The elements `obj` exports through DLPack: host memory copied in the order it shows (strides, bfloat16), this
     # backend's own device memory wrapped in place, another vendor's device memory refused by name.
+def copy_to_address(tensor, address: int) -> None
+    # The values, in C order, copied into a buffer another library owns on the same device heap (`interop.handoff`).
+def host_bytes(tensor) -> bytearray
+    # The values, in C order, as host bytes for another library to type itself (`interop.handoff`).
 
 ### `nbxtensor.backend.metal_dispatch` — Triton's compiled Metal kernels, run on nbxtensor's own stream
 
@@ -2914,6 +2922,8 @@ one-worker trials disagree is not steady and is not to be recorded.
 ### `nbxtensor.io.safetensors` — the host conversions of a loaded weight, split across the loader's workers
 
 ```python
+def mapped_view(mapping, offset: int, shape: tuple, sf_dtype: str) -> NBXTensor
+    # A host tensor over one weight's stored bytes inside a read-only mapped shard, no byte copied, the mapping its base.
 def to_bf16_bits(arr: np.ndarray, io) -> np.ndarray   # float32 / float16 -> bfloat16 patterns (uint16), the
                                                       # bytes of one f32_to_bf16_bits call, one span per worker
 def read_bytes(fd: int, offset: int, nbytes: int, io) -> np.ndarray

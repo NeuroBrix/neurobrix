@@ -2239,24 +2239,14 @@ class GraphExecutor:
         from neurobrix.core.runtime.expert_files import bind_views, held_dtype, locate
         spans = locate(nbx_path, component, keys)
         if self.mode in ("triton", "triton_sequential"):
-            import ctypes
-            from nbxtensor.tensor import NBXTensor
-            from nbxtensor.io.safetensors import SF_DTYPE_INFO as _SF_DTYPE_INFO
+            from nbxtensor.io.safetensors import SF_DTYPE_INFO as _SF_DTYPE_INFO, mapped_view
             by_nbx = {info[1]: sf for sf, info in _SF_DTYPE_INFO.items()}
 
             def held_as(sf):
                 return by_nbx[held_dtype(_SF_DTYPE_INFO[sf][1], compute_dtype, "triton")]
 
-            import numpy as _np
-            bases = {}
-
-            def build(m, span, key):
-                # the shard is mapped read-only (`access` below): its address read without a writable export
-                base = bases.get(id(m))
-                if base is None:
-                    base = bases[id(m)] = _np.frombuffer(m, dtype=_np.uint8).ctypes.data
-                return NBXTensor.from_raw(base + span.offset, span.shape, _SF_DTYPE_INFO[span.dtype][1],
-                                          device="cpu", owns_data=False, base=m)
+            def build(m, span, key):           # the shard mapped read-only (`access` below): the library's view
+                return mapped_view(m, span.offset, span.shape, span.dtype)
             access = mmap.ACCESS_READ
         else:
             import torch
@@ -3114,24 +3104,11 @@ class GraphExecutor:
                 if (isinstance(src_idx, int) and src_idx != device_idx) \
                         or str(value.device) == "cpu":
                     value = value.to(f"cuda:{device_idx}")
-                didx = value.device.index if isinstance(getattr(value.device, 'index', None), int) else device_idx
-                # Contiguous-guard at the torch->NBXTensor input boundary.
-                # from_raw wraps the data_ptr with CONTIGUOUS strides derived
-                # from shape alone, ignoring value's real strides. A non-
-                # contiguous torch input — e.g. run.py's --input-image
-                # `.permute(2,0,1)` channels-last view fed as global.image to an
-                # I2V vae_encoder — would then be read as if NCHW-contiguous,
-                # interleaving the RGB channels (period-3 garbage). The VAE
-                # encoder then encodes noise -> wrong I2V conditioning ->
-                # blue-cast video. `.to(cuda)` above preserves non-contiguity, so
-                # materialise here. No-op if already contiguous; shared by triton
-                # AND triton_sequential (both reach _run_triton_* below).
-                if hasattr(value, 'is_contiguous') and not value.is_contiguous():
-                    value = value.contiguous()
-                input_map[tid] = NBXTensor.from_raw(
-                    value.data_ptr(), tuple(value.shape),
-                    parse_dtype(str(value.dtype)), 'cuda',
-                    owns_data=False, device_idx=didx, base=value)
+                # through DLPack (nbxtensor.interop): the card, the strides and the producer's lifetime read there.
+                # A non-contiguous input (run.py's --input-image `.permute(2,0,1)` view fed to an I2V vae_encoder)
+                # was once wrapped as if contiguous — interleaved RGB, a blue-cast video: the library copies it.
+                from neurobrix.kernels.torch_interop import torch_to_nbx
+                input_map[tid] = torch_to_nbx(value)
 
         # Rank-align inputs to the graph input contract — R30 mirror of the
         # compiled bind path (graph-driven input rank alignment, commits
