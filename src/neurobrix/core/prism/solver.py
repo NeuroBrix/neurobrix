@@ -5226,6 +5226,7 @@ class PrismSolver:
         from neurobrix.core.prism import prefill_chunk as PC
         from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
         from neurobrix.core.state import price as P
+        from neurobrix.core.config.loader import get_vendor_config, vendor_profile_for_device
         if kv.session_reach is None:
             return None, "no serving session is planned (no session reach): one chunk per request"
         # the phrase `served_prefill` reads a chunk chosen without certified times by: its constant, never restated
@@ -5238,20 +5239,25 @@ class PrismSolver:
         if profile is None or not kv_devices or getattr(container, "cache_path", None) is None:
             return None, "one chunk per turn: the plan names no decoder card to price a chunk on"
         cards = set()
+        # On a unified card the host and the card are ONE memory pool: `_kv_devices` names the host beside it for the
+        # memory accounting, and that entry is the same cache, priced by the card's kernels.
+        unified = any(":" in str(d) and _device_is_unified(str(d), profile) for d in kv_devices)
         for d in kv_devices:
             if ":" not in str(d):
-                if untimed:
+                if untimed or unified:
                     continue                # the host side of the cache prices no chunk; the cards' page does
                 return None, f"one chunk per turn: the decoder's cache lives on {d}, which certifies no kernel time"
             idx = int(str(d).rsplit(":", 1)[1])
             spec = next((x for x in profile.devices if int(x.index) == idx), None)
             if spec is None:
                 return None, f"one chunk per turn: the profile states no device {d}"
-            cards.add((spec.brand.value, spec.architecture, spec.memory_class_gb))
+            # the tables are the chip's VENDOR PROFILE's (`vendor_profile_for_device`), never its architecture field
+            cards.add((spec.brand.value, vendor_profile_for_device(spec.brand.value, spec.architecture,
+                                                                   spec.compute_capability, spec.name),
+                       spec.memory_class_gb))
         if len(cards) != 1 or None in next(iter(cards)):
             return None, f"one chunk per turn: the decoder's cards are of several classes {sorted(map(str, cards))}"
         vendor, arch, cls = cards.pop()
-        from neurobrix.core.config.loader import get_vendor_config
         from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES
         page, _ = P.paged_cache_params(kv.num_kv_heads, kv.k_head_dim, kv.v_head_dim, str(kv.dtype),
                                        get_vendor_config(vendor, arch).get("memory"), int(kv.memory_bytes),
