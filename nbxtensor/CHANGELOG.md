@@ -28,24 +28,26 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
 
 ## [0.1.5] - 2026-11-12
 
+Triton models on Apple GPUs several times faster, and the NeuroBrix engine's remaining tensor work as library calls.
+
 ### Changed
 - Triton models on Apple GPUs run several times faster: nbxtensor now runs each compiled kernel on its own Metal stream,
   in order, and waits for the GPU only where a result is read, instead of after every kernel. Measured on an M4 Pro,
   outputs byte-identical: TinyLlama 1.1B, 256 tokens, 46.2 s -> 8.1 s; granite-3.1-1b-a400m (mixture of experts),
   128 tokens, 22.5 s -> 4.7 s.
-- A failed device assert in a kernel now raises at the next read of a result (or the next launch), not at its own
-  launch.
+- A device assert raised in a kernel surfaces at the next read of a result (or the next launch).
 - `NBX_SYNC_TIMING=1` on Apple now counts launches and the time spent issuing them, per kernel; there is no per-launch
   wait left to time.
 - The library's documentation lives in its own `docs/` (the API reference, the backends' contract, the device keys;
   `docs/design/` the allocator, cost and design notes; `docs/history/` the inventory and the migration record) and
   the three tensor reference pages (tensor cores through linear layouts, the certified-autotune method, recording a
   replay in a one-shot request) with the Triton CPU install page. The README links them in this repository.
-- The int4 MoE decode band's tiles, warps and stages no longer change with an environment variable (NBX_MOEV_BN, _BK,
-  _WARPS, _BND, _WARPS_D, _STAGES, read by the engine until now): they are the defaults those variables had.
+- The int4 MoE decode band's tiles, warps and stages are the defaults the environment variables NBX_MOEV_BN, _BK,
+  _WARPS, _BND, _WARPS_D and _STAGES gave them; the band reads no environment variable.
 - `memory.deferred_frees`: `DeferredFrees`, `Drain`, `sync_devices_of` — the tensors a run drops, released in batches
   at a bytes cliff, a count or (pool off) a free-memory reserve, every owning device synchronised first, and the
   allocator's out-of-memory reclaimer while the batch lives. The engine's two hot loops held this queue themselves.
+- `NBXTensor.item()` on a bfloat16 element returns its value, read as the high half of a float32.
 
 ### Added
 - `memory.block_upload` (`open_copy_stream`, `upload_block`, `wait_for_upload`, `drop_upload_events`,
@@ -53,17 +55,17 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   ordering-only readiness event the compute stream waits on (synchronous, with no event, given no stream), and the
   stream's and events' release. Moved from the NeuroBrix engine's zero3 strategy, which keeps which block moves, when,
   and how much stays resident.
-- `memory.shadow.install_shadow(devices)`, `shadow_launch`, `shadow_device`, `DevicesVisible`: the whole shadow device — the
-  allocator's direct operations, streams, events and device queries answered without a driver, every launch skipped,
-  a value read answering a host-born value or a benign one — refused while a device is visible. Moved from the
-  NeuroBrix engine's census, which keeps which keys are recorded and its own seams; `from_numpy`'s stand-in now takes
-  every argument `from_numpy` takes.
+- `memory.shadow.install_shadow(devices)`, `shadow_launch`, `shadow_device`, `DevicesVisible`: the whole shadow device —
+  the allocator's direct operations, streams, events and device queries answered without a driver, every launch skipped,
+  a value read answering a host-born value or a benign one — refused while a device is visible. Moved from the NeuroBrix
+  engine's census, which keeps which keys are recorded and its own seams; `from_numpy`'s stand-in now takes every
+  argument `from_numpy` takes.
 - `nbxtensor.interop.from_dlpack(obj, device=None)`: take in another library's array through DLPack (a torch tensor,
   a numpy array): host memory is copied in the order it shows, strided views and bfloat16 included; this backend's own
   device memory is used in place (a strided one is first made contiguous on the device); another vendor's device
   memory is refused with its name.
 - `backend.triton_ext_driver.kernel_name(kernel)`: the name a Metal kernel was loaded under. The sync counter
-  (`NBX_SYNC_TIMING=1`) now ranks Metal kernels by their own names; every launch was counted as `MetalKernel`.
+  (`NBX_SYNC_TIMING=1`) ranks Metal kernels by their own names.
 - `ops.moe_fused.fused_moe(gate_scores, hidden_states, gate_weights, up_weights, down_weights, top_k, num_experts,
   ...)`: a whole mixture-of-experts layer in one call — the routing (top-k and renormalisation, or a blended routing
   taken as given), host experts promoted for the call, the experts' pointer tables, and the path the call's shape and
@@ -108,11 +110,12 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   stored bytes. Moved from the engine's float16-safety scan.
 - `DeviceAllocator.pool_cached_bytes`, `pool_enabled`, `pool_stats`, `blocks_in_use` and `Arena.bytes_on`: the
   allocator's and an arena's figures for an application's memory lines, forensic dumps and per-key states. The engine
-  read the allocator's private tables (`_cuda_live_bytes`, `_POOL`, `_cuda_ptr_size`, `_pool_enabled`) in a dozen places.
+  read the allocator's private tables (`_cuda_live_bytes`, `_POOL`, `_cuda_ptr_size`, `_pool_enabled`) in a dozen
+  places.
 - `memory.oom_advice.held_memory_report(named, big, bucket)` and `Arena.census(large)`: after a refused allocation,
   who holds the device's memory (blocks in use by size, the tensors alive on the large ones named or ORPHAN with their
   referrers, autotuners still holding tensors) and what an arena holds by region. The engine's NBX_LIVE_DUMP_ON_OOM
-  dump walked the allocator's tables and the garbage collector itself.
+  dump walked the allocator's tables and Python's gc module itself.
 - `memory.memory_pool.release_weights`, `join_weights` and `Arena.release`: a loaded weight set released after
   every device holding it synchronised (the library's bias and pointer-table caches dropped, the pool emptied), a
   second load's arenas joined to the first's, an arena cleared after its devices drain. The engine did each itself
@@ -138,9 +141,6 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   held the same arithmetic six times (its Triton sampler, the encoder-decoder, dual-AR and TTS flows, and the
   compiled twins of the last two); every copy draws the same tokens through these.
 
-### Fixed
-- `NBXTensor.item()` on a bfloat16 element returns its value (the high half of a float32); it returned 0.0.
-
 ## [0.1.4] - 2026-11-12
 
 ### Added
@@ -152,8 +152,9 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   `FrozenPlan`, `install_seams`, `arm_launch_recorder`, the action tags. Moved from the NeuroBrix engine, which
   keeps only when a step is recorded, verified and replayed.
 - `frozen_plan.measure`, `room_for`, `slabs`, `record`, `retire`, `head_values`, `FrozenPlan.hand_out_outputs`,
-  `STATE.open_measurement`, `values_sha256`, `carved_from`: a step's slab measured, made room for, allocated and recorded into, a rejected plan
-  released — the mechanism of the replay's state machine, whose decisions stay the caller's.
+  `STATE.open_measurement`, `values_sha256`, `carved_from`: a step's slab measured, made room for, allocated and
+  recorded into, a rejected plan released — the mechanism of the replay's state machine, whose decisions stay the
+  caller's.
 - `DeviceAllocator.give_back_cached(dev)`: a card's cached free memory (the expandable range's chunks, the pool's
   blocks) back to the driver after its work ends.
 - `StepSlab.for_carved`, `DeviceAllocator.register_idle_reclaimer`: a decode step's slab sized in the library; an
@@ -171,8 +172,8 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   call them instead of their own device-to-host copies.
 - `memory.memory_pool.break_aliases(tensors, freed)`: before the tensors at `freed` (keys of a list or a dict) are
   freed, every other entry viewing one of their allocations is replaced by its `contiguous()`. The engine's weight
-  eviction called its own two copies of it. Known limit, kept from them: a view that is already contiguous is its own
-  `contiguous()` and still reads the freed memory.
+  eviction called its own two copies of it. An entry that is already contiguous is its own `contiguous()` and stays a
+  view of that allocation, as in those copies.
 - `NBXTensor.saturated(dtype)`: a one-element float32 or float64 tensor holding a finite value beyond a half dtype's
   range comes back as a new tensor (same dtype, shape and card) holding the clamped value (`saturate_scalar`);
   anything else is itself. The engine's `where` wrap called its own copy, which uploaded to the current card.
@@ -202,18 +203,15 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   carried this op, with its device-to-host and card-to-card copies; it now hands over the tables its placement built.
 
 ### Changed
-- The multi-device routed layer no longer reads the routing scores back to the host (a copy per layer nothing read).
+- The multi-device routed layer keeps the routing scores on the device.
 - The slot store reads the card's clock at the size of the word it reads into, no byte count written in the code.
-
-### Fixed
 - `autotune_cache.seed_late(tuner)`, called at a tuner's first launch: a kernel module imported after the process's
-  first autotuned launch gets the machine's stored settings too (the certified directory first), once — they were
-  seeded only into the modules already imported, so every new process measured the late ones again.
+  first autotuned launch gets the machine's stored settings too (the certified directory first), once, so every new
+  process reuses the settings measured for the modules it imports late.
 - **A driver error while a card's expandable pool asks which cards reach it is refused by name.** `memory.vmm.Vmm`
   builds the access grant of its chunks from the driver's answers (`cuDeviceGetCount`, `cuDeviceGet`,
-  `cuDeviceCanAccessPeer`); a call that failed was read as "no peer" and the grant silently named the owning card
-  alone, so a later card-to-card copy failed far from its cause. The failing call, its device and its status are now
-  the error. A driver that answers "not a peer" is unchanged.
+  `cuDeviceCanAccessPeer`); an error in one of those calls raises at once, naming the call, its device and its status. A
+  driver that answers "not a peer" gives a grant naming the owning card, as before.
 
 ## [0.1.3] - 2026-11-11
 
@@ -224,20 +222,16 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
 - `PagedTritonKVCache.replay_host_mark()`: the cache's host length, for a replay that mirrors what its recorded run
   moved (the engine's replayed layer-streamed pieces).
 
-### Fixed
-- **A tensor of a card's expandable pool can be handed to another card.** The pool grows by mapping chunks into one
-  virtual range; a mapped chunk is readable only from the devices its access grant names, and the grant named the
-  owning card alone. Any card-to-card copy of a tensor living in the range failed (`cudaMemcpy failed rc=1 (kind=3)`);
-  only small tensors, held in ordinary blocks, crossed. Each chunk is now granted to its card and to every card that
-  can reach it as a peer. One card: nothing changes.
-- **A routed layer whose experts sit on two cards is read at the right experts.** `memory.pointer_tables.build_ptr_tables`
-  gave each card a table of its own experts alone, packed, while the grouped GEMM reads a table at the expert's number
-  in the layer: on a card that does not hold experts 0..n-1 it read another expert's weights, or past the table's end.
-  A card's table now keeps the layer's length, each of its experts at its own number (0 where another card holds the
-  expert); the launch's key, which carries that length, is the layer's again. A layer held by one card is unchanged.
-
 ### Changed
 
+- **A tensor of a card's expandable pool can be handed to another card.** The pool grows by mapping chunks into one
+  virtual range; a mapped chunk is readable from the devices its access grant names, and each chunk is granted to its
+  card and to every card that can reach it as a peer, so a tensor of any size living in the range is copied card to
+  card. One card: nothing changes.
+- **A routed layer whose experts sit on two cards is read at the right experts.**
+  `memory.pointer_tables.build_ptr_tables` gives each card a table of the layer's length, each of its experts at its own
+  number (0 where another card holds the expert), as the grouped GEMM reads a table at the expert's number in the layer;
+  the launch's key, which carries that length, is the layer's. A layer held by one card is unchanged.
 - **The library's messages speak of records and graphs.** Seven error texts reworded ("allocation record", "the
   container's graph"). No behaviour changes.
 
@@ -249,20 +243,16 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   handed by the launcher; Level Zero no — its kernels load no address from memory). What a launch over a table of
   `data_ptr()` values stands on; a backend without a row is refused by name.
 
-### Fixed
-- **Apple: an address read through a pinned table is answered from a wrap that covers it.** The Metal driver kept
-  its pinned whole-allocation wraps under their base address alone, and a pool segment begins where its first block
-  does. With that first block pinned, a view inside another block of the same segment — a slot of the Triton expert
-  store's arena — resolved to the first block's short wrap and was handed an address past that buffer's end: another
-  buffer's bytes, nothing raised. Found by a test that builds the copying expert store (the one with an arena)
-  directly and runs it after nine earlier mixture-of-experts runs in one process: every row of its result was wrong.
-  The engine does not build that store on Apple — a unified device's store binds its experts in place, where they
-  lie in the container's files — and the published 0.6.6 was not seen affected through `neurobrix serve`: on the
-  two plans the mixture-of-experts model that fits a 24 GB Mac takes (resident, and streamed layer by layer), no
-  pinned address out of two million was answered past its wrap and every expert's address resolved to an
-  allocation of its own. The expert-store plan itself was not run on Apple hardware (its models are 31 GB). The
-  wraps are now kept under their extent (base and size), and `pinned_gpu_address` refuses by name an address beyond
-  the wrap it resolved. CUDA and Level Zero are not concerned: they have no such wraps.
+### Changed
+- **Apple: an address read through a pinned table is answered from a wrap that covers it.** The Metal driver keeps its
+  pinned whole-allocation wraps under their extent (base and size), so a view inside any block of a pool segment — a
+  slot of the Triton expert store's arena — resolves to the wrap that holds it, and `pinned_gpu_address` refuses by name
+  an address beyond the wrap it resolved. Proven by a test that builds the copying expert store (the one with an arena)
+  directly and runs it after nine earlier mixture-of-experts runs in one process. On Apple the engine builds a unified
+  device's store, which binds its experts in place, where they lie in the container's files; with the published 0.6.6
+  through `neurobrix serve`, on the two plans the mixture-of-experts model that fits a 24 GB Mac takes (resident, and
+  streamed layer by layer), all two million pinned addresses observed resolved inside their wrap, and every expert's
+  address to an allocation of its own. CUDA and Level Zero have no such wraps.
 
 ## [0.1.1] - 2026-11-11
 
@@ -287,38 +277,38 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   merged in a fixed order. The host partial (`HostSpill.partial`) stays the decode step's one row: for a chunk's
   32 x 128 query rows over 14 336 positions it cost 85-122 ms a layer on a Xeon Gold 6230 (40 threads), about half of
   each spilled chunk of a 79 931-token turn (2026-11-10).
-- **A Level Zero failure is a typed refusal**: `backend.level_zero.IntelDeviceError` (a RuntimeError) carries the
-  call, the `ze_result_t` by name and the module's build log, raised by the runtime, the launch driver and a SPIR-V
-  module that does not build. The Intel backend is experimental — not yet validated on hardware by the NeuroBrix lab —
-  and an application decides on this type what a refusal means.
+- **A Level Zero refusal is typed**: `backend.level_zero.IntelDeviceError` (a RuntimeError) carries the call, the
+  `ze_result_t` by name and the module's build log, raised by the runtime, the launch driver and a SPIR-V module that
+  does not build. The Intel backend is experimental — not yet validated on hardware by the NeuroBrix lab — and an
+  application decides on this type what a refusal means.
 - **The Intel launch driver goes through its runtime's contract** (no behaviour change; the backend stays
   experimental, not yet validated on hardware): `backend/level_zero.py` is the only module that knows a Level Zero
   struct, constant or entry point of a module's life — `LevelZeroRuntime.build_module` (answers `ModuleBuilt`: the
-  result, the module, the build log; a failure is answered, the retry is the driver's decision), `create_kernel`,
+  result, the module, the build log; an error is answered, the retry is the driver's decision), `create_kernel`,
   `kernel_properties`, `destroy_kernel`, `destroy_module`, `set_argument`, `set_group_size`, `append_launch`,
   `current_device`. `backend/level_zero_driver.py` imported 14 private names and issued 12 raw `ze*` calls; it now
   imports none and issues none, and holds the one decision that is a driver's (the 256-register rebuild, its two
   constants beside it). `backend/launcher.py` names publicly what a driver in another file uses: `ModuleDriver`,
   `ctypes_slot`. Proven without a card: the exact ze calls of ten load and launch paths, recorded before the move,
   reproduced by it.
-- **The library's uploads name their device in the call** (the spilled prefill chunk's blocks, masks and merged
-  result, the paged decode's host partial, the MoE residency probe): they were written
-  `NBXTensor.from_numpy(x).to(device=...)`; `from_numpy` lands on the CURRENT device and `.to("cuda:N")` moves
-  nothing, so that idiom was right only when the call before it had left the wanted device current. No wrong placement
-  was observed; on a cache whose layers live on two cards it was one reordering away.
+- **The library's uploads name their device in the call** (the spilled prefill chunk's blocks, masks and merged result,
+  the paged decode's host partial, the MoE residency probe): `NBXTensor.from_numpy(x, device=...)` places each one on
+  the device it names, whichever device is current, so a cache whose layers live on two cards gets each upload on its
+  own card.
 - `NBXTensor.to` reads its positional argument in a named function (`_positional_target`); the method is 40 code
   lines (49), same answers.
-
-### Fixed
-- **Reading a device's memory leaves no context on another device**: `DeviceAllocator.free_memory_mb`,
-  `mem_get_info`, `device_total_bytes` and the other probes "restored the previous device" after reading; in a process
-  that had selected none, that selected device 0 and made the runtime create a context there. A previous device is
-  restored only when the process had selected it (`DeviceAllocator.restore_device`).
+- **Reading a device's memory leaves no context on another device**: `DeviceAllocator.free_memory_mb`, `mem_get_info`,
+  `device_total_bytes` and the other probes restore a previous device after reading only when the process had selected
+  one (`DeviceAllocator.restore_device`), so a process that selected none creates no context on device 0.
 
 ## [0.1.0] - 2026-11-10
 ### Changed
-- **Contributions are made under the NeuroBrix Contributor Assignment Agreement** (docs/legal/ of the neurobrix repository, an individual and an entity version): signed once by a comment on the first pull request, for every NeuroBrix project; the `NeuroBrix CLA` check on every pull request says who has yet to sign. CONTRIBUTING.md explains it.
-- **The authors' contact address is contact@neurobrix.org** (the package metadata), the project's address being neurobrix.org.
+- **Contributions are made under the NeuroBrix Contributor Assignment Agreement** (docs/legal/ of the neurobrix
+  repository, an individual and an entity version): signed once by a comment on the first pull request, for every
+  NeuroBrix project; the `NeuroBrix CLA` check on every pull request says who has yet to sign. CONTRIBUTING.md explains
+  it.
+- **The authors' contact address is contact@neurobrix.org** (the package metadata), the project's address being
+  neurobrix.org.
 
 ### Added
 - **A decoding sequence may outgrow the card's KV pages**: past `card_pages`, `PagedTritonKVCache` moves its oldest
@@ -337,10 +327,10 @@ A device and memory API that names every answer of the GPU runtime, refusals inc
   -inf before the sampler; the mask on the logits' own device, the element-wise launch's certified tile; a mask of
   another shape or allowing no token refused by name. Torch-free.
 - **A KV cache host tier**: `memory.kv_host_tier` (the prefix index of whole pages, the host page pool, the pages a
-  sequence holds), `memory.kv_host_pages` (host pages laid out [page][layer][K, V], pinned or pageable; per-layer copies,
-  and `offload_gathered` / `restore_scattered`: every layer's page gathered on the device by one kernel per K and V, then
-  one copy per page and run of layers — 43 MB in 21 / 8 ms against 184 / 210 ms per layer on a V100), and the paged
-  cache's `tier_*` protocol (layout, length, offload, restore in place, resume).
+  sequence holds), `memory.kv_host_pages` (host pages laid out [page][layer][K, V], pinned or pageable; per-layer
+  copies, and `offload_gathered` / `restore_scattered`: every layer's page gathered on the device by one kernel per K
+  and V, then one copy per page and run of layers — 43 MB in 21 / 8 ms against 184 / 210 ms per layer on a V100), and
+  the paged cache's `tier_*` protocol (layout, length, offload, restore in place, resume).
 - **`nbxtensor.ops.embedding_pool`**: an embedding model's pooling on the host (`pool_hidden`: mean over the kept
   positions, cls, or each sequence's last kept position whatever the padding side; `l2_normalize`), numpy and
   torch-free; refusals by name.
