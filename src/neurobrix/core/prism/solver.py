@@ -4782,7 +4782,8 @@ class PrismSolver:
         object, never the container's graph — each fused its own deep copy, 2 x (14.5 s copy + the fusion) of
         Qwen3-30B-A3B's 115 419 ops on one core (py-spy, 2026-10-30). norm_topk_prob does not change which weights
         the fused op reads; the declared value is passed so the sizing and the cut fuse identically."""
-        memo = self.__dict__.setdefault("_declared_fusions", {})
+        # a served session's raise is ONE planning (`served_prefill.solve_served`): its solves share one memo, kept
+        memo = self.__dict__.setdefault("_kept_fusions" if getattr(self, "keeps_fusions", False) else "_declared_fusions", {})
         hit = memo.get(id(graph))
         if hit is None or hit[0] is not graph or hit[1] != norm_topk_prob:
             from neurobrix.core.optim.passes.normalize import graph_copy

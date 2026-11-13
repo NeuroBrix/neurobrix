@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (and the same path's models) answered the first request right and every later one with a repeated token: the reload of
   its weights between requests rebuilt the model without its attention cache, so later prompts were decoded over no
   context.
+- **A served mixture-of-experts model starts minutes sooner on the PyTorch engine.** Choosing how many prompt rows a
+  served request reads at a time re-planned the model several times, and each plan copied the whole model graph again;
+  the copy is now made once per start.
 
 ## [0.6.13] - 2026-11-12
 

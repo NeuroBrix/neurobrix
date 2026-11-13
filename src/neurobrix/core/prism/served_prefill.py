@@ -51,11 +51,10 @@ def chunk_mask_bytes(input_config, mode: str) -> int:
     keys and their dtype (`InputConfig.seq_len`, `prefill_keys`, `prefill_key_dtype`). 0 for a request that states no
     cached keys: a run's one pass attends its own rows, which the walk prices."""
     rows, keys = (int(getattr(input_config, f, 0) or 0) for f in ("seq_len", "prefill_keys"))
-    if not rows or not keys:
-        return 0
     from neurobrix.core.prism.host_footprint import engine_of
     from neurobrix.core.state.price import session_chunk_attention_bytes
-    return session_chunk_attention_bytes(rows, keys, input_config.prefill_key_dtype, engine_of(mode))
+    return (session_chunk_attention_bytes(rows, keys, input_config.prefill_key_dtype, engine_of(mode))
+            if rows and keys else 0)
 
 
 def price_chunk_mask(component_memory, declared, input_config, mode: str, overhead: Callable) -> None:
@@ -74,6 +73,9 @@ def solve_served(container, profile, input_config, mode: str = "compiled") -> Tu
     raised while the plan holds."""
     from neurobrix.core.prism.solver import PrismSolver
     solver = PrismSolver()
+    # every solve of the raise reads one fused copy of a MoE graph: each copied and fused it again, Qwen3-Coder-30B-A3B
+    # served --compiled spent 10+ minutes of one core before its card was touched (py-spy, 2026-11-13)
+    solver.keeps_fusions = True
     return raise_while_the_plan_holds(
         lambda cfg: solver.solve_smart(container, profile, cfg, serve_mode=True, mode=mode), input_config)
 
@@ -99,6 +101,5 @@ def raise_while_the_plan_holds(solve: Callable[[Any], Any], input_config) -> Tup
             log.info("Prism: the served prefill chunk stays at %d rows — at %d the plan gives up a resident",
                      rows // 2, rows)
             break
-        held = resident_signature(trial) if held is None else held
-        plan, cfg, rows = trial, trial_cfg, rows * 2
+        held, plan, cfg, rows = (resident_signature(trial) if held is None else held), trial, trial_cfg, rows * 2
     return plan, cfg
