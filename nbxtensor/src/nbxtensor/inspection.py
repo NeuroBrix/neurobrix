@@ -104,3 +104,11 @@ def values_at(t, positions) -> list:
             v = v.select(0, i)
         out.append(float(v.item()))
     return out
+
+
+def label(t) -> str:
+    """A tensor as a diagnostic line names it: shape, dtype, device and this object's id (stable while it lives),
+    never its address ("-" for an empty slot)."""
+    if t is None:
+        return "-"
+    return f"{tuple(t.shape)} {t.nbx_dtype.name} {'cpu' if t.is_cpu else 'device'}:{t.device_idx} id={id(t):#x}"

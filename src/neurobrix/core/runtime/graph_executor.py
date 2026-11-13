@@ -3796,7 +3796,7 @@ class GraphExecutor:
                                                        lambda: '?')()))
                     _log.debug(f"[OP_TRACE path=tritonseq op_idx={op_idx} "
                                f"op_uid={op_uid} live_mb={_live:.0f} "
-                               f"out_ptr={_out_ptr}]")
+                               f"out={_out_ptr}]")
                 except Exception:
                     pass
 
@@ -4677,14 +4677,11 @@ class GraphExecutor:
                         _o = self._ctx.op_outputs.get(output_tids[0])
                         if _o is None:
                             _o = self._ctx.op_outputs.get(op_uid)
-                        if _o is not None and hasattr(_o, 'data_ptr'):
-                            try:
-                                _out_ptr = str(_o.data_ptr())
-                            except Exception:
-                                pass
+                        if _o is not None and hasattr(_o, 'shape'):      # torch's own fields, never the address
+                            _out_ptr = f"{tuple(_o.shape)} {_o.dtype} {_o.device} id={id(_o):#x}"
                     _log.debug(f"[OP_TRACE path=native op_idx={i} "
                                f"op_uid={op_uid} live_mb={_live:.0f} "
-                               f"out_ptr={_out_ptr}]")
+                               f"out={_out_ptr}]")
                     # Legacy format for backward compat.
                     _log.debug(f"[NATIVE_LIVE_TRACK op_idx={i} {op_uid}] "
                                f"live={_live:.0f}MB peak={_peak:.0f}MB")

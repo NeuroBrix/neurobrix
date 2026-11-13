@@ -2053,11 +2053,8 @@ class TritonSequence(SequenceSteps):
                 _g0_slot = _in_slot_c if _in_slot_c is not None else _gw[0]
                 _g0 = arena[_g0_slot]
                 _h0 = arena[_hs_slot]
-                _log.debug(f"[MOE_SLOT] {_cache_key} gw0_slot={_g0_slot} "
-                           f"gw0_ptr={0 if _g0 is None else _g0.data_ptr():#x} "
-                           f"gw0_dev={None if _g0 is None else _g0._device_idx} "
-                           f"hs_slot={_hs_slot} "
-                           f"hs_ptr={0 if _h0 is None else _h0.data_ptr():#x}")
+                _log.debug(f"[MOE_SLOT] {_cache_key} gw0_slot={_g0_slot} gw0={_inspection.label(_g0)} "
+                           f"hs_slot={_hs_slot} hs={_inspection.label(_h0)}")
             _held = _seq._expert_cards.get(_layer_key) if _seq._expert_cards else None
             if _held is not None:
                 # A block whose experts another card holds whole (S3, `expert_store._hold_experts_on_cards`): the
@@ -3782,9 +3779,7 @@ class TritonSequence(SequenceSteps):
             if _watch_slot >= 0 and arena[_watch_slot] is not _watch_ref:
                 _new = arena[_watch_slot]
                 _log.debug(f"[ARENA_WATCH] slot {_watch_slot} changed BEFORE "
-                           f"op_idx={op_idx} {op.op_uid}: "
-                           f"ptr={0 if _new is None else _new.data_ptr():#x} "
-                           f"dev={None if _new is None else _new._device_idx}")
+                           f"op_idx={op_idx} {op.op_uid}: {_inspection.label(_new)}")
                 _watch_ref = _new
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)

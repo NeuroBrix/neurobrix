@@ -29,6 +29,14 @@
   "launch": {"kernel launches": {"grid_names": ["grid"], "kernel_suffix": "_kernel"}},
   "arena_receiver": {"arena calls": "(?i)arena$"},
   "torch_library": ["torch"],
-  "torch_only_attributes": ["untyped_storage"]
+  "torch_only_attributes": ["untyped_storage"],
+  "justified": [
+   {"path": "src/neurobrix/core/prism/autodetect.py", "what": "ctypes.create_string_buffer", "count": 1,
+    "reason": "hardware detection, not tensor work: the buffer Windows' GetLogicalProcessorInformationEx fills with the cores' efficiency classes, for the machine profile (Orchestrateur 2026-11-13 04:00, (d))"},
+   {"path": "src/neurobrix/kernels/__init__.py", "what": "nbxtensor.backend.launcher.install", "count": 1,
+    "reason": "one call into nbxtensor's public launcher API at import; the engine holds no launcher state (Orchestrateur 2026-11-13 04:00, (d))"},
+   {"path": "src/neurobrix/cli/commands/run.py", "what": "nbxtensor.backend.launcher.prewarm_compiler", "count": 1,
+    "reason": "one call into nbxtensor's public launcher API at run start; the engine drives no compiler (Orchestrateur 2026-11-13 04:00, (d))"}
+  ]
  }
 }
