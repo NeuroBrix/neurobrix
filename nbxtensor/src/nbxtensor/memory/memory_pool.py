@@ -196,6 +196,44 @@ class ComponentArena:
             self.free()
 
 
+class WeightArenas:
+    """The memory of one weight set: aligned bytes counted per device and for page-locked host memory while the
+    application decides where each weight goes, then one `ComponentArena` per device and one `HostPinnedArena`, the
+    host block page-locked once its last weight is written. The application decides placement; this holds the
+    memory (2026-11-13: the counting, the arenas and the pinning were the engine's loader's own)."""
+
+    def __init__(self):
+        self._device_bytes: dict = {}
+        self._host_bytes = 0
+        self.devices: dict = {}           # {device: ComponentArena}, after `allocate`
+        self.host = None                  # the HostPinnedArena, after `allocate`, when any host bytes were reserved
+
+    def reserve(self, device: int, nbytes: int) -> None:
+        """Count a weight of `nbytes` stored bytes on `device`, at the arena's alignment."""
+        self._device_bytes[device] = self._device_bytes.get(device, 0) + aligned(nbytes, ComponentArena.ALIGNMENT)
+
+    def reserve_host(self, nbytes: int) -> None:
+        """Count a weight of `nbytes` stored bytes in page-locked host memory, at the host block's alignment."""
+        self._host_bytes += aligned(nbytes, HostPinnedArena.ALIGNMENT)
+
+    def device_bytes(self) -> dict:
+        """{device: bytes reserved}."""
+        return dict(self._device_bytes)
+
+    def allocate(self) -> "WeightArenas":
+        """One arena per device that has bytes reserved, and the host block when host bytes were; refused once."""
+        if self.devices or self.host is not None:
+            raise RuntimeError("WeightArenas.allocate: already allocated")
+        self.devices = {dev: ComponentArena(total, dev) for dev, total in self._device_bytes.items()}
+        self.host = HostPinnedArena(self._host_bytes) if self._host_bytes else None
+        return self
+
+    def pin_host(self) -> None:
+        """Page-lock the host block, once every host weight is written (a no-op without one)."""
+        if self.host is not None:
+            self.host.pin()
+
+
 class HostPinnedArena:
     """One page-locked host block for a component's host-held weights (zero3's block weights, an expert store's
     routed experts), sub-allocated like `ComponentArena`. A pinned allocation per weight cost Qwen3-30B-A3B 18 864

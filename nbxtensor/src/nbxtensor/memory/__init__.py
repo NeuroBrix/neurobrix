@@ -124,3 +124,9 @@ def register_idle_reclaimer(reclaim) -> None:
     """`reclaim(dev) -> bytes` called when a malloc on `dev` is refused after the pool's flush, to release memory the
     application holds idle; registered once."""
     _allocator().register_idle_reclaimer(reclaim)
+
+
+def weight_arenas():
+    """A weight set's memory, to count, allocate and pin (`memory_pool.WeightArenas`)."""
+    from nbxtensor.memory.memory_pool import WeightArenas
+    return WeightArenas()

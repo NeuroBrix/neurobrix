@@ -158,6 +158,15 @@ SF_DTYPE_INFO = {
 }
 
 
+def mapped_view(mapping, offset: int, shape: tuple, sf_dtype: str) -> NBXTensor:
+    """A host tensor over the stored bytes of one weight inside a read-only mapped shard (`mmap.ACCESS_READ`): its
+    address read from the mapping without a writable export, no byte copied, the mapping held as the tensor's base so
+    the pages live as long as the view (2026-11-13: built by the engine's executor until then)."""
+    address = np.frombuffer(mapping, dtype=np.uint8).ctypes.data
+    return NBXTensor.from_raw(address + int(offset), tuple(shape), SF_DTYPE_INFO[sf_dtype][1], device="cpu",
+                              owns_data=False, base=mapping)
+
+
 def half_in_place(ptr: int, count: int, device_idx: int):
     """The loader's raw bf16 weight buffer at `ptr` rewritten in place as float16 by nbxtensor's one device
     conversion (`ops.wrappers.bf16_to_fp16_gpu` with `out=` the same buffer)."""

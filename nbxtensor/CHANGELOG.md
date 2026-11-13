@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nbxtensor.memory` answers the allocator's figures and the pool's controls by name (`memory_allocated`,
   `pool_cached_bytes`, `peak_device_bytes`, `empty_cache_pool`, the held-memory windows and others): an application
   no longer calls the allocator class for them.
+- `nbxtensor.memory.weight_arenas()`: a weight set's memory, counted per device and in page-locked host memory,
+  allocated once and pinned once its host weights are written.
+- `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
+  copied.
+- `nbxtensor.interop.copy_to_address` and `host_bytes`: a tensor's values handed to another array library, into its
+  own device buffer or as host bytes in C order.
 
 ## [0.1.5] - 2026-11-12
 
