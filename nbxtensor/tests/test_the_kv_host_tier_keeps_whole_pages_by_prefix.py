@@ -65,8 +65,10 @@ def test_a_restored_page_comes_back_and_a_host_leaf_is_dropped():
 
 
 def test_the_budget_holds_whole_pages_and_the_pool_refuses_by_name():
-    assert host_tier_pages(10 * 1024, 4096) == 2
-    assert host_tier_pages(4095, 4096) == 0                         # below one page: the tier is off
+    assert host_tier_pages(10 * 1024, 2, 1024, 1024) == 2           # a page: 2 layers x (1 KB K + 1 KB V)
+    assert host_tier_pages(4095, 2, 1024, 1024) == 0                # below one page: the tier is off
+    with pytest.raises(ValueError, match="a page of 0 layers"):
+        host_tier_pages(4096, 0, 1024, 1024)
     pool = HostPagePool(1)
     p = pool.take()
     with pytest.raises(RuntimeError, match="all held"):

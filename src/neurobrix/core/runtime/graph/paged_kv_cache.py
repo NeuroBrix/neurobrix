@@ -49,13 +49,18 @@ class PagedKVCache:
     def _pages_for(self, positions: int) -> int:
         return -(-int(positions) // self.page_tokens)
 
+    def _paginate(self, batch: int) -> None:
+        """The library's page bookkeeping for `batch` sequences at the plan's starting length: one pool of page
+        indices, one table per sequence (the pages themselves are this cache's torch tensors, `_layer_pools`)."""
+        start = self.config.initial_cache_len or self.config.max_cache_len
+        self.pool = PagePool(batch * self._pages_for(start), self.page_tokens, self.async_release)
+        self.tables = [PageTable(self.pool) for _ in range(batch)]
+
     def _ensure(self, k: torch.Tensor) -> None:
         batch = int(k.shape[0])
         if self.pool is None:
             self.batch = batch
-            start = self.config.initial_cache_len or self.config.max_cache_len
-            self.pool = PagePool(batch * self._pages_for(start), self.page_tokens, self.async_release)
-            self.tables = [PageTable(self.pool) for _ in range(batch)]
+            self._paginate(batch)
         elif batch != self.batch:
             if self._seq_len != 0:
                 raise RuntimeError(f"ZERO FALLBACK: the paged KV cache holds {self.batch} sequences mid-request "
@@ -66,9 +71,7 @@ class PagedKVCache:
                 t.free()
             self.k_pools.clear(); self.v_pools.clear(); self.lens.clear()
             self.batch = batch
-            start = self.config.initial_cache_len or self.config.max_cache_len
-            self.pool = PagePool(batch * self._pages_for(start), self.page_tokens, self.async_release)
-            self.tables = [PageTable(self.pool) for _ in range(batch)]
+            self._paginate(batch)
 
     def _layer_pools(self, layer_idx: int, device) -> Tuple[torch.Tensor, torch.Tensor]:
         """The layer's pools on its device, extended to the pool's page count (pages added by `grow`)."""

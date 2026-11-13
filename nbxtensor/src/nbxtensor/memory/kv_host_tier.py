@@ -71,11 +71,13 @@ def sequence_pages(tables, batch: int) -> List[int]:
     return list(tables[0].pages)
 
 
-def host_tier_pages(budget_bytes: int, page_bytes_all_layers: int) -> int:
-    """How many host pages a budget holds: whole pages only; 0 (the tier off) below one page."""
-    if page_bytes_all_layers <= 0:
-        raise ValueError(f"host_tier_pages: a page of {page_bytes_all_layers} bytes")
-    return max(0, int(budget_bytes) // int(page_bytes_all_layers))
+def host_tier_pages(budget_bytes: int, num_layers: int, k_page_bytes: int, v_page_bytes: int) -> int:
+    """How many host pages a budget holds, a page being one page index of every layer's K and V: whole pages only;
+    0 (the tier off) below one page."""
+    page_bytes = int(num_layers) * (int(k_page_bytes) + int(v_page_bytes))
+    if page_bytes <= 0:
+        raise ValueError(f"host_tier_pages: a page of {num_layers} layers x ({k_page_bytes} + {v_page_bytes}) bytes")
+    return max(0, int(budget_bytes) // page_bytes)
 
 
 class _Node:

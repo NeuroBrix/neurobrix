@@ -42,7 +42,11 @@
    {"path": "src/neurobrix/core/runtime/graph/compiled_sequence.py", "what": "_arena.clear_inputs(", "count": 1,
     "reason": "the compiled (torch) engine's own TensorArena (core/runtime/graph/compiled_sequence.py:242-280) is a plain holder of torch tensors torch allocates: a slot list cleared by region, no reuse or aliasing policy, no pointer, no sizing (its size is a slot count); torch frees what no holder keeps (Orchestrateur 2026-11-13 05:08, (C))"},
    {"path": "src/neurobrix/core/runtime/graph/compiled_sequence.py", "what": "_arena.clear_all(", "count": 1,
-    "reason": "the compiled (torch) engine's own TensorArena (core/runtime/graph/compiled_sequence.py:242-280) is a plain holder of torch tensors torch allocates: a slot list cleared by region, no reuse or aliasing policy, no pointer, no sizing (its size is a slot count); torch frees what no holder keeps (Orchestrateur 2026-11-13 05:08, (C))"}
+    "reason": "the compiled (torch) engine's own TensorArena (core/runtime/graph/compiled_sequence.py:242-280) is a plain holder of torch tensors torch allocates: a slot list cleared by region, no reuse or aliasing policy, no pointer, no sizing (its size is a slot count); torch frees what no holder keeps (Orchestrateur 2026-11-13 05:08, (C))"},
+   {"path": "src/neurobrix/core/runtime/graph/paged_kv_cache.py", "what": "nbxtensor.memory.pages.PagePool", "count": 2,
+    "reason": "the compiled (torch) engine's paged KV cache (core/runtime/graph/paged_kv_cache.py:34 the attribute, :52-57 _paginate) uses the library's PagePool / PageTable as page-index bookkeeping only; the pages are torch's memory: the per-layer K and V tensors torch allocates (_layer_pools), which no library allocator holds (Orchestrateur 2026-11-13 05:13)"},
+   {"path": "src/neurobrix/core/state/kv_tier.py", "what": "nbxtensor.memory.kv_host_tier.HostPagePool", "count": 2,
+    "reason": "the KV host tier keeps POLICY only (core/state/kv_tier.py:27 the attribute, :43 the pool built at first use): when to park or restore and the budget; HostPagePool is the library's free-list of host page indices over the library's own HostPages (nbxtensor memory/kv_host_pages.py), and every byte copy and sizing is the library's (host_tier_pages, HostPages.nbytes, spill_bytes_per_position) (Orchestrateur 2026-11-13 05:13)"}
   ]
  }
 }
