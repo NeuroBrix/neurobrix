@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A served conversation on Apple Silicon plans its prompt in chunks priced on the chip's own tables.** The serving
+  session reads its chunk record and certified times under the chip's vendor profile, and a Mac's single memory pool
+  is planned as the one cache it is, as on other hardware.
+
 ## [0.6.15] - 2026-11-13
 
 With nbxtensor 0.1.7: Kokoro-82M speaks with its own voice on the Triton engine, `neurobrix upscale` runs on every host as
