@@ -226,7 +226,7 @@ def test_a_spilled_conversation_is_never_parked_and_the_spill_takes_what_the_par
     assert tier.spill_budget() == tier.budget_bytes                     # nothing parked: the whole budget
     _turn(tier, s, cache, list(range(1, 42)))
     _turn(tier, s, cache, list(range(500, 530)))                       # the first conversation parked
-    assert tier.parked_pages == 5 and tier.spill_budget() == tier.budget_bytes - tier.host_bytes() < tier.budget_bytes
+    assert tier.parked_pages == 5 and tier.spill_budget() == tier.budget_bytes - tier.host.nbytes() < tier.budget_bytes
     cache.spilled = TPP
     assert tier.park(list(range(500, 530)), cache) == 0
     assert tier.prepare(s, cache, list(range(1, 42)) + [9]) == 0 and tier.parked_pages == 5
@@ -254,11 +254,12 @@ def test_the_served_reach_is_the_card_then_the_host_spill_within_the_window():
     session reach), plus the host spill's on the tier's share when a tier serves and the window is longer, never past
     the window (the rack's Qwen3-Coder: 65 664 on the card, a 79 963-position request refused before the spill)."""
     from types import SimpleNamespace
-    from neurobrix.core.state.kv_tier import served_reach, spill_position_bytes
+    from nbxtensor.memory.host_spill import spill_bytes_per_position
+    from neurobrix.core.state.kv_tier import served_reach
     plan = SimpleNamespace(max_cache_len=100, session_reach=90, num_layers=LAYERS, num_kv_heads=H, k_head_dim=D,
                            v_head_dim=D)
     tier = KVTier(budget_mb=1, pinned=False, source="test", slice_positions=2 * TPP)
-    host = tier.spill_budget() // spill_position_bytes(plan)
+    host = tier.spill_budget() // spill_bytes_per_position(LAYERS, H, D, D)
     assert served_reach(plan, None, 10 ** 6)[0] == 90                    # no tier: the card's reach
     assert served_reach(plan, tier, 80)[0] == 90                          # the window within the card: no spill
     total, source = served_reach(plan, tier, 10 ** 6)

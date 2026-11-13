@@ -207,8 +207,9 @@ DEVICE, HOST
 class HostPagePool
     # `capacity` host pages, each one page index of every layer's K and V contiguous: take, give, free_pages; grow(n),
     # shrink(n) (the last n pages, when all are free) as the host memory grows or frees a slice
-def host_tier_pages(budget_bytes, page_bytes_all_layers) -> int
-    # the whole host pages a budget holds; 0 (the tier off) below one page
+def host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes) -> int
+    # the whole host pages a budget holds, a page being one page index of every layer's K and V; 0 (the tier off)
+    # below one page
 def sequence_pages(tables, batch) -> List[int]
     # a serving cache's one sequence's device pages in position order (refused for a batch > 1)
 class PrefixIndex
@@ -221,7 +222,7 @@ class PrefixIndex
 ```python
 class HostPages
     # host pages, each [layer][K page, V page] contiguous, allocated in slices of `slice_pages` up to `max_pages` (the
-    # budget a ceiling): grow, shrink, capacity, contiguous(a, b) (one slice), page_view, address(host_page, layer,
+    # budget a ceiling): grow, shrink, capacity, nbytes() (the bytes its slices hold), contiguous(a, b) (one slice), page_view, address(host_page, layer,
     # which), close; fixed(capacity, ...) one slice at once; page-locked when asked, pageable otherwise (unified memory)
 def offload(k_pools, v_pools, pages, host, host_pages) -> None
     # each device page (every layer's K and V, `pool[page]`) copied to its host page, after the device's queued work
@@ -258,6 +259,8 @@ def one_head_per_group(t, kv_heads, group)
 `nbxtensor.memory.host_spill` — the positions a decoding sequence spilled from the card's pages to host memory
 
 ```python
+def spill_bytes_per_position(num_layers, kv_heads, k_dim, v_dim) -> int
+    # host bytes one spilled position costs across every layer (float32 K and V); a server sizes its reach by it
 class HostSpill(num_layers, kv_heads, k_dim, v_dim, budget_bytes)
     # per layer K / V float32 [H_kv, positions, D], written once per spilled page (append(layer, k_pages, v_pages)),
     # grown by doubling up to the budget (refused by name past it: reach(), position_bytes()); partial(layer, q,

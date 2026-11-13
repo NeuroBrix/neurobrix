@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `nbxtensor.memory.kv_host_tier.host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes)` takes a
+  page's parts and sizes the page itself; it no longer takes a precomputed all-layers page size.
+
 ### Fixed
 - A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
   only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises
@@ -26,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocated once and pinned once its host weights are written.
 - `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
   copied.
+- `nbxtensor.memory.host_spill.spill_bytes_per_position`: the host bytes one spilled KV position costs, for a
+  server that sizes its reach before any spill exists; `HostPages.nbytes()`: the host bytes its slices hold.
 - `nbxtensor.memory.slot_store`, `end_store_request`, `release_store`: a compiled sequence's slot memory and its
   request and unload lifecycle, with `store_held_bytes` and `store_contents` for diagnostics.
 - `nbxtensor.inspection.label`: a tensor as a diagnostic line names it (shape, dtype, device and the object's id),
