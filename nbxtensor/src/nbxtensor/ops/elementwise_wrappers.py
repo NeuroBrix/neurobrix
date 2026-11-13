@@ -1137,19 +1137,18 @@ def swiglu_fused_wrapper(gate, up):
     output = NBXTensor.empty((M, N), dtype=gate2d._dtype,
                              device=f"cuda:{gate2d._device_idx}")
 
-    BLOCK_M = 16
-    BLOCK_N = min(triton.next_power_of_2(N), 1024)
-    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    # One element-wise launch over the M x N elements, at the certified tile of their class (`_ew_meta`): the former
+    # fixed 16 x 1024 tile (128 elements a thread) spilled on an M4 Pro, 84 us at a decode step's (1, 5632)
+    # (2026-11-13). Each element is computed alone: the tile moves no value.
+    n = M * N
     set_device(gate2d)
-
-    silu_mul_split_kernel[grid](
+    silu_mul_split_kernel[_1d_grid(n)](
         gate2d, up2d, output,
         M, N,
         gate2d.stride(0), gate2d.stride(1),
         up2d.stride(0), up2d.stride(1),
         output.stride(0), output.stride(1),
-        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
-        num_warps=4,
+        **_ew_meta(n),
     )
     return output.view(*orig_shape)
 
