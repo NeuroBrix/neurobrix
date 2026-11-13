@@ -490,7 +490,7 @@ class DeviceAllocator:
         dm, table = _rt.device_memory(), _rt.backend_table()
         prev = cls.get_device()
         out: list[tuple[int, int]] = []
-        restore_error = None
+        walk_error = restore_error = None
         try:
             for i in range(ndev):
                 rc = dm.set_device(i)
@@ -504,15 +504,18 @@ class DeviceAllocator:
                     raise DeviceQueryError(f"{table.get('mem_get_info', 'mem_get_info')} failed with error {rc} on "
                                            f"device {i}")
                 out.append((int(free_b), int(total_b)))
-        finally:
-            try:                                    # back to the device that was current, whatever the walk met
-                cls.restore_device(prev)
-            except Exception as exc:                # raised below, or noted on the walk's own error
-                restore_error = exc
-                walk_error = exc.__context__        # the walk's own error, when one is propagating
-                if walk_error is not None:
-                    walk_error.add_note(f"and the current device {prev} could not be restored after it: {exc}")
-            _rt.invalidate_current_device_cache()
+        except Exception as exc:                    # raised below, after the restore, with the restore's own failure
+            walk_error = exc
+        try:                                        # back to the device that was current, whatever the walk met
+            cls.restore_device(prev)
+        except Exception as exc:
+            restore_error = exc
+        _rt.invalidate_current_device_cache()
+        if walk_error is not None and restore_error is not None:
+            raise DeviceQueryError(f"{walk_error}; and the current device {prev} could not be restored after it: "
+                                   f"{restore_error}") from walk_error
+        if walk_error is not None:
+            raise walk_error
         if restore_error is not None:
             raise DeviceQueryError(f"the current device {prev} could not be restored after the walk: "
                                    f"{restore_error}") from restore_error
