@@ -1,7 +1,7 @@
-"""The workshop's roots, for every tool that reads or writes outside the engine (`docs/internal/_atelier.md` v2, §4).
+"""The workshop's roots, for every tool that reads or writes outside the engine (the workshop configuration).
 
-Each machine declares its paths ONCE in `~/.neurobrix/atelier.json` (the column of `_atelier.md` §1 for that machine;
-`NBX_ATELIER_JSON` names another file). A role is overridden by `NBX_ATELIER_<ROLE>` (upper case). A tool takes every
+Each machine declares its paths ONCE in its workshop configuration, `~/.neurobrix/atelier.json` (`NBX_ATELIER_JSON`
+names another file). A role is overridden by `NBX_ATELIER_<ROLE>` (upper case). A tool takes every
 path it reads or writes from here — no `/tmp/…`, `validation_outputs/`, `~/…` or absolute path in its code — and a
 write outside the roles the file lists as `_writable` stops with an error naming the path (`OutsideTheAtelier`).
 
@@ -36,8 +36,8 @@ def _load() -> Dict[str, Any]:
     try:
         return json.loads(p.read_text())
     except FileNotFoundError:
-        raise AtelierUndeclared(f"{p}: no atelier.json on this machine — write it from the column of "
-                                f"docs/internal/_atelier.md §1 for this machine; no tool guesses a path") from None
+        raise AtelierUndeclared(f"{p}: no workshop configuration on this machine (atelier.json: each role's path); "
+                                f"no tool guesses a path") from None
     except json.JSONDecodeError as e:
         raise AtelierUndeclared(f"{p}: not JSON ({e})") from None
 
@@ -56,13 +56,13 @@ def root(role: str) -> Path:
 
 
 def python(name: str) -> str:
-    """The interpreter of the environment `name` (`engine`, `oracle`, `competitors`, the container builder's: environments.md)."""
+    """The interpreter of the environment `name` (`engine`, `oracle`, `competitors`, the container builder's: the workshop configuration's `python`)."""
     env = os.environ.get(f"NBX_ATELIER_PYTHON_{name.upper()}")
     if env:
         return env
     py = (_load().get("python") or {}).get(name)
     if not py:
-        raise AtelierUndeclared(f"{config_path()}: no python {name!r} — the environments are those of environments.md")
+        raise AtelierUndeclared(f"{config_path()}: no python {name!r} — the environments are those its `python` table declares")
     return py
 
 
@@ -79,7 +79,7 @@ def writable(path) -> Path:
     if any(p == r or p.is_relative_to(r) for r in roots):
         return p
     raise OutsideTheAtelier(f"{p}: outside the workshop's writable roots ({', '.join(str(r) for r in roots)}) — "
-                            f"docs/internal/_atelier.md §4: a tool writes in its campaign, the registers, tmp or the repo")
+                            f"the workshop configuration's `_writable` roles: a tool writes in its campaign, the registers, tmp or the repo")
 
 
 def tmp(*parts: str) -> Path:
