@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from 2017" was spoken "...from a...") and mangled brand names. Numbers, years, versions, decimals, ordinals,
   percentages, currencies, units and known names are now written out before the voice reads them; a character it cannot
   say is refused by name.
+- **A served model built for images no longer answers a chat request with garbage.** Janus-Pro-7B, built to generate
+  images, ran its image generation for a chat request and returned the image tokens as text; the server now refuses a
+  mode the container was not built for, by name, as `neurobrix run --mode` already did.
+- **A served multimodal model keeps answering identical requests.** After generating an image, a served Janus-Pro-7B
+  loaded a second copy of its language model and failed two requests in three; a served model's weights now stay loaded.
 
 ## [0.6.13] - 2026-11-12
 

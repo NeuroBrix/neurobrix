@@ -1699,6 +1699,12 @@ class RuntimeExecutor:
 
         if not getattr(executor, '_weights_loaded', False):
             return
+        if getattr(executor, '_persistent', False):
+            # a serving daemon's executor keeps its weights (`unload_weights` declines them): marking it unloaded made
+            # the next request load a SECOND copy and free the first under the replay plans recorded on it — Janus
+            # served: every request after an image's language-model "unload" failed "replay input-copy failed at slot
+            # 0" (the freed [102400, 4096] weight), the one after it re-recorded, 2 in 3 failing (2026-11-13)
+            return
 
         if hasattr(executor, 'unload_weights'):
             # Strategy uninstall FIRST — the lifecycle mirror of the
