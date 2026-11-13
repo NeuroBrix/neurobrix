@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-11-13
+
+With nbxtensor 0.1.6: served models that answered only their first request, or answered a chat with garbage, now
+answer every request; a served mixture-of-experts model starts sooner.
+
 ### Fixed
 
 - **The voice says every number and name it is given.** Kokoro-82M dropped a number written in digits ("a graphics card

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-13
+
 ### Fixed
 - A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
   only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises

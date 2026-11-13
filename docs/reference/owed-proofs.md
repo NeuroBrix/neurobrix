@@ -1132,7 +1132,6 @@ The `real-esrgan-x8 @448` `leaky_relu _device_idx` face was already fixed (the i
 dispatches by kind before size, 48055229-line).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01HgxLbUbkxogC87ppc4tQ5H
 
 ---
 
