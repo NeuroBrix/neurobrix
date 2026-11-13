@@ -114,10 +114,9 @@ def test_a_failed_restore_is_raised(runtime):
 
 def test_a_failed_restore_after_a_failed_walk_is_said_on_the_walks_error(runtime):
     runtime([5, 9], refuse={("info", 1): 2}, restore_fails=True)
-    with pytest.raises(DeviceQueryError) as caught:
+    with pytest.raises(DeviceQueryError, match=r"on device 1; and the current device 0 could not be restored after it: "
+                                               r"cudaSetDevice\(0\) failed with error 46"):
         DeviceAllocator.most_free_device()
-    assert "on device 1" in str(caught.value)
-    assert any("could not be restored" in n for n in getattr(caught.value, "__notes__", []))
 
 
 def test_the_devices_and_their_totals_are_listed(runtime):
