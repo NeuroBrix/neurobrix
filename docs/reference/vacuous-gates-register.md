@@ -2897,7 +2897,7 @@ the number sitting right beside it is what makes that findable.
 ### 97 — a `git checkout` restore is a no-op on an untracked file, and the injection harness assumed otherwise
 
 Three deliberate injections were run against
-`tests/unit/forge/test_a_weight_dim_is_never_a_request_symbol.py` and its detector
+`tests/unit/container_symbols/test_a_weight_dim_is_never_a_request_symbol.py` and its detector
 `tools/weights_are_not_symbolic.py`, each followed by
 
 ```bash
