@@ -71,6 +71,15 @@ link by link: once the 22 `ones` are one, the 22 `tril`s read one input
 and merge, then the 22 `where`s. Aliases outlive a mutation barrier
 (they are renamings already decided); only the table of available
 expressions is cleared.
+
+ONE VALUE, SEVERAL NAMES. Two constants the container recorded with the
+same bytes, dtype and shape are one value (TinyLlama records its RoPE
+tables once per layer: 44 constants of the same bytes), and a view of
+one value under the same attributes is one value too. The planner KEYS
+such names as their first twin, so the gathers that read them merge;
+it never drops a view (the class above) nor a constant. Both equalities
+end at a mutation barrier: a write may have reached a constant through
+a view, which this planner does not follow.
 """
 
 from __future__ import annotations
@@ -199,6 +208,39 @@ def _aliased(attributes: dict, alias: dict) -> dict:
     return op["attributes"]
 
 
+def _identical_constants(tensors: dict) -> dict:
+    """{constant tid: the first constant of the same recorded bytes, dtype and shape}, for every later twin."""
+    first: dict = {}
+    same: dict = {}
+    for tid in sorted(tensors):
+        t = tensors[tid] or {}
+        data = t.get("constant_data")
+        if not t.get("constant") or not isinstance(data, str) or not data:
+            continue
+        key = (t.get("dtype"), json.dumps(t.get("shape")), data)
+        if key in first:
+            same[tid] = first[key]
+        else:
+            first[key] = tid
+    return same
+
+
+def _key(op: dict, op_type: str, outs: list, same: dict, tensors: dict, graph_outputs: set, opaque: set):
+    """The op's equivalence key, its inputs read through `same`, or None when the op is not a candidate."""
+    ins = [same.get(t, t) for t in op.get("input_tensor_ids") or []]
+    if not outs or (not ins and op_type not in _CREATORS):
+        return None
+    if any(o in graph_outputs for o in outs):
+        return None
+    if any(t in opaque for t in ins) or any(o in opaque for o in outs):
+        return None
+    out_meta = [((tensors.get(o) or {}).get("dtype"), (tensors.get(o) or {}).get("device")) for o in outs]
+    return json.dumps(
+        [op_type, ins, _canon(_aliased(op.get("attributes", {}), same)), out_meta],
+        sort_keys=True, separators=(",", ":"),
+    )
+
+
 def plan_cse(dag: dict) -> dict | None:
     """Compute the redundancy plan of `dag`, or None when nothing merges.
 
@@ -228,6 +270,8 @@ def plan_cse(dag: dict) -> dict | None:
 
     available: dict[str, str] = {}     # equivalence key -> keeping uid
     alias: dict[str, str] = {}         # a dropped op's output -> its kept twin
+    # the names an op is KEYED by: the aliases, plus constants of the same bytes and views of one value (never dropped)
+    same: dict[str, str] = {**_identical_constants(tensors)}
     merges: list[dict] = []
     n_barriers = 0
 
@@ -240,34 +284,18 @@ def plan_cse(dag: dict) -> dict | None:
             # tids whose ids did not change. Everything computed before
             # it is no longer known to be reproducible.
             available.clear()
+            same = dict(alias)         # constants and views of one value: no longer known equal
             n_barriers += 1
             continue
 
-        if (
-            op_type in _NONDETERMINISTIC
-            or op_type in _VIEW_CLASS
-            or not op_type.startswith("aten::")
-        ):
+        if op_type in _NONDETERMINISTIC or not op_type.startswith("aten::"):
             continue
+        is_view = op_type in _VIEW_CLASS
 
-        ins = [alias.get(t, t) for t in op.get("input_tensor_ids") or []]
         outs = list(op.get("output_tensor_ids") or [])
-        if not outs or (not ins and op_type not in _CREATORS):
+        key = _key(op, op_type, outs, same, tensors, graph_outputs, opaque)
+        if key is None:
             continue
-        if any(o in graph_outputs for o in outs):
-            continue
-        if any(t in opaque for t in ins) or any(o in opaque for o in outs):
-            continue
-
-        out_meta = []
-        for o in outs:
-            t = tensors.get(o) or {}
-            out_meta.append((t.get("dtype"), t.get("device")))
-
-        key = json.dumps(
-            [op_type, ins, _canon(_aliased(op.get("attributes", {}), alias)), out_meta],
-            sort_keys=True, separators=(",", ":"),
-        )
 
         keep = available.get(key)
         if keep is None:
@@ -278,6 +306,9 @@ def plan_cse(dag: dict) -> dict | None:
         if len(keep_outs) != len(outs):
             # Same key, different arity: refuse rather than guess.
             continue
+        same.update(zip(outs, keep_outs))
+        if is_view:
+            continue                   # keyed as its twin, still run (the view class is never dropped)
         merges.append({
             "keep": keep,
             "drop": uid,
