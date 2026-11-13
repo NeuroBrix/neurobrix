@@ -582,75 +582,15 @@ def cmd_run(args):
         log.error(f"Error: {e}")
         sys.exit(1)
 
-    # Mutually exclusive flags: --compiled / --sequential / --triton /
-    # --triton-sequential. Default = compiled when no flag is passed.
-    # Resolved BEFORE the container gates: capability gates (e.g. the
-    # audio-mode engine gate) need the resolved engine name.
-    _mode_flags = [
-        getattr(args, 'compiled', False),
-        args.sequential,
-        args.triton,
-        getattr(args, 'triton_sequential', False),
-    ]
-    if sum(bool(f) for f in _mode_flags) > 1:
-        log.error("Error: only one execution mode flag can be passed at a time: one of --compiled, --sequential, "
-                  "--triton, --triton-sequential")
+    # The engine: ONE rule for every command that runs a model (cli/engine_choice.py), resolved BEFORE the container
+    # gates: capability gates (e.g. the audio-mode engine gate) need the resolved engine name.
+    from neurobrix.cli.engine_choice import choose_engine, declare_for
+    execution_mode = choose_engine(args, log)
+    if execution_mode is None:
         return 1
-    # No mode flag: the PyTorch engine where torch is installed, the Triton engine where it is not — said here
-    _default_triton = False
-    if not any(bool(f) for f in _mode_flags):
-        from neurobrix.core.runtime.engines import default_mode
-        _default, _said = default_mode()
-        log.info(f"[Engine] {_said}")
-        _default_triton = _default == "triton"
-
-    if args.sequential:
-        execution_mode = "sequential"
-    elif args.triton or getattr(args, 'triton_sequential', False) or _default_triton:
-        # Triton mode: the backend for this hardware must actually be present.
-        # Both gates below REFUSE with an install command instead of letting
-        # the run die later inside the Triton driver — and neither of them
-        # fetches anything on the user's behalf.
-        from nbxtensor.backend.cpu_backend import TritonCPUNotInstalledError, ensure_triton_cpu_or_raise
-        from nbxtensor.backend.metal_backend import TritonMetalNotInstalledError, ensure_triton_metal_or_raise
-        from neurobrix.core.paths import BackendOnClearedStorage as _BackendOnClearedStorage
-        try:
-            # A census shadow (NBX_CENSUS=1, kernels/census.py) launches nothing: it
-            # runs with NO visible device on purpose — the door that proves it cannot
-            # touch a card — so the backend-presence gates below, which answer for a
-            # process that WILL launch, do not apply to it.
-            from neurobrix.kernels import census as _census
-            if not _census.active():
-                # Apple GPUs: upstream Triton has no Metal target, but an
-                # out-of-tree backend exists. This replaced a hardcoded
-                # "supported in a future version" message that was already
-                # out of date.
-                ensure_triton_metal_or_raise()
-                # The workshop's rule: the selected Metal backend is refused on storage the machine clears.
-                from neurobrix.core.paths import refuse_a_backend_on_cleared_storage
-                refuse_a_backend_on_cleared_storage()
-                # CPU-only profile: triton-cpu is a separate upstream package.
-                # Previously TRITON_CPU_BACKEND was set without checking it was
-                # installed, so the run died in the driver a step later.
-                ensure_triton_cpu_or_raise()
-        except (TritonMetalNotInstalledError, TritonCPUNotInstalledError, _BackendOnClearedStorage) as exc:
-            log.error(f"Error: {exc}")
-            return 1
-        execution_mode = "triton_sequential" if getattr(args, 'triton_sequential', False) else "triton"
+    if execution_mode in ("triton", "triton_sequential"):
         from nbxtensor.backend.launcher import prewarm_compiler
         prewarm_compiler()          # Triton's 1.3 s cache key, computed while the model loads
-    else:
-        # --compiled, or no flag with torch installed
-        execution_mode = "compiled"
-    if any(bool(f) for f in _mode_flags):
-        log.info(f"[Engine] engine: {execution_mode}")       # the engine a flag asked for, said like the default
-    # The PyTorch branch without torch installed: refused by name before anything is loaded (core/runtime/engines.py).
-    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
-    try:
-        require_engine(execution_mode)
-    except PyTorchBranchNotInstalledError as exc:
-        log.error(f"Error: {exc}")
-        return 1
 
     # 1. Load NBX Container
     log.debug("[1/4] Loading NBX container...")
@@ -1028,9 +968,7 @@ def cmd_run(args):
     # with `No module named 'triton'` AFTER Prism had chosen `single_gpu`
     # and the engine had printed `Engine: COMPILED`, so a fresh Mac could
     # not start the engine in ANY mode.
-    if execution_mode != "compiled":
-        from neurobrix.triton.dtype import declare_hardware_profile
-        declare_hardware_profile(hw_profile)
+    declare_for(execution_mode, hw_profile)
     # What the runtime itself grows to during the run, outside every allocator (core/runtime/runtime_growth.py): read
     # before the executor exists and at the run's end, on the Triton engine with accelerators; recorded per model.
     _growth = growth_baseline(execution_mode, hw_profile)

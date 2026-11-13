@@ -380,7 +380,11 @@ neurobrix upscale [options]
 | `--model` `MODEL` | required | Upscaler model name (e.g. swin2SR-realworld-sr-x4-64-bsrgan-psnr) |
 | `--input`, `--input-image` `INPUT` | required | Input image path (PNG/JPEG). `--input-image` is accepted as an alias. |
 | `--output` `OUTPUT` | required | Output image path (PNG) |
-| `--mode` `{compiled,sequential,triton,triton-sequential}` | `compiled` | Execution mode (default: compiled) |
+| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. Used when no execution flag is passed and PyTorch is installed (without it, --triton); this flag makes the choice explicit. |
+| `--sequential` | off | PyTorch eager op-by-op (no fusion, ATen dispatcher). Useful for debugging individual ATen ops. Slower than --compiled. |
+| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). Needs the triton package. |
+| `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
+| `--mode` `{compiled,sequential,triton,triton-sequential}` | — | The same choice as the engine flags (--mode triton = --triton) |
 | `--hardware` `HARDWARE` | — | Hardware profile ID (auto-detected if omitted) |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
 

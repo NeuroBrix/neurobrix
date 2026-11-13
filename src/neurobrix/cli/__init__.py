@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 
 from neurobrix import __version__
+from neurobrix.cli.engine_choice import add_engine_flags
 
 
 def _add_run_arguments(p):
@@ -46,29 +47,8 @@ def _add_run_arguments(p):
                                  '(1.0 = disabled)')
     p.add_argument('--set', action='append', metavar='KEY=VALUE',
                             help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
-    # Execution modes (mutually exclusive). When no flag is passed the
-    # default is --compiled where torch is installed, --triton where it is
-    # not (core/runtime/engines.default_mode), said on the launch line.
-    p.add_argument('--compiled', action='store_true',
-                            help='PyTorch fused graph + cuDNN/cuBLAS '
-                                 '(CompiledSequence). Production PyTorch performance. '
-                                 'Used when no execution flag is passed and PyTorch is '
-                                 'installed (without it, --triton); this flag makes the '
-                                 'choice explicit.')
-    p.add_argument('--sequential', action='store_true',
-                            help='PyTorch eager op-by-op (no fusion, ATen dispatcher). '
-                                 'Useful for debugging individual ATen ops. '
-                                 'Slower than --compiled.')
-    p.add_argument('--triton', action='store_true',
-                            help='Triton-pure compiled mode: every op runs on NeuroBrix\'s '
-                                 'own Triton kernels, with no cuDNN or cuBLAS, through '
-                                 'a preallocated memory arena and fused kernels '
-                                 '(TritonSequence). Needs the triton package.')
-    p.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
-                            help='Triton-pure eager mode: Triton kernels op-by-op (no '
-                                 'fusion, TritonSequentialDispatcher). Equivalent of '
-                                 '--sequential but for the Triton backend. Useful for '
-                                 'debugging individual Triton kernels.')
+    # Execution modes (mutually exclusive), the one rule of every command that runs a model (cli/engine_choice.py).
+    add_engine_flags(p)
     p.add_argument('--certified-only', action='store_true', dest='certified_only',
                             help='Confirmation run: every autotuned kernel is served from the '
                                  'certified directory, or the run fails naming the missing key '
@@ -555,10 +535,9 @@ Validation levels:
                                      '`--input-image` is accepted as an alias.')
     upscale_parser.add_argument('--output', required=True,
                                 help='Output image path (PNG)')
-    upscale_parser.add_argument('--mode', default='compiled',
-                                choices=['compiled', 'sequential',
-                                         'triton', 'triton-sequential'],
-                                help='Execution mode (default: compiled)')
+    add_engine_flags(upscale_parser)      # the engine chosen as `run` chooses it (cli/engine_choice.py)
+    upscale_parser.add_argument('--mode', default=None, choices=['compiled', 'sequential', 'triton', 'triton-sequential'],
+                                help='The same choice as the engine flags (--mode triton = --triton)')
     upscale_parser.add_argument('--hardware', default=None,
                                 help='Hardware profile ID '
                                      '(auto-detected if omitted)')

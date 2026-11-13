@@ -98,11 +98,15 @@ def test_the_compiled_run_path_does_not_reach_the_triton_wrappers(without_triton
     chain it protects.
     """
     run = _fresh("neurobrix.cli.commands.run")
+    choice = _fresh("neurobrix.cli.engine_choice")
     import inspect
     src = inspect.getsource(run.cmd_run)
-    i = src.index("declare_hardware_profile")      # the engine's declaration of the profile to the Triton surface
-    before = src[:i]
-    assert 'execution_mode != "compiled"' in before, (
+    assert "declare_hardware_profile" not in src and "declare_for(execution_mode" in src, (
+        "cmd_run declares the profile to the Triton surface itself instead of through the one gate "
+        "(cli/engine_choice.declare_for)")
+    gate = inspect.getsource(choice.declare_for)
+    i = gate.rindex("declare_hardware_profile(")    # the call: the engine's declaration of the profile to the Triton surface
+    assert 'mode != "compiled"' in gate[:i], (
         "the Triton wrapper surface is configured without asking the mode; "
         "on a machine with no Triton wheel that import is fatal and the "
         "compiled path never needed it")

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`neurobrix upscale` chooses its engine as `neurobrix run` does**, on every host: the same `--compiled`,
+  `--sequential`, `--triton`, `--triton-sequential` flags, the PyTorch engine where it is installed and the Triton engine
+  where it is not when no flag is given, said on the launch line. On a host without a GPU, `upscale` runs an upscaler on
+  the PyTorch engine as `run --input-image` does. `--mode` stays accepted as the same choice.
+
 - **A language model split across two cards scores every sequence of a batch.** When the last layer and the output head
   sit on different cards, each sequence's last position reaches the head through the tensor library's card-to-card
   transfer, laid out per sequence.

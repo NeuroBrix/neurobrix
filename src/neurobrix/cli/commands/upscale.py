@@ -24,16 +24,12 @@ from nbxtensor import device as _nbx_device
 log = logging.getLogger(__name__)
 
 
-def _resolve_execution_mode(args) -> str:
-    """Map the --mode flag to a runtime execution-mode string."""
-    mode = getattr(args, "mode", None) or "compiled"
-    valid = {"compiled", "sequential", "triton", "triton-sequential"}
-    if mode not in valid:
-        log.error(
-            f"Error: --mode must be one of {sorted(valid)}, got '{mode}'.")
-        sys.exit(1)
-    # Runtime uses an underscore variant for the sequential triton mode.
-    return "triton_sequential" if mode == "triton-sequential" else mode
+def _mode_as_flag(args):
+    """`--mode X` is the engine flag `--X` (one rule, cli/engine_choice.py): set here, so passing both is refused
+    there like two flags."""
+    if getattr(args, "mode", None):
+        setattr(args, args.mode.replace("-", "_"), True)     # the same choice said twice stays one
+    return args
 
 
 # Input-variable discovery and image preprocessing moved to the shared
@@ -88,9 +84,11 @@ def cmd_upscale(args):
         log.error(f"Error: input image not found: {input_path}")
         sys.exit(1)
 
-    execution_mode = _resolve_execution_mode(args)
-
-    log.info(f"[Engine] {execution_mode}")
+    # The engine, chosen as `run` chooses it (cli/engine_choice.py): no flag = PyTorch where torch is installed, the
+    # Triton engine where it is not; a Triton mode's backend checked; a PyTorch mode without torch refused by name.
+    from neurobrix.cli.engine_choice import choose_engine, declare_for
+    if (execution_mode := choose_engine(_mode_as_flag(args), log)) is None:
+        sys.exit(1)
 
     from neurobrix.cli.utils import resolve_model_arg
     args.model = resolve_model_arg(args.model)
@@ -131,7 +129,7 @@ def cmd_upscale(args):
     )
     solver = PrismSolver()
     execution_plan = solver.solve_smart(container, hw_profile, input_config,
-                                        mode=locals().get('execution_mode') or 'compiled')
+                                        mode=execution_mode)
     log.debug(f"   Strategy: {execution_plan.strategy}")
     # The choice, said out loud. Prism scores every viable strategy and takes
     # the fastest — invisible unless printed, and an engine that decides
@@ -152,8 +150,7 @@ def cmd_upscale(args):
     loader = NBXRuntimeLoader()
     pkg = loader.load(str(nbx_path))
 
-    from neurobrix.triton.dtype import declare_hardware_profile
-    declare_hardware_profile(hw_profile)
+    declare_for(execution_mode, hw_profile)        # the Triton branch's declaration only where a Triton kernel runs
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
     log.debug(f"[4/4] Running upscale ({execution_mode})...")
