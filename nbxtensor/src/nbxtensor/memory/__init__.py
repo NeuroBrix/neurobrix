@@ -130,3 +130,12 @@ def weight_arenas():
     """A weight set's memory, to count, allocate and pin (`memory_pool.WeightArenas`)."""
     from nbxtensor.memory.memory_pool import WeightArenas
     return WeightArenas()
+
+
+def __getattr__(name):
+    """`SlotStore` and its lifecycle (`memory.slot_stores`), read from their module only when asked."""
+    import importlib
+    stores = importlib.import_module("nbxtensor.memory.slot_stores")
+    if name in stores.__all__:
+        return getattr(stores, name)
+    raise AttributeError(f"module 'nbxtensor.memory' has no attribute {name!r}")
