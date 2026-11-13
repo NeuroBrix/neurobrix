@@ -68,6 +68,13 @@ def test_a_device_resolves_to_its_vendor_profile():
     assert vendor_profile_for_device("apple", "apple_silicon", "0.0", "Apple M4 Pro") == "apple_m4_pro"
 
 
+def test_a_device_no_vendor_file_describes_and_no_architecture_names_is_refused_by_name():
+    import pytest
+    from neurobrix.core.config.loader import UnsupportedArchitectureError, vendor_profile_for_device
+    with pytest.raises(UnsupportedArchitectureError, match="no vendor file describes 'nvidia'"):
+        vendor_profile_for_device("nvidia", None, "", None)          # never the string 'None'
+
+
 def test_the_m4_pro_plans_a_chunk_on_its_chip_s_tables(monkeypatch, tmp_path):
     kv, asked = _plan(monkeypatch, tmp_path, APPLE_M4_PRO, "apple", "apple_m4_pro", 18)
     assert kv.prefill_chunk in (64, 128), kv.prefill_chunk_reason

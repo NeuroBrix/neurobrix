@@ -1,0 +1,22 @@
+No hardware profile for {vendor}/{architecture}.
+
+NeuroBrix reads every hardware-dependent value (block sizes, shared-memory limits,
+precision support) from a per-architecture profile, and refuses to guess them: a
+guessed block size produces wrong output, not an error.
+
+Your GPU was detected as: {vendor} / {architecture}
+Profiles available:       {known}
+
+If your GPU is one NeuroBrix should support, this is a gap on our side, not a
+limit of your hardware — please open an issue naming the architecture above.
+Expected profile path:   {config_path}
+
+What closing this gap needs — one YAML at the path above, with values READ FROM
+the vendor's own specification, never estimated from a neighbouring part:
+  architecture, compute_capability   identity, so the profile can be resolved
+  memory.max_shared_memory_per_block the binding constraint on every autotune tile
+  memory.max_registers_per_block, memory.warp_size
+  block_sizes.{{gemm,bmm,conv2d}}      starting tiles, sized to the budget above
+  pipelining.max_num_stages          conservative until measured on the card
+`config/vendors/nvidia/volta.yml` is the worked reference; apple_silicon.yml shows
+how a profile records that its values are documentation-sourced and unmeasured.

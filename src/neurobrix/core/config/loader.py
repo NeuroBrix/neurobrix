@@ -109,6 +109,9 @@ def vendor_profile_for_device(vendor: str, architecture: Optional[str], compute_
     Not the device's `architecture` field: the M4 Pro's is the family `apple_silicon` while its tables are the chip's,
     `apple_m4_pro`. A V100's coincide (`volta`: its capability 7.0 resolves volta.yml)."""
     found = _vendor_file_for_device(vendor, compute_capability, model)
+    if found is None and not architecture:
+        raise UnsupportedArchitectureError(f"no vendor file describes {vendor!r} (compute capability "
+                                           f"{compute_capability or '?'}) and the device names no architecture")
     return found[0] if found is not None else str(architecture)
 
 
@@ -184,21 +187,9 @@ def get_vendor_config(vendor: str, architecture: str) -> Dict[str, Any]:
         available = list_vendors()
         known = ", ".join(f"{v}/{a}" for v, arches in sorted(available.items())
                           for a in sorted(arches)) or "none"
-        raise UnsupportedArchitectureError(
-            f"No hardware profile for {vendor}/{architecture}.\n\nNeuroBrix reads every hardware-dependent val"
-            f"ue (block sizes, shared-memory limits,\nprecision support) from a per-architecture profile, and "
-            f"refuses to guess them: a\nguessed block size produces wrong output, not an error.\n\nYour GPU wa"
-            f"s detected as: {vendor} / {architecture}\nProfiles available:       {known}\n\nIf your GPU is on"
-            f"e NeuroBrix should support, this is a gap on our side, not a\nlimit of your hardware — please op"
-            f"en an issue naming the architecture above.\nExpected profile path:   {config_path}\n\nWhat closi"
-            f"ng this gap needs — one YAML at the path above, with values READ FROM\nthe vendor's own specific"
-            f"ation, never estimated from a neighbouring part:\n  architecture, compute_capability   identity,"
-            f" so the profile can be resolved\n  memory.max_shared_memory_per_block the binding constraint on "
-            f"every autotune tile\n  memory.max_registers_per_block, memory.warp_size\n  block_sizes."
-            f"{{gemm,bmm,conv2d}}      starting tiles, sized to the budget above\n  pipelining.max_num_stages "
-            f"         conservative until measured on the card\n`config/vendors/nvidia/volta.yml` is the worke"
-            f"d reference; apple_silicon.yml shows\nhow a profile records that its values are documentation-so"
-            f"urced and unmeasured.")
+        raise UnsupportedArchitectureError(   # the text a user reads, kept whole beside the vendor files
+            (CONFIG_ROOT / "vendors" / "no_profile_for_device.txt").read_text(encoding="utf-8").rstrip("\n")
+            .format(vendor=vendor, architecture=architecture, known=known, config_path=config_path))
 
     # A copy of the file parsed ONCE per process: the vendor files do not change while an engine runs, and this
     # reader sits under per-op paths (kernels/wrappers._arch_param, read by every attention launch). Parsed at every
