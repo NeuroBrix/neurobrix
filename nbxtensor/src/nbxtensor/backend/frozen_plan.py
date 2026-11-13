@@ -35,6 +35,9 @@ SYNC = "y"       # (device_idx,) — a device synchronisation the recorded run m
                   # source card before a peer copy: the copy is not ordered after another card's kernels). Replayed
                   # without it, a held expert's card read a buffer still being written: error 700 that
                   # CUDA_LAUNCH_BLOCKING hid (Qwen3-30B-A3B tail replay, 2026-10-28).
+BOUND = "b"      # (bound launch,) — a KERNEL action resolved once by the driver (`prepare_launch`): run(stream) only
+                  # encodes. Never recorded: the direct replay's own list (`FrozenPlan._bound_actions`), the records
+                  # (and a graph capture) keep the KERNEL actions.
 H2D = "h"        # (dst, host_snapshot: bytes) — the recorded host
                   # source is transient (probe 5: a dangling 16-B host
                   # staging pointer at replay); the plan owns a byte
@@ -198,6 +201,16 @@ class _NBXLaunch:
         self.names = [n for n, _t in runtime]
         self.types = [t for _n, t in runtime]
 
+    def bind(self, g0, g1, g2, vals):
+        """This launch resolved once by the active driver (`prepare_launch`), or None: a driver without one, or a launch
+        it keeps live."""
+        from nbxtensor.backend.launcher import active_driver
+        prepare = getattr(active_driver(), "prepare_launch", None)
+        if prepare is None:
+            return None
+        return prepare(self.prep.function, (g0, g1, g2), self.prep.block, self.prep.shared, list(zip(self.kinds, vals)),
+                       names=self.names, types=self.types, trailing=self.prep.trailing, **self.extra)
+
     def run(self, g0, g1, g2, stream, function, packed_metadata,
             launch_md, enter_hook, exit_hook, *vals):
         # The stream is the CALLER's: the graph capture hands its own capture stream
@@ -314,7 +327,8 @@ def install_seams() -> None:
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
                  "launches", "actions", "output_slots", "scan_limit",
-                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses", "scan_slots", "advances")
+                 "graph", "graph_disabled", "extra_scan", "other_slabs", "_crosses", "scan_slots", "advances",
+                 "_bound")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
@@ -324,6 +338,7 @@ class FrozenPlan:
                  extra_scan: Tuple[int, ...] = (),
                  scan_slots: Optional[Tuple[int, ...]] = None) -> None:
         self.records = records
+        self._bound: Optional[List[Tuple[str, tuple]]] = None    # the direct replay's resolved actions, made once
         # {owner index in the sequence's `_replay_state_owners`: (its host mark before, after) the recorded run}: a
         # replay mirrors exactly that move (`_advance_what_the_recording_moved`)
         self.advances: Dict[int, tuple] = {}
@@ -555,24 +570,42 @@ class FrozenPlan:
             self._crosses = any(tag == SETDEV and rec[0] != own for tag, rec in self.records)
             return self._crosses
 
+    def _bound_actions(self) -> List[Tuple[str, tuple]]:
+        """The whole plan's actions with each launch the driver can resolve once made a BOUND action (made at the first
+        direct replay; the addresses never move within a plan)."""
+        if self._bound is None:
+            self._bound = [_bound(tag, rec) for tag, rec in self.records]
+        return self._bound
+
     def _direct_actions(self, records=None) -> None:
-        """Phase 4a direct C-launcher replay of the action list."""
+        """Phase 4a direct C-launcher replay of the action list (the whole plan's through its bound actions)."""
         if records is None:
-            records = self.records
+            records = self._bound_actions()
         for idx, (tag, rec) in enumerate(records):
             try:
                 _run_action(tag, rec)
             except BaseException as e:
-                name = (getattr(rec[0], "name", "?")
-                        if tag == KERNEL else tag)
+                name = (getattr(rec[0], "name", "?") if tag == KERNEL
+                        else getattr(getattr(rec[0], "pipe", rec[0]), "name", tag) if tag == BOUND else tag)
                 raise RuntimeError(
                     f"replay action {idx}/{len(self.records)} "
                     f"({name}) failed: {e}") from e
 
 
+def _bound(tag, rec) -> Tuple[str, tuple]:
+    """A KERNEL action of the library's launcher resolved once by the active driver, else the action as recorded."""
+    if tag == KERNEL and isinstance(rec[0], _NBXLaunch):
+        launch = rec[0].bind(rec[1], rec[2], rec[3], rec[5])
+        if launch is not None:
+            return BOUND, (launch,)
+    return tag, rec
+
+
 def _run_action(tag, rec) -> None:
     """One recorded action, run directly."""
-    if tag == SETDEV:
+    if tag == BOUND:
+        rec[0].run(0)
+    elif tag == SETDEV:
         # Triton keeps its OWN current device, so setting the
         # runtime's alone would still launch on the wrong card.
         DeviceAllocator.set_device(rec[0])
