@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Text generation does less work per token.** A causal mask recorded once per layer is computed once per step,
+  identical constants are shared, the SwiGLU activation runs as one launch, and on Apple GPUs the command stream is
+  committed in batches so the GPU starts while the host prepares the rest of the step. The answers are unchanged.
 - **A served conversation on Apple Silicon plans its prompt in chunks priced on the chip's own tables.** The serving
   session reads its chunk record and certified times under the chip's vendor profile, and a Mac's single memory pool
   is planned as the one cache it is, as on other hardware.
