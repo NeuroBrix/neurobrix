@@ -211,6 +211,11 @@ class DeviceOOMError(RuntimeError):
         return max(0, self.requested - self.driver_free)
 
 
+class DeviceQueryError(RuntimeError):
+    """A device question the runtime refused: the call, the device it was about and the runtime's own code. Raised
+    instead of a default, so a broken driver never reads as "no device" or as a smaller machine."""
+
+
 class AllocatorInterceptor:
     """What stands in front of the allocator's five device operations (allocate, free, copy, set, synchronise) while
     it is installed (`DeviceAllocator.install_interceptor`): each method receives the DIRECT operation it stands in
@@ -377,8 +382,11 @@ class DeviceAllocator:
             # the process as its own (2026-09-05: torch's, in the compiled
             # branch — "invalid device ordinal" on an fp16 op).
             DeviceAllocator.clear_last_error()
-            raise RuntimeError(f"set_device({device_id}) refused by the runtime (error {ret}) — "
-                               f"the process sees {DeviceAllocator.device_count()} device(s)")
+            try:                            # the count, said beside the refusal; its own refusal said instead
+                seen = f"the process sees {DeviceAllocator.device_count()} device(s)"
+            except DeviceQueryError as exc:
+                seen = f"and counting the devices was refused too: {exc}"
+            raise RuntimeError(f"set_device({device_id}) refused by the runtime (error {ret}) — {seen}")
         # C2 cache maintenance: a runtime-only switch to a device other
         # than the cached one breaks the "runtime AND Triton both point
         # at the cached idx" invariant — invalidate so the next
@@ -401,7 +409,10 @@ class DeviceAllocator:
 
     @staticmethod
     def device_count() -> int:
-        """How many GPUs this process can see. 0 if there is no runtime.
+        """How many GPUs this process can see: 0 when the host has no GPU runtime (`backend.runtime.NoGpuRuntime`) or
+        the runtime answers its own "no device" code (`no_device_rc` in the backend table). Any other refusal of the
+        runtime raises `DeviceQueryError` with its code: a driver that fails is never read as "no device" (it was,
+        until 2026-11-13: any exception answered 0).
 
         The backend table has declared `device_count` since the seam was
         written, but nothing exposed it: `most_free_device` counted inline and
@@ -409,9 +420,18 @@ class DeviceAllocator:
         whether multi-GPU behaviour is even testable need it too.
         """
         try:
-            return max(0, _rt.device_memory().device_count()[1])
-        except Exception:
+            dm = _rt.device_memory()
+        except _rt.NoGpuRuntime:
             return 0
+        rc, n = dm.device_count()
+        if rc == 0:
+            return max(0, int(n))
+        DeviceAllocator.clear_last_error()
+        if rc == _rt.backend_table().get("no_device_rc"):
+            return 0
+        fn = _rt.backend_table().get("device_count", "device_count")
+        raise DeviceQueryError(f"{fn} failed with error {rc} on {_rt.gpu_backend()}: the runtime is there and refuses "
+                               f"to count its devices (a driver older than the runtime, or a broken install)")
 
     @staticmethod
     def free_memory_mb(index: int) -> "Optional[float]":
@@ -442,43 +462,64 @@ class DeviceAllocator:
         except Exception:
             return None
 
-    @staticmethod
-    def most_free_device() -> int:
+    @classmethod
+    def most_free_device(cls) -> int:
         """Return the GPU index with the most driver-free VRAM.
 
         Used by the triton weight loader to place a CPU-staged lazy
         component on the emptiest card (the loop GPU may have just
         unloaded). Pure runtime-API — cudaGetDeviceCount + cudaSetDevice +
         cudaMemGetInfo via ctypes; no torch (R33). The previously-current
-        device is restored before returning. Falls back to device 0 on any
-        query failure or a single-GPU host.
+        device is restored before returning. 0 on a host with one device or
+        none; a device the runtime refuses to describe raises
+        `DeviceQueryError` naming it (until 2026-11-13 it was skipped, and a
+        failed restore was not raised).
         """
-        dm = _rt.device_memory()
         ndev = DeviceAllocator.device_count()
         if ndev <= 1:
             return 0
-        prev = DeviceAllocator.get_device()
-        best_idx, best_free = 0, -1
-        for i in range(ndev):
-            try:
-                dm.set_device(i)
-                _rc, free_b, _total_b = dm.mem_get_info()
-                if free_b > best_free:
-                    best_free, best_idx = free_b, i
-            except Exception:
-                continue
-        try:
-            DeviceAllocator.restore_device(prev)
-        except Exception:
-            pass
-        # C2: the probe loop above issued raw cudaSetDevice calls (and
-        # the restore may have failed silently) — drop the fast-path
-        # cache so the next ensure_triton_device re-syncs fully.
-        _rt.invalidate_current_device_cache()
-        return best_idx
+        free = cls._each_device_memory(ndev)
+        return max(range(ndev), key=lambda i: (free[i][0], -i))     # the most free; the lowest ordinal on a tie
 
-    @staticmethod
-    def visible_device_memory() -> list[tuple[int, int]]:
+    @classmethod
+    def _each_device_memory(cls, ndev: int) -> list[tuple[int, int]]:
+        """`[(free, total)]` bytes of devices 0..ndev-1 from the runtime, the previously-current device restored after.
+        A device the runtime refuses (selecting it, or reading its memory) raises `DeviceQueryError` with the device and
+        the code; so does a failed restore. The fast-path cache is dropped either way: the walk issued raw device
+        switches (C2)."""
+        dm, table = _rt.device_memory(), _rt.backend_table()
+        prev = cls.get_device()
+        out: list[tuple[int, int]] = []
+        restore_error = None
+        try:
+            for i in range(ndev):
+                rc = dm.set_device(i)
+                if rc != 0:
+                    cls.clear_last_error()
+                    raise DeviceQueryError(f"{table.get('set_device', 'set_device')}({i}) failed with error {rc}: "
+                                           f"device {i} of the {ndev} the runtime counts cannot be selected")
+                rc, free_b, total_b = dm.mem_get_info()
+                if rc != 0:
+                    cls.clear_last_error()
+                    raise DeviceQueryError(f"{table.get('mem_get_info', 'mem_get_info')} failed with error {rc} on "
+                                           f"device {i}")
+                out.append((int(free_b), int(total_b)))
+        finally:
+            try:                                    # back to the device that was current, whatever the walk met
+                cls.restore_device(prev)
+            except Exception as exc:                # raised below, or noted on the walk's own error
+                restore_error = exc
+                walk_error = exc.__context__        # the walk's own error, when one is propagating
+                if walk_error is not None:
+                    walk_error.add_note(f"and the current device {prev} could not be restored after it: {exc}")
+            _rt.invalidate_current_device_cache()
+        if restore_error is not None:
+            raise DeviceQueryError(f"the current device {prev} could not be restored after the walk: "
+                                   f"{restore_error}") from restore_error
+        return out
+
+    @classmethod
+    def visible_device_memory(cls) -> list[tuple[int, int]]:
         """`[(ordinal, total_bytes)]` for every device THIS PROCESS can see.
 
         The ordinals come back usable as-is in `cuda:<i>`, because the whole
@@ -498,30 +539,15 @@ class DeviceAllocator:
         cudaMemGetInfo, no torch (R33). The previously-current device is
         restored and the fast-path cache invalidated, as in
         `most_free_device`, whose inline copy of this loop this replaces.
-        Returns `[]` when there is no runtime or no device.
+        Returns `[]` when the host has no GPU runtime or no device; a device
+        the runtime refuses to describe raises `DeviceQueryError` naming it
+        (until 2026-11-13 it was left out of the list, silently).
         """
-        try:
-            dm = _rt.device_memory()
-        except Exception:
-            return []
         ndev = DeviceAllocator.device_count()
         if ndev <= 0:
             return []
-        prev = DeviceAllocator.get_device()
-        out: list[tuple[int, int]] = []
-        for i in range(ndev):
-            try:
-                dm.set_device(i)
-                _rc, _free_b, total_b = dm.mem_get_info()
-                out.append((i, total_b))
-            except Exception:
-                continue
-        try:
-            DeviceAllocator.restore_device(prev)
-        except Exception:
-            pass
-        _rt.invalidate_current_device_cache()
-        return out
+        mem = cls._each_device_memory(ndev)
+        return [(i, mem[i][1]) for i in range(ndev)]
 
     @staticmethod
     def _maybe_init_pool() -> None:

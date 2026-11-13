@@ -8,7 +8,17 @@ replaced by a default.
 """
 from typing import Optional, Tuple
 
-__all__ = ["count", "current", "select", "select_for_launch", "synchronize", "drain", "mem_info", "most_free"]
+__all__ = ["count", "current", "select", "select_for_launch", "synchronize", "drain", "mem_info", "most_free",
+           "DeviceQueryError"]
+
+
+def __getattr__(name):
+    """`DeviceQueryError` (the refusal a device question raises), read from the allocator only when asked: importing
+    the door loads no device runtime."""
+    if name == "DeviceQueryError":
+        from nbxtensor.memory.allocator import DeviceQueryError
+        return DeviceQueryError
+    raise AttributeError(f"module 'nbxtensor.device' has no attribute {name!r}")
 
 
 def _allocator():
@@ -17,8 +27,8 @@ def _allocator():
 
 
 def count() -> int:
-    """How many devices this process can see (`DeviceAllocator.device_count`). Today that answers 0 for ANY failure
-    of the runtime, not only its absence: a defect of the mechanism, named in docs/API.md section 10."""
+    """How many devices this process can see (`DeviceAllocator.device_count`): 0 on a host with no GPU runtime or when
+    the runtime says it has no device; any other refusal of the runtime raises `DeviceQueryError` with its code."""
     return _allocator().device_count()
 
 
@@ -61,6 +71,6 @@ def mem_info(index: Optional[int] = None) -> Tuple[int, int]:
 
 def most_free() -> int:
     """The device with the most free memory as the runtime reports it; the current device is restored after
-    (`DeviceAllocator.most_free_device`). Today a device whose query fails is skipped, and a failed restore is not
-    raised: defects of the mechanism, named in docs/API.md section 10."""
+    (`DeviceAllocator.most_free_device`). A device the runtime refuses to describe, or a failed restore, raises
+    `DeviceQueryError` naming it."""
     return _allocator().most_free_device()

@@ -101,10 +101,10 @@ def _triton_engine() -> tuple[bool, str]:
     from nbxtensor.backend.cpu_backend import triton_cpu_installed
     try:
         from nbxtensor.backend.runtime import gpu_backend
-        backend = gpu_backend()
-    except RuntimeError as exc:    # names what to install for a GPU on the bus (nbxtensor.backend.install_help)
-        return False, f"no GPU runtime: {exc}"
-    if _nbx_device.count() > 0:
+        backend, visible = gpu_backend(), _nbx_device.count()   # a runtime that refuses to count: said, never 0
+    except RuntimeError as exc:    # what to install (nbxtensor.backend.install_help), or the runtime's own refusal
+        return False, f"GPU runtime not usable: {exc}"
+    if visible > 0:
         return True, f"ready on {backend} (nbxtensor {nbxtensor.__version__}, Triton {triton.__version__})"
     cpu = triton_cpu_installed()      # no device this process sees: what the engine can run on is the CPU, or nothing
     return cpu, f"no {backend} device visible{_hidden_said()}; " + ("runs on the CPU (triton-cpu)" if cpu else

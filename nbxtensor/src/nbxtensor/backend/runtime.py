@@ -67,6 +67,7 @@ _GPU_BACKENDS = {
         "set_device": "cudaSetDevice",
         "get_last_error": "cudaGetLastError", "get_device": "cudaGetDevice",
         "device_count": "cudaGetDeviceCount",
+        "no_device_rc": 100,               # cudaErrorNoDevice: the runtime is there, no device is (a fact, not a failure)
         "mem_get_info": "cudaMemGetInfo",
         "sync": "cudaDeviceSynchronize",
         "malloc_host": "cudaMallocHost", "free_host": "cudaFreeHost",
@@ -120,6 +121,7 @@ _GPU_BACKENDS = {
         "set_device": "hipSetDevice",
         "get_last_error": "hipGetLastError", "get_device": "hipGetDevice",
         "device_count": "hipGetDeviceCount",
+        "no_device_rc": 100,               # hipErrorNoDevice: the runtime is there, no device is (a fact, not a failure)
         "mem_get_info": "hipMemGetInfo",
         "sync": "hipDeviceSynchronize",
         "malloc_host": "hipHostMalloc", "free_host": "hipHostFree",
@@ -282,6 +284,11 @@ def _pin_triton_backend(name: str) -> str:
     return name
 
 
+class NoGpuRuntime(RuntimeError):
+    """No GPU runtime on this host: no vendor runtime library loads and no device probe answers. A fact (the host has no
+    GPU to work on), told apart from a runtime that is there and refuses a question."""
+
+
 @functools.lru_cache(maxsize=1)
 def gpu_backend() -> str:
     """Detect GPU backend: 'cuda', 'hip' or 'metal' — from the vendor runtime
@@ -350,7 +357,7 @@ def gpu_backend() -> str:
         if getattr(importlib.import_module(module), function)():
             return _pin_triton_backend(name)
     from nbxtensor.backend.install_help import no_runtime_message
-    raise RuntimeError(no_runtime_message())
+    raise NoGpuRuntime(no_runtime_message())
 
 
 def device_label(tensor) -> str:
@@ -441,7 +448,7 @@ def gpu_runtime():
             return ctypes.cdll.LoadLibrary(lib)
         except OSError:
             continue
-    raise RuntimeError(f"GPU runtime not found for {name}")
+    raise NoGpuRuntime(f"GPU runtime not found for {name}")
 
 
 def device_memory():

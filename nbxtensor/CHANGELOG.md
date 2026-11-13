@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
+  only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises
+  `DeviceQueryError` with its code. Choosing the device with the most free memory, and listing the devices, no
+  longer skip one that fails silently.
+
 ### Added
 - `nbxtensor.device`: the devices a process sees, the one it works on, the one the next kernel launch runs on, when
   they drain and what each has free (`count`, `current`, `select`, `select_for_launch`, `synchronize`, `drain`,
