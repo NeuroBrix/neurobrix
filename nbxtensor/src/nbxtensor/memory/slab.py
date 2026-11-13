@@ -144,13 +144,13 @@ class StepSlab(SlabAllocator):
     def __init__(self, nbytes: int, dev_idx: Optional[int]) -> None:
         super().__init__(nbytes, dev_idx)
         self.stale: set = set()
+        self.carve_sizes: List[int] = []   # diagnosis: per-step size seq
+        self.prev_carve: Optional[List[int]] = None
 
     @classmethod
     def for_carved(cls, carved_bytes: int, dev_idx: Optional[int]) -> "StepSlab":
         """The step slab for a step that carved `carved_bytes` in total (pure bump: no reuse inside a step)."""
         return cls(int(carved_bytes * cls.MARGIN_RATIO) + cls.MARGIN_BYTES, dev_idx)
-        self.carve_sizes: List[int] = []   # diagnosis: per-step size seq
-        self.prev_carve: Optional[List[int]] = None
 
     def malloc(self, nbytes: int) -> int:
         """PURE BUMP carving — mid-step frees are absorbed without

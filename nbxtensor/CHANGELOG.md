@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.6] - 2026-11-13
 
 ### Fixed
+- A decode step's slab (`StepSlab`) carves again: its record of carved sizes was never set since
+  `StepSlab.for_carved`, so every run that stabilized its decode allocations failed at its first carve.
 - A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
   only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises
   `DeviceQueryError` with its code. Choosing the device with the most free memory, and listing the devices, no
@@ -32,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocated once and pinned once its host weights are written.
 - `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
   copied.
+- `nbxtensor.memory.step_stabilizer.StepStabilizer`: a decoding sequence's step slab over its first runs (pass
+  through, measure, then carve from one recycled slab), ticked once per run.
 - `nbxtensor.io.mapped_shards`: weight files mapped once each, the spans host views are built over, and the
   pages of a view's span given back once its bytes are copied to the device (`ShardMaps`, `drop_pages`).
 - `nbxtensor.memory.host_spill.spill_bytes_per_position`: the host bytes one spilled KV position costs, for a

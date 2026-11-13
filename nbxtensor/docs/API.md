@@ -514,6 +514,16 @@ class SlabInterceptor(AllocatorInterceptor)
     # The allocator's interceptor for slab-served runs.
 ```
 
+`nbxtensor.memory.step_stabilizer` — a decoding sequence's step slab, stabilized over its first runs
+
+```python
+class StepStabilizer(state, label)
+    # one per sequence on the slab interceptor `state`; tick(dev_idx) at each run's start: runs 1-2 pass through,
+    # run 3 measures the bytes the step carves (banked at the next tick of any sequence), runs 4+ carve from its
+    # recycled StepSlab (StepSlab.for_carved), put in force as state.stab_slab; runs, total, slab
+SAY_AT_RUN    # the run whose carve sequence is compared with the previous one, once, at debug level
+```
+
 ### `nbxtensor.ops.tiling_sizes` — the sizes the tiled and chunked paths cut by (the tiling table in force: `ops.tiling_policy`)
 
 Every figure is read from the tiling table in force (`set_tiling` / `tiling_table`), never written in the code.
