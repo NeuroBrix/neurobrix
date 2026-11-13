@@ -138,6 +138,7 @@ def pool_fit_slack(vendor, architecture) -> float              # pool.fit_slack
 # the allocator's figures and the pool's controls, same arguments as `DeviceAllocator`'s (2026-11-13):
 def memory_allocated(device_idx=None) -> int                   # live bytes handed out (None: every device)
 def pool_cached_bytes(device_idx=None) -> int                  # bytes parked in the pool's free blocks
+def pool_stats() -> dict                                       # a copy of the pool's counters (hits, miss, flushes, evictions)
 def blocks_in_use(device_idx=None) -> dict                     # {address: bytes} of the blocks tensors hold
 def device_free_bytes(device_idx=None) -> int                  # the driver's free bytes (None: current device)
 def device_total_bytes(device_idx=None) -> int                 # the device's total memory (refused: DeviceQueryError)
@@ -3150,6 +3151,7 @@ def synchronize() -> None                # the current device finished, through 
 def drain(index: Optional[int] = None) -> None   # every stream of a device drained; the current device restored
 def mem_info(index: Optional[int] = None) -> Tuple[int, int]   # (free, total) bytes, as the runtime reports them
 def most_free() -> int                   # the device with the most free memory; the current device restored
+def target_name() -> str                 # what the process compiles for, `<backend>-<arch>` (cuda-70); a driver's refusal raised
 class DeviceQueryError(RuntimeError)     # a device question the runtime refused: the call, the device, its code
 NoGpuRuntime                             # (backend.runtime) no GPU runtime on this host: the one refusal meaning no device
 ```

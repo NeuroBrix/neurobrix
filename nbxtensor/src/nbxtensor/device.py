@@ -9,7 +9,7 @@ replaced by a default.
 from typing import Optional, Tuple
 
 __all__ = ["count", "current", "select", "select_for_launch", "synchronize", "drain", "mem_info", "most_free",
-           "DeviceQueryError", "NoGpuRuntime"]
+           "target_name", "DeviceQueryError", "NoGpuRuntime"]
 
 
 def __getattr__(name):
@@ -77,3 +77,12 @@ def most_free() -> int:
     (`DeviceAllocator.most_free_device`). A device the runtime refuses to describe, or a failed restore, raises
     `DeviceQueryError` naming it."""
     return _allocator().most_free_device()
+
+
+def target_name() -> str:
+    """The name of what this process compiles for, as its measured and certified settings are keyed: the backend and
+    the architecture, `<backend>-<arch>` ("cuda-70", "hip-gfx90a", "metal-apple-m4-pro"), read from the launcher's
+    compile target (`backend.launcher.target`, `arch_name`). A driver that cannot answer raises its own error."""
+    from nbxtensor.backend.launcher import arch_name, target
+    t = target()
+    return f"{t.backend}-{arch_name(t)}"

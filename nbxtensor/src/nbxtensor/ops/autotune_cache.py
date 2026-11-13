@@ -88,9 +88,8 @@ def _arch_fingerprint() -> Optional[str]:
     (an sm_80 config seeded onto sm_70 fails at compile inside a user
     run)."""
     try:
-        from nbxtensor.backend.launcher import arch_name as _nbx_arch, target as _nbx_target  # no driver probe (R33)
-        target = _nbx_target()
-        return f"{target.backend}-{_nbx_arch(target)}"
+        from nbxtensor.device import target_name  # no driver probe (R33)
+        return target_name()
     except Exception:
         return None
 

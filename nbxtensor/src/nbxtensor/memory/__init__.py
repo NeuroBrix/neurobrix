@@ -71,6 +71,12 @@ def pool_cached_bytes(device_idx=None) -> int:
     return _allocator().pool_cached_bytes(device_idx)
 
 
+def pool_stats() -> dict:
+    """A copy of the pool's counters since the process began: hits (`exact`, `fit`), `miss`, `flushes`, `evictions`
+    and the bytes they returned."""
+    return _allocator().pool_stats()
+
+
 def blocks_in_use(device_idx=None) -> dict:
     """{address: bytes} of every block a tensor holds on `device_idx` (None: every device), the pool's free blocks
     not in it."""

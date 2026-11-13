@@ -546,17 +546,8 @@ def _machine() -> Dict[str, Any]:
     except Exception:
         pass
     try:
-        from nbxtensor.backend.launcher import arch_name, target
-        t = target()
-        info["target"] = f"{t.backend}-{arch_name(t)}"
-    except Exception:
-        pass
-    try:
-        from nbxtensor.memory.allocator import DeviceAllocator
-        for name in ("device_name", "driver_version"):
-            fn = getattr(DeviceAllocator, name, None)
-            if callable(fn):
-                info[name] = fn()
+        from nbxtensor.device import target_name
+        info["target"] = target_name()
     except Exception:
         pass
     info["device"] = _certifying_device()
@@ -576,14 +567,14 @@ def _certifying_device() -> Optional[Dict[str, Any]]:
 
 def _read_certifying_device() -> Optional[Dict[str, Any]]:
     """The card the certifying run executes on — the device `from_numpy`
-    places the synthesized inputs on (`DeviceAllocator.get_device()`), read in
+    places the synthesized inputs on (`nbxtensor.device.current()`), read in
     the Prism hardware profile in force: index, name, memory. The proof says
     which card's memory it was made on, and an entry is served only to that
     memory class (register 56). None when the card is not in the profile —
     the certifier then REFUSES to write the entry (`file_certification`)."""
     try:
-        from nbxtensor.memory.allocator import DeviceAllocator
-        idx = int(DeviceAllocator.get_device())
+        from nbxtensor import device
+        idx = int(device.current())
     except Exception:
         return None
     try:
@@ -1430,7 +1421,7 @@ def _alloc_state() -> str:
     another round of reading the code. Never raises: a probe that can end a sweep is worse than
     no probe."""
     try:
-        from nbxtensor.memory.allocator import DeviceAllocator as A
+        from nbxtensor import memory as A
         parts = [f"live {A.memory_allocated() / 2**20:.0f}MB", f"pool {A.pool_cached_bytes() / 2**20:.0f}MB"]
         if not A.pool_enabled():
             parts.append("pool OFF")
