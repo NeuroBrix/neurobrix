@@ -8,11 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- A decode token makes fewer device copies: a small-M matrix product writes each row's GEMV straight into its output
+  (`mv_wrapper(..., out=)`), and the paged KV cache hands a step's K and V to its append kernel as views.
+- A run's end on one card under the pool frees its deferred tensors without waiting for the device
+  (`DeferredFrees.finish`); several cards, or the pool off, still wait first.
 - `nbxtensor.memory.kv_host_tier.host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes)` takes a
   page's parts and sizes the page itself.
 - A decode step that stabilizes its allocations serves them from one recycled `StepSlab` from its first stabilized run.
 
 ### Added
+- `nbxtensor.profile.kernel_times()`: where a real run's GPU time goes on Metal, kernel by kernel (and the copies as
+  one row). Inside it every launch runs alone and is timed on the GPU at its own boundaries: the table ranks kernels;
+  it is not the production speed, and its header says so. The output bytes do not change.
 - `nbxtensor.memory.weight_arenas()`: a weight set's memory, counted per device and in page-locked host memory,
   allocated once and pinned once its host weights are written.
 - `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte

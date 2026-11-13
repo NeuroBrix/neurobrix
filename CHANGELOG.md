@@ -9,9 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Text generation is faster on Apple GPUs.** A generated token makes fewer copies and waits for the GPU only to read
+  its result: TinyLlama-1.1B and granite-3.1-1B-A400M generate 128 tokens about a tenth faster on an M4 Pro, with the
+  same output.
+
 - **A language model split across two cards scores every sequence of a batch.** When the last layer and the output head
   sit on different cards, each sequence's last position reaches the head through the tensor library's card-to-card
   transfer, laid out per sequence.
+
+### Added
+
+- **`neurobrix run --profile-kernels` shows where the GPU time goes on Apple GPUs.** The run prints its kernels
+  ranked by GPU time (and the copies as one row); `--profile-kernels PATH` also writes the whole table as JSON. Each
+  kernel is timed on its own, so the table ranks kernels and the run is slower while it is measured; the answer is
+  the same.
 
 ## [0.6.14] - 2026-11-13
 
