@@ -560,6 +560,8 @@ rose by exactly these lines, measured: 80 938 (main bf3993c39) to 81 047, +109.
 | wrapper | src/neurobrix/core/runtime/graph_executor.py | execute | the executor interface's name (serving, strategies); run() takes a pre-op callback second, so it is not an alias of run |
 | wrapper | src/neurobrix/core/runtime/lm_facts.py | decode_sequences(resolved) | the run's resolved values (a CLI cfg_scale) — the tests pass it (tests/unit/prism/test_the_plan_prices_every_cache_its_decoder_opens) |
 | wrapper | src/neurobrix/core/runtime/phase_trace.py | first | the ledger's read door: _FIRST is the module's private state |
+| wrapper | src/neurobrix/core/runtime/phase_trace.py | mark(sync) | passed positionally by the Triton flow through its alias `_phase_mark` (triton/flow/autoregressive.py: the device sync before a stamp); the scan reads calls by name, and the one call it saw by that name left with the build tools (2026-11-13) |
+| wrapper | src/neurobrix/core/runtime/phase_trace.py | mark(note) | passed positionally by the Triton flow through its alias `_phase_mark` (triton/flow/autoregressive.py: the allocator's live/cached/free note); the scan reads calls by name, and the one call it saw by that name left with the build tools (2026-11-13) |
 | wrapper | src/neurobrix/core/runtime/tensor_compat.py | aten | a named question (is torch loaded?) asked by the shared orchestration code, never importing it |
 | wrapper | src/neurobrix/core/paths.py | PathNotConfigured | a named refusal: a caller tells a missing configured location from an ordinary directory it may create (tests/unit/core/test_one_door_for_the_machines_paths catches it by name) |
 | wrapper | src/neurobrix/core/paths.py | BackendOnClearedStorage | a named refusal caught by name in cli run and cli autotune, beside the backend-not-installed errors, to refuse with its own sentence |
@@ -608,6 +610,7 @@ rose by exactly these lines, measured: 80 938 (main bf3993c39) to 81 047, +109.
 | wrapper | src/neurobrix/core/optim/passes/invariant.py | InvariantPlanRefused | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
 | wrapper | src/neurobrix/nbx/atomic_install.py | InstallHeldByAnother | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
 | wrapper | src/neurobrix/nbx/weight_presence.py | AbsentWeightError | a named refusal: its type says what was refused, to the reader and to a caller that catches it |
+| dead | src/neurobrix/nbx/names.py | container_files | the engine's one definition of an installed entry's files (its name record excluded, the record is not part of the container): the hub publishing tool, outside this repository since 2026-11-13, hashes an entry by it |
 | dead | src/neurobrix/cli/commands/registry.py | installing_path | a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else |
 | dead | src/neurobrix/core/module/autoregressive/generator.py | AutoregressiveGenerator.num_generated | a test seam: read by tests/unit/serving/test_both_engines_read_the_stop_at_their_token_seam.py, nothing else |
 | dead | src/neurobrix/core/module/tiling_engine.py | OpLevelTilingPlan.add_inplace_unary | a test seam: read by tests/unit/prism/test_the_tiling_rung_s_reason_reaches_a_reader.py, nothing else |
