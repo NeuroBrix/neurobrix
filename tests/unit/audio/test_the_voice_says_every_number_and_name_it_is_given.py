@@ -59,12 +59,11 @@ def test_a_character_the_voice_cannot_say_is_named_never_dropped():
     assert unspeakable(verbalize("Founded in 2017, 50% faster.")) == []
 
 
-LEXICON = Path.home() / ".neurobrix" / "cache" / "Kokoro-82M" / "modules" / "g2p" / "en_lexicon.txt.gz"
-NAS = Path("/Users/hocine/Mounts/Super-NeuroBrix-Cache/Kokoro-82M/modules/g2p/en_lexicon.txt.gz")
-
-
 def _lexicon():
-    for path in (LEXICON, NAS):
+    """Kokoro's own lexicon, read from the engine's configured model cache (`neurobrix.core.paths`), never a machine's
+    path; skipped by name when the container is not installed here."""
+    from neurobrix.core.paths import cache_dir
+    for path in (cache_dir() / "Kokoro-82M" / "modules" / "g2p" / "en_lexicon.txt.gz",):
         if path.exists():
             rows = gzip.open(path, "rt").read().splitlines()
             return {k: v for k, v in (r.split("\t", 1) for r in rows if "\t" in r and not r.startswith("#"))}

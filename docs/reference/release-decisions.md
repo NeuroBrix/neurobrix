@@ -168,20 +168,9 @@ Four sub-agents ran on the Dell all night, never collected; their work was found
 4. Every sub-agent and chain of the last 48 h has its deliverable on disk and in the report, or is recovered from the campaign and the session logs under RECOVERED.
 5. A job that ran unreported is a fault of method, not an incident.
 
-## 2026-10-12 15:30 — CONTAINER BUILDER guidelines (the owner, via the supervisor)
+## 2026-10-12 15:30 — Container builder guidelines
 
-The container builder is the proprietary tool that builds our models' containers.
-
-- It is used explicitly through its entry point and documented commands (its repository README and the CLAUDE.md at its root). It has its own git branch, and the builder's main is the only line.
-- A model's container is never built with a custom script.
-- The container builder stays portable and builds every model we own: a lost container is rebuilt by it into an exact copy.
-- Every specification stays in force:
-  - NeuroTax 5.0;
-  - symbolic shapes are mandatory, with no frozen dimension;
-  - one algebraic-function tool for symbolic shapes, extended and fixed as needed;
-  - unified VMM for every build.
-- A fix never breaks another model's build. The build suite of the whole catalogue is the proof before a container-builder fix lands.
-- Hard code is allowed in the container builder, a private tool, but is not desirable.
+Kept in the project's internal notes.
 
 ## 2026-10-12 18:20 — CONFIDENTIALITY and ECONOMY (the owner, via the supervisor)
 

@@ -53,7 +53,7 @@ the number (that is the whole finding), so a different card is not a defence.
 """
 from __future__ import annotations
 
-import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
+import atelier as _atelier  # the workshop's roots
 import argparse
 import glob
 import json

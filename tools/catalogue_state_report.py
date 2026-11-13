@@ -30,7 +30,7 @@ Usage: python tools/catalogue_state_report.py > docs/reference/catalogue-state.m
 """
 from __future__ import annotations
 
-import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
+import atelier as _atelier  # the workshop's roots
 import json
 import re
 import subprocess
@@ -479,7 +479,7 @@ def coverage_cell(cov) -> str:
 
 # ---------------------------------------------------------------------------
 # the debts named beside the line they hold — the A rows of
-# the internal debts triage, docs/internal/debts-triage.md, not published (a debt that blocks a catalogue line), keyed by
+# the internal debts triage, not published (a debt that blocks a catalogue line), keyed by
 # container. A line with none says "none named"; a debt named here and not in
 # DETTE.md is a defect of this table.
 # ---------------------------------------------------------------------------
