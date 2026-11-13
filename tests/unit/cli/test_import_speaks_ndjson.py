@@ -52,13 +52,15 @@ def _archive(tmp_path: Path, manifest=None) -> bytes:
     return p.read_bytes()
 
 
-def _wire(monkeypatch, tmp_path, body: bytes, gated=False, status_info=200):
+def _wire(monkeypatch, tmp_path, body: bytes, gated=False, status_info=200, stated_sha=None):
+    import hashlib
+    sha = stated_sha or hashlib.sha256(body).hexdigest()       # the hub states the container's sha256
     def fake_get(url, **kw):
         if url.endswith(f"/api/models/{ORG}/{NAME}"):
             return _Resp({"model": {"fileSize": len(body), "category": "LLM", "license": "mit",
-                                    "licenseName": "MIT", "gated": gated}}, status=status_info)
+                                    "licenseName": "MIT", "gated": gated, "sha256": sha}}, status=status_info)
         if url.endswith("/download"):
-            return _Resp({"url": f"{REGISTRY}/blob", "fileName": f"{NAME}.nbx"})
+            return _Resp({"url": f"{REGISTRY}/blob", "fileName": f"{NAME}.nbx", "sha256": sha})
         if url.endswith("/blob"):
             return _Resp(body=body, headers={"content-length": str(len(body))})
         raise AssertionError(url)
@@ -191,3 +193,16 @@ def test_the_progress_bar_speaks_ndjson_at_most_once_per_interval_and_at_close(c
     events = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
     assert [e["bytes"] for e in events] == [10, 30, 30]
     assert events[0]["total"] == 100 and events[0]["file"] == "x.nbx"
+
+
+def test_a_download_whose_sha256_is_not_the_hubs_is_refused_and_never_installed(monkeypatch, tmp_path, capsys):
+    """Whatever host serves the bytes (the hub's storage, a CDN), the archive installed is the one the hub states: a
+    different sha256 is refused by name, the file kept as `.unverified`, nothing extracted (hub review, 2026-11-13)."""
+    body = _archive(tmp_path)
+    _wire(monkeypatch, tmp_path, body, stated_sha="0" * 64)
+    code, events, _err = _run(capsys, _args())
+    assert code == 1
+    assert events[-1]["event"] == "error" and "0" * 64 in events[-1]["message"]
+    assert not (tmp_path / "cache" / NAME).exists()
+    assert (tmp_path / "store" / f"{NAME}.nbx.unverified").read_bytes() == body
+    assert not (tmp_path / "store" / f"{NAME}.nbx").exists()

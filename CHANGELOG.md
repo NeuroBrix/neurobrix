@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`neurobrix import` installs only the container the hub states.** The downloaded `.nbx` is checked against the
+  sha256 the hub publishes for it, whatever host served the bytes; another archive is refused by name with both
+  values, kept beside the store as `<name>.nbx.unverified` and never extracted.
+
 - **`neurobrix upscale` chooses its engine as `neurobrix run` does**, on every host: the same `--compiled`,
   `--sequential`, `--triton`, `--triton-sequential` flags, the PyTorch engine where it is installed and the Triton engine
   where it is not when no flag is given, said on the launch line. On a host without a GPU, `upscale` runs an upscaler on

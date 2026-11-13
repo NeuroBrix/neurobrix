@@ -95,6 +95,34 @@ def partial_path(dest):
     return dest.with_name(dest.name + ".part")
 
 
+def _json_object(resp):
+    """A response's JSON body when it is an object, else None (no response, not JSON, or another JSON value)."""
+    try:
+        body = resp.json() if resp is not None else None
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def file_sha256(path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 24):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def refuse_unverified(args, store_path, want, hub_name) -> None:
+    """The archive installed is the one the hub states, whatever host served it: else refused by name, kept as
+    `<name>.unverified`, never extracted."""
+    if want and (got := file_sha256(store_path)) == want:
+        return
+    Path(store_path).replace(kept := Path(str(store_path) + ".unverified"))
+    _die(args, f"ERROR: the downloaded {Path(store_path).name} is not the container the hub serves as {hub_name}: "
+               f"its sha256 is {file_sha256(kept)}, the hub states {want or 'none'}.", f"   Kept, not installed: {kept}.")
+
+
 def download_resumable(url, dest, total_hint=0, desc="", get=None, progress=None, chunk_size=1 << 20):
     """Download `url` to `dest`, resuming a partial left by an earlier attempt.
 
@@ -120,8 +148,6 @@ def download_resumable(url, dest, total_hint=0, desc="", get=None, progress=None
     server and quiet in tests; the import command passes `requests.get` and
     `tqdm`. Returns the final size in bytes.
     """
-    import os
-    from pathlib import Path
     if get is None:
         import requests
         get = requests.get
@@ -131,8 +157,7 @@ def download_resumable(url, dest, total_hint=0, desc="", get=None, progress=None
     headers = {"Range": f"bytes={have}-"} if have else {}
     resp = get(url, stream=True, timeout=30, headers=headers)
     resp.raise_for_status()
-    total = 0
-    mode = "wb"
+    total, mode = 0, "wb"
     if have and resp.status_code == 206:
         content_range = resp.headers.get("Content-Range", "")
         # bytes <start>-<end>/<total>; the start must be exactly what we have
@@ -332,17 +357,9 @@ def _import_body(args):
         # a local copy of the hub's file: verified before anything is answered; installed below, or its entry named
         if not given.is_file():
             _die(args, f"ERROR: --container {given}: no such file.")
-        if not hub_sha:
-            _die(args, f"ERROR: the registry states no sha256 for {hub_name}: a local container cannot be verified "
-                       f"against it.")
-        import hashlib
-        _h = hashlib.sha256()
-        with open(given, "rb") as _f:
-            for _chunk in iter(lambda: _f.read(1 << 24), b""):
-                _h.update(_chunk)
-        if _h.hexdigest() != hub_sha:
-            _die(args, f"ERROR: --container {given}: its sha256 {_h.hexdigest()} is not the container the hub serves "
-                       f"as {hub_name} ({hub_sha}).")
+        if not hub_sha or (_got := file_sha256(given)) != hub_sha:
+            _die(args, f"ERROR: --container {given} cannot be verified as the container the hub serves as {hub_name}: "
+                       + (f"its sha256 is {_got}, the hub states {hub_sha}." if hub_sha else "the hub states no sha256."))
     # "already installed", asked on every name the record gives the container BEFORE any byte is fetched: on the slug
     # alone (`..._diffusers`), a second import of Sana downloaded 9 GB to learn it (2026-11-08)
     if not args.force:
@@ -472,16 +489,7 @@ def _import_body(args):
             download_info = resp.json()
         except requests.HTTPError as e:
             status = e.response.status_code if e.response is not None else 0
-            server_error = None
-            if e.response is not None:
-                try:
-                    body = e.response.json()
-                    if isinstance(body, dict):
-                        server_error = body
-                except ValueError:
-                    server_error = None
-
-            if server_error is not None:
+            if (server_error := _json_object(e.response)) is not None:
                 code = server_error.get("code", "")
                 message = server_error.get("message") or server_error.get("error") or ""
                 if code == "LICENSE_LOGIN_REQUIRED":
@@ -496,10 +504,8 @@ def _import_body(args):
 
             _die(args, f"ERROR: Failed to get download URL: {e}")
 
-        download_url = download_info.get("url")
         file_name = download_info.get("fileName", f"{name}.nbx")
-
-        if not download_url:
+        if not (download_url := download_info.get("url")):
             _die(args, "ERROR: Registry did not return a download URL.",
                  "The model may not have a .nbx file uploaded yet.")
 
@@ -513,6 +519,7 @@ def _import_body(args):
                                              desc=file_name, get=requests.get,
                                              progress=NdjsonProgress if wants_json(args) else tqdm)
             log.debug(f"   Saved: {store_path} ({format_size(actual_size)})")
+            refuse_unverified(args, store_path, download_info.get("sha256") or hub_sha, hub_name)
             _ev(args, "downloaded", file=file_name, store=str(store_path), bytes=actual_size)
 
         except requests.HTTPError as e:
