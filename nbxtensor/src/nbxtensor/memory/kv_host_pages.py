@@ -50,6 +50,10 @@ class HostPages:
         """Pages allocated now."""
         return sum(n for _, _, n in self._slices)
 
+    def nbytes(self) -> int:
+        """Host bytes its slices hold now."""
+        return self.capacity * self.page_bytes
+
     def grow(self) -> int:
         """One more slice (the last one cut at `max_pages`); returns the pages added, 0 at the ceiling."""
         n = min(self.slice_pages, self.max_pages - self.capacity)

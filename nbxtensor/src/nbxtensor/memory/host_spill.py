@@ -18,6 +18,11 @@ import numpy as np
 from nbxtensor.ops.host_decode_partial import host_decode_partial
 
 
+def spill_bytes_per_position(num_layers: int, kv_heads: int, k_dim: int, v_dim: int) -> int:
+    """Host bytes one spilled position costs across every layer: float32 K and V in the attention's layout."""
+    return 4 * int(kv_heads) * (int(k_dim) + int(v_dim)) * int(num_layers)
+
+
 class HostSpill:
     def __init__(self, num_layers: int, kv_heads: int, k_dim: int, v_dim: int, budget_bytes):
         self.num_layers, self.kv_heads, self.k_dim, self.v_dim = int(num_layers), int(kv_heads), int(k_dim), int(v_dim)
@@ -28,7 +33,7 @@ class HostSpill:
 
     def position_bytes(self) -> int:
         """Host bytes one spilled position costs across every layer (float32 K and V)."""
-        return 4 * self.kv_heads * (self.k_dim + self.v_dim) * self.num_layers
+        return spill_bytes_per_position(self.num_layers, self.kv_heads, self.k_dim, self.v_dim)
 
     @property
     def budget_bytes(self) -> int:
