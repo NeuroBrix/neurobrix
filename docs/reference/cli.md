@@ -94,6 +94,7 @@ neurobrix run [options]
 | `--mode` `{auto,text,chat,image,audio,video,t2i,img2img,inpainting,t2v,i2v,v2v}` | — | Execution mode. Required for multimodal (text\|image). Auto-deduced for other families from inputs provided. |
 | `--chat` | — | Force chat template formatting |
 | `--no-chat` | off | Force raw text completion |
+| `--profile-kernels` `JSON` | — | Time every GPU kernel of the request on its own (Metal) and print them ranked by GPU time (with JSON: the whole table written there); each kernel runs alone, so the table ranks kernels and is not the run's speed |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
 
 ## info

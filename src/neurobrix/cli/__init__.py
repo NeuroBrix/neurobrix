@@ -14,6 +14,15 @@ from pathlib import Path
 from neurobrix import __version__
 
 
+def _add_run_command_arguments(p):
+    """`run`'s own: every request argument, and the kernel-time profile (a run's, not calibrate's or drift's)."""
+    _add_run_arguments(p)
+    p.add_argument('--profile-kernels', nargs='?', const='', default=None, metavar='JSON', dest='profile_kernels',
+                   help='Time every GPU kernel of the request on its own (Metal) and print them ranked by GPU time '
+                        '(with JSON: the whole table written there); each kernel runs alone, so the table ranks '
+                        'kernels and is not the run\'s speed')
+
+
 def _add_run_arguments(p):
     """The request arguments shared by `run` and `calibrate` (one list, one help)."""
     p.add_argument('--model', default=None, help='Model name (auto-detected from running daemon if omitted)')
@@ -164,7 +173,7 @@ For more information: https://neurobrix.org"""
         help='Run inference using NBX Engine',
         description='Run inference using Prism ExecutionPlan + NBX Engine. Family is read from manifest.'
     )
-    _add_run_arguments(run_parser)
+    _add_run_command_arguments(run_parser)
 
     # ========================================
     # CALIBRATE command — the precision calibration record (DtypeEngine fp32 islands)

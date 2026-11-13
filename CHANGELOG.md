@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`neurobrix run --profile-kernels` shows where the GPU time goes on Apple GPUs.** The run prints its kernels
+  ranked by GPU time (and the copies as one row); `--profile-kernels PATH` also writes the whole table as JSON. Each kernel is
+  timed on its own, so the table ranks kernels and the run is slower while it is measured; the answer is the same.
+
 ### Fixed
 
 - **A language model split across two cards scores every sequence of a batch correctly.** When the last layer and

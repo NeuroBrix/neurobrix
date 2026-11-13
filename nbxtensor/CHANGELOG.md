@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StepSlab.for_carved`, so every run that stabilized its decode allocations failed at its first carve.
 
 ### Added
+- `nbxtensor.profile.kernel_times()`: where a real run's GPU time goes on Metal, kernel by kernel (and the copies as
+  one row). Inside it every launch runs alone and is timed on the GPU at its own boundaries: the table ranks kernels;
+  it is not the production speed, and its header says so. The output bytes do not change.
 - `nbxtensor.memory.weight_arenas()`: a weight set's memory, counted per device and in page-locked host memory,
   allocated once and pinned once its host weights are written.
 - `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
