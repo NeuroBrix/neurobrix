@@ -210,6 +210,7 @@
     "num_ctas": 1,
     "maxnreg": null
    },
+   "excluded": [],
    "proof": {
     "date": "2026-11-07T07:46:48+00:00",
     "engine_version": "0.6.1",
@@ -294,7 +295,198 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "alternates": [
+    {
+     "config": {
+      "kwargs": {
+       "BT": 256,
+       "BF": 16
+      },
+      "num_warps": 2,
+      "num_stages": 1,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-11-13T14:24:46+00:00",
+      "engine_version": "0.6.14",
+      "backend": {
+       "triton": "3.8.0+git4a15f415.nbx1",
+       "name": "mps",
+       "backend_hash": "content-3a38a05dfda2da61"
+      },
+      "shape": [
+       16,
+       32,
+       32,
+       65536,
+       "int64",
+       "int64",
+       "int64",
+       "int64"
+      ],
+      "launches": 1,
+      "fp16_contract": false,
+      "launch_deviations": [
+       0.0
+      ],
+      "deviation": 0.0,
+      "tolerance": 0.0,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition exact integers",
+      "machine": {
+       "platform": "macOS-27.2.1-arm64-arm-64bit",
+       "python": "3.11.15",
+       "hardware_profile": "auto-apple-m4-pro-18g",
+       "has_native_bf16": true,
+       "target": "mps-apple-m4-pro",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": null,
+        "name": "Apple M4 Pro",
+        "memory_mb": 18186,
+        "unified": true
+       },
+       "clocks_mhz": null
+      },
+      "best_ms": 0.036445194137632364,
+      "second_ms": 0.0368636614123619,
+      "candidates": 48,
+      "accepted": 48,
+      "benched": 47,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.001,
+       "runs": 14.752,
+       "bench": 181.804
+      },
+      "stability_witness": {
+       "open_ms": 0.0856,
+       "close_ms": 0.0854,
+       "drift": 0.0023,
+       "tolerance": 0.08,
+       "kernel": "matmul",
+       "shape": [
+        2048,
+        2048,
+        2048
+       ],
+       "chunk": 4,
+       "brackets": [
+        {
+         "what": "chunk 1 of 12",
+         "open_ms": 0.0878,
+         "close_ms": 0.0862,
+         "drift": 0.0179,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 2 of 12",
+         "open_ms": 0.0864,
+         "close_ms": 0.0857,
+         "drift": 0.0077,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 3 of 12",
+         "open_ms": 0.085,
+         "close_ms": 0.0851,
+         "drift": 0.0014,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 4 of 12",
+         "open_ms": 0.0856,
+         "close_ms": 0.0923,
+         "drift": 0.0786,
+         "attempt": 2,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 5 of 12",
+         "open_ms": 0.0853,
+         "close_ms": 0.0865,
+         "drift": 0.0139,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 6 of 12",
+         "open_ms": 0.0851,
+         "close_ms": 0.0851,
+         "drift": 0.0002,
+         "attempt": 2,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 7 of 12",
+         "open_ms": 0.0897,
+         "close_ms": 0.0864,
+         "drift": 0.0366,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 8 of 12",
+         "open_ms": 0.0849,
+         "close_ms": 0.0851,
+         "drift": 0.0022,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 9 of 12",
+         "open_ms": 0.0922,
+         "close_ms": 0.087,
+         "drift": 0.056,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 10 of 12",
+         "open_ms": 0.0862,
+         "close_ms": 0.0849,
+         "drift": 0.0149,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 11 of 12",
+         "open_ms": 0.0841,
+         "close_ms": 0.0857,
+         "drift": 0.019,
+         "attempt": 1,
+         "contenders": 4
+        },
+        {
+         "what": "chunk 12 of 12",
+         "open_ms": 0.0859,
+         "close_ms": 0.0846,
+         "drift": 0.0152,
+         "attempt": 1,
+         "contenders": 3
+        },
+        {
+         "what": "the final two",
+         "open_ms": 0.0856,
+         "close_ms": 0.0854,
+         "drift": 0.0023,
+         "attempt": 1,
+         "contenders": 2
+        }
+       ]
+      },
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   ]
   },
   "(16, 64, 64, 65536, 'int64', 'int64', 'int64', 'int64')": {
    "config": {
