@@ -61,6 +61,7 @@ import threading
 from typing import Dict, Optional, Tuple
 import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved names live in (M2 cut of tensor.py)
 import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
+from nbxtensor.backend import metal_profile as _profile
 
 # Status codes. 0 is success, mirroring the C runtimes the seam was written
 # against; the non-zero values are ours and appear only in NeuroBrix errors.
@@ -665,6 +666,8 @@ class MetalRuntime:
         error = command_buffer.error()
         if error is not None:
             raise RuntimeError(f"Metal command buffer failed: {error}")
+        if _profile.SESSION is not None:
+            _profile.SESSION.retired(command_buffer)     # its launches' samples, read once it has retired
 
     def _dispatches_per_buffer(self) -> int:
         """How many dispatches one command buffer may carry before it is
@@ -679,9 +682,13 @@ class MetalRuntime:
         """The open encoder of this stream, opening one if there is none.
 
         Returns `(command_buffer, encoder)`. The caller encodes and then calls
-        `note_dispatch`; it must not commit — the stream owns that.
+        `note_dispatch`; it must not commit — the stream owns that. Inside a
+        kernel-time session (`metal_profile`) every launch gets its own timed
+        encoder (a launch names it after: `metal_profile.Session.name`).
         """
         key = int(stream or 0)
+        if _profile.SESSION is not None:
+            return self._timed_encoder(key, kind)
         with self._lock:
             entry = self._open.get(key)
             if entry is not None and entry[2] != kind:
@@ -705,6 +712,29 @@ class MetalRuntime:
                 return None, None
             self._open[key] = [command_buffer, encoder, kind, 0]
             return command_buffer, encoder
+
+    def _timed_encoder(self, key: int, kind: str):
+        """A kernel-time session's encoder: the stream's previous one ended, a new one opened that samples its own
+        start and end at the launch's index in the buffer (`metal_profile.Session.open_encoder`)."""
+        with self._lock:
+            entry = self._open.get(key)
+            if entry is None:
+                queue = self._resolve_queue(key)
+                if queue is None:
+                    return None, None
+                entry = self._open[key] = [queue.commandBuffer(), None, kind, 0]
+            if entry[1] is not None:
+                entry[1].endEncoding()
+            entry[1] = _profile.SESSION.open_encoder(entry[0], kind, entry[3])
+            entry[2] = kind
+            return entry[0], entry[1]
+
+    def open_kernel_times(self):
+        """Open the process's kernel-time session (`nbxtensor.profile.kernel_times`)."""
+        return _profile.open_session(self._device, self._dispatches_per_buffer(), self.flush)
+
+    def close_kernel_times(self):
+        return _profile.close_session(self.flush)
 
     @staticmethod
     def _new_encoder(command_buffer, kind: str):

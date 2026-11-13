@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `nbxtensor.profile.kernel_times()`: where a real run's GPU time goes on Metal, kernel by kernel (and the copies as
+  one row). Inside it every launch runs alone and is timed on the GPU at its own boundaries: the table ranks kernels;
+  it is not the production speed, and its header says so. The output bytes do not change.
+
 ### Fixed
 - A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
   only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises

@@ -2883,6 +2883,34 @@ def copies(nbytes=1 << 30, reps=10) -> dict
 
 The operands come from `numpy.random.default_rng(0)`: two machines time the same values.
 
+### `nbxtensor.profile` — where a real run's GPU time goes, kernel by kernel
+
+```python
+def ranked_call(fn, path=None, out=print)       # fn() inside a session, its table to `out` (and `path` as JSON)
+def kernel_times() -> ContextManager[KernelTimes]
+    # a profiling session around the caller's work (Metal; another backend refused by name; one per process): every
+    # launch and every copy runs alone and is timed on the GPU at its own boundaries — the table RANKS kernels, it is
+    # not the production step's time (the batching changes)
+class KernelTimes
+    # rows: {kernel name: [launches, total ms, max ms]} ('blit' for the copies); wall_s, gpu_ms, unsampled;
+    # ranked() -> [(name, launches, total ms, max ms)] heaviest first; format(top=25) -> the printed table; as_dict();
+    # report(path=None, top=25) -> the table, and the whole of it written to `path` as JSON
+```
+
+`nbxtensor.backend.metal_profile` — the Metal mechanism behind it
+
+```python
+SESSION                       # the open session or None: the one flag the stream reads
+POOL_ASK                      # the sample buffers a first session asks the device for (it keeps what is granted)
+class Session(device, per_buffer)
+    # open_encoder(command_buffer, kind, index, label): a launch's own encoder, sampled at 2 x index and 2 x index + 1;
+    # retired(command_buffer): its samples read into the table; close() -> KernelTimes; granted_pool()
+def open_session(device, per_buffer, flush) -> KernelTimes
+def close_session(flush) -> KernelTimes
+```
+
+`MetalRuntime.open_kernel_times()`, `close_kernel_times()`; `encoder_for(stream, kind, label=None)` names the launch.
+
 ### `nbxtensor.io.read_rate` — how fast the machine reads its weight files, by parallel reads
 
 ```python
