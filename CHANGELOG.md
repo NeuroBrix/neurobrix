@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A model larger than its card runs on the Triton engine without running out of memory.** When a model's layers stream
+  from host memory, the card kept more of them than its plan allowed, because the weights loaded on the card from the
+  start (embeddings, norms) were not counted: Qwen2.5-Coder-14B on one 16 GB V100 stopped at its second pass.
+- **Long served prompts on the PyTorch engine no longer run the card out of memory.** The check that a model's attention
+  mask is the causal pattern used several gigabytes of card memory at every layer of a long prefill; it now runs once per
+  chunk in host memory. Qwen3-30B-A3B-Thinking served with `--compiled` on one 32 GB V100 failed every request.
+
 - **Kokoro-82M speaks with its own voice on the Triton engine.** A model built in float32 and run in half precision keeps
   float32 wherever its own forward keeps it, unless the model's calibration record measured that op safe in half: the
   voice's harmonic source (a running phase of thousands of radians) is computed whole, and the Triton engine's voice

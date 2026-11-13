@@ -84,7 +84,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from typing import TYPE_CHECKING
 
@@ -651,29 +651,12 @@ class Zero3Strategy(ExecutionStrategy):
             return build_expert_store_state(self, component_name, executor, seq, is_triton, blocks,
                                             dev_idx, transfer_stream, transfer_stream_torch)
 
-        # The weights Prism keeps RESIDENT across passes (`resident_weight_mb`, the room its plan
-        # leaves on the card beside everything it holds with this component): the non-block
-        # weights first — every pass reads them, op by op — then the blocks in execution order,
-        # each whole, while its bytes fit. Only the rest streams through the window.
-        state_blocks = dict(real_blocks)
         nonblock = blocks.get(-1)
         if nonblock is not None and nonblock.get('weight_tensor_ids'):
             cpu_originals.update(self._snapshot_cpu_originals(executor, {-1: nonblock}))
         budget = int(self._resident_budget_mb(component_name) * 1024 * 1024)
-        resident: Set[int] = set()
-        resident_bytes = 0
-        order = ([-1] if nonblock is not None else []) + sorted(real_blocks)
-        for bidx in order:
-            entry = nonblock if bidx == -1 else real_blocks[bidx]
-            nbytes = self._host_bytes(entry, cpu_originals)
-            if nbytes == 0 or resident_bytes + nbytes > budget:
-                if bidx == -1:
-                    continue
-                break
-            resident.add(bidx)
-            resident_bytes += nbytes
-            if bidx == -1:
-                state_blocks[-1] = nonblock
+        resident, resident_bytes = self._resident_blocks(nonblock, real_blocks, cpu_originals, budget)
+        state_blocks = {**real_blocks, **({-1: nonblock} if -1 in resident else {})}
 
         state: Dict[str, Any] = {
             'seq': seq,
@@ -718,19 +701,40 @@ class Zero3Strategy(ExecutionStrategy):
             return float(alloc.get('resident_weight_mb', 0.0))
         return 0.0
 
+    @classmethod
+    def _resident_blocks(cls, nonblock: Optional[Dict[str, Any]], real_blocks: Dict[int, Dict[str, Any]],
+                         cpu_originals: Dict[str, Any], budget: int) -> Tuple[Set[int], int]:
+        """The blocks the plan keeps RESIDENT across passes (`resident_weight_mb`, the room its plan leaves on
+        the card beside everything it holds with this component), and the bytes they spend: the non-block
+        weights first — every pass reads them, op by op — then the blocks in execution order, each whole,
+        while its bytes fit. Only the rest streams through the window.
+
+        Non-block weights the loader already placed on the card (the Triton loader keeps them there,
+        `triton/weight_loader.py`) spend the grant all the same: the plan priced every weight of the
+        component against it. Before, the grant went to blocks alone and the non-block weights sat beside
+        it unpriced — Qwen2.5-Coder-14B --triton on one V100-16GB: 9 blocks resident on top of them, out of
+        memory at the second pass, short by 38 MB (2026-11-12 23:08)."""
+        spent = cls._host_bytes(nonblock, cpu_originals, on_card=True) if nonblock is not None else 0
+        resident: Set[int] = set()
+        for bidx in ([-1] if nonblock is not None else []) + sorted(real_blocks):
+            nbytes = cls._host_bytes(nonblock if bidx == -1 else real_blocks[bidx], cpu_originals)
+            if nbytes and spent + nbytes <= budget:
+                resident.add(bidx)
+                spent += nbytes
+            elif bidx != -1:
+                break
+        return resident, spent
+
     @staticmethod
-    def _host_bytes(entry: Dict[str, Any], cpu_originals: Dict[str, Any]) -> int:
-        """The bytes a block's host weights occupy once on the card (each tensor once)."""
+    def _host_bytes(entry: Dict[str, Any], cpu_originals: Dict[str, Any], on_card: bool = False) -> int:
+        """The bytes a block's host weights occupy once on the card (each tensor once); with `on_card`, the
+        bytes of its weights already on a card instead."""
         total = 0
-        for tid in dict.fromkeys(entry.get('weight_tensor_ids', [])):
-            t = cpu_originals.get(tid)
-            if t is None:
-                continue
-            if is_torch_tensor(t):
-                if t.device.type == 'cpu':
-                    total += t.numel() * t.element_size()
-            elif getattr(t, '_device', None) == 'cpu':
-                total += int(t._nbytes)
+        for t in (cpu_originals.get(tid) for tid in dict.fromkeys(entry.get('weight_tensor_ids', []))):
+            torch_t = t is not None and is_torch_tensor(t)
+            where = t.device.type if torch_t else getattr(t, '_device', None)
+            if t is not None and (where == 'cpu') != on_card:
+                total += t.numel() * t.element_size() if torch_t else int(t._nbytes)
         return total
 
     def _prime_only_state(
