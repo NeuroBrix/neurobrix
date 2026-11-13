@@ -627,8 +627,8 @@ class DeviceAllocator:
         # phases, 47 737 unmaps and as many maps, +26 s (2026-11-02)
         return DeviceAllocator._pool_flush()
 
-    @staticmethod
-    def new_allocation_epoch() -> int:
+    @classmethod
+    def new_allocation_epoch(cls) -> int:
         """Declare that every address issued so far belongs to a runtime that
         is being replaced. Returns the new epoch.
 
@@ -643,8 +643,15 @@ class DeviceAllocator:
         failure in an unrelated kernel, which is the worst way for it to be
         found.
         """
-        DeviceAllocator._alloc_epoch += 1
-        return DeviceAllocator._alloc_epoch
+        cls._alloc_epoch += 1
+        # Every segment the pool holds belongs to the runtime being replaced, the FREE remainder of a segment that a
+        # live tensor still holds included: `empty_cache_pool` gives back only wholly free segments, so that
+        # remainder stayed carvable and the next allocation took an address the new runtime never issued (every
+        # later launch touching it refused: the "intermittent" kernel-suite failures after
+        # test_metal_runtime_lifetime, 2026-11-13). The pool starts empty with the new epoch; a survivor's later
+        # free is the epoch's (above), never the pool's.
+        cls._POOL = SegmentPool(on_block=cls._block_reported)
+        return cls._alloc_epoch
 
     @staticmethod
     def set_limit(nbytes: Optional[int], dev: Optional[int] = None) -> None:
