@@ -219,3 +219,62 @@ def dispatch(pipe: Pipeline, stream: int, pointers: Sequence[int], scalars: Opti
     encoder.dispatchThreadgroups_threadsPerThreadgroup_(Metal.MTLSizeMake(*map(int, grid)),
                                                         Metal.MTLSizeMake(*map(int, block)))
     rt.note_dispatch(stream)
+
+
+class BoundLaunch:
+    """One launch resolved once — a frozen plan's, whose addresses never move: its pipeline, each pointer's (buffer,
+    offset), its packed scalars, its grid. `run(stream)` only encodes (stage A of the Metal replay: the live path's
+    lookups, checks and packing cost ~26 us a launch, measured 2026-11-13)."""
+
+    __slots__ = ("pipe", "buffers", "packed", "grid", "block", "shared", "exposes", "reads")
+
+    def __init__(self, pipe: Pipeline, buffers, packed: Optional[bytes], grid, block, shared: int, exposes: bool,
+                 reads: bool):
+        import Metal
+        self.pipe, self.buffers, self.packed, self.shared = pipe, tuple(buffers), packed, int(shared)
+        self.grid, self.block = Metal.MTLSizeMake(*map(int, grid)), Metal.MTLSizeMake(*map(int, block))
+        self.exposes, self.reads = bool(exposes), bool(reads)
+
+    def run(self, stream: int) -> None:
+        import Metal
+        from nbxtensor.backend.metal_device import runtime
+        rt = runtime()
+        cb, encoder = rt.encoder_for(stream, kind="compute")
+        if encoder is None:                             # pragma: no cover
+            raise RuntimeError(f"no Metal compute encoder for stream {stream} to launch {self.pipe.name!r}")
+        if _profile.SESSION is not None:
+            _profile.SESSION.name(cb, self.pipe.name)
+        encoder.setComputePipelineState_(self.pipe.pso)
+        if self.shared:
+            encoder.setThreadgroupMemoryLength_atIndex_(self.shared, 0)
+        for i, (buffer, offset) in enumerate(self.buffers):
+            encoder.setBuffer_offset_atIndex_(buffer, offset, i)
+        if self.packed:
+            encoder.setBytes_length_atIndex_(self.packed, len(self.packed), len(self.buffers))
+        if self.exposes:
+            rt.expose([b for b, _o in self.buffers])
+        if self.reads:
+            named = rt.exposed_buffers()
+            if named:
+                encoder.useResources_count_usage_(named, len(named),
+                                                  Metal.MTLResourceUsageRead | Metal.MTLResourceUsageWrite)
+        encoder.dispatchThreadgroups_threadsPerThreadgroup_(self.grid, self.block)
+        rt.note_dispatch(stream)
+
+
+def bind(pipe: Pipeline, pointers: Sequence[int], scalars: Optional[bytes], grid, block, exposes: bool = False,
+         reads: bool = False, shared: int = 0, barrier: bool = False) -> BoundLaunch:
+    """A launch with no trailing buffer resolved once (`BoundLaunch`): the live path's checks made here, each pointer
+    found in its allocation here, refused by name as `bind_pointer` refuses."""
+    from nbxtensor.backend.metal_device import runtime
+    check_launch(pipe, len(pointers) + (1 if scalars else 0), grid, block, barrier)
+    rt = runtime()
+    resolved = []
+    for i, address in enumerate(pointers):
+        buffer, offset = rt.buffer_for_pointer(int(address))
+        if buffer is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: kernel {pipe.name!r}, pointer argument {i}: 0x{int(address):x} lies in no allocation "
+                f"of this Metal runtime (device, host or mapped memory), so it cannot be bound")
+        resolved.append((buffer, offset))
+    return BoundLaunch(pipe, resolved, scalars, grid, block, shared, exposes, reads)
