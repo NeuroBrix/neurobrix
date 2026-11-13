@@ -52,7 +52,7 @@ import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
-from nbxtensor.memory.slab import StepSlab
+from nbxtensor.memory.step_stabilizer import StepStabilizer
 import logging
 from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
@@ -172,74 +172,14 @@ from nbxtensor.backend.frozen_plan import (  # noqa: E402
 STATE.site_of = lambda filename: "neurobrix" in filename and "replay" not in filename
 
 def _stabilize_tick(seq) -> None:
-    """B1 lifecycle per sequence: runs 1-2 pass through (prefill +
-    warmup), run 3 measures the transient high-water, runs 4+ carve
-    every allocation from the sequence's recycled StepSlab. The active
-    slab is switched at each run start (runs are synchronous, so the
-    slab in force during a run is always the running sequence's)."""
-    # Bank a pending measurement into ITS owner first (ticks of OTHER
-    # sequences must never clobber the global measuring window — that
-    # sized the decode slab from the sampler's tiny window and starved
-    # it by 627 MB).
-    if getattr(STATE, "measure_owner", None) is not None:
-        STATE.measure_owner.__dict__["_stab_total"] = STATE.total_measured
-        STATE.measure_owner = None
-        STATE.measuring = False
-
-    n = seq.__dict__.get("_stab_run", 0) + 1
-    seq.__dict__["_stab_run"] = n
-    if n <= 2:
-        STATE.stab_slab = None
-        return
-    if n == 3:
-        STATE.stab_slab = None
-        STATE.measuring = True
-        STATE.live = STATE.high_water = 0
-        STATE.measured.clear()
-        STATE.total_measured = 0
-        STATE.measure_owner = seq
-        return
-    if "_stab_total" in seq.__dict__ and \
-            seq.__dict__.get("_stab_slab") is None:
-        # PURE-BUMP sizing: the slab must hold the step's TOTAL carved
-        # bytes (no intra-step reuse), not the live high-water.
-        slab = StepSlab.for_carved(seq.__dict__.pop("_stab_total"), _nbx_device.current())
-        need = slab.size
-        seq.__dict__["_stab_slab"] = slab
+    """The sequence's step-slab stabilizer ticked at its run's start (nbxtensor memory/step_stabilizer.py: runs 1-2
+    pass through, run 3 measures, runs 4+ carve from its recycled StepSlab)."""
+    stab = seq.__dict__.get("_stabilizer")
+    if stab is None:
         comp = str((seq.dag or {}).get("component_name", "?"))
-        _log.debug(f"[StepSlab] {comp}: stabilizing decode allocations "
-                   f"({need / 1e6:.0f} MB slab)")
-    slab = seq.__dict__.get("_stab_slab")
-    if slab is not None:
-        if not seq.__dict__.get("_stab_served_printed") and \
-                seq.__dict__["_stab_run"] == 6:
-            comp = str((seq.dag or {}).get("component_name", "?"))
-            n_ops = len((seq.dag or {}).get("ops", {}))
-            _log.debug(f"[StepSlab] {comp} (dag {n_ops} ops, seq id "
-                       f"{id(seq) & 0xffff:04x}): served "
-                       f"{len(slab.allocs) + len(slab.stale)} allocations "
-                       f"last step (live {len(slab.allocs)}, "
-                       f"stale {len(slab.stale)}, shortfall {slab.shortfall})")
-            a, b = slab.prev_carve or [], slab.carve_sizes
-            if a and b:
-                if len(a) != len(b):
-                    _log.debug(f"[StepSlab] {comp}: carve COUNT varies "
-                               f"({len(a)} vs {len(b)})")
-                else:
-                    div = [i for i, (x, y) in enumerate(zip(a, b))
-                           if x != y]
-                    if div:
-                        i = div[0]
-                        _log.debug(f"[StepSlab] {comp}: carve sizes diverge "
-                                   f"at {len(div)} indices; first at #{i}: "
-                                   f"{a[max(0,i-2):i+3]} vs "
-                                   f"{b[max(0,i-2):i+3]}")
-                    else:
-                        _log.debug(f"[StepSlab] {comp}: carve size sequence "
-                                   f"IDENTICAL ({len(a)} allocs)")
-            seq.__dict__["_stab_served_printed"] = True
-        slab.reset()
-    STATE.stab_slab = slab
+        label = f"{comp} (dag {len((seq.dag or {}).get('ops', {}))} ops, seq id {id(seq) & 0xffff:04x})"
+        stab = seq.__dict__["_stabilizer"] = StepStabilizer(STATE, label)
+    stab.tick(_nbx_device.current())
 
 
 # ---------------------------------------------------------------------------
@@ -649,7 +589,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
 
     Mode composition: NBX_REPLAY_TUPLE_CENSUS short-circuits every plan
     path (pure observation; with NBX_REPLAY_KV_DECODE it also runs the
-    B1 StepSlab stabilizer so the census sees stabilized addresses).
+    B1 step-slab stabilizer so the census sees stabilized addresses).
     WITHOUT the census flag, NBX_REPLAY_KV_DECODE composes with the
     plan machine directly: the B1 stabilizer stays OFF (the recording
     slab is the address-pinning authority) and the interceptor
