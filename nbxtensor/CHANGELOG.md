@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `nbxtensor.memory.kv_host_tier.host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes)` takes a
+  page's parts and sizes the page itself.
+- A decode step that stabilizes its allocations serves them from one recycled `StepSlab` from its first stabilized run.
+
+### Added
+- `nbxtensor.memory.weight_arenas()`: a weight set's memory, counted per device and in page-locked host memory,
+  allocated once and pinned once its host weights are written.
+- `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
+  copied.
+- `nbxtensor.io.mapped_shards`: weight files mapped once each, the spans host views are built over, and the pages of a
+  view's span given back once its bytes are copied to the device (`ShardMaps`, `drop_pages`).
+- `nbxtensor.memory.slot_store`, `end_store_request`, `release_store`: a compiled sequence's slot memory and its
+  request and unload lifecycle, with `store_held_bytes` and `store_contents` for diagnostics.
+- `nbxtensor.memory.step_stabilizer.StepStabilizer`: a decoding sequence's step slab over its first runs (pass through,
+  measure, then carve from one recycled slab), ticked once per run.
+- `nbxtensor.memory.host_spill.spill_bytes_per_position`: the host bytes one spilled KV position costs, for a server
+  that sizes its reach before any spill exists; `HostPages.nbytes()`: the host bytes its slices hold.
+- `nbxtensor.inspection.label`: a tensor as a diagnostic line names it (shape, dtype, device and the object's id).
+- `nbxtensor.interop.copy_to_address` and `host_bytes`: a tensor's values handed to another array library, into its
+  own device buffer or as host bytes in C order.
+
 ## [0.1.6] - 2026-11-13
 
 A device and memory API that names every answer of the GPU runtime, refusals included.

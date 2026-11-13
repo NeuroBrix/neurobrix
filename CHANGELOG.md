@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A language model split across two cards scores every sequence of a batch.** When the last layer and the output head
+  sit on different cards, each sequence's last position reaches the head through the tensor library's card-to-card
+  transfer, laid out per sequence.
+
 ## [0.6.14] - 2026-11-13
 
 With nbxtensor 0.1.6: served multimodal and vision-language models hold a whole conversation on the Triton engine, a
