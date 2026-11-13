@@ -1,7 +1,7 @@
 """The VACE conditioning spec is the container's, in both engines — never a model's constants.
 
 `conditioning_spec` filled a bare `vace_control_conditioning` flag with Wan2.1-VACE-1.3B's own
-numbers (15 control layers, 64 mask channels, z_dim 16, "vae_encoder"); the retraced container
+numbers (15 control layers, 64 mask channels, z_dim 16, "vae_encoder"); the rebuilt container
 carries the whole spec, and a container that does not is refused by name. Injection: the
 refusal removed from either engine -> RED."""
 import types

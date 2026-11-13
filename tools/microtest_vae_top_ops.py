@@ -109,7 +109,7 @@ def run_microtest(uid: str, kind: str, extra_kw: dict, target_dev: str):
     out_shapes = op.get("output_shapes")
 
     # Match graph dtype if it's float-something (fp32 in graph means
-    # graph DAG records the trace-time precision; on Volta runtime
+    # graph DAG records the build-time precision; on Volta runtime
     # these are downcast to fp16 by Prism for non-matmul ops). We'll
     # test in fp16 to mirror the actual triton path on Volta.
     test_dtype = "float16"

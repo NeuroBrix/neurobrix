@@ -9,7 +9,7 @@ them (2026-10-04 01:57) PROVIDED each passes the gates, proven here:
 * collision — the registry keys that land on the token are exactly the spellings of that one role
   (pinned below): a later entry that maps a token of another meaning onto it goes red here. Over
   the 49 containers the rename makes no two keys of a component collide (the census gate of
-  2026-10-04, `forge/tools/neurotax_rename.py` dry run: 0 collisions, 0 refused).
+  2026-10-04, `builder/tools/neurotax_rename.py` dry run: 0 collisions, 0 refused).
 
 What these would do if one of them were remapped (e.g. `kv` -> `key`) or another meaning were
 mapped onto one (e.g. `pooler` -> `pre_norm`): the fixed-point or the synonym cell fails.

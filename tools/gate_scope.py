@@ -714,7 +714,7 @@ class Cells:
         self.models = sorted({m for cs in self.cells.values() for m, _ in cs})
         self.recs = GI.records(CACHE, self.models, SCRATCH / "index", PYTHON, src)
         self.gone = sorted(m for m, r in self.recs.items() if r.get("gone"))
-        # a container whose graphs are newer than the gate's row of it was retraced after the gate ran: the gate
+        # a container whose graphs are newer than the gate's row of it was rebuilt after the gate ran: the gate
         # judged another container, so every cell of it is replayed, whatever the diff
         self.rebuilt = {}
         for cls in sorted(self.gated):                     # a class the gate never judged says nothing
@@ -1905,7 +1905,7 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
     sel = {cls: {} for cls in cfg["classes"]}
     report = {"gate": str(gate_dir), "pairs": [], "prunes": [], "gone": cells.gone}
     if cells.gone:
-        log("retraced away since the gate ran (scoped from the record indexed while present): " + ", ".join(cells.gone))
+        log("rebuilt away since the gate ran (scoped from the record indexed while present): " + ", ".join(cells.gone))
 
     def pick(cls, cs, why):
         for c in cs:

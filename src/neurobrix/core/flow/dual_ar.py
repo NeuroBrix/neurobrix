@@ -288,7 +288,7 @@ class DualAREngine(ComponentFlowHandler):
         # ── Step 4: codec.decoder (features -> waveform), single symbolic-seq pass ──
         # The DAC decoder is fully symbolic (unpad1d negative-end slice keeps the
         # upsampled length symbolic), so it runs the whole feature sequence at once —
-        # no trace-seq chunking, no inter-block seams.
+        # no build-seq chunking, no inter-block seams.
         for stage in stages[1:]:
             codec_name = stage["component"]
             if codec_name not in self.ctx.executors:
@@ -307,7 +307,7 @@ class DualAREngine(ComponentFlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     def _try_chunked_forward(self, comp_name: str) -> bool:
-        """Run chunked forward if input seq_len exceeds graph's trace-time seq_len."""
+        """Run chunked forward if input seq_len exceeds graph's build-time seq_len."""
         executor = self.ctx.executors.get(comp_name)
         if executor is None:
             return False

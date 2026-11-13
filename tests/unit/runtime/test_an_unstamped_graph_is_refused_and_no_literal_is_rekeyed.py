@@ -35,8 +35,8 @@ from neurobrix.nbx.fixed_point import FIXED_POINT_FLAG, unstamped_components
 from neurobrix.nbx.neurotax import NEUROTAX_VERSION
 
 
-def _sym(i, trace):
-    return {"type": "symbol", "id": i, "trace": trace}
+def _sym(i, built):
+    return {"type": "symbol", "id": i, "trace": built}
 
 
 def _t(dims, concrete):

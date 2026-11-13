@@ -4,7 +4,7 @@
 Answers three questions that a half-written file makes look like a broken model:
 
   1. does every local ``.nbx`` whose name matches a hub artifact still carry that
-     artifact's byte size, or has a local re-trace silently overwritten it?
+     artifact's byte size, or has a local rebuild silently overwritten it?
   2. does every runtime-cache entry hold the files the loader needs
      (``manifest.json`` + ``topology.json`` + ``components/``), or was it cut
      mid-restore?

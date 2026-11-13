@@ -34,29 +34,29 @@ def _meta(dtype, params=None):
     return meta
 
 
-@pytest.mark.parametrize("traced,params,compute,wide", [
+@pytest.mark.parametrize("built,params,compute,wide", [
     ("float32", "bfloat16", "bfloat16", True),    # Allegro's timestep: wider than the bf16 weights
     ("float32", "float32", "float16", False),     # orpheus: built float32 throughout, run at fp16 — the model's width
     ("float64", "float32", "float16", True),      # wider than fp32 weights
     ("float16", "float32", "float16", False),
 ])
-def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compute, wide):
+def test_wider_means_wider_than_the_graph_s_own_parameters(built, params, compute, wide):
     from neurobrix.core.dtype.entry_width import enters_at_built_width, built_parameter_width
     from nbxtensor.dtype.itemsize import itemsize
-    meta = _meta(traced, params)
+    meta = _meta(built, params)
     assert built_parameter_width(meta) == itemsize(params)
-    assert enters_at_built_width(itemsize(traced), itemsize(compute), meta) is wide
+    assert enters_at_built_width(itemsize(built), itemsize(compute), meta) is wide
     # the compiled resolver hands the built dtype (the executor stores it through the DtypeEngine); the Triton
     # engine hands the dtype as its branch stores it (no fp64 here)
     from neurobrix.core.runtime.graph.execution_context import ExecutionContext
     from neurobrix.core.runtime.graph.tensor_resolver import TensorResolver
     ctx = ExecutionContext(dag={"tensors": meta}, device="cpu", dtype=getattr(torch, compute))
-    assert TensorResolver(ctx).get_input_dtype("t") == getattr(torch, traced if wide else compute)
+    assert TensorResolver(ctx).get_input_dtype("t") == getattr(torch, built if wide else compute)
     pytest.importorskip("triton")
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype[compute], has_native_bf16=True, graph_dtype=compute, stores_fp64=False)
-    stored = {"float64": "float32"}.get(traced, traced)
+    stored = {"float64": "float32"}.get(built, built)
     assert eng._target_dtype_for_input("input::t", meta) == NBXDtype[stored if wide else compute]
 
 
@@ -72,7 +72,7 @@ def test_prism_prices_the_orpheus_input_at_the_compute_dtype():
     assert got["input::t"] == "float16"
 
 
-@pytest.mark.parametrize("traced,compute,stores_fp64,expected", [
+@pytest.mark.parametrize("built,compute,stores_fp64,expected", [
     ("float32", "float16", False, "float32"),       # wider: enters at its width
     ("float64", "float16", False, "float32"),       # wider, the branch holds no fp64: its storage form
     ("float64", "float16", True, "float64"),
@@ -80,31 +80,31 @@ def test_prism_prices_the_orpheus_input_at_the_compute_dtype():
     ("float16", "float16", False, "float16"),
     ("int64", "float16", False, "int64"),           # non-floating: the graph's own
 ])
-def test_the_triton_engine_s_entry_rule(traced, compute, stores_fp64, expected):
+def test_the_triton_engine_s_entry_rule(built, compute, stores_fp64, expected):
     pytest.importorskip("triton")
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from neurobrix.triton.dtype import TritonDtypeEngine
     eng = TritonDtypeEngine(NBXDtype[compute], has_native_bf16=True, graph_dtype=compute, stores_fp64=stores_fp64)
-    assert eng._target_dtype_for_input("input::t", _meta(traced)) == NBXDtype[expected]
+    assert eng._target_dtype_for_input("input::t", _meta(built)) == NBXDtype[expected]
 
 
-@pytest.mark.parametrize("traced,compute,expected", [
+@pytest.mark.parametrize("built,compute,expected", [
     ("float32", torch.float16, torch.float32), ("float64", torch.float16, torch.float64),
     ("float16", torch.bfloat16, torch.bfloat16), ("float16", torch.float16, torch.float16),
     ("int64", torch.float16, torch.int64),
 ])
-def test_the_compiled_resolver_s_entry_rule(traced, compute, expected):
+def test_the_compiled_resolver_s_entry_rule(built, compute, expected):
     from neurobrix.core.runtime.graph.execution_context import ExecutionContext
     from neurobrix.core.runtime.graph.tensor_resolver import TensorResolver
-    ctx = ExecutionContext(dag={"tensors": _meta(traced)}, device="cpu", dtype=compute)
+    ctx = ExecutionContext(dag={"tensors": _meta(built)}, device="cpu", dtype=compute)
     assert TensorResolver(ctx).get_input_dtype("t") == expected
 
 
 @pytest.mark.parametrize("engine", ["compiled", "sequential", "triton", "triton_sequential"])
-@pytest.mark.parametrize("traced,stores_fp64,expected", [
+@pytest.mark.parametrize("built,stores_fp64,expected", [
     ("float32", False, "float32"), ("float64", False, "float32"), ("float64", True, "float64"), ("float16", False, "float16")])
-def test_prism_prices_the_seed_by_the_same_rule(engine, traced, stores_fp64, expected):
-    dag = {"tensors": {**_meta(traced), "o": {"dtype": traced, "shape": [2]}},
+def test_prism_prices_the_seed_by_the_same_rule(engine, built, stores_fp64, expected):
+    dag = {"tensors": {**_meta(built), "o": {"dtype": built, "shape": [2]}},
            "ops": {"neg::0": {"op_type": "aten::neg", "input_tensor_ids": ["input::t"], "output_tensor_ids": ["o"],
                               "attributes": {"args": [{"type": "tensor", "tensor_id": "input::t"}]}}},
            "execution_order": ["neg::0"], "input_tensor_ids": ["input::t"], "output_tensor_ids": ["o"], "torch_dtype": "float16"}

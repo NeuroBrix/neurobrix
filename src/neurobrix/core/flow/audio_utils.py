@@ -269,7 +269,7 @@ def redistribute_snac_codes(generated_ids, audio_token_start, vocab_size):
     per frame) into the 3 SNAC codebooks. PURE python (no torch, no `snac`):
     c0=[0], c1=[1,4], c2=[2,3,5,6] per frame, each modulo _SNAC_CODEBOOK_SIZE. Returns
     (c0, c1, c2) lists or None if there are no full frames. The neural decode of
-    these codes runs through the TRACED codec.decoder component (in the .nbx)."""
+    these codes runs through the BUILT codec.decoder component (in the .nbx)."""
     at = [t - audio_token_start for t in generated_ids
           if audio_token_start <= t < vocab_size]
     n = len(at) // 7
@@ -306,7 +306,7 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
         if vocab_size is None:
             raise RuntimeError("ZERO FALLBACK: vocab_size missing from defaults.json.")
 
-        # Zero Outsider (ZO-0): if the SNAC codec is TRACED into the .nbx as a
+        # Zero Outsider (ZO-0): if the SNAC codec is BUILT into the .nbx as a
         # `codec.decoder` component, the flow handler runs it as a proper stage
         # (via _execute_component — needed for symbolic-shape + in-graph randn
         # setup). Skip the vendor `snac` decode here; the flow binds global.output_audio.
@@ -409,7 +409,7 @@ def find_model_config_path(ctx: FlowContext) -> Path:
         if candidate.exists():
             return candidate
     # Removed: legacy absolute-path fallback to `topology.components.path`.
-    # That field held the trace-host absolute snapshot location and is no
+    # That field held the build-host absolute snapshot location and is no
     # longer present in correctly-built containers. Audio models without
     # an embedded `modules/processor` directory must be re-imported with
     # the current builder which embeds `preprocessor_config.json`.

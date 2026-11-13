@@ -3,7 +3,7 @@
 The supervisor, 2026-10-04 00:33: a model is judged at the smallest request inside its documented
 envelope where the vendor's own pipeline gives a correct output. Allegro's vendor pipeline is blank
 at the video family's confirmation (4 steps, 256x640) and recognisable at 720x1280 / 10 steps. The
-step count is declared for the model in Forge's registry with its source, written by the build (and
+step count is declared for the model in the container builder's registry with its source, written by the build (and
 the in-place pass) into topology.json's extracted_values["_global"]["confirmation"], and read here
 over the family's `confirmation:` section. No model is named in the tool.
 

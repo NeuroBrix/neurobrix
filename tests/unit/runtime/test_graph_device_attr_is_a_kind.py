@@ -1,5 +1,5 @@
 """A device attribute in the graph names a KIND, never a card. The index it
-carries is the tracer's GPU (48 of the zoo's containers carry `cuda:1`..);
+carries is the builder's GPU (48 of the zoo's containers carry `cuda:1`..);
 placement belongs to Prism. The sequential dispatcher resolved it literally
 when it had no runtime device and refused chatterbox's sequential oracle
 under a pinned card ("invalid device ordinal", 2026-09-06)."""

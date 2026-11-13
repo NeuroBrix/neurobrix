@@ -115,8 +115,8 @@ def test_a_tiled_encoder_s_time_map_is_one_symbol_never_the_batch(model):
     assert len(time) == 1 and not time & batch, (model, time, batch)
 
 
-def _sym(i, trace):
-    return {"type": "symbol", "id": i, "trace": trace}
+def _sym(i, built):
+    return {"type": "symbol", "id": i, "trace": built}
 
 
 @pytest.fixture()
@@ -125,8 +125,8 @@ def linear_down_encoder(tmp_path):
     t_in, h_in, w_in = 20, 112, 176
     b, t, h, w = _sym("s0", 1), _sym("s1", t_in), _sym("s2", h_in), _sym("s3", w_in)
 
-    def div(x, n, trace):
-        return {"type": "floordiv", "left": x, "right": n, "trace": trace}
+    def div(x, n, built):
+        return {"type": "floordiv", "left": x, "right": n, "trace": built}
 
     graph = {
         "input_tensor_ids": ["x"],

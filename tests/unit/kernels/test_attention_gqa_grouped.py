@@ -127,7 +127,7 @@ _SHAPES = [
     (1, 16, 16, 1, 128, 64),     # MHA, small head dim
     (2, 8, 2, 1, 256, 64),       # batch > 1
     (1, 32, 4, 12, 12, 128),     # prefill square, GQA
-    (1, 16, 4, 23, 23, 64),      # prefill at the tracer's prime length
+    (1, 16, 4, 23, 23, 64),      # prefill at the builder's prime length
 ]
 
 

@@ -1,4 +1,4 @@
-"""Scaling a trace-sized activation estimate to the request actually made.
+"""Scaling a build-sized activation estimate to the request actually made.
 
 Three defects this file pins, all measured on CUDA on 2026-09-17 while proving
 the Mac's `cc7d314b` on this rack:

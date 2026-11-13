@@ -7,7 +7,7 @@ them (`expert_weight_lists`, spec in_axis 0), so the kernel's B tile walks n
 contiguously and k by the slab's row stride — a stride pattern no other model
 hands it. This probe runs `execute_moe_fused` (the engine's own entry, both the
 resident path and the zero3 promotion of host-resident views, which now crosses
-`NBXTensor.to_cuda` for non-dense views) against the fp64 oracle of the TRACED
+`NBXTensor.to_cuda` for non-dense views) against the fp64 oracle of the BUILT
 dense form: topk of the softmax, renormalised or not, every expert computed and
 weighted by the scattered routing matrix, summed over the experts.
 

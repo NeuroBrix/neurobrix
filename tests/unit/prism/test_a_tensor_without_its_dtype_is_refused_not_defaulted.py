@@ -1,4 +1,4 @@
-"""Prism prices every tensor at its TRACED dtype; a meta without one is refused by name, never priced at a default.
+"""Prism prices every tensor at its BUILT dtype; a meta without one is refused by name, never priced at a default.
 
 `_compute_size` took a `default_dtype_bytes` and priced a dtype-less tensor at it — 2 bytes by `component_work`'s own
 default, the compute width elsewhere: an fp32 tensor that lost its dtype was planned at half its size. No container

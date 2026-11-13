@@ -161,7 +161,7 @@ def _scope(cfg, **kw):
 
 
 def _rebuilt(res, cls):
-    """The cells of containers retraced since the gate ran: replayed whatever the diff."""
+    """The cells of containers rebuilt since the gate ran: replayed whatever the diff."""
     return {c for c in res["cells"].cells[cls] if c[0] in res["cells"].rebuilt}
 
 

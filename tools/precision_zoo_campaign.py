@@ -50,7 +50,7 @@ def zoo_python() -> str:
 
     It used to prefer the rig's absolute `ml/venv` path whenever that path existed — correct when
     that venv was the engine's, and a trap once the engine moved to its own stack (2026-09-16,
-    `docs/internal/environments.md`: `ml/venv` is Forge's python in transition). Measured
+    `docs/internal/environments.md`: `ml/venv` is the container builder's python in transition). Measured
     2026-09-26: the regression matrix, launched under the engine python, ran its first cell under
     the old venv's `neurobrix` binary (torch 2.5.1) because the legacy path existed. A machine
     path that answers "which stack" is a constant answering a live question; the launch answers it.

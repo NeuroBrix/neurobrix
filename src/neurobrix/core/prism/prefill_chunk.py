@@ -92,7 +92,7 @@ def certified_times(vendor: str, profile: str, memory_gb: Optional[int]) -> Serv
 def chunk_record(cache_dir: Path, vendor: str, profile: str, memory_gb: int, mode: str) -> Optional[Dict]:
     """This container's chunk record of the census table of (vendor, profile, memory class) for `mode` (the census's
     spelling, `triton` / `triton-sequential`), or None — no census for this hardware, none written for this model, or
-    written for another graph (a retrace). A census of this hardware without its chunk file is a broken install,
+    written for another graph (a rebuild). A census of this hardware without its chunk file is a broken install,
     refused by name (FileNotFoundError), never planned as if no model had a record."""
     from neurobrix.kernels import census_table as T
     table = T.table_path(vendor, profile, memory_gb)

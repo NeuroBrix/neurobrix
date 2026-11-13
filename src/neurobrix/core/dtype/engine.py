@@ -706,7 +706,7 @@ class DtypeEngine:
                 # wins over every contract, on any hardware.
                 if op_uid is not None and op_uid in self.fp32_op_uids:
                     return self._make_fp32_wrapper(func)
-                # The trace's own fp32 island (core/dtype/built_island): an op the vendor
+                # The build's own fp32 island (core/dtype/built_island): an op the vendor
                 # computed in fp32 inside a half graph keeps fp32 on ANY hardware — bf16's
                 # range is no answer to the precision the build kept (Sana's Gemma rotary).
                 if is_built_fp32_island(attrs, _dtype_name(self.graph_dtype)):

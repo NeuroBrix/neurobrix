@@ -5,7 +5,7 @@ at a time. The floor was written for a guessed binding — Qwen3-Omni's audio ax
 taking the global text length (~128) instead of its 441-frame build, 2026-08-10 — and it also
 caught the request's frames, height and width, which are not guesses. Wan2.1-VACE built at
 480x832 and asked at 832x480 (the vendor's portrait size, the same area) priced its width at the
-trace's 104 latent columns where it asked for 60: a 104x104 grid, the transformer 18.04 GiB
+build's 104 latent columns where it asked for 60: a 104x104 grid, the transformer 18.04 GiB
 instead of 10.41 GiB, and the plan fell from lazy_sequential to cpu_streaming (2026-09-29).
 
 Injection, seen RED: the floor back on time/height/width -> the swap and the fewer-frames cases.

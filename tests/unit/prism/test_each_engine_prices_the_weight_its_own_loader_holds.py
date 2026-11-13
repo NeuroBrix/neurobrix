@@ -93,14 +93,14 @@ def test_the_two_engines_differ_where_their_loaders_do():
     assert _widths(_dag("float16"), "compiled", "float32")["param::w"] == "float32"
 
 
-@pytest.mark.parametrize("traced,c,graph", [("float32", "float16", "float16"),   # vendor fp32 constant: kept
+@pytest.mark.parametrize("built,c,graph", [("float32", "float16", "float16"),   # vendor fp32 constant: kept
                                             ("float32", "float16", "float32"),   # graph-dtype constant: at C
                                             ("float16", "float32", "float16"),
                                             ("bfloat16", "float16", "float32")])
-def test_an_embedded_constant_is_priced_as_the_compiled_engine_binds_it(traced, c, graph):
+def test_an_embedded_constant_is_priced_as_the_compiled_engine_binds_it(built, c, graph):
     eng = DtypeEngine(getattr(torch, c), graph_dtype=getattr(torch, graph))
-    bound = _name(eng.convert_constant(torch.zeros(8, 4, dtype=getattr(torch, traced))).dtype)
-    dag = _dag(traced, graph=graph, constant=True, constant_data=base64.b64encode(b"x").decode())
+    bound = _name(eng.convert_constant(torch.zeros(8, 4, dtype=getattr(torch, built))).dtype)
+    dag = _dag(built, graph=graph, constant=True, constant_data=base64.b64encode(b"x").decode())
     assert _widths(dag, "compiled", c)["param::w"] == bound
 
 

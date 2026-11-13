@@ -9,7 +9,7 @@ them. A measurement of TIME needs the machine to itself; a check of BYTES does n
           The machine is exclusive, the clock is locked, one card at a time, the rest at rest.
           Nothing else runs, because a second job on a second card moves the number.
 
-  UNTIMED — byte gates, retraces, builds, downloads, audits, correctness gates, byte-identity
+  UNTIMED — byte gates, rebuilds, builds, downloads, audits, correctness gates, byte-identity
           checks, certifications of correctness. Their output is an equality, and an equality
           does not care what the neighbouring card is doing. They run in PARALLEL on the free
           cards, one card per job, the card chosen from the profile's capacity and the job's

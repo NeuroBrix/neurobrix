@@ -102,7 +102,7 @@ def test_an_op_outside_the_safe_map_is_not_admitted():
 def test_size_is_deliberately_not_decided_here():
     """The detector admits a SMALL tensor, and that is the fix, not a bug.
 
-    The DAG carries the extents the model was TRACED at. `real-esrgan-x8`'s
+    The DAG carries the extents the model was BUILT at. `real-esrgan-x8`'s
     `aten.leaky_relu::278` declares [1, 64, 896, 640] -- 140 MB -- and the
     1024x1024 request runs that same op at [1, 64, 8192, 8192], 8 GiB, which is
     the allocation that kills it. A byte threshold applied to `output_shapes`

@@ -43,7 +43,7 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     # The bert/text_encoder/predictor/decoder graphs carry a symbolic seq_len that
     # the runtime binds from the input_ids shape, so every stage runs at the true
     # length and the audio duration tracks the text. The previous code padded AND
-    # truncated every utterance to the trace's 23-phoneme length, which froze the
+    # truncated every utterance to the build's 23-phoneme length, which froze the
     # output to a fixed duration (identical bytes for any prompt) and silently cut
     # any text longer than 23 phonemes.
     actual_len = len(ids)

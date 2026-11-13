@@ -7,7 +7,7 @@ the 2026-08-28 swinir hypothesis look plausible and be wrong:
   1. what does the RUNTIME rewrite — runs the engine's own
      `_spatial_promotion_pass` over a copy of the container's ops
      metadata and diffs which shape args it turns symbolic;
-  2. what did the TRACER already emit — censuses the shape args that
+  2. what did the BUILDER already emit — censuses the shape args that
      arrive symbolic (`symbol` / `floordiv` / arith nodes) against the
      ones baked as literals.
 

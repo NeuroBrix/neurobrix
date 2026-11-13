@@ -3,7 +3,7 @@ a tensor of `dtype` with the values the formula gave, on every backend; `new_ten
 dtype and card.
 
 Why: on 2026-09-28 the Sana 4K container failed at the transformer's first add in both Triton modes on Metal at every
-off-trace size (3072x4096, 2048x2560). The embedding was recomputed at the runtime resolution in float64, placed on the
+off-build size (3072x4096, 2048x2560). The embedding was recomputed at the runtime resolution in float64, placed on the
 device as float64 and cast to bf16 by a kernel; Apple GPUs have no float64 and the Metal lowering narrows it silently:
 1 139 of 143 360 bits right, 3 255 non-finite. The ATen branch casts through torch on the host and renders.
 

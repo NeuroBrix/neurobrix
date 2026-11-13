@@ -1655,7 +1655,7 @@ class GraphExecutor:
           scores = Q_scaled @ K_scaled^T  # Already scaled by s
           output = softmax(scores) @ V
 
-        When the tracer's pattern reassembly reconstructs SDPA, it may keep the
+        When the builder's pattern reassembly reconstructs SDPA, it may keep the
         pre-scaling mul ops AND set scale=s in the SDPA attributes. This causes
         double-scaling: total = sqrt(s)^2 * s = s^2 instead of s.
 
@@ -4175,7 +4175,7 @@ class GraphExecutor:
                         _cands = []
                         for _pos, _d in enumerate(_sshape):
                             # A symbolized dim can still be a structural unit
-                            # (the builder symbolizes trace-value-1 dims too);
+                            # (the builder symbolizes build-value-1 dims too);
                             # candidacy is decided by the simulation checks
                             # below (concrete-unit facing + batch coherence),
                             # not by symbol presence alone.
@@ -4435,7 +4435,7 @@ class GraphExecutor:
             self._seq_constant_originals_native = {}
             self._seq_constant_axis_native = {}
 
-        # Find seq_len symbol and its trace/runtime values
+        # Find seq_len symbol and its build/runtime values
         for sym_id, sym_info in symbols.items():
             if sym_info.get("name") != "seq_len":
                 continue

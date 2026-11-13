@@ -245,12 +245,12 @@ def test_the_op_budget_is_unchanged():
 
 # --- overlaps -------------------------------------------------------------------------------------
 
-def _sym(i, trace):
-    return {"type": "symbol", "id": i, "trace": trace}
+def _sym(i, built):
+    return {"type": "symbol", "id": i, "trace": built}
 
 
-def _sop(kind, left, right, trace):
-    return {"type": kind, "left": left, "right": right, "trace": trace}
+def _sop(kind, left, right, built):
+    return {"type": kind, "left": left, "right": right, "trace": built}
 
 
 def _decoder_graph():
@@ -306,11 +306,11 @@ def test_the_encode_tile_overlaps_are_unchanged(tmp_path):
         {"tile_size": 344, "overlap": 48, "t_tile": 28, "t_overlap": 4}
 
 
-@pytest.mark.parametrize("trace,window,expected", [(64, 1, 8), (16, 1, 4), (64, 6, 16), (200, 1, 25)])
-def test_the_tiling_engine_overlap_is_unchanged(tmp_path, trace, window, expected):
+@pytest.mark.parametrize("built,window,expected", [(64, 1, 8), (16, 1, 4), (64, 6, 16), (200, 1, 25)])
+def test_the_tiling_engine_overlap_is_unchanged(tmp_path, built, window, expected):
     from neurobrix.core.module.tiling_engine import TilingEngine
     graph = {"input_tensor_ids": ["x"], "output_tensor_ids": ["y"],
-             "tensors": {"x": {"shape": [1, 3, trace, trace]}, "y": {"shape": [1, 3, 4 * trace, 4 * trace]}}}
+             "tensors": {"x": {"shape": [1, 3, built, built]}, "y": {"shape": [1, 3, 4 * built, 4 * built]}}}
     (tmp_path / "graph.json").write_text(json.dumps(graph))
     (tmp_path / "profile.json").write_text(json.dumps({"config": {"upscale": 4, "window_size": window}}))
     eng = TilingEngine.from_component_config(tmp_path / "graph.json", tmp_path / "profile.json")

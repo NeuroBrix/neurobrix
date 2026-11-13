@@ -107,7 +107,7 @@ def _rand(shape, seed, dt=np.float16):
     (1, 8, 1, 128, 64),      # small head dim
     (2, 4, 1, 256, 128),     # batch > 1
     (1, 32, 12, 12, 128),    # prefill square
-    (1, 16, 23, 23, 64),     # prefill at the tracer's prime length
+    (1, 16, 23, 23, 64),     # prefill at the builder's prime length
 ])
 def test_scores_bit_identical(B, H, T_q, T_k, D) -> None:
     """The strided walk must produce the same bytes as the copy."""

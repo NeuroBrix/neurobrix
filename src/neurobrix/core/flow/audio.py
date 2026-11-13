@@ -666,7 +666,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
                 return candidate
         # Removed: legacy absolute-path fallback. See the comment in
         # `core/flow/audio_utils.py:find_model_config_path` for the
-        # rationale — the field held a trace-host snapshot location
+        # rationale — the field held a build-host snapshot location
         # and is no longer present in correctly-built containers.
         raise RuntimeError(
             "Cannot find model config path. Expected `modules/tokenizer/` "

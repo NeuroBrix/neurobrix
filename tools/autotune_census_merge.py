@@ -1,7 +1,7 @@
 """Merge autotune replay caches into one census file for `neurobrix autotune certify --census`.
 
 The certifier's census is the machine's replay cache — every key the engine swept at runtime.
-Since the retrace gate froze the kernel-config state per gate (2026-09-07), a gate's runtime
+Since the rebuild gate froze the kernel-config state per gate (2026-09-07), a gate's runtime
 sweeps land in the gate's OWN replay cache (`<model dir>/autotune_replay/`), never in the
 machine's: Sana 4K's old Triton arm swept 29 keys of 4K convolutions the census had never
 seen. This merges every replay cache found under the given roots (and the machine's) into

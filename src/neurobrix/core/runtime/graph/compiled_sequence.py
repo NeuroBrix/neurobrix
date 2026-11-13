@@ -643,7 +643,7 @@ class CompiledSequence(SequenceSteps):
         self._apply_cse_plan(tensors, execution_order)
 
         # Phase -0.25: (retired) Windowing symbolization — pad→view num_blocks
-        # = ceil(seq/W) — is now emitted at trace/build time, so the graph
+        # = ceil(seq/W) — is now emitted at build time, so the graph
         # arrives with symbolic windowing dims and no runtime pre-compilation
         # pass is needed.
 
@@ -1476,7 +1476,7 @@ class CompiledSequence(SequenceSteps):
             # aten::view / aten::reshape / aten::_unsafe_view
             # Shape args may contain seq_len — promote matching elements.
             # SKIP if the builder already did algebraic symbolization (shape list
-            # has symbol refs). The tracer's algebraic propagation is authoritative:
+            # has symbol refs). The builder's algebraic propagation is authoritative:
             # it derives symbolic dims from input shapes, so concrete values in the
             # shape list were intentionally left concrete (e.g., head_dim=128 that
             # happens to match build_seq_len=128 but is NOT dynamic).
@@ -1491,7 +1491,7 @@ class CompiledSequence(SequenceSteps):
                         for elem in shape_items
                     )
                     if has_builder_symbols:
-                        pass  # Tracer's algebraic symbolization is authoritative
+                        pass  # Builder's algebraic symbolization is authoritative
                     else:
                         # Legacy graph without algebraic symbolization — fall back
                         # to brute-force promotion (collision check still applies)
@@ -2613,11 +2613,11 @@ class CompiledSequence(SequenceSteps):
                 return SymbolArg(symbol_id=symbol_id, trace_value=trace_value, offset=offset)
 
             # An expression of the shared vocabulary (core/runtime/symexpr.py): integer
-            # extents from SymInt.to_json(), and the real bounds Forge's extent provenance
+            # extents from SymInt.to_json(), and the real bounds the container builder's extent provenance
             # records (truediv, sqrt). Evaluated at run time in the slot it is resolved for.
             if _symexpr.is_expression(arg):
-                trace = arg.get("trace", arg.get("trace_value", 0))
-                return ExprArg(expr_dict=arg, trace_value=trace)
+                built = arg.get("trace", arg.get("trace_value", 0))
+                return ExprArg(expr_dict=arg, trace_value=built)
 
             if arg_type in ("int", "float", "bool", "none"):
                 return ScalarArg(arg.get("value"))

@@ -614,7 +614,7 @@ def conv2d_wrapper(
     # ATen broadcasts single-element stride/padding/dilation lists over
     # both spatial dims (padding="valid" convs record [0] — the
     # MiniCPM-o NaViT patch_embedding hit exactly that as an
-    # IndexError here; same contract as the tracer-side estimator).
+    # IndexError here; same contract as the builder-side estimator).
     if isinstance(stride, (list, tuple)):
         stride_h = stride[0]
         stride_w = stride[1] if len(stride) > 1 else stride_h

@@ -5,7 +5,7 @@ The alert: a MoE build burns the per-expert token counts of the build batch into
 `aten::slice` bounds (topk -> sort -> floor_divide -> index -> per-expert slice).
 Those bounds depend on values the router produced at build time, not on seq_len,
 so no symbolic shape can cover them. If such a slice still sits in
-`execution_order` when the model runs, every generation routes with the trace's
+`execution_order` when the model runs, every generation routes with the build's
 expert histogram.
 
 `core/runtime/graph/moe_fusion.py` claims to remove exactly those ops. This probe
@@ -45,12 +45,12 @@ def _first_axis(shapes: Any) -> Optional[int]:
 
 
 def frozen_expert_slices(dag: Dict[str, Any], build_seq_len: int) -> List[Dict[str, Any]]:
-    """Axis-0 slices whose literal bounds can only come from the trace's routing.
+    """Axis-0 slices whose literal bounds can only come from the build's routing.
 
     A per-expert slice cuts the gathered buffer [seq_len * top_k, dim] at the
-    cumulative token counts of the trace's router. The signature is: dim 0, both
+    cumulative token counts of the build's router. The signature is: dim 0, both
     bounds finite integers, and an input first axis that is a multiple of the
-    trace's seq_len (the gather's [seq_len * top_k, dim]) — never seq_len itself,
+    build's seq_len (the gather's [seq_len * top_k, dim]) — never seq_len itself,
     which the promotion pass covers.
     """
     ops = dag.get("ops", {})

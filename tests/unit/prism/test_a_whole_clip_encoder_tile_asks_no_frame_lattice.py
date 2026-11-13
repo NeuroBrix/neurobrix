@@ -33,12 +33,12 @@ MB = 1024 ** 2
 ACTIVATION = 319_500 * MB          # the planner's figure for Allegro-TI2V's encoder at 88x720x1280
 
 
-def _sym(i, trace):
-    return {"type": "symbol", "id": i, "trace": trace}
+def _sym(i, built):
+    return {"type": "symbol", "id": i, "trace": built}
 
 
-def _op(kind, left, right, trace):
-    return {"type": kind, "left": left, "right": right, "trace": trace}
+def _op(kind, left, right, built):
+    return {"type": kind, "left": left, "right": right, "trace": built}
 
 
 def _encoder(tmp_path, form):
@@ -46,7 +46,7 @@ def _encoder(tmp_path, form):
     writes it), T' by `form`:
       slice   ((t+1)//2 + 1)//2                — two stride-2 slices
       linear  t//4
-      folded  ((s0*t + 1)//2 + 1)//2, batch 1  — the frozen-batch trace"""
+      folded  ((s0*t + 1)//2 + 1)//2, batch 1  — the frozen-batch build"""
     t_in, h_in, w_in = 20, 112, 176
     b, t, h, w = _sym("s0", 1), _sym("s1", t_in), _sym("s2", h_in), _sym("s3", w_in)
     ceil4 = lambda x: _op("floordiv", _op("add", _op("floordiv", _op("add", x, 1, 21), 2, 10), 1, 11), 2, 5)

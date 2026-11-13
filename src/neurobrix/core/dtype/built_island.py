@@ -4,7 +4,7 @@
 In a half-precision graph, an op whose built floating inputs are all float32 and whose built floating output is
 float32 ran in fp32 in the vendor's own forward: the vendor kept it there (a rotary table computed with autocast
 disabled — Gemma's `inv_freq @ position_ids`, then cos and sin; a timestep frequency table). Its precision is the
-trace's fact, not a range question: under bf16 compute the policy input-cast such a GEMM to bf16 ("bf16 range = fp32
+build's fact, not a range question: under bf16 compute the policy input-cast such a GEMM to bf16 ("bf16 range = fp32
 range"), and the rotary angles of 506 positions lost ~2 rad — Sana_1600M_1024px_MultiLing's Gemma text encoder,
 compiled branch on the M4 Pro, 2026-10-25, its image a different composition from the Triton branch's. Range stays
 calibration's question (core/dtype/calibration.py: islands beyond finfo(dtype).max); this predicate only keeps what

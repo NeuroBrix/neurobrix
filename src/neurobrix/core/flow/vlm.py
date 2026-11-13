@@ -406,7 +406,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             "vlm (compiled)", SAMPLER_IMPLEMENTS, _samp_cfg, explicit=_samp_explicit)
 
         # Declared-MoE fusion (mirror of the AR flow's setup — the Stage-1
-        # wall-5 class: without it only the trace-fired experts of a
+        # wall-5 class: without it only the build-fired experts of a
         # 128-expert MoE run and the logits go near-uniform ⇒ degenerate
         # single-token repetition; proven again on the first vlm-path run).
         lm_cfg = self.ctx.pkg.defaults.get("lm_config", {})

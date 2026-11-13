@@ -208,11 +208,11 @@ def test_every_triton_site_asks_its_engine(stores_fp64):
     seq = TritonSequence({"ops": {}, "tensors": {}, "execution_order": []}, 0, NBXDtype.float16,
                          stores_fp64=stores_fp64)
     disp = TritonSequentialDispatcher(0, NBXDtype.float16, stores_fp64=stores_fp64)
-    for traced, held in wide.items():
-        assert constant_load_dtype(traced, "float16", stores_fp64) == held
-        assert seq._parse_dtype(f"torch.{traced}").name == held
-        assert disp.resolve_attr({"type": "dtype", "value": f"torch.{traced}"}).name == held
-        assert disp.resolve_attr({"type": "unknown", "value": f"torch.{traced}"}).name == held
+    for built, held in wide.items():
+        assert constant_load_dtype(built, "float16", stores_fp64) == held
+        assert seq._parse_dtype(f"torch.{built}").name == held
+        assert disp.resolve_attr({"type": "dtype", "value": f"torch.{built}"}).name == held
+        assert disp.resolve_attr({"type": "unknown", "value": f"torch.{built}"}).name == held
     dag = {"ops": {"a::0": {"op_type": "aten::_to_copy", "input_tensor_ids": ["x"],
                             "output_tensor_ids": ["y"], "output_dtypes": ["torch.float64"],
                             "attributes": {"kwargs": {"dtype": {"type": "dtype",

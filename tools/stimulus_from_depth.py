@@ -153,8 +153,8 @@ def analyse(graph: dict, symbol_id: str, ceiling: int = 512) -> dict:
     """The smallest stimulus for `symbol_id` that leaves no REACHABLE depth in
     the collision zone, plus the plateau that no stimulus reaches."""
     table = declared(graph)
-    base = {sid: trace for sid, (_, trace) in table.items()
-            if isinstance(trace, int)}
+    base = {sid: built for sid, (_, built) in table.items()
+            if isinstance(built, int)}
     if symbol_id not in base:
         raise KeyError(f"{symbol_id} is not a declared symbol with a build value")
 
@@ -197,8 +197,8 @@ def analyse(graph: dict, symbol_id: str, ceiling: int = 512) -> dict:
 
 
 def _rows(graph: dict, only: str | None):
-    for sid, (name, trace) in sorted(declared(graph).items()):
-        if not isinstance(trace, int):
+    for sid, (name, built) in sorted(declared(graph).items()):
+        if not isinstance(built, int):
             continue
         if only and name != only:
             continue

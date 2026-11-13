@@ -146,13 +146,13 @@ def matrix_unit_split_scale(unit: dict) -> tuple:
     return int(fi.maxexp) - 2, int(fi.nmant) + 1
 
 
-def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str:
+def constant_load_dtype(built: str, compute: str, stores_fp64: bool) -> str:
     """The dtype (a name) an embedded graph constant is bound in by the Triton engines
     (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
     when that is half (fp16 bits from bf16 on hardware computing fp16, the bf16 bits kept under
     bf16), to float32 otherwise; float64 / complex128 are held as the branch holds them
     (`dtype.itemsize.storage_dtype`); every other dtype is kept as built. The loader and Prism's width
     pass both ask it."""
-    if traced == "bfloat16":
+    if built == "bfloat16":
         return compute if compute in ("float16", "bfloat16") else "float32"
-    return _itemsize.storage_dtype(traced, stores_fp64)
+    return _itemsize.storage_dtype(built, stores_fp64)

@@ -166,7 +166,7 @@ def test_the_pieces_compute_what_the_whole_computes(mode, batch, seq, tmp_path):
     assert proc.returncode == 0, proc.stderr[-3000:]
     report = json.loads(out.read_text())
     assert report["pieces"] >= 2, report
-    # The size is the one asked for, not the trace's: a dim the harness could not bind from a
+    # The size is the one asked for, not the build's: a dim the harness could not bind from a
     # symbol keeps its built extent, and the cell would then prove the build size again.
     assert all(sh[1] == seq for sh in report["inputs"].values() if len(sh) >= 2), report["inputs"]
     assert all(o["whole_shape"][1] == seq for o in report["outputs"].values()), report["outputs"]

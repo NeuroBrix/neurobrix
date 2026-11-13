@@ -148,7 +148,7 @@ class LayerPartitioner:
         # Activations are sized AT THE REQUEST when the caller gives the request's symbol map: the
         # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
         # the same numbers Prism's placement estimate uses. Without it a tensor's `shape` is the
-        # TRACE's — SANA-Video's VAE input [1,128,9,14,22] where a 1280x512 request makes
+        # BUILD's — SANA-Video's VAE input [1,128,9,14,22] where a 1280x512 request makes
         # 21x64x160, ~77x more — and every segment was cut for the build, not the run (the same
         # bug written twice: the profiler already resolved it). No map = the build, said so by
         # the caller's absence of one, as before.

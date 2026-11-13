@@ -229,7 +229,7 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 still 3 segments, identical in both modes:
                 [embedding::0, split_with_sizes::35] [slice::502, view::427] [moe_fused::block.21, rms_norm::81]
       a-partition-is-cut-at-the-request: activations sized at the REQUEST at the plan's compute
-                width (the profiler's resolver) instead of the trace's float32 widths, which doubled
+                width (the profiler's resolver) instead of the build's float32 widths, which doubled
                 them: 2 segments, identical in both modes.
       a-model-that-fits-whole-is-planned-whole (2026-10-04), TRITON ONLY: the head kept whole
                 beside the segments is priced without the transpose of its weight

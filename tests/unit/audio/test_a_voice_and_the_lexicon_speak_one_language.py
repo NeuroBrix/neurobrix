@@ -75,9 +75,9 @@ def test_the_ids_are_framed_and_keep_only_known_phonemes(monkeypatch):
 def test_the_plan_binds_a_phonemizer_request_at_its_phoneme_count(monkeypatch, tmp_path):
     """The one InputConfig a run plans with (`run.request_input_config`) carries the
     phonemizer request's length — len(phoneme_ids) — so every `seq_len` symbol of the text
-    components binds to the length the flow will run, not the trace's. Measured 2026-09-28:
+    components binds to the length the flow will run, not the build's. Measured 2026-09-28:
     Kokoro planned 23 phonemes and ran 94, and the derived census, binding from this same
-    config, derived the trace's keys. Injection: the seq_len line removed -> None, RED."""
+    config, derived the build's keys. Injection: the seq_len line removed -> None, RED."""
     import json
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config

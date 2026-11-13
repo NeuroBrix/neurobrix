@@ -12,7 +12,7 @@ What each test would do if the code were wrong: without the installation the fir
 plan for the component (RED, seen); a detector that installed in-place adds regardless of the
 estimate's own threshold would make the second test find a plan (RED).
 
-SIZE IS THE REQUEST'S, NOT THE TRACE'S (2026-10-12). Sana_1600M_4Kpx_BF16's VAE rebuilt at its
+SIZE IS THE REQUEST'S, NOT THE BUILD'S (2026-10-12). Sana_1600M_4Kpx_BF16's VAE rebuilt at its
 own 7x10 latent (the container builder 4730493) carries 224x320 built extents at its merge adds; the detectors read
 the DAG's built `output_shapes`, every add fell under the 1 GiB threshold, and the 3072x4096 plan
 priced and installed none of them (15 360 -> 18 432 MB). The third test holds the request's sizing:
@@ -80,9 +80,9 @@ def test_an_add_the_estimate_prices_out_of_place_installs_nothing():
 
 def _symbolic_graph(build_h: int, build_w: int, scale: int) -> dict:
     """The same residual add, its spatial dims SYMBOLIC (latent height/width x scale), built small."""
-    def dim(sym, trace):
-        return {"type": "mul", "left": {"type": "symbol", "id": sym, "trace": trace}, "right": scale,
-                "trace": trace * scale}
+    def dim(sym, built):
+        return {"type": "mul", "left": {"type": "symbol", "id": sym, "trace": built}, "right": scale,
+                "trace": built * scale}
     shape = [1, 128, build_h * scale, build_w * scale]
     sym = {"dims": [{"type": "symbol", "id": "s0", "trace": 1}, 128, dim("s1", build_h), dim("s2", build_w)],
            "concrete": shape}
@@ -100,7 +100,7 @@ def test_an_add_is_sized_at_the_request_not_at_the_build():
     g = _symbolic_graph(7, 10, 32)         # built at 224x320: 36 MiB fp32-equivalent, under 1 GiB
     request = InputConfig(batch_size=1, height=3072, width=4096, dtype="float16", vae_scale=32)
     solver = PrismSolver()
-    assert solver._identify_inplace_add_candidates_static(g) == []          # the trace's answer
+    assert solver._identify_inplace_add_candidates_static(g) == []          # the build's answer
     priced = solver._identify_inplace_add_candidates_static(g, input_config=request)
     assert priced == [("aten.add::0", 0)], priced                           # 6 GiB at 3072x4096
     comp = SimpleNamespace(name="vae", graph=g)
@@ -113,13 +113,13 @@ def test_an_add_is_sized_at_the_request_not_at_the_build():
 
 
 # THE RUNTIME SITE (2026-10-12). `OpLevelTilingEngine.register_into_graph_executor` re-detected the
-# in-place adds from the DAG whenever a plan carried none — at the TRACE's `output_shapes`, the
+# in-place adds from the DAG whenever a plan carried none — at the BUILD's `output_shapes`, the
 # same class the two tests above hold at the plan. Prism now hands its request-sized decision over
 # with EVERY plan it emits (also the overflow / residual-chain branch, which handed nothing over),
 # and the runtime refuses a plan that carries no decision, by name. What each test would do if the
 # code were wrong: a plan built without the handover would carry `inplace_adds is None` (RED in the
 # fourth test, SEEN); a runtime that re-detected instead of refusing would install the add at the
-# trace's extents and not raise (RED in the fifth, SEEN).
+# build's extents and not raise (RED in the fifth, SEEN).
 
 def test_a_plan_from_the_chain_branch_carries_the_request_sized_adds(monkeypatch):
     g = _symbolic_graph(7, 10, 32)

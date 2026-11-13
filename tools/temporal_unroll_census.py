@@ -131,8 +131,8 @@ def census(root: Path, second_point: Path | None):
         defaults = defaults_for(model_dir)
         compression = int(defaults.get("temporal_compression_ratio")
                           or DEFAULT_COMPRESSION)
-        traced = temporal[0][1]
-        k_build = chunks(traced, compression)
+        built = temporal[0][1]
+        k_build = chunks(built, compression)
         run_frames = defaults.get("num_frames")
         k_run = chunks(run_frames, compression) if isinstance(run_frames, int) else None
         sig = signature(graph, k_build)
@@ -148,13 +148,13 @@ def census(root: Path, second_point: Path | None):
                     g2 = None
                 if g2:
                     t2 = temporal_symbols(g2)
-                    if t2 and t2[0][1] != traced:
+                    if t2 and t2[0][1] != built:
                         k2 = chunks(t2[0][1], compression)
                         n1, n2 = len(graph.get("ops") or {}), len(g2.get("ops") or {})
                         if k2 != k_build:
                             slope = (n2 - n1) / (k2 - k_build)
                             row_kind = "MEASURED"
-                            fit = {"points": [(traced, n1), (t2[0][1], n2)],
+                            fit = {"points": [(built, n1), (t2[0][1], n2)],
                                    "ops_per_chunk": slope}
         rows.append({
             "component": f"{model}/{comp}", "kind": row_kind,

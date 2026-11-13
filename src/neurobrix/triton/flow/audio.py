@@ -245,7 +245,7 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
         self._ensure_weights_loaded(comp_name)
         # Fixed-length decoders (codec / iSTFT vocoder: the window-norm divisor and
         # the as_strided framing are baked at the build frame count) must run at
-        # EXACTLY the graph seq_len. Chunk a longer runtime input into trace-length
+        # EXACTLY the graph seq_len. Chunk a longer runtime input into build-length
         # blocks — triton mirror of compiled AudioFlow._try_chunked_forward.
         # Data-driven: triggers only when the runtime 3D input seq_len differs from
         # the graph's build seq_len; otherwise the normal single pass runs.
@@ -260,7 +260,7 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
             release_flow_memory(self.ctx.primary_device)
 
     def _try_chunked_forward(self, comp_name: str) -> bool:
-        """Run a fixed-length decoder in trace-length chunks (triton-pure mirror of
+        """Run a fixed-length decoder in build-length chunks (triton-pure mirror of
         compiled AudioFlow._try_chunked_forward).
 
         The graph expects [1, C, graph_seq_len]; the runtime input may be longer
@@ -420,7 +420,7 @@ def _find_model_config_path(ctx) -> Path:
         if candidate.exists():
             return candidate
     # Removed: legacy absolute-path fallback. The field held a
-    # trace-host snapshot location and is no longer present in
+    # build-host snapshot location and is no longer present in
     # correctly-built containers.
     raise RuntimeError(
         "Cannot find model config path. Expected `modules/processor/` "

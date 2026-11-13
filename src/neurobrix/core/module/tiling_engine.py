@@ -1280,7 +1280,7 @@ class OpLevelTilingEngine:
         # REQUEST it priced (`_identify_inplace_add_candidates_static` under
         # `_request_shape_of`) and handed over with every plan it emits. The
         # runtime never re-detects them: the DAG's `output_shapes` are the
-        # TRACE's extents, and a re-detection there installed adds the
+        # BUILD's extents, and a re-detection there installed adds the
         # estimate never priced or dropped adds it did (Sana_1600M_4Kpx_BF16
         # rebuilt at a 7x10 latent, 2026-10-12). A plan that carries no
         # decision is refused by name.
@@ -1289,7 +1289,7 @@ class OpLevelTilingEngine:
                 f"[OpLevelTilingEngine] '{self.plan.component_name}': the plan carries no "
                 f"in-place-add decision (inplace_adds is None) — Prism decides them at the "
                 f"request it prices and hands them over with the plan; the runtime does not "
-                f"re-detect them at the trace's extents")
+                f"re-detect them at the build's extents")
         # The same liveness question asked of element-wise activations, which
         # is where the bytes actually are in a convolutional decoder: a conv
         # and the activation reading it hold two buffers of identical size

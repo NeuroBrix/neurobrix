@@ -267,7 +267,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
         # decode exactly ONE latent per step (→ a fixed 3200-sample chunk). Per-step
         # independent T=1 decode is bit-equivalent to a cumulative full decode
         # (max|diff|=0.0001) — the causal-conv decoder needs no left context here.
-        # (Symbolic-T decode is NOT usable: the decoder bakes trace-T-specific pad
+        # (Symbolic-T decode is NOT usable: the decoder bakes build-T-specific pad
         # constants, so a T!=build_T runtime decode produces a wrong-length output.)
         audio_chunks: List[torch.Tensor] = []        # each [1, 1, 3200]
 

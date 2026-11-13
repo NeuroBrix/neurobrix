@@ -2,7 +2,7 @@
 
 2026-09-27: a unit gate told `CUDA_VISIBLE_DEVICES=3` put a TinyLlama child on physical card 2
 (the lazy-bind boundary test set "2") and a launch-path child on card 0 (the launcher set "0").
-Twice it met a PixArt retrace that owned card 2, and the launcher test went red on a card it had
+Twice it met a PixArt rebuild that owned card 2, and the launcher test went red on a card it had
 not been given. Before this branch the helper does not exist and the scan names three sites (a
 fourth, test_serve_warm, carries its ordinal in a dict the scan cannot read): these fail on main.
 """

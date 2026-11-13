@@ -3,7 +3,7 @@
 The owner's rule of 2026-09-28 03:06: a model's name is the model's own name as its maker
 publishes it. A publication-format suffix of its Hugging Face repository (`_diffusers`,
 `-Diffusers`) says where and in which format the weights are published, not what the model is;
-the repository is recorded as the SOURCE (Forge's registry `hf_repo`, the manifest's
+the repository is recorded as the SOURCE (the container builder's registry `hf_repo`, the manifest's
 `origin.repository`), never as the name. Five catalogue containers carried such a suffix and were
 renamed to the model's own name.
 

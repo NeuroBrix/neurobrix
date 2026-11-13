@@ -1,4 +1,4 @@
-"""A vision-language model's vision tower is priced at the request's image, not at its trace's.
+"""A vision-language model's vision tower is priced at the request's image, not at its build's.
 
 The image reaches the tower as the build's processor makes it (`input_processor.prepare_image_inputs`): the patch
 rows (`hidden_states`) and the grid (`grid_thw`, whose VALUES bind its grid symbols) — the flow's contract. Prism's
@@ -43,7 +43,7 @@ def test_the_tower_binds_the_request_images_patches_and_grid():
     assert by_source.get("input::grid_thw::val_1") == 32 and by_source.get("input::grid_thw::val_2") == 32
     assert by_source.get("input::grid_thw::val_0") == 1
     assert max(int(s["trace_value"]) for s in syms.values() if s["source"] == "input::hidden_states::dim_0") > 1024, \
-        "precondition: the trace's patch count is not the request's"
+        "precondition: the build's patch count is not the request's"
 
 
 def test_a_request_without_an_image_binds_nothing_for_the_tower():

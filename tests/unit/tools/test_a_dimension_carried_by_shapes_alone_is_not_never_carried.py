@@ -25,8 +25,8 @@ def _tool():
     return mod
 
 
-def _sym(sid, trace):
-    return {"type": "symbol", "id": sid, "trace": trace}
+def _sym(sid, built):
+    return {"type": "symbol", "id": sid, "trace": built}
 
 
 def _embedding_only_graph(tmp_path, output_carries: bool):

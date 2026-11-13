@@ -1,7 +1,7 @@
 """Counts the `.to(<device>)` calls that name another device than the one the tensor is on.
 
 Why it exists. `NBXTensor.to("cuda:N")` / `.to(device=...)` moves nothing: it answers "already on device" whatever
-it is given (the traced graphs' own `aten::to(device)` rely on that). A caller that MEANT a placement gets a tensor
+it is given (the built graphs' own `aten::to(device)` rely on that). A caller that MEANT a placement gets a tensor
 left where it was, silently (found 2026-11-10; five uploads were written that way). Before that contract changes —
 a refusal by name, or a real move — the agents want a measure: which callers name a device the tensor is not on,
 and how often. This module is that measure and nothing else: it changes no behaviour.

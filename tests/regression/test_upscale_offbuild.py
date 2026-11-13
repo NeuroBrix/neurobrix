@@ -8,15 +8,15 @@ engines, with output dimensions verified:
     cell follows any future stimulus change instead of hardcoding
     one) — this half catches regressions introduced BY a rebuild;
   * an OFF-BUILD size — the half that catches everything a
-    trace-sized gate is structurally blind to.
+    build-sized gate is structurally blind to.
 
 Both halves are load-bearing. When the swin2sr recovery config was
 first attached under `flow.stages`, it silently redefined the
 model's flow and dropped a component: the off-build cell merely
-stayed red, while the TRACE-SIZE cell flipped green->red and made
+stayed red, while the BUILD-SIZE cell flipped green->red and made
 the regression attributable in one cycle (2026-08-28).
 
-Born from the upscaler trace-value collision + frozen window-count
+Born from the upscaler build-value collision + frozen window-count
 pair (DETTE: D-RETRACE-SWIN2SR-SYMBOLIC; the class covers the seven
 Swin-window artifacts — see
 models/_agents/archives/dell/validation_outputs_pre_2026_09_01/spatial_freeze_census_2026_08_27/VERDICT.md).
@@ -139,7 +139,7 @@ def test_upscale_two_sizes(model: str, size: str, mode: str,
     hw = {"trace": None, "offtrace": OFF_BUILD_HW,
           "offtrace_unaligned": OFF_BUILD_UNALIGNED_HW}[size] or _build_hw(model)
     if size != "trace" and hw == _build_hw(model):
-        pytest.skip("off-trace size coincides with the build size — "
+        pytest.skip("off-build size coincides with the build size — "
                     "pick a different off-build size")
     if mode == "triton" and model == "hat-l-x4":
         pytest.skip("hat triton support in progress (docs/upscalers)")
@@ -259,7 +259,7 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
     if not asset.exists():
         pytest.skip(f"bench asset missing: {asset}")
 
-    # The trace-size half keeps the tonal verdict readable even for an
+    # The build-size half keeps the tonal verdict readable even for an
     # artifact that freezes off-build: letting it crash would hide the
     # tone behind an exit 1 (observed 2026-08-28 on swinir / hat). The
     # off-build half is where a shape-dependent value defect shows.
@@ -268,7 +268,7 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
     hw = {"trace": None, "offtrace": OFF_BUILD_HW,
           "offtrace_rect": OFF_BUILD_RECT_HW}[size] or _build_hw(model)
     if size != "trace" and hw == _build_hw(model):
-        pytest.skip("off-trace size coincides with the build size")
+        pytest.skip("off-build size coincides with the build size")
     src = tmp_path / f"tone_in_{model}_{size}.png"
     Image.open(asset).convert("RGB").resize(
         (hw[1], hw[0]), Image.LANCZOS).save(src)
@@ -307,7 +307,7 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
 
     # 2. Vendor-referenced — only where a vendor arm is banked AND this
     #    cell ran at the size that arm was measured at. Comparing a
-    #    trace-size run against a 448-measured vendor mean would be
+    #    build-size run against a 448-measured vendor mean would be
     #    comparing two different inputs.
     vendor = (TONE_REF["artifacts"][model] or {}).get("vendor")
     if vendor and list(hw) == TONE_REF.get("vendor_measured_hw"):

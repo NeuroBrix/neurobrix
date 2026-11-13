@@ -5,7 +5,7 @@ def placement_device(value) -> "torch.device":
     """The device a graph attribute stands for, on THIS process's card:
     `cuda:<any>` is the current CUDA device, `cpu` is the cpu; a
     `torch.device` is treated by its type. The index in the graph is never
-    used — it is the tracer's, and placement belongs to Prism."""
+    used — it is the builder's, and placement belongs to Prism."""
     kind = value.type if isinstance(value, torch.device) else str(value or "cpu").split(":")[0]
     if kind == "cuda":
         return torch.device("cuda", torch.cuda.current_device())
@@ -94,11 +94,11 @@ class NativeATenDispatcher:
 
         elif attr_type == "device":
             # A device attribute in the graph names a KIND (cpu / cuda), never
-            # a card: the index it carries is the tracer's GPU, and placement
+            # a card: the index it carries is the builder's GPU, and placement
             # is Prism's. Prism's device when the dispatcher was given one;
             # otherwise the kind on the current card — exactly what the
             # compiled (`ScalarArg(self.device)`) and Triton
-            # (`cuda:{device_idx}`) paths do. Taking the trace's index
+            # (`cuda:{device_idx}`) paths do. Taking the build's index
             # literally refused chatterbox's sequential oracle under a pinned
             # card (`cuda:1` in its build, one card visible: "invalid device
             # ordinal", 2026-09-06; 48 of the zoo's containers carry such an

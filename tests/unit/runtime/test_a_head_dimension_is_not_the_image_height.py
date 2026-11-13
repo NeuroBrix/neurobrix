@@ -38,8 +38,8 @@ BUILD_TOKENS = BUILD_LATENT * BUILD_LATENT
 RUN_TOKENS = RUN_LATENT * RUN_LATENT
 
 
-def _tok(trace):
-    return {"type": "mul", "trace": trace,
+def _tok(built):
+    return {"type": "mul", "trace": built,
             "left": {"type": "symbol", "id": "s6", "trace": BUILD_LATENT},
             "right": {"type": "symbol", "id": "s7", "trace": BUILD_LATENT}}
 

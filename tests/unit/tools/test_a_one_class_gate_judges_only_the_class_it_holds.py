@@ -8,8 +8,8 @@ were scoped against a 32 GB-only base: the tool found no 16 GB row for any model
 cells". The class a gate holds is read from its rows directories.
 
 What this test does if the code is wrong: the one-class cell fails when a 32 GB-only base marks a
-model retraced for its missing 16 GB row (red before this change: every model marked); the
-two-class cell fails if a row genuinely missing from a gated class stops being a retrace; the
+model to rebuild for its missing 16 GB row (red before this change: every model marked); the
+two-class cell fails if a row genuinely missing from a gated class stops being a rebuild; the
 refusal cell fails if a gate with no rows at all is accepted; the queue cell fails if a reached
 cell of a non-gated class survives into the selection.
 

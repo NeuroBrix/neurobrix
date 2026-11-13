@@ -1,5 +1,5 @@
-"""The input synthesizer's shape transform cut a 213-token `inputs_embeds` down to the trace's 23
-because the topology's `shapes` carry the trace's concrete extents — while the graph binds that
+"""The input synthesizer's shape transform cut a 213-token `inputs_embeds` down to the build's 23
+because the topology's `shapes` carry the build's concrete extents — while the graph binds that
 dimension as a symbol (`s1`, source `input::inputs_embeds::dim_1`) and runs at any length
 (Qwen3-Omni, 2026-09-21: `shape '[-1, 1, 23]' is invalid for input of size 639`).
 
@@ -7,7 +7,7 @@ A dimension the graph binds as a symbol is never sliced. A dimension the graph c
 literal (a frozen extent, a build defect at the source) is still cut to the literal — the only
 way that graph runs — and the cut is said in clear.
 
-Shapes: 213 is Omni's real prompt length here (196 image tokens plus text), 23 the trace's
+Shapes: 213 is Omni's real prompt length here (196 image tokens plus text), 23 the build's
 prime; 2048 the hidden size, unchanged on both sides so the old rule would slice.
 """
 from __future__ import annotations

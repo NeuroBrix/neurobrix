@@ -52,8 +52,8 @@ class ComponentConfig:
 
     # === Runtime attributes (from runtime.json) ===
     state_channels: Optional[int] = None        # From runtime.json attributes
-    state_extent_0: Optional[int] = None        # Trace-time latent height
-    state_extent_1: Optional[int] = None        # Trace-time latent width
+    state_extent_0: Optional[int] = None        # Build-time latent height
+    state_extent_1: Optional[int] = None        # Build-time latent width
 
     # === Raw config for extension ===
     raw_profile: Dict[str, Any] = field(default_factory=dict)

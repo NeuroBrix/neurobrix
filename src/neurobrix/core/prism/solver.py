@@ -3901,7 +3901,7 @@ class PrismSolver:
         profiler's own resolution under the placement-floored symbol map the
         estimate binds (`_compute_memory`), so the plan installs exactly what
         the estimate priced. None when no request is given: the detectors then
-        read the DAG's built extents, which are the trace's, not a request's
+        read the DAG's built extents, which are the build's, not a request's
         (Sana_1600M_4Kpx_BF16 rebuilt at a 7x10 latent, 2026-10-12: every
         merge add fell under the in-place threshold for a 3072x4096 decode)."""
         if input_config is None:
@@ -4897,7 +4897,7 @@ class PrismSolver:
     }
 
     def _scale_activations_to_request(self, comp, activation_bytes, input_config):
-        """Scale a trace-sized activation estimate to the request actually made.
+        """Scale a build-sized activation estimate to the request actually made.
 
         Graph tensor shapes are BUILD values — measured on this rack, all four
         image models declare height/width symbols and ZERO of their tensors use
@@ -4913,7 +4913,7 @@ class PrismSolver:
 
         Refuses by name rather than swallowing: a bare `except Exception:
         return activation_bytes` stood here, which would have turned any bug in
-        this method back into the trace-sized estimate that caused the problem.
+        this method back into the build-sized estimate that caused the problem.
         """
         from neurobrix.core.runtime_values import MissingRuntimeValue
 
@@ -4935,7 +4935,7 @@ class PrismSolver:
         #
         # So once `build_symbol_map` binds a spatial symbol to the request, the
         # profiler's peak is ALREADY at the requested extent and multiplying by
-        # trace->request here applies the same correction twice. Measured on
+        # build->request here applies the same correction twice. Measured on
         # real-esrgan-x8 at 1024x1024 the moment the binding was fixed: the
         # profiler answered 16 384 MiB, this method multiplied by
         # (1024/112)x(1024/80) = 117.03, and the plan read 1 917 396 MB of
@@ -5012,9 +5012,9 @@ class PrismSolver:
                     f"the graph declares symbol {sym_id!r} as {type(spec).__name__}, "
                     f"not a specification with a build-time value; the estimate cannot "
                     f"be scaled against a symbol it cannot read")
-            trace = spec.get("trace_value")
+            built = spec.get("trace_value")
             name = spec.get("name")
-            if trace in (None, 0) or not name:
+            if built in (None, 0) or not name:
                 continue                               # declared without a build value
             if sym_id in bound_to_request:
                 continue                               # the profiler already followed it
@@ -5027,7 +5027,7 @@ class PrismSolver:
                 logging.getLogger(__name__).debug(
                     "Prism: %s declares symbol %r (build-time value %s) that no request "
                     "field answers for — the estimate does not follow it",
-                    getattr(comp, "name", "?"), name, trace)
+                    getattr(comp, "name", "?"), name, built)
                 continue
             actual = getattr(input_config, attr, None)
             if actual in (None, 0):
@@ -5069,8 +5069,8 @@ class PrismSolver:
             if attr in seen_dims:
                 continue                               # already counted this dimension
             seen_dims.add(attr)
-            ratio *= comparable / float(trace)
-            followed.append(f"{name} {trace}->{comparable:g}"
+            ratio *= comparable / float(built)
+            followed.append(f"{name} {built}->{comparable:g}"
                             + (f" (request {actual} / unit {unit})" if unit != 1 else ""))
 
         if ratio <= 1.0:
@@ -7498,7 +7498,7 @@ class PrismSolver:
         # The live reading itself: the rung inside rounds it ONCE (the law
         # forbids a second rounding of an already-quantised figure).
         # Strategy 3.4: a temporal stream — the component in exact time chunks carrying its causal states
-        # (Forge-derived from its graph, `core/prism/temporal_stream.py`). Above spatial tiling: every chunk
+        # (derived by the container builder from its graph, `core/prism/temporal_stream.py`). Above spatial tiling: every chunk
         # is the clip's function exactly (or the vendor's own), and the card keeps the whole component.
         streams = self.__dict__.setdefault("_component_stream", {})
         if comp_name not in streams and self._stream_declaration(container, comp_name):
@@ -9202,7 +9202,7 @@ class PrismSolver:
                 if _sizing is None:
                     return _no(
                         f"'{comp_name}' has no activation profile at this request (_compute_memory could "
-                        f"not profile it) — a partition cut at the trace's shapes would plan a run that "
+                        f"not profile it) — a partition cut at the build's shapes would plan a run that "
                         f"is not this one")
                 _extra = dict((getattr(self, "_conv_band_bytes", None) or {}).get(comp_name) or {})
                 # what each attention writes while it runs (`_attention_scratch`, the engine's own route), on the

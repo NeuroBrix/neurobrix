@@ -18,7 +18,7 @@ Lookup precedence at runtime:
 
 Where the registry IS reachable, a flag it declares that the container lacks
 or carries with another value is refused by name: a registry edit now takes
-effect through the container (Forge's in-place pass or a rebuild), so the
+effect through the container (the container builder's in-place pass or a rebuild), so the
 developer's rack and every other machine run the same thing.
 
 ZERO FALLBACK boundary (engine audit #2 2026-07-05): an ABSENT registry

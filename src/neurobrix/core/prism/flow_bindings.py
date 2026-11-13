@@ -14,7 +14,7 @@
   (`text_encoder_handler.finalized_text_length`: Wan pads to 512, Sana slices to 300).
 * **A FLUX denoiser's packed inputs** — the flow packs the latent (`packed_4d_shape` /
   `packed_5d_shape`) and synthesizes its positional ids and cond (`conditioning_shapes`); its image
-  tokens are that packing, not the trace's.
+  tokens are that packing, not the build's.
 * **An image encoder's view** — the request's image reaches `global.pixel_values` as the CLIP view
   of the build's own processor (`input_processor.prepare_image_inputs`, `image_dsp.clip_view_shape`),
   whatever the request's height and width: Wan2.1-I2V's image encoder runs at 224x224. Its height and
@@ -23,7 +23,7 @@
   makes it (`input_processor.prepare_image_inputs`, the function the CLI runs): `hidden_states` the patch rows,
   `grid_thw` the grid whose VALUES bind its grid symbols (the flow's contract, core/flow/vlm.py and
   triton/flow/vlm.py). Unbound, every one of them took its build extent under the placement floor:
-  Ming-Lite-Omni-1.5's tower was priced at its trace's 17 020 patches (4 x 17 020 x 17 020 fp32 attention, 9.9 GB
+  Ming-Lite-Omni-1.5's tower was priced at its build's 17 020 patches (4 x 17 020 x 17 020 fp32 attention, 9.9 GB
   of activations) for a 448x448 image of about a thousand, and its Triton plan was refused on the Mac and on a
   16 GB card (2026-10-14).
 * **A VACE control encoder's pair** — under the loop component's `vace_control_conditioning`

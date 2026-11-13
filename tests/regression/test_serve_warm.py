@@ -70,8 +70,8 @@ def _synthetic_input(tmp_path: Path) -> Path:
 # supervisor decision after the 4th warm-boundary recurrence). Small
 # models, short configs; every row verifies output PRESENCE + SHAPE/
 # TYPE, never just exit codes. rnnt (parakeet) is absent:
-# BLOCKED-ON-ARTIFACT (legacy family field — S2 prereg re-trace
-# motion); add its row when the re-traced artifact lands.
+# BLOCKED-ON-ARTIFACT (legacy family field — S2 prereg rebuild
+# motion); add its row when the rebuilt artifact lands.
 
 AUDIO_REF = REPO / "benchmarks" / "assets" / "jfk_11s.wav"
 IMAGE_REF = REPO / "benchmarks" / "assets" / "apple_448.png"

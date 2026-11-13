@@ -334,7 +334,7 @@ def census_requests(model: str, fam: str, extra: list, table) -> list:
     stray = [f for f in _trace.SIZE_FLAGS if f in extra]
     if stray:
         raise RequestRefused(
-            f"{model}: --extra carries {', '.join(stray)} — a size is the container's trace's "
+            f"{model}: --extra carries {', '.join(stray)} — a size is the container build's "
             f"({_trace.size_text(want)}), never a flag appended to every request; drop it from --extra")
     if not table:
         # the gate cell's request too, when the model's container states gate values (container_request.gate_request):

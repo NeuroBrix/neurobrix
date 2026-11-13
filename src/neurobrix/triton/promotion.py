@@ -739,7 +739,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         return None
 
     def _override_misattributed_arith(expr):
-        """Override import-tracer mistakes that bind spatial dims to the
+        """Override builder mistakes that bind spatial dims to the
         wrong symbol.
 
         Sana 4Kpx VAE shape args contain expressions like `mul(s_batch=1, 64)`
@@ -749,7 +749,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         when an arithmetic expression's build value equals a single spatial
         build (h_trace or w_trace) AND the expression isn't already
         anchored to a height/width symbol, REPLACE it with the canonical
-        spatial symbol. This corrects the tracer's mis-attribution at
+        spatial symbol. This corrects the builder's mis-attribution at
         engine load time without touching graph.json or the build side.
 
         Returns (new_expr, changed). If the expr already references

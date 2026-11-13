@@ -1,7 +1,7 @@
 """The census is ONE table per vendor profile and memory class: rows with fixed columns, sorted,
 de-duplicated, a model's rows replaced — never added to — when its container is censused again.
 
-What each test would do if the code were wrong: a writer that appended would keep a retraced model's
+What each test would do if the code were wrong: a writer that appended would keep a rebuilt model's
 old rows (the replace test fails); a reader that accepted a row without a column would let a table
 lose the container sha or the mode unnoticed (the refusal test fails); two tables written for two
 classes in one file would answer a 16 GB question with a 32 GB row (the path test fails); a writer

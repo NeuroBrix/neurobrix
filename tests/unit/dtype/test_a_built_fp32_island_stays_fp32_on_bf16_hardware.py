@@ -5,7 +5,7 @@ Sana_1600M_1024px_MultiLing on the M4 Pro, 2026-10-25: the compiled branch input
 506 positions lost ~2 rad; the image was a different composition from the Triton branch's (19.8 dB).
 
 What this test would do if the code were wrong: under bf16 compute the compiled policy picks the lower-precision
-(input-cast) wrapper for the traced-fp32 GEMM -> red (seen red before the fix, 2026-10-25). fp16 hardware keeps its
+(input-cast) wrapper for the built-fp32 GEMM -> red (seen red before the fix, 2026-10-25). fp16 hardware keeps its
 answer (the GEMM was already fp32-protected there), and a GEMM built at the graph's half width is still cast."""
 from __future__ import annotations
 

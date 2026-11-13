@@ -533,7 +533,7 @@ class TritonDtypeEngine:
         if built_output_is_complex(op_record):
             return self._wrap_complex_output(func)
         # The op's built output dtype — the vendor's dtype for this op (the cast-back floor).
-        traced = built_output_dtype_name(op_record)
+        built = built_output_dtype_name(op_record)
 
         # The calibration record's islands come FIRST: a pinned op computes
         # in fp32 and keeps its fp32 output whatever its AMP class — a
@@ -543,7 +543,7 @@ class TritonDtypeEngine:
                 return self._wrap_fp32(func)
             if op_uid in getattr(self, "_narrow_op_uids", ()) and op_name in AMP_FP32_OPS:
                 return self._wrap_fp32_internal_compute_dtype_output(func, force_cast_back=True,
-                                                                     traced=traced)
+                                                                     built=built)
         # Self-managed wrappers are NEVER wrapped — universal hardware
         # (mm/bmm/addmm self-gate on _NBX_HAS_NATIVE_BF16 internally;
         # conv2d/upsample_nearest are dtype-tag-driven). See _SELF_MANAGED_OPS
@@ -564,7 +564,7 @@ class TritonDtypeEngine:
             # that computes bf16 natively the compiled branch casts a GEMM's or a conv's float operands to bf16
             # (`_wrap_lower_precision`); the Triton wrapper took them as they came, so an island's fp32 output stayed
             # fp32 through every self-managed op after it (2 017 policy sites on Sana's transformer, the Mac, 06:40).
-            # An island — the trace's or the calibration's (returned above) — keeps fp32. Under fp16 compute without
+            # An island — the build's or the calibration's (returned above) — keeps fp32. Under fp16 compute without
             # native bf16 nothing changes: the in-kernel widening IS the compiled branch's fp32-internal rule there.
             from neurobrix.core.dtype.built_island import is_built_fp32_island
             if is_built_fp32_island(op_record, self.graph_dtype):
@@ -583,10 +583,10 @@ class TritonDtypeEngine:
             # bf16 on a bf16 graph, fp32 on another; fp16: back to fp16 only
             # under the contract flag (read at call time via the _w global),
             # else fp32.
-            return self._wrap_fp32_internal_compute_dtype_output(func, traced=traced)
+            return self._wrap_fp32_internal_compute_dtype_output(func, built=built)
 
         if op_name in AMP_FP16_OPS:
-            # The trace's own fp32 island — the compiled engine's rule, one predicate (R30).
+            # The build's own fp32 island — the compiled engine's rule, one predicate (R30).
             from neurobrix.core.dtype.built_island import is_built_fp32_island
             if is_built_fp32_island(op_record, self.graph_dtype):
                 return self._wrap_fp32(func)
@@ -595,7 +595,7 @@ class TritonDtypeEngine:
                 # on V100, epsilon underflow). Same uniform cast-back wrap —
                 # under fp16 only: under bf16 div is a plain AMP_FP16 op
                 # (inputs cast to bf16, output bf16) and never reaches it.
-                return self._wrap_fp32_internal_compute_dtype_output(func, traced=traced)
+                return self._wrap_fp32_internal_compute_dtype_output(func, built=built)
             return self._wrap_lower_precision(func)
 
         if op_name in AMP_PROMOTE_OPS:
@@ -719,7 +719,7 @@ class TritonDtypeEngine:
         return fp32_func
 
     def _wrap_fp32_internal_compute_dtype_output(self, func: Callable, force_cast_back: bool = False,
-                                                 traced: Optional[str] = None) -> Callable:
+                                                 built: Optional[str] = None) -> Callable:
         """fp32 compute inside; the OUTPUT dtype is `amp_fp32_output_dtype`'s answer.
 
         The op's internal precision rationale (RMSNorm pow->mean->rsqrt overflow risk, div
@@ -746,7 +746,7 @@ class TritonDtypeEngine:
         def cast_back(result):
             from nbxtensor.ops import wrappers as _w
             if amp_fp32_output_dtype(cname, gname, _w._NBX_ACTIVATIONS_FP16_SAFE,
-                                     force_cast_back, traced) != cname:
+                                     force_cast_back, built) != cname:
                 return result          # fp16 without the contract, or a non-bf16 graph: fp32
             # every floating tensor of the result, a `native_*_norm` tuple included — the compiled engine's
             # `_to_compute_dtype` / half-IO norms under the contract. The fp16 cast was the single-tensor one

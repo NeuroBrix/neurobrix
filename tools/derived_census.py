@@ -108,7 +108,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
 
     A component holding a VALUE-DERIVED axis (`value_axes`) is derived at every key class of
     that axis over its envelope at this binding: the ops outside the axis's cone once, the
-    cone's ops at each extent `census.bisect_extent` asks for — never at the trace's value
+    cone's ops at each extent `census.bisect_extent` asks for — never at the build's value
     alone, which is one draw of the values the run computes."""
     from neurobrix.kernels import census as _census
     g = runtime_graph(model, comp)
@@ -131,7 +131,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
                 bounded.append((ax, lo, hi))
             groups.append(bounded)
     except (ValueDerivedAxisRefused, AnnotationContradiction) as e:
-        # an axis with no derivable envelope: the component is derived at the trace's extents
+        # an axis with no derivable envelope: the component is derived at the build's extents
         # and the model refused by name (a partial table would certify a partial model)
         unhandled[f"{comp}: value-derived axis not classed — {e}"] += 1
         return _derive_at(*args, out_dtypes=out_dtypes)
@@ -183,7 +183,7 @@ def _fixed_tensors(g: dict) -> set:
         # An op whose ARGUMENTS carry a symbol shapes its output by the request even when every
         # tensor it reads is a parameter: MiniCPM-o's resampler repeats its learned query by the
         # image-slice count (`repeat(1, s0, 1)` then `view(64 * s0, 4096)`), and the derivation
-        # keyed its addmm at the trace's three slices (192 rows) for a one-slice request (64 rows)
+        # keyed its addmm at the build's three slices (192 rows) for a one-slice request (64 rows)
         # — the Mac's miss, 2026-10-14. Such an output is free; its dims resolve at the binding.
         if ins_ and all(t in fixed for t in ins_) and not _args_carry_a_symbol(o_):
             fixed.update(o_.get("output_tensor_ids") or [])
@@ -344,7 +344,7 @@ def _reads_key(reads: dict):
 
 
 def built_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
-    """The ops `TritonDtypeEngine.wrap_op` wraps fp32 for the TRACE's own fp32 island (core/dtype/built_island,
+    """The ops `TritonDtypeEngine.wrap_op` wraps fp32 for the BUILD's own fp32 island (core/dtype/built_island,
     2026-10-25) — in wrap_op's order: under a half compute dtype, an op that is no self-managed wrapper, in the
     AMP_FP16 class, whose built floating inputs and output are all float32 inside a half graph. The wrap is the one a
     contract island gets (`_wrap_fp32`: every float operand cast to fp32, `_NBX_COMPUTE_DTYPE` fp32 for the call), so
@@ -425,18 +425,18 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         import dataclasses as _dc
         contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | pins,
                                narrow_op_uids=frozenset(contract.narrow_op_uids) - pins)
-    # The trace's own fp32 islands: the same wrap as a contract island, read by the key derivation through the same
+    # The build's own fp32 islands: the same wrap as a contract island, read by the key derivation through the same
     # set (the width pass above already states their widths and casts by the engines' rule; it is not re-run).
     # one answer per graph and compute dtype (the graph's ops are its own): read again at every binding it was a third of
     # a session continuation's derivation (DeepSeek-Coder-V2-Lite, 2026-11-08)
     _tk = (id(g), str(cdtype))
     if _BUILT.get(_tk, (None,))[0] is not g:
         _BUILT[_tk] = (g, built_island_uids(ops, g.get("torch_dtype"), str(cdtype)))
-    traced = _BUILT[_tk][1]
-    if traced:
+    built_islands = _BUILT[_tk][1]
+    if built_islands:
         import dataclasses as _dc
-        contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | traced,
-                               narrow_op_uids=frozenset(contract.narrow_op_uids) - traced)
+        contract = _dc.replace(contract, fp32_op_uids=frozenset(contract.fp32_op_uids) | built_islands,
+                               narrow_op_uids=frozenset(contract.narrow_op_uids) - built_islands)
     def dt0(tid):
         # a runtime dtype name as NBXDtype spells it: `bool` is `bool_` (a Python keyword) — read once a keyed op could
         # take a mask (a sum of a bool mask: chatterbox, 2026-10-23); any other name not an NBXDtype is refused by name
@@ -728,7 +728,7 @@ def first_full_binding(model: str, comp: str, lo: int, hi: int, inputs_of) -> in
 # ── Value-derived axes ─────────────────────────────────────────────────────────────────────────
 # An op whose OUTPUT extent is computed from its input's VALUES — `repeat_interleave` over
 # predicted repeats (a duration predictor's frames), the row count of `nonzero`, `masked_select`
-# or `unique` — leaves every dim downstream of it a literal at the trace's draw: no symbol names
+# or `unique` — leaves every dim downstream of it a literal at the build's draw: no symbol names
 # it, and the runtime lets the actual extent win (`_meta_expand`, `_resolve_view_shape`, a scaled
 # upsample recomputing its width). The derivation classes such an axis over its ENVELOPE, read
 # from the graph alone:
@@ -905,7 +905,7 @@ def _value_sized(o: dict, fixed: set):
     ins = o.get("input_tensor_ids") or []
     outs = o.get("output_tensor_ids") or []
     if k not in _VALUE_SIZED or not ins or not outs or all(t in fixed for t in ins):
-        return None                          # a constant's values are the trace's: its extent is too
+        return None                          # a constant's values are the build's: its extent is too
     if k == "aten::repeat_interleave":
         a = (o.get("attributes") or {}).get("args") or []
         osz = ((o.get("attributes") or {}).get("kwargs") or {}).get("output_size")
@@ -1718,7 +1718,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     outs = {}
     for ax in [a for grp in value_axes(model, comp) for a in grp] + _INERT_AXES[(model, comp)]:
         if ax.outputs and not ax.refused:
-            # the next stage would be fed this output at the trace's extent: a value-derived
+            # the next stage would be fed this output at the build's extent: a value-derived
             # extent crossing a stage boundary is not derived yet — named, never fed as built
             unhandled[f"{comp}: value-derived axis {ax.uid} reaches its outputs "
                       f"{', '.join(ax.outputs)} — a later stage fed from it is not derived"] += 1

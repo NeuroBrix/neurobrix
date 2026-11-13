@@ -299,7 +299,7 @@ def apply_fusion_horizontal(dag: dict, plan: dict) -> int:
             if wp is not None and wp in ops:
                 hoisted.append(wp)
 
-        # The emitted ops must use the tracer's OWN encoding, not a
+        # The emitted ops must use the builder's OWN encoding, not a
         # plausible one. `aten::cat` takes its tensors as a
         # `tensor_tuple` in args[0] with the dim in args[1] (and a
         # mirrored `dim` field); passing them only through

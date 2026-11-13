@@ -147,7 +147,7 @@ def clip_output_frames(clip: Dict[str, Any], decl: Dict[str, Any], smap: Dict[st
 
 def load_vendor_tiling(cache_path: Path, comp: str) -> Optional[Dict[str, Any]]:
     """The component's vendor tiling declaration (`components/<c>/vendor_tiling.json`, the container builder
-    `tracer/vendor_tiling.py`): the cut its vendor's own reference makes, with its source. None when it carries none;
+    `builder/vendor_tiling.py`): the cut its vendor's own reference makes, with its source. None when it carries none;
     refused by name when derived from another graph than the component's."""
     d = Path(cache_path) / "components" / comp
     path = d / "vendor_tiling.json"

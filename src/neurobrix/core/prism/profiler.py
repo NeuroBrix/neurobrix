@@ -707,7 +707,7 @@ class ActivationProfiler:
         default. The complete fix — declared per-input runtime maxima in
         the container defaults (registry-driven) — is a build-toolchain
         contract evolution, filed separately; the floor removes the
-        under-trace class without inventing data.
+        under-build class without inventing data.
 
         The positional convention in InputConfig.positional_symbol_map (s1=latent_h,
         s2=latent_w) is the image legacy. Graphs that carry a
@@ -773,7 +773,7 @@ class ActivationProfiler:
             if not isinstance(info, dict):
                 continue
             name = info.get("name")
-            trace = info.get("trace_value")
+            built = info.get("trace_value")
             if pixel_space and name in ("time", "height", "width"):
                 if name == "time" and input_config.chunk_frames is not None:
                     symbol_map[sid] = int(input_config.chunk_frames)
@@ -792,12 +792,12 @@ class ActivationProfiler:
             if name == "batch":
                 # Build value, NOT input_config.batch_size: the build baked
                 # each component's true batch semantics (VAE decode batch=1,
-                # CFG-traced transformers batch=2). Binding the CFG batch here
+                # CFG-built transformers batch=2). Binding the CFG batch here
                 # doubled every Sana 4Kpx VAE activation estimate and flipped
                 # its validated single_gpu+tiling plan to weight_sharding
                 # (R23 regression caught by the legacy-vs-new plan probe).
                 # Matches the legacy concrete-shape behavior exactly.
-                symbol_map[sid] = trace if isinstance(trace, int) else (
+                symbol_map[sid] = built if isinstance(built, int) else (
                     input_config.batch_size)
             elif name == "time" and input_config.chunk_frames is not None:
                 symbol_map[sid] = int(input_config.chunk_frames)
@@ -805,41 +805,41 @@ class ActivationProfiler:
                 if latent_t is None:
                     raise MissingRuntimeValue(
                         f"the plan's request names no frame count for symbol {sid} (time) of "
-                        f"this graph: the build-time extent {trace} is a witnessed stimulus, not the request")
+                        f"this graph: the build-time extent {built} is a witnessed stimulus, not the request")
                 symbol_map[sid] = latent_t
             elif name == "height":
                 if latent_h is None:
                     raise MissingRuntimeValue(
                         f"the plan's request names no height for symbol {sid} (height) of "
-                        f"this graph: the build-time extent {trace} is a witnessed stimulus, not the "
+                        f"this graph: the build-time extent {built} is a witnessed stimulus, not the "
                         "request (Wan T2V planned 1.74 GiB for a 35 GiB decode this way)")
                 symbol_map[sid] = latent_h
             elif name == "width":
                 if latent_w is None:
                     raise MissingRuntimeValue(
                         f"the plan's request names no width for symbol {sid} (width) of this "
-                        f"graph: the build-time extent {trace} is a witnessed stimulus, not the request")
+                        f"graph: the build-time extent {built} is a witnessed stimulus, not the request")
                 symbol_map[sid] = latent_w
             elif name in ("seq_len", "sequence_length"):
                 symbol_map[sid] = input_config.seq_len or (
-                    trace if isinstance(trace, int) else 128)
-            elif isinstance(trace, int):
+                    built if isinstance(built, int) else 128)
+            elif isinstance(built, int):
                 # Unknown named symbol: build value (matches the build, never
                 # worse than the legacy positional guess).
-                symbol_map[sid] = trace
+                symbol_map[sid] = built
             # The floor is for a binding that is a GUESS (a `seq_len` axis taking the global text
             # length, the 2026-08-10 case), never for an extent the request states: frames, height
             # and width are the request's own, exactly as the pixel-space branch above binds them
             # unfloored. Floored one axis at a time, Wan2.1-VACE at 832x480 — the vendor's portrait
-            # size, built at 480x832 — priced its width at the trace's 104 latent columns where it
+            # size, built at 480x832 — priced its width at the build's 104 latent columns where it
             # asked for 60: a 104x104 grid, the transformer 18.04 GiB instead of 10.41, and the plan
             # fell from lazy_sequential to cpu_streaming (2026-09-29).
-            if (placement_floor and isinstance(trace, int)
+            if (placement_floor and isinstance(built, int)
                     and name not in ("time", "height", "width")
                     and sid in symbol_map
                     and isinstance(symbol_map[sid], int)
-                    and symbol_map[sid] < trace):
-                symbol_map[sid] = trace
+                    and symbol_map[sid] < built):
+                symbol_map[sid] = built
         # The request's FLOW binds what no name says (`flow_bindings.FlowBindings.overrides`): the
         # CFG batch, the VACE pair, an encoder's length, a denoiser's text axis — each the extent
         # the flow runs, never a guess, so never floored. Floored, Wan2.2-I2V's transformer (built
@@ -872,9 +872,9 @@ class ActivationProfiler:
         for sid, info in syms.items():
             if not isinstance(info, dict):
                 continue
-            trace = info.get("trace_value")
-            if isinstance(trace, int):
-                out[sid] = trace
+            built = info.get("trace_value")
+            if isinstance(built, int):
+                out[sid] = built
             else:
                 missing.append(f"{sid} '{info.get('name')}'")
         if missing:
@@ -1566,7 +1566,7 @@ class ActivationProfiler:
                     # Sana _unsafe_view dim whose expr build is 8.4e14 against
                     # a concrete dim of 1) — evaluating those exploded peak
                     # estimates to absurdity. Self-consistency at build is the
-                    # discriminator: valid exprs (video frugal-trace graphs)
+                    # discriminator: valid exprs (video frugal-build graphs)
                     # evaluate at runtime dims; invalid or unannotated ones
                     # fall back to the concrete value (legacy behavior, R23).
                     if isinstance(d, dict):

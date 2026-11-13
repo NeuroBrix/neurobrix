@@ -32,7 +32,7 @@ compares the mirrored ATen sets with the engine's own (drift door).
 What it does NOT know, and the choice made each time (never a narrower width):
   * which upsample->conv pairs the runtime fuses and which ops it tiles standalone: the
     op-level tiling plan is computed AFTER placement (`PrismSolver._detect_op_level_tiling_pairs`,
-    on its own traced-dtype estimate). Without a plan, every structurally eligible pair / op is
+    on its own built-dtype estimate). Without a plan, every structurally eligible pair / op is
     priced at the WIDER of its tiled and untiled width.
   * S5 residual chains write their result in place into the chain's base tensor
     (tiling_engine.py:2221, residual_chain.py): the chain's ops are priced by the op rules,
@@ -400,7 +400,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
     tensors = dag.get("tensors") or {}
     ops = dag.get("ops") or {}
 
-    def traced(tid: str) -> str:
+    def built_dtype(tid: str) -> str:
         meta = tensors.get(tid)
         if meta is None:
             raise ValueError(f"runtime_widths: tensor {tid!r} is not in the graph's tensor table")
@@ -420,7 +420,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
     for tid, meta in tensors.items():
         if tid in produced:
             continue
-        name = traced(tid)
+        name = built_dtype(tid)
         if name not in _FLOAT:
             out[tid] = name
         elif tid in graph_inputs or meta.get("is_input"):
@@ -451,7 +451,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             seen = dict(out)
             seen.update(operand_reads[uid])
         for tid in outs:
-            name = traced(tid)
+            name = built_dtype(tid)
             if name not in _FLOAT and name not in _COMPLEX:
                 out[tid] = name
                 continue
@@ -577,7 +577,7 @@ class _Rules:
                 return d
         return self.first_dimensioned(fl)
 
-    def weight_dtype(self, tid: str, traced: str) -> str:
+    def weight_dtype(self, tid: str, built: str) -> str:
         """A param/buffer/constant: the dtype the ENGINE'S OWN loader holds it in — each engine
         names its rule below; this base names none."""
         raise NotImplementedError(f"{type(self).__name__} names no weight rule")
@@ -659,7 +659,7 @@ class _TritonRules(_Rules):
     def remap_explicit(self, name: str) -> str:
         return _triton_remap(name, self.c, self.stores_fp64)
 
-    def weight_dtype(self, tid: str, traced: str) -> str:
+    def weight_dtype(self, tid: str, built: str) -> str:
         # GraphExecutor._bind_fp32_constants (graph_executor.py:2063-2107) binds the
         # constants of fp32-computing consumers in fp32, once, Triton engines only.
         name = tid.split("::", 1)[1] if "::" in tid else tid
@@ -671,11 +671,11 @@ class _TritonRules(_Rules):
             # half compute dtype — swin2SR's fp32 coordinates table stayed fp32, canary's bf16
             # positional table became fp16 (the census walk).
             from nbxtensor.dtype.operands import constant_load_dtype
-            return constant_load_dtype(traced, self.c, self.stores_fp64)
+            return constant_load_dtype(built, self.c, self.stores_fp64)
         # The Triton loader's rule for every weight of a shard (`stored_dtype_in_compute`): a half
         # weight follows the compute half, fp32 is narrowed under a half compute, anything else
         # (an fp16 weight under an fp32 plan) keeps its stored dtype.
-        return _nbx_name(stored_dtype_in_compute(_nbx(traced), _nbx(self.c)))
+        return _nbx_name(stored_dtype_in_compute(_nbx(built), _nbx(self.c)))
 
     def amp_fp32_out(self, op=None, narrowed: bool = False) -> str:
         # `_wrap_fp32_internal_compute_dtype_output`: fp32 compute; the output is the engine's
@@ -828,7 +828,7 @@ class _TritonRules(_Rules):
             return r
         if name in _tdt.AMP_FP16_OPS:                                       # :566-573
             if is_built_fp32_island(op, self.graph_dtype):
-                return "float32"            # the trace's own fp32 island: `_wrap_fp32`, fp32 compute and store
+                return "float32"            # the build's own fp32 island: `_wrap_fp32`, fp32 compute and store
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
                 return self.amp_fp32_out(op)
             return self._lower_precision(uid, op, name, fl, ins)
@@ -939,7 +939,7 @@ class _AtenRules(_Rules):
     def remap_explicit(self, name: str) -> str:
         return _aten_kwarg_remap(name, self.c)
 
-    def weight_dtype(self, tid: str, traced: str) -> str:
+    def weight_dtype(self, tid: str, built: str) -> str:
         # The compiled engine's OWN loaders, never the Triton engine's rule: an embedded constant
         # through `DtypeEngine.convert_constant` (its graph-dtype constants at C, a vendor's
         # other-precision constant kept), every other weight through `WeightLoader.held_dtype`
@@ -949,8 +949,8 @@ class _AtenRules(_Rules):
         # `storage_dtype`: `runtime_dtypes` applies that ceiling over every tensor when
         # `stores_fp64` is False — `storage_dtype_name`.)
         if self.embedded_constant(tid):
-            return compiled_constant_dtype(traced, self.c, self.graph_dtype)
-        return compiled_weight_dtype(traced, self.c)
+            return compiled_constant_dtype(built, self.c, self.graph_dtype)
+        return compiled_weight_dtype(built, self.c)
 
     def operand_casts(self, uid, op, ins, w) -> List[Tuple[str, str]]:
         """`DtypeEngine.compile_op`'s wrapper for this op, in its order, and the operand copies it makes: an fp32
@@ -1005,9 +1005,9 @@ class _AtenRules(_Rules):
         fl = self.floats(ins, w)
         explicit = _explicit_dtype(op)
         if name == "_to_copy":                                              # :680-681
-            traced = _name((op.get("output_dtypes") or [None])[0]
+            built = _name((op.get("output_dtypes") or [None])[0]
                            or self.tensors[op["output_tensor_ids"][0]]["dtype"])
-            return _aten_to_copy(traced, c)
+            return _aten_to_copy(built, c)
         if explicit is not None and (name in _CASTS or not fl or name.endswith("_like")
                                      or name.startswith("new_")
                                      or name in ATEN_AMP_CREATION_FILL_OPS):
@@ -1048,7 +1048,7 @@ class _AtenRules(_Rules):
                     c, self.graph_dtype, False, contract and uid in self.contract.narrow_op_uids)
             if name in ATEN_AMP_FP16_OPS:                                   # :754-791
                 if is_built_fp32_island(op, self.graph_dtype):
-                    return "float32"        # the trace's own fp32 island: `_make_fp32_wrapper`, fp32 kept
+                    return "float32"        # the build's own fp32 island: `_make_fp32_wrapper`, fp32 kept
                 if c == "float16" and name in ATEN_FP16_NEED_FP32:
                     if contract and name in ATEN_FP16_GEMM_OPS:
                         return c

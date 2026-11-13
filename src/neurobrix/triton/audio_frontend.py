@@ -187,13 +187,13 @@ def fit_features(feats: np.ndarray, input_shape) -> np.ndarray:
     the extent the encoder then runs at, which the derived census binds from."""
     if input_shape and len(input_shape) == feats.ndim and feats.ndim >= 3:
         for d in range(1, len(input_shape)):
-            trace, actual = input_shape[d], feats.shape[d]
-            if actual > trace:
+            built, actual = input_shape[d], feats.shape[d]
+            if actual > built:
                 sl = [slice(None)] * feats.ndim
-                sl[d] = slice(None, trace)
+                sl[d] = slice(None, built)
                 feats = feats[tuple(sl)]
-            elif actual < trace:
-                ps = list(feats.shape); ps[d] = trace - actual
+            elif actual < built:
+                ps = list(feats.shape); ps[d] = built - actual
                 feats = np.concatenate([feats, np.zeros(ps, np.float32)], axis=d)
     return np.ascontiguousarray(feats.astype(np.float32))
 

@@ -28,10 +28,10 @@ from __future__ import annotations
 from neurobrix.triton.promotion import promote_seq_len_scalars
 from neurobrix.triton.symbols import SymbolResolver
 
-TRACE = 23
+BUILD_LEN = 23
 
 
-def _sym(tv=TRACE):
+def _sym(tv=BUILD_LEN):
     return {"type": "symbol", "symbol_id": "s1", "trace_value": tv}
 
 
@@ -41,13 +41,13 @@ def _make_case_b_dag():
         "param::w": {"weight_name": "w", "shape": [2304, 96]},
         "param::inv_freq": {"weight_name": "rotary_embed.inv_freq",
                             "shape": [64], "constant": True},
-        "ar0": {"shape": [TRACE]},
-        "v0": {"shape": [TRACE, 1]},
-        "m0": {"shape": [TRACE, 64]},
-        "c0": {"shape": [TRACE, 128]},
-        "cos0": {"shape": [TRACE, 128]},
-        "sl0": {"shape": [TRACE, 128]},
-        "input::position_ids": {"shape": [1, TRACE]},
+        "ar0": {"shape": [BUILD_LEN]},
+        "v0": {"shape": [BUILD_LEN, 1]},
+        "m0": {"shape": [BUILD_LEN, 64]},
+        "c0": {"shape": [BUILD_LEN, 128]},
+        "cos0": {"shape": [BUILD_LEN, 128]},
+        "sl0": {"shape": [BUILD_LEN, 128]},
+        "input::position_ids": {"shape": [1, BUILD_LEN]},
     }
     ops = {
         "aten.arange::0": {
@@ -109,7 +109,7 @@ def _make_case_b_dag():
     }
     dag = {
         "symbolic_context": {
-            "symbols": {"s1": {"name": "seq_len", "trace_value": TRACE}},
+            "symbols": {"s1": {"name": "seq_len", "trace_value": BUILD_LEN}},
         },
         "tensors": tensors,
         "ops": ops,
@@ -122,8 +122,8 @@ def _make_case_a_dag():
     tensors = {
         "param::w": {"weight_name": "w", "shape": [2304, 96]},
         "buffer::cs": {"weight_name": "cos_cached", "shape": [4096, 128]},
-        "slA": {"shape": [TRACE, 128]},
-        "input::position_ids": {"shape": [1, TRACE]},
+        "slA": {"shape": [BUILD_LEN, 128]},
+        "input::position_ids": {"shape": [1, BUILD_LEN]},
     }
     ops = {
         "aten.slice::0": {
@@ -149,7 +149,7 @@ def _make_case_a_dag():
     }
     dag = {
         "symbolic_context": {
-            "symbols": {"s1": {"name": "seq_len", "trace_value": TRACE}},
+            "symbols": {"s1": {"name": "seq_len", "trace_value": BUILD_LEN}},
         },
         "tensors": tensors,
         "ops": ops,
@@ -181,7 +181,7 @@ def test_case_b_chain_goes_dynamic():
     syms = dag["symbolic_context"]["symbols"]
     assert "nbx_rope_len" in syms
     assert syms["nbx_rope_len"]["source"] == "input::position_ids::val_-1"
-    assert syms["nbx_rope_len"]["trace_value"] == TRACE - 1
+    assert syms["nbx_rope_len"]["trace_value"] == BUILD_LEN - 1
 
 
 def test_case_b_idempotent():
@@ -205,7 +205,7 @@ def test_resolver_binds_last_position_plus_one():
     ctx = {"symbols": {"nbx_rope_len": {
         "name": "nbx_rope_len",
         "source": "input::position_ids::val_-1",
-        "trace_value": TRACE - 1}}}
+        "trace_value": BUILD_LEN - 1}}}
     r = SymbolResolver(ctx)
     # prefill: positions 0..12 -> binding 12, ref resolves to 13
     r.bind_from_inputs({"input::position_ids": [0, 1, 2, 3, 4, 5, 6, 7,
@@ -213,7 +213,7 @@ def test_resolver_binds_last_position_plus_one():
                        [], {})
     assert r.get("nbx_rope_len") == 12
     ref = {"type": "symbol", "id": "nbx_rope_len", "offset": 1,
-           "trace": TRACE - 1}
+           "trace": BUILD_LEN - 1}
     assert r.resolve(ref) == 13
     # decode at absolute position 40 -> total 41
     r.bind_from_inputs({"input::position_ids": [40]}, [], {})
@@ -227,7 +227,7 @@ def test_an_unbound_ref_refuses_by_name():
     from neurobrix.triton.symbols import UnboundSymbolError
     r = SymbolResolver({"symbols": {}})
     ref = {"type": "symbol", "id": "nbx_rope_len", "offset": 1,
-           "trace": TRACE - 1}
+           "trace": BUILD_LEN - 1}
     with pytest.raises(UnboundSymbolError, match="nbx_rope_len"):
         r.resolve(ref)
 
@@ -244,7 +244,7 @@ def test_compiled_binder_parses_negative_val_index():
     ctx = {"symbols": {"nbx_rope_len": {
         "name": "nbx_rope_len",
         "source": "input::position_ids::val_-1",
-        "trace_value": TRACE - 1}}}
+        "trace_value": BUILD_LEN - 1}}}
     r = SymbolicShapeResolver(ctx)
     r.bind_from_inputs({"position_ids": np.array([[0, 1, 2, 3, 40]])}, {})
     assert r.get_bound_symbols().get("nbx_rope_len") == 40

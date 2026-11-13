@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vendor reproduction of one image request (diffusers, the model's own snapshot), for a retrace
+"""Vendor reproduction of one image request (diffusers, the model's own snapshot), for a rebuild
 gate whose two ATen arms differ: the arm closer to the vendor's render at the SAME prompt, seed,
 steps and guidance is the right one. Runs under the diffusers bench venv (torch is allowed
 under tools/); CPU offload so a 16 GB card carries a T5-XXL pipeline.

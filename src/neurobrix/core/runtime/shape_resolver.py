@@ -35,7 +35,7 @@ _SHAPE_DEBUG = _os_shape.environ.get("NBX_DEBUG") == "1"
 
 from neurobrix.core.runtime import symexpr as _symexpr
 
-# Import SymInt support (from core/runtime, no trace/ dependency)
+# Import SymInt support (from core/runtime, no builder/ dependency)
 try:
     from neurobrix.core.runtime.symint import SymInt
 except ImportError:
@@ -376,11 +376,11 @@ class SymbolicShapeResolver:
         if symbol_id in self._runtime_values:
             return self._runtime_values[symbol_id]
         info = self._symbols.get(symbol_id) or {}
-        trace = (node or {}).get("trace", (node or {}).get("trace_value", info.get("trace_value")))
+        built = (node or {}).get("trace", (node or {}).get("trace_value", info.get("trace_value")))
         raise ShapeResolutionError(
             f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
             f"{info.get('source')}) is not bound at runtime; its build-time value "
-            f"{trace} is a witnessed extent, not a value. Bound: {sorted(self._runtime_values)}.")
+            f"{built} is a witnessed extent, not a value. Bound: {sorted(self._runtime_values)}.")
 
     def _resolve_symint_dict(self, data: Dict[str, Any], slot: str = _symexpr.SHAPE):
         """Evaluate a serialized expression — the ONE vocabulary of `core/runtime/symexpr.py`,

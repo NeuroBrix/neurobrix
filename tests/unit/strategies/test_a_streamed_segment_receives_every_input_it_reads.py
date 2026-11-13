@@ -141,7 +141,7 @@ def test_a_streamed_piece_holds_the_computable_buffer_its_op_reads(height, width
     seen = {}
     _instrument(strategy, seen)
 
-    # First request at the trace-sized grid, so a piece built with a stale resolution would pass it.
+    # First request at the build-sized grid, so a piece built with a stale resolution would pass it.
     base.set_runtime_resolution(64, 64)
     strategy.execute_component(COMPONENT, inputs={"x": np.zeros((1, 4, EMBED_DIM))})
     # The request under test — what `RuntimeExecutor` does per run: it sets the COMPONENT's executor.

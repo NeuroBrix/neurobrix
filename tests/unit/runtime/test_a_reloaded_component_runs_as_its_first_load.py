@@ -110,7 +110,7 @@ def test_a_second_request_after_a_reload_gives_the_first_requests_bytes(tmp_path
         for again in lists[1:]:
             assert again == lists[0], (f"{comp}: a compile after the release compiled {len(again)} ops where the "
                                        f"first compiled {len(lists[0])}")
-    # (a record the FIRST compile already refuses — an artifact re-traced since its calibration — is the load's
+    # (a record the FIRST compile already refuses — an artifact rebuilt since its calibration — is the load's
     # own finding, said once; the recompile must not add one)
     second_log = p.stderr.split("[reload test] request 1", 1)[1]
     assert "REFUSED RECORD" not in second_log, "the compile after the release refused the model's calibration record"

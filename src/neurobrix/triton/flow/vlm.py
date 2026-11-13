@@ -310,7 +310,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             modal_embeds = modal_embeds.to(dtype)
             n_modal = modal_embeds.shape[1]
             if has_deepstack:
-                # Tracer names the vision tuple's flattened extras
+                # The builder names the vision tuple's flattened extras
                 # output_1..N ((hidden, [deepstack x3]) return).
                 for k in range(1, len(ds_input_names) + 1):
                     t = resolved.get(f"{vision_name}.output_{k}")
@@ -459,7 +459,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                       else [eos_token_id])
 
         # Declared-MoE fusion — R30 mirror of the compiled vlm flow (the
-        # Stage-1 wall-5 class: without it only trace-fired experts run
+        # Stage-1 wall-5 class: without it only build-fired experts run
         # and logits go near-uniform ⇒ degenerate repetition).
         lm_cfg = self.ctx.pkg.defaults.get("lm_config", {})
         _n_exp = lm_cfg.get("num_experts")

@@ -238,7 +238,7 @@ class GraphAnalyzer:
                     detail = f"cast to same dtype {outd[0]}"
             elif t in _VIEW_LIKE_SAME_SHAPE:
                 # Same-shape is only an identity if it holds SYMBOLICALLY
-                # — concrete trace-shape equality on symbolic dims proves
+                # — concrete build-shape equality on symbolic dims proves
                 # nothing at other extents.
                 tin = self._tensor_inputs(op)
                 outs_t = op.get("output_tensor_ids") or []
@@ -270,7 +270,7 @@ class GraphAnalyzer:
             elif t == "aten::slice":
                 # Symbolic honesty (slice-attrs doctrine): a concrete
                 # end that merely EQUALS the build extent of a SYMBOLIC
-                # dim is the signature of a trace-frozen bound — a
+                # dim is the signature of a build-frozen bound — a
                 # build-side coverage bug to surface, never an
                 # optimization site. Only the to-the-end sentinel, a
                 # concrete dim, or a proven-symbolic end qualify.

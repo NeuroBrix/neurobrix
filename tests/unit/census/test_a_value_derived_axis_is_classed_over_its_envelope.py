@@ -1,8 +1,8 @@
-"""A dim computed from VALUES is classed over its envelope, never read at the trace's draw.
+"""A dim computed from VALUES is classed over its envelope, never read at the build's draw.
 
 Kokoro's duration predictor sums its predicted per-phoneme durations into a frame count
 (`repeat_interleave` over the rounded, clamped durations), and every dim downstream holds the
-trace's 34 as a literal; the run lets the actual frame count win, so it formed baddbmm
+build's 34 as a literal; the run lets the actual frame count win, so it formed baddbmm
 (640, 240, 96) on this rack and (640, 160, 55) on the Mac where the table held only 34 frames
 (the supervisor's decision, 2026-10-04 17:23). The derivation now finds such an axis in the graph,
 bounds it by interval arithmetic over the ops producing its repeats (the duration projection's
@@ -10,7 +10,7 @@ bounds it by interval arithmetic over the ops producing its repeats (the duratio
 every dim downstream (a transposed convolution and a scaled upsample by their own arithmetic) and
 derives the cone at every key class of the axis.
 
-What this test would do if the code were wrong: a derivation reading the trace's extent only
+What this test would do if the code were wrong: a derivation reading the build's extent only
 (the bisection removed) forms one frame class — the exhaustive comparison and the 240-frame class
 fail; a cone rule that dropped the transposed convolution's arithmetic leaves the 2F convolution at
 the build — the exhaustive comparison fails; an unbounded repeat read as a number instead of
@@ -78,7 +78,7 @@ def graph():
         outs = []
         for i, (shp, dt) in enumerate(outs_shapes):
             tid = f"{uid}::out_{i}"
-            # Forge's annotation: the phoneme axis (23 at the build) is the symbol s1 everywhere
+            # The container builder's annotation: the phoneme axis (23 at the build) is the symbol s1 everywhere
             t[tid] = _t(shp, dt, sym=[S1 if d == 23 else d for d in shp])
             outs.append(tid)
         ops[uid] = _op(uid, kind, ins, outs, args, **attrs)
@@ -186,7 +186,7 @@ def test_the_bisection_meets_every_class_the_envelope_holds(synthetic, tl_dot_ge
     assert {k for k in want if k[0] not in cone} <= got, "a key outside the cone the walk lost"
     bmm = {k[1] for uid, _q, k in got if uid == "aten.bmm::0"}
     assert 240 in bmm                                    # the run's 229 frames: the 240 class
-    assert (34 in bmm) == (lo <= 34)                     # the trace's draw only where the envelope holds it
+    assert (34 in bmm) == (lo <= 34)                     # the build's draw only where the envelope holds it
 
 
 def test_the_run_extents_of_kokoro_land_in_a_derived_class(synthetic, tl_dot_gemms):

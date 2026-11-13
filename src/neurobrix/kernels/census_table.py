@@ -9,7 +9,7 @@ certified directory alone. This module is the one reader and writer of the list:
 one JSON object per line, one line per (model, mode, kernel, key), sorted, with these columns:
 
     model      the container's name
-    container  the sha the census computed over the container's graph.json files — a retrace changes
+    container  the sha the census computed over the container's graph.json files — a rebuild changes
                it, and the model's rows are replaced, never added to
     mode       the served mode that formed the key (triton, triton-sequential)
     rungs_mb   the memory budgets the shadow planned under when it formed the key, ascending (a key
@@ -173,7 +173,7 @@ def locked(path: Path):
 
 def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int = 0, former=()) -> Tuple[int, int]:
     """The model's rows replaced by `rows` (a new census of that container), every other model's kept:
-    a retrace replaces, never adds, and `former` names (container_renames) too. Returns (removed, written).
+    a rebuild replaces, never adds, and `former` names (container_renames) too. Returns (removed, written).
 
     `keyless_ops` is the derivation's PROOF that a model forms no key: the count of kernel-bearing ops it
     placed whose launcher key function returned no key (a profile's matrix unit carries its tile in the
@@ -209,7 +209,7 @@ def inputs_path(path: Path) -> Path:
 
 def container_sha(cache_dir: Path) -> str:
     """The census's container hash (its `container` column): sha256 over every component's graph.json, the file name
-    then its bytes, in sorted path order, 16 hex digits — a retrace changes it. One function: the derived census
+    then its bytes, in sorted path order, 16 hex digits — a rebuild changes it. One function: the derived census
     writes it, Prism reads a model's chunk record against it."""
     import hashlib
     h = hashlib.sha256()

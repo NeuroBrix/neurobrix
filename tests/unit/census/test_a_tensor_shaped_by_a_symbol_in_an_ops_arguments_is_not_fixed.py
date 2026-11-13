@@ -4,7 +4,7 @@ unless an op on the way carries a symbol in its ARGUMENTS: then the request shap
 MiniCPM-o-4_5's resampler repeats its learned query by the image-slice count — `repeat(query,
 [1, s0, 1])` then `view([64 * s0, 4096])` — with s0 the batch of slices bound from the tower's
 output. Every tensor on that chain is a parameter's child, so the derivation classed the view
-FIXED and keyed `addmm (192, 4096, 4096)` at the trace's three slices for a one-slice request
+FIXED and keyed `addmm (192, 4096, 4096)` at the build's three slices for a one-slice request
 whose run asked (64, 4096, 4096) (the Mac, 2026-10-14 06:18; measured on the CPU with its
 profile: the site fed x [1, 1024, 1152], the output resolved [1, 64, 4096], the addmm 192).
 

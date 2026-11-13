@@ -1,4 +1,4 @@
-"""A `symbolic_shape.dims` entry that is a bare integer must equal the trace's
+"""A `symbolic_shape.dims` entry that is a bare integer must equal the build's
 concrete dim — an integer cannot vary with any symbol, so a different value
 is a corrupted annotation, not information.
 

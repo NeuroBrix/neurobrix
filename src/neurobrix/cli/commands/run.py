@@ -4,7 +4,7 @@ neurobrix run — Execute inference using NBX Engine.
 DATA-DRIVEN DESIGN:
 - CLI does NO business logic
 - All args are mapped to global.* variables
-- Family is read from manifest.json (set at trace/import time)
+- Family is read from manifest.json (set at build/import time)
 - The model (via variables.json) decides how to use them
 
 ZERO HARDCODE: Defaults cascade from CLI > runtime/defaults.json > family config
@@ -375,7 +375,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
                                                 cached_defaults))[1])
     # The prompt's token count where the flow tokenizes it and prefills it alone: an autoregressive TEXT request (no
     # input image or audio, whose own tokens the flow adds beside the prompt's). The decoder's sequence symbol is bound
-    # to it — without it the symbol took the trace's extent and a 400-token prompt was priced as the trace's few tokens
+    # to it — without it the symbol took the build's extent and a 400-token prompt was priced as the build's few tokens
     # (TinyLlama ~0.01 GiB planned, 652 MB held by the Triton arena, 2026-11-08). The same rule the derived census reads
     # (`core/runtime/prompt_length.prompt_tokens`); `run_prompt_tokens` refuses by name a prompt past the window.
     elif (_prompt is not None and "tokenizer" in (manifest.get("modules") or {}) and _topo_path.exists()

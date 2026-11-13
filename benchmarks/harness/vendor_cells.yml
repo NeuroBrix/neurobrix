@@ -6,7 +6,7 @@
 # sequential oracle replays the SAME graph the runtime executes, so a defect OF
 # THE GRAPH ITSELF is invisible to all of them: both arms are wrong in the same
 # way and the gate says IDENTICAL. The MoE frozen-routing alert (2026-09-09) is
-# the worked example — a trace can burn the trace batch's per-expert token
+# the worked example — a build can burn the build batch's per-expert token
 # counts into slice bounds, and no byte gate we own could ever see it.
 #
 # This cell is the only gate that can. It compares our output to the ORIGINAL
@@ -108,8 +108,8 @@ cells:
     # driven by its own tool rather than by the generic one-shot path.
     driven_by: "tools/moe_real_path_check.py --model DeepSeek-Coder-V2-Lite-Instruct"
     blind_to: >
-      A MoE whose per-expert slice bounds were frozen at trace would route with
-      the trace's expert histogram: coherent at the trace length only. Our byte
+      A MoE whose per-expert slice bounds were frozen at build would route with
+      the build's expert histogram: coherent at the build length only. Our byte
       gates replay that same graph and cannot see it.
 
   - id: llm-dense-tinyllama

@@ -1,10 +1,10 @@
 """
 SymInt - Symbolic Integer for Runtime Shape Resolution.
 
-Copied from trace/symbolic/shapes.py for runtime independence.
+Copied from builder/symbolic/shapes.py for runtime independence.
 Only includes SymInt and SymExprOp (runtime needs only .resolve()).
 
-ZERO IMPORT from trace/ module.
+ZERO IMPORT from builder/ module.
 """
 
 from enum import Enum, auto

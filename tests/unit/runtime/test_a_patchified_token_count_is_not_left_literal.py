@@ -41,12 +41,12 @@ RUN_TOKENS = 256 * 256      # 65536
 BATCH = 2                   # CFG
 
 
-def _h_expr(sid, trace):
+def _h_expr(sid, built):
     """((s - 2) // 2 + 1) — exactly the form the container carries at view::0."""
-    return {"type": "add", "right": 1, "trace": trace // 2,
-            "left": {"type": "floordiv", "right": 2, "trace": trace // 2 - 1,
-                     "left": {"type": "add", "right": -2, "trace": trace - 2,
-                              "left": {"type": "symbol", "id": sid, "trace": trace}}}}
+    return {"type": "add", "right": 1, "trace": built // 2,
+            "left": {"type": "floordiv", "right": 2, "trace": built // 2 - 1,
+                     "left": {"type": "add", "right": -2, "trace": built - 2,
+                              "left": {"type": "symbol", "id": sid, "trace": built}}}}
 
 
 def _dag():

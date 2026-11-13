@@ -76,7 +76,7 @@ def _mask_axis_short(mask_extent: int, seq: int) -> bool:
     An axis of extent 1 is not short: it broadcasts over the whole sequence,
     which is how every key-padding mask reaches attention — [B, 1, 1, Sk],
     the shape `_cast_attn_mask` above is written around. Reading it as short
-    took the "trace-time constant causal mask" branch and replaced a padding
+    took the "build-time constant causal mask" branch and replaced a padding
     mask by `is_causal=True`: mochi-1-preview's joint video/text attention
     (mask [2, 1, 1, 4306]) ran causally over the raster-ordered video tokens
     in all 48 blocks — query 0 returned V row 0 exactly — and the compiled
@@ -728,7 +728,7 @@ class CompiledOpResolver:
                         or _mask_axis_short(attn_mask.shape[-1], seq_k)):
                     # A mask whose extent froze at the build length (a container builder
                     # symbolic-coverage defect). Its CONTENT decides: an exact
-                    # causal mask is the trace's spelling of `is_causal`, which
+                    # causal mask is the build's spelling of `is_causal`, which
                     # extends to any length; anything else is refused by name.
                     _require_causal_frozen_mask(attn_mask, seq_q, seq_k,
                                                 op_uid or op_name)

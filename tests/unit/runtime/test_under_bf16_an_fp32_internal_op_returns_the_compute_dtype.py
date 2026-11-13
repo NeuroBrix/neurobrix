@@ -115,10 +115,10 @@ def test_the_two_engines_twins_are_one_rule():
     from nbxtensor.dtype import outputs
     from neurobrix.core.dtype import engine as E
     assert E.amp_fp32_output_dtype is T.amp_fp32_output_dtype is outputs.amp_fp32_output_dtype
-    for c, g, safe, narrowed, traced in itertools.product(
+    for c, g, safe, narrowed, built in itertools.product(
             _HALF, _GRAPHS, (False, True), (False, True), (None,) + _GRAPHS):
-        assert (E.amp_fp32_output_dtype(c, g, safe, narrowed, traced)
-                == T.amp_fp32_output_dtype(c, g, safe, narrowed, traced)), (c, g, safe, narrowed, traced)
+        assert (E.amp_fp32_output_dtype(c, g, safe, narrowed, built)
+                == T.amp_fp32_output_dtype(c, g, safe, narrowed, built)), (c, g, safe, narrowed, built)
     for f in (E.amp_fp32_output_dtype, T.amp_fp32_output_dtype):
         assert f("float16", None, True, False) == "float16"
         for c, g in (("float32", "float32"), ("float64", "bfloat16"), ("bfloat16", None),

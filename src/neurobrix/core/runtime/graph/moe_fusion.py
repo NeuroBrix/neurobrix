@@ -46,7 +46,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
           from lm_config, registry-driven). MoE LMs are packaged under
           other families too (Qwen3-Omni thinker → multimodal); a family
           branch alone on this universal primitive silently skipped them
-          and the graph ran with only the trace-fired experts → garbage.
+          and the graph ran with only the build-fired experts → garbage.
           The structural pattern-match below remains the correctness
           authority either way.
         - Must find topk ops with k > 1 (eliminates dense LLMs)
@@ -153,7 +153,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
                 producer_map[out_tid] = fused_uid
 
     # A DECLARED MoE (the registry says num_experts > 1) with a router left
-    # unfused would run it as built: trace-frozen routing, or every expert for
+    # unfused would run it as built: build-frozen routing, or every expert for
     # every token — in silence. Refused by name instead, whichever matcher (or
     # none) looked at it. A router is covered when its topk left the order (its
     # layer was fused) or a fused op names it in its gate group (a multi-gate

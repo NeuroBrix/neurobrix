@@ -2,7 +2,7 @@
 
 It answers "where would a symbolic-shape defect be INVISIBLE", which is a larger
 set than "where is one". An axis built at a value where two rules agree cannot be
-cleared by the trace-point check, however many invariants pass — register 29.
+cleared by the build-point check, however many invariants pass — register 29.
 
 Run: PYTHONPATH=tools python -m pytest tests/unit/tools/test_symbol_collision_census.py
 """

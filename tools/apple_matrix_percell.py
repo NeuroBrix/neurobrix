@@ -53,7 +53,7 @@ def main():
         # a model that has already crashed once, and the next model Prism
         # underestimates gets no row and no protection. The need is fixed where
         # it was wrong — the plan now reads the request's image size and scales
-        # the trace-sized activation estimate to it.
+        # the build-sized activation estimate to it.
         need = prism_need_mb(model, flag, val)
         gate = None
         if need is not None and need * MARGIN > avail:

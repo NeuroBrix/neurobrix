@@ -66,7 +66,7 @@ _BACKEND_KERNELS_READ_DATA_PTR = {"cuda": True, "hip": True, "xpu": False, "meta
 # `TRITON_METAL_FP64_UNAVAILABLE`), so a kernel over a float64 buffer reads eight-byte
 # elements as four-byte ones. Measured 2026-09-28: `from_numpy(float64).to(bf16)` on the
 # M4 Pro gave 1 139 of 143 360 bits right and 3 255 non-finite values (the Sana 4K sincos
-# positional embedding, every off-trace size). A census says "not this time"; the door in
+# positional embedding, every off-build size). A census says "not this time"; the door in
 # `NBXTensor.to` says "never": a cast from or to such a dtype is refused BY NAME there.
 #
 # The answer is the CALLER's to give (`set_backend_has_fp64`), not a table here: it is a fact

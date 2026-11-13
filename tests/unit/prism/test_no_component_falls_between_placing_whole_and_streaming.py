@@ -20,7 +20,7 @@ THE SCENARIO IS CONSTRUCTED, NOT FOUND
 --------------------------------------
 The machine is pinned (the Mac's host reading injected, the rung imposed through the door). The
 band is not hand-picked: it is computed from the solver's own estimate of the component and its
-own fraction, so a retrace or a re-measured fraction moves the band and the cells follow it. A
+own fraction, so a rebuild or a re-measured fraction moves the band and the cells follow it. A
 precondition cell proves the band is non-empty before anything is judged in it.
 """
 from __future__ import annotations

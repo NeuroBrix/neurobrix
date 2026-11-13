@@ -3,7 +3,7 @@
 Regression guard for the synthetic-sum fuzzy-match bug: when a graph has
 two seq_len symbols (e.g. build values 14 and 1), the promotion pass
 synthesizes a combined symbol `_sum_sA_sB` (build 15). The +1 offset
-tolerance — designed for single-tracer-symbol `seq_len + 1` patterns —
+tolerance — designed for single-builder-symbol `seq_len + 1` patterns —
 also applied to that synthetic sum, so a STRUCTURAL model constant 16
 (the rotate-half half-width of a 32-wide per-axis RoPE chunk) was
 promoted to `sum + 1`. At runtime the slice end rebound to

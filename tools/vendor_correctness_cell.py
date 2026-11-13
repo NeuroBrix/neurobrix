@@ -343,7 +343,7 @@ def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
     if is_image or is_video:
         # The request's render config belongs to BOTH arms, whichever kind of
         # render it is. Ours used to take the model's defaults while the vendor
-        # rendered the declared step count — the same defect the retrace gate
+        # rendered the declared step count — the same defect the rebuild gate
         # closed for its image row. Guarding this on `is_image` alone put the
         # video cell straight back into it: Wan rendered its default 81 frames
         # against a 17-frame vendor arm, which is not slow, it is a different

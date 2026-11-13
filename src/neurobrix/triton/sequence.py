@@ -2600,8 +2600,8 @@ class TritonSequence(SequenceSteps):
 
             # An expression of the shared vocabulary (core/runtime/symexpr.py), integer or real
             if _symexpr.is_expression(arg):
-                trace = arg.get("trace", arg.get("trace_value", 0))
-                return ExprArg(expr_dict=arg, trace_value=trace)
+                built = arg.get("trace", arg.get("trace_value", 0))
+                return ExprArg(expr_dict=arg, trace_value=built)
 
             if arg_type in ("int", "float", "bool", "none"):
                 return ScalarArg(arg.get("value"))
@@ -2626,8 +2626,8 @@ class TritonSequence(SequenceSteps):
 
             # Raw expression (from SymInt.to_json)
             if "symbol_id" in arg or "op" in arg:
-                trace = arg.get("trace_value", 0)
-                return ExprArg(expr_dict=arg, trace_value=trace)
+                built = arg.get("trace_value", 0)
+                return ExprArg(expr_dict=arg, trace_value=built)
 
             return arg
 

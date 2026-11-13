@@ -2,7 +2,7 @@
 component read and pinned.
 
 Measured 2026-10-12 on the M4 Pro (mq25 46b0a9b7, gate chain `results/apple_gate_mq25_rebuild8_2026_10_12/`):
-PixArt-XL-2-1024-MS retraced stores its text encoder in float32 (18 GB). The native plan (mps, bf16,
+PixArt-XL-2-1024-MS rebuilt stores its text encoder in float32 (18 GB). The native plan (mps, bf16,
 eager) priced 50 170 MB of host, 32 740 MB of it "transient" = every component as read plus a pinned
 copy at the plan's width, summed under eager — the CUDA rule (the caching host allocator keeps every
 pinned block, pytorch#134332). The harness withheld the cell for hours; Sana-4K and Sana MultiLing

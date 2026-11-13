@@ -58,7 +58,7 @@ def the_callers_door(default: str) -> str:
     A child told its own ordinal escapes the door the workshop runs the suite under. Measured
     2026-09-27: a gate told `CUDA_VISIBLE_DEVICES=3` put a TinyLlama child on physical card 2
     (the lazy-bind boundary test's "2") and a launch-path child on card 0 (the launcher's "0"),
-    twice meeting a retrace that owned card 2. An empty door holds no card, and the test says so
+    twice meeting a rebuild that owned card 2. An empty door holds no card, and the test says so
     instead of finding one.
     """
     import pytest

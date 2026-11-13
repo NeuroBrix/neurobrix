@@ -70,7 +70,7 @@ MODES = ["triton", "triton_sequential", "compiled"]
 #: below turned red as it was written to, and both now plan layer_streaming at the top rung.
 STREAMED = ["CogVideoX-5b-I2V", "Wan2.2-I2V-A14B-Diffusers",
             "Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
-#: Ming-Lite-Omni-1.5 left STREAMED on 2026-10-14: its vision tower was priced at its TRACE's 17 020 patches
+#: Ming-Lite-Omni-1.5 left STREAMED on 2026-10-14: its vision tower was priced at its BUILD's 17 020 patches
 #: (9.65 GiB of activations) because no flow rule bound it to the request's image; priced at the image
 #: (1 024 patches, 0.05 GiB — test_a_vision_tower_is_priced_at_the_requests_image.py) its components fit and
 #: the plan holds them on the device, never streamed, never refused, never on the host.
@@ -144,7 +144,7 @@ def test_under_a_rung_below_its_largest_component_the_component_streams_inside_i
 
 
 #: Ming's busy-Mac cell was marked owed (strict xfail) for a query-axis slice of its vision tower's
-#: [heads, N, N] attention scores — 4 420 MB each, at the TRACE's N = 17 020 patches. At the request's image
+#: [heads, N, N] attention scores — 4 420 MB each, at the BUILD's N = 17 020 patches. At the request's image
 #: N is 1 024 and the scores are 16 MB: the debt was the mispricing (2026-10-14), not a missing slice. The
 #: cell moved to WHOLE_AT_THE_IMAGE below.
 OWED_BUSY = {}

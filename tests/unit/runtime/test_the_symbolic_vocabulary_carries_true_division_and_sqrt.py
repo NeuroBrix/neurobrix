@@ -3,8 +3,8 @@
 mochi-1-preview's rotary table (diffusers MochiRoPE, `transformer_mochi.py`, `_get_positions`)
 spans its centres over `+-height * scale / 2`, `scale = (target_area / (height * width)) ** 0.5`,
 height and width the post-patch extents. With integers only (`add sub mul floordiv mod neg`), the container builder
-could record those bounds as the trace's floats alone, and the table's values froze at the build
-grid (9.5 rad of rotary error at 160x416 from a 10x60x106 build). Forge's extent provenance now
+could record those bounds as the build's floats alone, and the table's values froze at the build
+grid (9.5 rad of rotary error at 160x416 from a 10x60x106 build). the container builder's extent provenance now
 records them as expressions with `truediv` and `sqrt`; this file proves that every runtime reader
 evaluates them through the ONE evaluator (`core/runtime/symexpr.py`) and agrees:
 
@@ -36,8 +36,8 @@ from types import SimpleNamespace
 import pytest
 
 
-def _sym(i, trace):
-    return {"type": "symbol", "id": f"s{i}", "trace": trace}
+def _sym(i, built):
+    return {"type": "symbol", "id": f"s{i}", "trace": built}
 
 
 def _hh():
@@ -54,7 +54,7 @@ def _scale():
                                         "trace": 149.24696356275302}, "trace": 12.216667449134933}
 
 
-# Forge-emitted (verbatim structure): aten.linspace::0 args[0:2] and aten.linspace::1 args[0:2]
+# Builder-emitted (verbatim structure): aten.linspace::0 args[0:2] and aten.linspace::1 args[0:2]
 H_START = {"type": "truediv", "left": {"type": "mul", "left": {"type": "neg", "operand": _hh(), "trace": -13},
                                        "right": _scale(), "trace": -158.81667683875412},
            "right": 2, "trace": -79.40833841937706}

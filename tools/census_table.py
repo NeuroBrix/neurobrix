@@ -8,7 +8,7 @@ Each source is a directory the census tool wrote: its census JSON (the models' `
 `<model>.<mode>[.probe][.r<rung>][.walk].keys` files (under `census_runs/`, or in the directory itself), which keep what the merged JSON
 lost — the MODE and the RUNG each key was formed at. A model's rows come from the LAST source that
 holds it (a later census of a model replaces an earlier one, never adds to it), and only when the
-graph sha that source recorded is the container's in the cache today: a model retraced since its
+graph sha that source recorded is the container's in the cache today: a model rebuilt since its
 census is left out and named, never written with keys of a graph that no longer exists. The census
 tree's revision is the `tool` column; `ops` is [None] for these rows (the shadow did not record them).
 
@@ -162,7 +162,7 @@ def consolidate(a) -> int:
         if not (CACHE / model).is_dir():
             stale.append((model, "no such container in the cache"))
         elif graph_sha(model) != chosen[model][0]["container"]:
-            stale.append((model, f"retraced since its census (census {chosen[model][0]['container']}, "
+            stale.append((model, f"rebuilt since its census (census {chosen[model][0]['container']}, "
                                  f"cache {graph_sha(model)})"))
     for model, why in stale:
         print(f"[census-table] {model}: LEFT OUT — {why} (from {origin[model]})", flush=True)

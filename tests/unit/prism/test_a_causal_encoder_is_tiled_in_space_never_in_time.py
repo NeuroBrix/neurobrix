@@ -25,12 +25,12 @@ GB = 1024 ** 3
 RUNG_MB = 16384
 
 
-def _sym(i, trace):
-    return {"type": "symbol", "id": i, "trace": trace}
+def _sym(i, built):
+    return {"type": "symbol", "id": i, "trace": built}
 
 
-def _op(kind, left, right, trace):
-    return {"type": kind, "left": left, "right": right, "trace": trace}
+def _op(kind, left, right, built):
+    return {"type": kind, "left": left, "right": right, "trace": built}
 
 
 def _encoder_graph(causal: bool):

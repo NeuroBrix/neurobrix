@@ -12,7 +12,7 @@ runs at another length, another batch or another resolution.
 
 The case that engraved it, 2026-09-26: granite-speech-3.3-8b rebuilt at seq 31 with
 batch 1 had its q-projection view [1, 31, 4096] -> [1, 31, 32, 128] recorded with the
-head count as `s0 + s1` (1 + 31 = 32). The trace-point check passed in all forty layers;
+head count as `s0 + s1` (1 + 31 = 32). The build-point check passed in all forty layers;
 at 209 tokens the sequential arm asked for [1, 209, 210, 128] and died. The same census
 over the shared cache named 22 components, three classes: an inferred slot written as an
 expression of the wrong symbols (granite), a batch frozen to the literal 1 in the target

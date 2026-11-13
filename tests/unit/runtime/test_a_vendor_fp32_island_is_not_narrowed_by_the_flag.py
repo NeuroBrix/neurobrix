@@ -39,9 +39,9 @@ def test_the_rule_keeps_a_built_fp32_op_fp32_under_the_flag():
 
 
 def test_the_rule_is_unchanged_for_an_op_built_at_the_half_dtype():
-    for traced in ("float16", None):
-        assert T.amp_fp32_output_dtype("float16", "float16", True, False, traced) == "float16"
-        assert T.amp_fp32_output_dtype("float16", "float16", False, False, traced) == "float32"
+    for built in ("float16", None):
+        assert T.amp_fp32_output_dtype("float16", "float16", True, False, built) == "float16"
+        assert T.amp_fp32_output_dtype("float16", "float16", False, False, built) == "float32"
     # an fp32 graph coerced to fp16 compute: every op is built fp32; the flag rules as before
     assert T.amp_fp32_output_dtype("float16", "float32", True, False, "float32") == "float16"
 
@@ -85,10 +85,10 @@ def flag():
     _w.set_activations_fp16_safe(prev)
 
 
-def _out(op, traced, narrow=()):
+def _out(op, built, narrow=()):
     eng = T.TritonDtypeEngine(NBXDtype.float16, graph_dtype="float16", stores_fp64=False)
     eng.set_precision_contract(True, (), narrow)
-    rec = {"output_dtypes": [traced]}
+    rec = {"output_dtypes": [built]}
     return eng.wrap_op(op, _same, op_uid="op::0", op_record=rec)(_Fake(NBXDtype.float32)).nbx_dtype
 
 

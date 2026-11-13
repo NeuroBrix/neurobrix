@@ -120,7 +120,7 @@ def _marks_for(name: str, mode: str, family: str,
     marks: List = []
     if status == "not_traced":
         marks.append(pytest.mark.skip(reason=skip_reason or
-                                      "DETTE_TECHNIQUE_NON_OUVERTE: model not traced"))
+                                      "DETTE_TECHNIQUE_NON_OUVERTE: model not built"))
         return marks
     if family in SLOW_FAMILIES:
         marks.append(pytest.mark.slow)
@@ -135,7 +135,7 @@ def _build_parametrize() -> List:
     """Return a list of pytest.param entries for each (model, mode).
 
     Testable cells come from `discover_models()` (= cached .nbx
-    inventory). Not-traced reference-matrix cells come from
+    inventory). Not-built reference-matrix cells come from
     `discover_target_matrix()` and skip with reason — they make
     family-coverage gaps visible at every harness run instead of
     being silently absent.
@@ -148,7 +148,7 @@ def _build_parametrize() -> List:
                 marks=_marks_for(m["name"], mode, m["family"]),
                 id=f"{m['name']}::{mode}",
             ))
-    # Not-yet-traced reference matrix — single skipped cell per
+    # Not-yet-built reference matrix — single skipped cell per
     # model (no per-mode expansion: the model isn't built, so the
     # mode distinction is moot until it lands in the cache).
     for m in discover_target_matrix():

@@ -3,7 +3,7 @@
 A language model's prefill runs at the token count of the prompt as the flow renders it (`prompt_token_ids` below: the SFT
 format of an image-AR model, the chat template when the container sets `chat_mode`, else a basic encode with the
 tokenizer's specials, unpadded), through the container's own tokenizer module. Prism prices the decoder's sequence
-symbol at that count (`cli/commands/run.request_input_config`); without it the symbol bound to the trace's extent and
+symbol at that count (`cli/commands/run.request_input_config`); without it the symbol bound to the build's extent and
 TinyLlama's prefill was priced at ~0.01 GiB for a 20-, 200- or 400-token prompt alike while the Triton arena held 102,
 314 and 652 MB (2026-11-08). The derived census reads the same function, so the plan and the census agree."""
 from __future__ import annotations

@@ -5,7 +5,7 @@ granite-speech-3.3-8b, 2026-09-26: [1, 31, 4096] -> [1, 31, 32, 128] with the he
 recorded as `s0 + s1` reproduced the build and died at 209 tokens. The cells below are that
 graph in miniature (RED on a census that only checked the build point) and its corrected
 form (literal 32), plus the LLM flatten `[s0, s1, H] -> [-1, H]` whose slot is `s0 * s1`
-and is sound, plus a corrupted-at-trace site, which is counted and never evaluated.
+and is sound, plus a corrupted-at-build site, which is counted and never evaluated.
 
 Run: python -m pytest tests/unit/tools/test_view_numel_census.py
 """

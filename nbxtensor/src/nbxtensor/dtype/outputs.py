@@ -40,7 +40,7 @@ def built_output_is_complex(record: Optional[Dict[str, Any]]) -> bool:
 
 
 def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: bool,
-                          narrowed: bool, traced: Optional[str] = None) -> str:
+                          narrowed: bool, built: Optional[str] = None) -> str:
     """The OUTPUT dtype (a name) of an op computed in float32 inside under the half compute dtype `compute_dtype`.
 
     * bfloat16 on a bfloat16 graph (`graph_dtype`, the dtype the model was built in): bfloat16 — a float32 result
@@ -57,7 +57,7 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                 f"{graph_dtype!r} is none of {sorted(_GRAPH_FLOAT_NAMES)} — the container's graph must state it")
         return "bfloat16" if graph_dtype == "bfloat16" else "float32"
     if compute_dtype == "float16":
-        if traced == "float32" and graph_dtype in _HALF_GRAPH_NAMES:
+        if built == "float32" and graph_dtype in _HALF_GRAPH_NAMES:
             return "float16" if narrowed else "float32"
         return "float16" if (safe or narrowed) else "float32"
     raise ValueError(f"amp_fp32_output_dtype: compute dtype {compute_dtype!r} is not a half dtype — the cast-back "

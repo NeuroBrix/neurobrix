@@ -106,7 +106,7 @@ def _report_invented_shape(x, shape):
 
 
 def _resolve_view_shape(x, shape):
-    """Reconcile a trace-baked view/reshape shape with the runtime numel.
+    """Reconcile a build-baked view/reshape shape with the runtime numel.
 
     NBXTensor.view does NOT validate numel — it re-strides blindly over the same
     data_ptr, so a baked build dim that differs at runtime becomes a silent

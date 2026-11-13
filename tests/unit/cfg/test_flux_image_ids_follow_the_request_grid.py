@@ -1,7 +1,7 @@
 """The FLUX-family image position ids follow the REQUEST's latent grid, never a
 square guess from the token count.
 
-Measured 2026-09-25 on the re-traced Flex.1-alpha at 512x1536 (latent 64x192,
+Measured 2026-09-25 on the rebuilt Flex.1-alpha at 512x1536 (latent 64x192,
 patch grid 32x96 = 3072 tokens): both CFG engines computed the count from the
 runtime latent dims and then rebuilt the grid as int(sqrt(3072)) = 55 rows by 55
 columns = 3025 ids — the RoPE multiply failed: ``Cannot broadcast (1, 24, 3584, 128)

@@ -82,7 +82,7 @@ def scan_graph(graph: dict):
     symbols = (graph.get("symbolic_context") or {}).get("symbols") or {}
     if not symbols:
         return [], 0
-    trace = {k: int(v["trace_value"]) for k, v in symbols.items()}
+    built = {k: int(v["trace_value"]) for k, v in symbols.items()}
     # One request dimension moved at a time (3x its build value), so each break names what it
     # follows: a dim that breaks when the BATCH moves is not the defect of one that breaks when the
     # length does. Symbols sharing a NAME move together — two `seq_len` symbols are one request
@@ -90,9 +90,9 @@ def scan_graph(graph: dict):
     groups: dict = {}
     for k, v in symbols.items():
         groups.setdefault(v.get("name") or k, []).append(k)
-    envs, names = [trace], [None]
+    envs, names = [built], [None]
     for name, ks in sorted(groups.items()):
-        envs.append({**trace, **{k: max(trace[k] * 3, int((symbols[k].get("constraints") or {}).get("min", 1)))
+        envs.append({**built, **{k: max(built[k] * 3, int((symbols[k].get("constraints") or {}).get("min", 1)))
                                  for k in ks}})
         names.append(name)
     tensors = graph.get("tensors") or {}

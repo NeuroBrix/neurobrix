@@ -36,7 +36,7 @@ An axis built at value `v` cannot distinguish these rules:
   v == 2   doubling and squaring agree (2*2 == 2**2 == 4); so do s+2 and 2*s.
   v == w   where w is a WEIGHT dimension of the same component: a dim bound to
            the wrong quantity reproduces the build anyway. This is the
-           trace-value collision the project already guards at build time; the
+           build-value collision the project already guards at build time; the
            census reports it because a guard that fired is not the same as an
            axis that is safe.
 
@@ -83,7 +83,7 @@ def weight_extents(graph: dict) -> set:
     """Every extent appearing in a PARAMETER's shape.
 
     A symbol whose build value equals one of these can be bound to the wrong
-    quantity and still reproduce the build — the collision the tracer's own
+    quantity and still reproduce the build — the collision the builder's own
     guard exists for.
     """
     out = set()

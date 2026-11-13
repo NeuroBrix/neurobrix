@@ -238,11 +238,11 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
 
 
 # Reference matrix: models that NeuroBrix is expected to run but
-# are NOT yet traced/imported into the runtime cache. These show up
+# are NOT yet built/imported into the runtime cache. These show up
 # in the harness as `pytest.mark.skip` with the reason
 # `DETTE_TECHNIQUE_NON_OUVERTE` so a clean run lists them visibly as
 # coverage gaps — the harness becomes the inventory of truth for
-# "what NeuroBrix should run" (testable + not-yet-traced), not only
+# "what NeuroBrix should run" (testable + not-yet-built), not only
 # "what is currently built". Update when new families are opened or
 # when a model gets built and lands in `~/.neurobrix/cache/`.
 #
@@ -261,7 +261,7 @@ TARGET_MATRIX_NOT_BUILT: List[Tuple[str, str, str]] = [
     # `-Diffusers` cache names) and Qwen3-VL-30B-A3B-Thinking are all in
     # `~/.neurobrix/cache/`, hence already REAL cells via
     # discover_models(). Keeping them here emitted a second, phantom
-    # "not traced" cell per model — an inventory that contradicted the
+    # "not built" cell per model — an inventory that contradicted the
     # cache it claims to describe. Removed; the list holds only what is
     # genuinely absent.
 ]
@@ -296,7 +296,7 @@ def _read_manifest(model_dir: Path) -> Dict[str, str]:
 
 
 def discover_target_matrix() -> List[Dict[str, str | int]]:
-    """Yield the not-yet-traced reference matrix as discover-style records.
+    """Yield the not-yet-built reference matrix as discover-style records.
 
     Each entry carries `status="not_traced"` so the harness skips it
     (instead of failing on a missing cache directory). The harness

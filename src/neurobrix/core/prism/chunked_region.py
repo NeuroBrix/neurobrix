@@ -26,7 +26,7 @@ HOW THE AXIS IS FOUND — FROM DATAFLOW, NEVER FROM A NAME
 
 A token axis is a SYMBOL (`s6`, frames) bound from a component input's dimension. A tensor carries
 it when its symbolic shape mentions it; the dimension that does is a PRODUCT `P * S * R` — S's
-extent between an outer extent P and an inner extent R, in row-major order. Forge's symbolic
+extent between an outer extent P and an inner extent R, in row-major order. The container builder's symbolic
 algebra keeps the vendor's arithmetic order (`SymInt.__mul__` does not sort), so the textual order
 of `((s6*s7)*s8)` is NOT the memory order: the layout is DERIVED, op by op from the tensors where
 the dimension IS the symbol (R = 1), through every reshape, by exact monomial arithmetic. A slice of

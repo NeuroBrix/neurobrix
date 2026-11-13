@@ -6,7 +6,7 @@ What each test would do if the code were wrong:
   * a schedule breaking a strided window's alignment accepted (Wan's encoder: a next chunk must be a multiple of 4
     input frames): the encoder's windows would straddle the chunks — the chosen schedule names its broken condition;
   * the choice not the longest fitting chunk: more chunks than needed (R5) — the length is checked;
-  * the vendor's remainder put anywhere but the first chunk: CogVideoX's decode is another function (1.7e-1 in Forge's
+  * the vendor's remainder put anywhere but the first chunk: CogVideoX's decode is another function (1.7e-1 in the container builder's
     proof) — the schedule is checked;
   * a declaration derived from another graph read: the test writes one and expects the refusal by name.
 """

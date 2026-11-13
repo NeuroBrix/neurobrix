@@ -1,6 +1,6 @@
 """aten::sum and aten::mean carry ATen's `dtype` keyword in the Triton branch: the input cast to it first.
 
-Ming-Lite-Omni-1.5's language model, retraced and installed 2026-10-14: its router normalises the top-k weights with
+Ming-Lite-Omni-1.5's language model, rebuilt and installed 2026-10-14: its router normalises the top-k weights with
 `sum(topk_weights, -1, keepdim=True, dtype=torch.float32)`; the Triton wrapper took no `dtype` and the run died at
 aten.sum::0 ("unexpected keyword argument 'dtype'"), the compiled branch rendered the apple.
 
