@@ -405,9 +405,11 @@ class KVCacheAttentionWrapper:
         length, the keys past the true end masked). A graph mask is replaced only when it is the causal pattern."""
         start = self.cache.lens.get(layer_idx, 0)    # the positions this layer holds before the chunk appends
         rows = int(q.shape[2])
-        if attn_mask is not None:
+        if attn_mask is not None and ("graph_mask", id(attn_mask)) not in self._chunk_masks:
+            # read once per chunk's mask, as the Triton interceptor does (every layer reads the graph's one mask)
             require_causal_frozen_mask(attn_mask, rows, rows, f"KV interceptor (layer {layer_idx}, prefill chunk)",
                                        align_lengths=True)
+            self._chunk_masks[("graph_mask", id(attn_mask))] = True
         self.cache.update(layer_idx, k, v, real=self._chunk_real)
         if self.cache.spilled:
             return self._prefill_over_spill(q, layer_idx, start, rows, scale)
