@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocated once and pinned once its host weights are written.
 - `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
   copied.
+- `nbxtensor.io.mapped_shards`: weight files mapped once each, the spans host views are built over, and the
+  pages of a view's span given back once its bytes are copied to the device (`ShardMaps`, `drop_pages`).
 - `nbxtensor.memory.host_spill.spill_bytes_per_position`: the host bytes one spilled KV position costs, for a
   server that sizes its reach before any spill exists; `HostPages.nbytes()`: the host bytes its slices hold.
 - `nbxtensor.memory.slot_store`, `end_store_request`, `release_store`: a compiled sequence's slot memory and its

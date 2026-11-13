@@ -2256,19 +2256,17 @@ class GraphExecutor:
                 return (sf_of[nbx_dtype_to_torch(held_dtype(torch_of[sf], compute_dtype, "compiled"))]
                         if sf in torch_of else sf)
 
-            pages = {}
             access = mmap.ACCESS_COPY
 
             def build(m, span, key):
                 dt = torch_of[span.dtype]
                 n = span.nbytes // torch.empty((), dtype=dt).element_size()
-                t = torch.frombuffer(m, dtype=dt, count=n, offset=span.offset).view(span.shape)
-                pages[t.data_ptr()] = (m, span.offset, span.nbytes)      # the span behind the view
-                return t
+                return torch.frombuffer(m, dtype=dt, count=n, offset=span.offset).view(span.shape)
         views, maps = bind_views(spans, held_as, build, access)
         self._expert_maps = maps
         if self.mode not in ("triton", "triton_sequential"):
-            self._expert_pages = pages
+            for key, view in views.items():            # the torch store gives each copied view's pages back
+                maps.note(view, spans[key].shard, spans[key].offset, spans[key].nbytes)
         _log.debug(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] '{component}': "
                    f"{len(views)} routed expert weights mapped from {len(maps)} shard(s), "
                    f"{sum(s.nbytes for s in spans.values()) / 2**20:.0f} MB left in the files")
@@ -2276,14 +2274,13 @@ class GraphExecutor:
 
     def _release_expert_pages(self, view) -> None:
         """A file-backed expert's bytes sit in a device slot: give the kernel back the pages of its
-        span (`expert_files.drop_pages`). Called by the torch store after each copy on a device
+        span (the library's shard maps, `give_back`). Called by the torch store after each copy on a device
         without CUDA streams (a unified device: the pages a copy touched stay in the one pool)."""
-        from neurobrix.core.runtime.expert_files import drop_pages
-        span = (getattr(self, "_expert_pages", None) or {}).get(view.data_ptr())
-        if span is None:
-            raise RuntimeError("ZERO FALLBACK: the expert store copied a host tensor that is no view of a mapped "
+        maps = getattr(self, "_expert_maps", None)
+        if maps is None:
+            raise RuntimeError("ZERO FALLBACK: the expert store copied a host tensor and this executor mapped no "
                                "expert file — nothing to give back, and nothing should have been copied from it")
-        drop_pages(*span)
+        maps.give_back(view)
 
     def _note_loader_rate(self, engine: str, nbx_path, component: str, where: str, landed: int,
                           seconds: float) -> None:

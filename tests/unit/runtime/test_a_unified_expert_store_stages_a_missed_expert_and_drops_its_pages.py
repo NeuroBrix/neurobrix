@@ -6,7 +6,7 @@ footprint stayed flat at 8.6 GB while, during the first forward's expert misses,
 from 12 GB to 0.6 GB and swap grew 7 GB — memory outside the process, held by the copies from
 `torch.frombuffer` views over the private shard maps (55 GB of experts) into MPS slots. The store
 now copies through a host staging buffer allocated once per projection and asks the executor to
-`madvise(MADV_DONTNEED)` the expert's page-aligned span (`expert_files.drop_pages`).
+`madvise(MADV_DONTNEED)` the expert's page-aligned span (`nbxtensor.io.mapped_shards`).
 
 What this test does if the code is wrong: the staging cell fails when a second miss allocates a
 new staging buffer or the bytes do not reach the slot (red before this change: no staging at all);
@@ -24,7 +24,6 @@ import struct
 import pytest
 import torch
 
-from neurobrix.core.runtime import expert_files as EF
 from neurobrix.core.runtime.expert_residency import ExpertResidency
 from neurobrix.core.runtime.graph.expert_store import TorchExpertStore
 
@@ -66,17 +65,19 @@ def test_the_executor_gives_back_the_page_aligned_span_of_a_mapped_view(tmp_path
     head = b"\x00" * 1000                                   # the view starts inside a page
     data = struct.pack("<12f", *range(12))
     path.write_bytes(head + data + b"\x00" * 100)
-    with open(path, "rb") as f:
-        m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_COPY)
+    from nbxtensor.io import mapped_shards as MS
+    maps = MS.ShardMaps(mmap.ACCESS_COPY)
+    m = maps.map(str(path))
     view = torch.frombuffer(m, dtype=torch.float32, count=12, offset=len(head)).view(SHAPE)
+    maps.note(view, str(path), len(head), len(data))
     ex = GraphExecutor.__new__(GraphExecutor)
-    ex._expert_pages = {view.data_ptr(): (m, len(head), len(data))}
+    ex._expert_maps = maps
     advised = []
-    real = EF.drop_pages
-    monkeypatch.setattr(EF, "drop_pages", lambda mm, off, n: advised.append((mm is m, off, n)) or (0, 0))
+    real = MS.drop_pages
+    monkeypatch.setattr(MS, "drop_pages", lambda mm, off, n: advised.append((mm is m, off, n)) or (0, 0))
     ex._release_expert_pages(view)
     assert advised == [(True, len(head), len(data))]
-    with pytest.raises(RuntimeError, match="no view of a mapped expert file"):
+    with pytest.raises(RuntimeError, match="no view of a mapped weight file"):
         ex._release_expert_pages(torch.zeros(SHAPE))
     # the real advice: page-aligned, covering the span, and the mapping still readable afterwards
     start, length = real(m, len(head), len(data))
