@@ -5,6 +5,90 @@
  "kernel": "nbxtensor.ops.softmax.softmax_forward_looped_kernel",
  "dtype": "fp32",
  "entries": {
+  "(1024, 131072, False, 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "TILE_FEAT": 4096
+    },
+    "num_warps": 4,
+    "num_stages": 3,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-11-13T17:34:18+00:00",
+    "engine_version": "0.6.15",
+    "backend": {
+     "triton": "3.8.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1024,
+     131072,
+     false,
+     "fp32",
+     "fp32"
+    ],
+    "launches": 1,
+    "fp16_contract": false,
+    "launch_deviations": [
+     3.359246350045059e-07
+    ],
+    "deviation": 3.359246350045059e-07,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-211; rows 406-617; rows 813-1024) of 1024 rows",
+    "machine": {
+     "platform": "Linux-5.15.0-203-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-v100-16gb-16g",
+     "has_native_bf16": false,
+     "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384,
+      "unified": false
+     },
+     "clocks_mhz": {
+      "0": {
+       "graphics": 1290,
+       "memory": 877
+      },
+      "1": {
+       "graphics": 1290,
+       "memory": 877
+      },
+      "2": {
+       "graphics": 1290,
+       "memory": 877
+      },
+      "3": {
+       "graphics": 1290,
+       "memory": 877
+      }
+     }
+    },
+    "best_ms": 1.9817983865737916,
+    "second_ms": 1.985967152997067,
+    "candidates": 15,
+    "accepted": 14,
+    "benched": 14,
+    "could_not_run": 1,
+    "seconds": {
+     "oracle": 1.166,
+     "runs": 33.253,
+     "bench": 0.924
+    },
+    "stability_witness": null,
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
   "(1024, 32768, False, 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
