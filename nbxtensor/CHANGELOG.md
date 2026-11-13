@@ -9,13 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.6] - 2026-11-13
 
-### Fixed
-- A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
-  only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises
-  `DeviceQueryError` with its code. Choosing the device with the most free memory, and listing the devices, no
-  longer skip one that fails silently. Reading a device's free or total memory no longer answers 0, -1 or None for a
-  driver that refuses or a device the process does not see: it raises, so a broken card is never planned as an empty
-  one.
+A device and memory API that names every answer of the GPU runtime, refusals included.
 
 ### Added
 - `nbxtensor.device`: the devices a process sees, the one it works on, the one the next kernel launch runs on, when
@@ -23,7 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mem_info`, `most_free`).
 - `nbxtensor.memory` answers the allocator's figures and the pool's controls by name (`memory_allocated`,
   `pool_cached_bytes`, `peak_device_bytes`, `empty_cache_pool`, the held-memory windows and others): an application
-  no longer calls the allocator class for them.
+  calls these names, not the allocator class.
+
+### Changed
+- Every device answer is exact or a named error. Counting the devices answers 0 only when the host has no GPU runtime
+  or the runtime reports no device; a driver error raises `DeviceQueryError` with its code. Choosing the device with
+  the most free memory and listing the devices consider every device. A device's free and total memory are its
+  measured figures, or `DeviceQueryError` when the driver refuses or the process does not see the device, so a plan is
+  always made from what the card really has.
 
 ## [0.1.5] - 2026-11-12
 

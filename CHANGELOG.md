@@ -9,27 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.14] - 2026-11-13
 
-With nbxtensor 0.1.6: served models that answered only their first request, or answered a chat with garbage, now
-answer every request; a served mixture-of-experts model starts sooner.
+With nbxtensor 0.1.6: served multimodal and vision-language models hold a whole conversation on the Triton engine, a
+served mixture-of-experts model is ready about 30 % sooner, and the voice reads numbers and names as written.
 
-### Fixed
+### Changed
 
-- **The voice says every number and name it is given.** Kokoro-82M dropped a number written in digits ("a graphics card
-  from 2017" was spoken "...from a...") and mangled brand names. Numbers, years, versions, decimals, ordinals,
-  percentages, currencies, units and known names are now written out before the voice reads them; a character it cannot
-  say is refused by name.
-- **A served model built for images no longer answers a chat request with garbage.** Janus-Pro-7B, built to generate
-  images, ran its image generation for a chat request and returned the image tokens as text; the server now refuses a
-  mode the container was not built for, by name, as `neurobrix run --mode` already did.
-- **A served multimodal model keeps answering identical requests.** After generating an image, a served Janus-Pro-7B
-  loaded a second copy of its language model and failed two requests in three; a served model's weights now stay loaded.
-- **Served vision-language models answer every request, not only the first, on the Triton engine.** Ming-Lite-Omni-1.5
-  (and the same path's models) answered the first request right and every later one with a repeated token: the reload of
-  its weights between requests rebuilt the model without its attention cache, so later prompts were decoded over no
-  context.
-- **A served mixture-of-experts model starts minutes sooner on the PyTorch engine.** Choosing how many prompt rows a
-  served request reads at a time re-planned the model several times, and each plan copied the whole model graph again;
-  the copy is now made once per start.
+- **The voice reads every number and name as written.** Kokoro-82M now writes out numbers, years, versions, decimals,
+  ordinals, percentages, currencies, units and known names before it speaks them ("a graphics card from 2017" is read
+  in full); a character it cannot say is refused by name.
+- **Each served build answers the modes it was built for.** Janus-Pro-7B built for images serves image generation; a
+  request for a mode the container was not built for is refused by name, over HTTP as on `neurobrix run --mode`.
+- **A served multimodal model keeps one copy of its weights for its whole life.** Janus-Pro-7B serves image after image,
+  and any request after them, from the language model loaded at start.
+- **Served vision-language models hold a conversation on the Triton engine.** Ming-Lite-Omni-1.5 and the models on the
+  same path keep their attention cache across requests, so every turn is answered over its full context.
+- **A served mixture-of-experts model is ready about 30 % sooner on the PyTorch engine.** Qwen3-Coder-30B-A3B on one
+  32 GB V100 is ready in 545 s instead of 769 s: the model graph is prepared once per start.
 
 ## [0.6.13] - 2026-11-12
 
