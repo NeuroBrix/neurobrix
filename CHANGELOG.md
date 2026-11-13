@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   property the engine cannot read is refused by name, never split another way.
 - **A chat template that marks the assistant's turns with `{% generation %}` renders as its vendor renders it**, where
   it stopped at that tag before.
+- **A GPU that no hardware profile describes is refused by name at once.** When the device also reports no
+  architecture, the engine now names the device it could not place, instead of failing later on a profile called
+  "None".
 
 ## [0.6.15] - 2026-11-13
 
