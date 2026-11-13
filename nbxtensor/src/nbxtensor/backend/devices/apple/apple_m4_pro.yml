@@ -156,10 +156,14 @@ dispatch:
   # NeuroBrix stream is one command buffer with one serialised compute
   # encoder; this bounds how long the host waits for a result and how much
   # work a single failure takes down with it. It is not a correctness knob —
-  # the encoder's own barriers keep the order at any value. A decode step of
-  # TinyLlama encodes ~1,350 dispatches, so 512 puts it in three buffers
-  # where one per launch put it in 1,505.
-  max_dispatches_per_command_buffer: 512
+  # the encoder's own barriers keep the order at any value. It also sets how
+  # soon the GPU starts on a step the host is still encoding: the GPU runs
+  # nothing of a buffer before its commit. MEASURED on THIS chip 2026-11-13
+  # (TinyLlama, 128 tokens, warm; a decode step ~660 dispatches): 512 3.90 s,
+  # 128 3.68, 64 3.61, 32 3.56, 16 3.51, 8 3.48, 4 3.51, 2 3.56 — the same
+  # output bytes at every value. 16: within noise of the best, half the
+  # buffers of 8.
+  max_dispatches_per_command_buffer: 16
 
 autotune:
   buckets:
