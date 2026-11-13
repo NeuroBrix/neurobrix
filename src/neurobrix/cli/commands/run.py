@@ -699,33 +699,17 @@ def cmd_run(args):
     if _topo_path.exists():
         with open(_topo_path) as f:
             _topo = json.load(f)
-        _build_gen_type = _topo.get("flow", {}).get("generation", {}).get("type", "")
-        _mode_gen_type = {"text": "autoregressive_text", "image": "autoregressive_image"}.get(mode or "")
-        # Generative-image contract (P-OMNI-GEN model 2/3): a build that
-        # declares topology.flow.image_gen serves --mode image through
-        # the diffusion leg — the autoregressive-image coherence gate
-        # below is for VQ-AR builds (Janus class), not this contract
-        # (the speech-gate pattern: capability comes from the DECLARED
-        # contract, never the model name).
-        if mode == "image" and _topo.get("flow", {}).get("image_gen"):
-            _mode_gen_type = None
-        if _mode_gen_type and _build_gen_type and _mode_gen_type != _build_gen_type:
-            _supported_mode = "image" if _build_gen_type == "autoregressive_image" else "text"
-            log.error(
-                f"Error: this '{args.model}' build supports only --mode "
-                f"{_supported_mode} (its build generation_type is "
-                f"'{_build_gen_type}'). Re-import a container built for "
-                f"--mode {mode} to use that mode."
-            )
+        from neurobrix.core.runtime.build_modes import build_refuses_mode
+        _refusal = build_refuses_mode(_topo, mode)
+        if _refusal:
+            log.error(f"Error: '{args.model}': {_refusal}. Re-import a container built for that mode to use it.")
             sys.exit(1)
         # Speech capability gates — scoped to multimodal_strict families
         # (the generative-speech leg: builds where --mode audio routes
         # through topology.flow.speech). Audio-native families (tts, stt,
         # audio_llm) serve mode "audio" through their own flow handlers,
         # closed in both engines — these gates must never fire for them.
-        _mm_strict = (
-            get_family_config(family).get("modes", {}).get("multimodal_strict", False)
-        )
+        _mm_strict = get_family_config(family).get("modes", {}).get("multimodal_strict", False)
         if _mm_strict and mode == "audio":
             # All four engines serve --mode audio: the compiled leg
             # (core/flow/speech.py) and its R33-pure triton mirror
@@ -735,12 +719,8 @@ def cmd_run(args):
             # container (topology.flow.speech, emitted from the model's
             # declared registry contract). Builds without it refuse HERE.
             if not _topo.get("flow", {}).get("speech"):
-                log.error(
-                    f"Error: this '{args.model}' build carries no "
-                    f"generative-speech contract (topology.flow.speech). "
-                    f"--mode audio requires a speech-declaring build "
-                    f"(P-OMNI-GEN speech leg)."
-                )
+                log.error(f"Error: this '{args.model}' build carries no generative-speech contract (topology.flow.speech). "
+                          f"--mode audio requires a speech-declaring build (P-OMNI-GEN speech leg).")
                 sys.exit(1)
 
     neural_components = container.get_neural_components()
@@ -759,9 +739,7 @@ def cmd_run(args):
     hw_profile = load_profile(hardware_id)
     log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
-    # Build InputConfig for activation profiling
-    cache_path = container._cache_path
-    assert cache_path is not None, "Container cache path must be set"
+    # Build InputConfig for activation profiling (cache_path: the container's, read and asserted above)
     defaults_path = cache_path / "runtime" / "defaults.json"
     cached_defaults = json.load(open(defaults_path)) if defaults_path.exists() else {}
     input_config = request_input_config(args, manifest, family, cache_path)

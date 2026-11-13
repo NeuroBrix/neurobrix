@@ -185,6 +185,11 @@ class Served:
             return None
         return self.default_mode if self.default_mode in modes else modes[0]
 
+    def refusal(self, mode: Optional[str]) -> Optional[str]:
+        """Why this BUILD does not serve `mode` (`build_refuses_mode`, the rule `run` applies), or None."""
+        from neurobrix.core.runtime.build_modes import build_refuses_mode
+        return build_refuses_mode(getattr(self.package, "topology", None) or {}, mode) if mode else None
+
     def mode_arg(self, mode: Optional[str]) -> Dict[str, Any]:
         """The `mode` input of a multimodal-strict family (the others resolve their own)."""
         return {"mode": mode} if (self.strict and mode is not None) else {}
@@ -390,9 +395,9 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
     else:
         mode = "chat" if "chat" in served.supported else ("text" if served.strict and "text" in served.supported
                                                           else None)
-        if mode is None:
+        if mode is None or served.refusal(mode):
             raise errors.not_served("/v1/chat/completions", model, served.family,
-                                    "its family declares no chat or text-answer mode")
+                                    served.refusal(mode) or "its family declares no chat or text-answer mode")
         if _constrained(body, None, False, None, None, None, None) is not None:
             raise errors.not_served("/v1/chat/completions with response_format json_schema", model, served.family,
                                     "a grammar binds the agent path's decode; this family serves chat without it")
@@ -596,9 +601,9 @@ def images_generations(door, handler, body) -> Dict[str, Any]:
     model = _model(door, body)
     served = Served(door.daemon._engine)
     mode = served.mode_with(".png", prompt_only=True)
-    if mode is None:
+    if mode is None or served.refusal(mode):
         raise errors.not_served("/v1/images/generations", model, served.family,
-                                "its family has no prompt-only mode that writes an image")
+                                served.refusal(mode) or "its family has no prompt-only mode that writes an image")
     if not isinstance(body.get("prompt"), str) or not body["prompt"]:
         raise errors.ApiError(400, "`prompt` is required", param="prompt")
     fmt = body.get("response_format")
