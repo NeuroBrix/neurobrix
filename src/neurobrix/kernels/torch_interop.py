@@ -11,6 +11,7 @@ import nbxtensor.backend.runtime as _nbx_runtime
 from nbxtensor.memory.allocator import DeviceAllocator  # noqa: F401
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.tensor import NBXTensor
+from nbxtensor.interop import copy_to_address, host_bytes
 
 
 # ============================================================================
@@ -147,9 +148,7 @@ def nbx_to_torch(tensor: 'NBXTensor'):
     if shares_heap:
         t = torch.empty(tensor.shape, dtype=nbx_dtype_to_torch(tensor._dtype),
                         device=device)
-        if tensor._nbytes > 0:                  # a strided view's buffer is not its values in order: C order first
-            src = tensor.contiguous()
-            DeviceAllocator.memcpy(t.data_ptr(), src.data_ptr(), src.numel() * dtype_size(src._dtype))
+        copy_to_address(tensor, t.data_ptr())   # C order into torch's buffer: the library's copy
         return t
 
     # Separate heaps: the values travel through the host. On unified memory
@@ -160,17 +159,11 @@ def nbx_to_torch(tensor: 'NBXTensor'):
     # tensor would arrive as something torch cannot take — on the dtype most
     # of the hub runs in. `torch.frombuffer` knows bfloat16, so the bytes
     # are typed once, correctly, by the same table that named the device.
-    import ctypes
     torch_dtype = nbx_dtype_to_torch(tensor._dtype)
     if tensor._nbytes == 0:
         return torch.empty(tuple(tensor.shape), dtype=torch_dtype,
                            device=device)
-    host = tensor.contiguous()
-    if host._device != 'cpu':
-        host = host.to_cpu()
-    raw = bytearray(ctypes.string_at(host.data_ptr(),
-                                     host.numel() * dtype_size(host._dtype)))
-    flat = torch.frombuffer(raw, dtype=torch_dtype)
+    flat = torch.frombuffer(host_bytes(tensor), dtype=torch_dtype)
     return flat.reshape(tuple(tensor.shape)).to(device=device)
 
 
