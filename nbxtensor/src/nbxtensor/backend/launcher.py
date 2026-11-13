@@ -587,60 +587,34 @@ class CudaDriver(ModuleDriver):
 
     def launch(self, function, grid, block, shared: int, stream: int, params,
                names=None, types=None, trailing=None) -> None:
-        # `types` is for a backend that packs its scalars into one buffer and
-        # needs the field offsets; CUDA binds each parameter to its own slot and
-        # has no use for it.
-        if trailing is not None:
-            raise RuntimeError(
-                "NeuroBrix launcher: trailing buffers were computed for this "
-                f"kernel ({trailing!r}) and the CUDA driver cannot bind them. "
-                "It declares none, so this is a driver/metadata mismatch, not "
-                "something to launch past.")
-        # Two refusals BEFORE anything reaches the device (the launcher
-        # contract's ownership rules, checked by `verify_driver_contract`):
-        # the argument list must be exactly what the cubin declares, and
-        # every non-null pointer must be an address this engine's allocator
-        # handed out. A kernel launched past either fault reads garbage or
-        # foreign memory, and a CUDA fault is sticky for the whole context.
-        expected = self._param_counts.get(int(function.value))
-        if expected is not None and len(params) != expected:
-            raise TypeError(f"NeuroBrix launcher: the kernel declares {expected} parameters, "
-                            f"{len(params)} given — refused, not launched")
-        from nbxtensor.memory.allocator import DeviceAllocator
-        for i, (kind, value) in enumerate(params):
-            if kind == "ptr" and value and not DeviceAllocator.holds(int(value)):
-                # The refusal names the parameter: "which buffer" is the
-                # whole question the caller then has to answer (Ming's
-                # embedding, 2026-09-14, refused an address nobody could
-                # attribute from the address alone).
-                what = (f"parameter '{names[i]}'" if names and i < len(names)
-                        else f"parameter #{i}")
-                raise ValueError(f"NeuroBrix launcher: device address {int(value):#x} ({what}) was not "
-                                 f"handed out by the allocator — refused, not launched")
-        # A caller may give one or two extents (the contract's checker does); CUDA wants three.
-        gx, gy, gz = (tuple(int(g) for g in grid) + (1, 1, 1))[:3]
-        bx, by, bz = (tuple(int(b) for b in block) + (1, 1, 1))[:3]
-        if gx * gy * gz <= 0:
+        # `types` is for a backend that packs its scalars into one buffer and needs the field offsets; CUDA binds each
+        # parameter to its own slot and has no use for it. Refused by name before anything reaches the device
+        # (`cuda_launch.refuse`). The argument buffer is built ONCE per (function, argument kinds) and written in place
+        # afterwards: a decode step launches six hundred kernels, and allocating one ctypes object per parameter plus a
+        # pointer array per launch was a fifth of the launcher's cost (2026-09-08); a launch is synchronous from
+        # Python's side (cuLaunchKernel reads the values before it returns), so one buffer is enough.
+        from nbxtensor.backend import cuda_launch as CL
+        CL.refuse(lambda: self._param_counts, function, params, names, trailing)
+        launch_dims = CL.dims(grid, block)
+        if launch_dims is None:
             return
-        # The argument buffer is built ONCE per (function, argument kinds) and written in place
-        # afterwards: a decode step launches six hundred kernels, and allocating one ctypes object
-        # per parameter plus a pointer array per launch was a fifth of the launcher's cost
-        # (2026-09-08). The buffer belongs to this driver and this function, and every launch of
-        # that function overwrites it before the call — a launch is synchronous from Python's side
-        # (the values are read by cuLaunchKernel before it returns), so one buffer is enough.
-        kinds = tuple(k for k, _ in params)
-        cache_key = (int(function.value), kinds)
-        slot = self._arg_buffers.get(cache_key)
-        if slot is None:
-            storage = [ctypes_slot(kind) for kind in kinds]
-            arr = (ctypes.c_void_p * len(storage))(*[ctypes.addressof(c) for c in storage])
-            slot = self._arg_buffers[cache_key] = (storage, arr)
-        storage, arr = slot
+        cache_key = (int(function.value), tuple(k for k, _ in params))
+        if cache_key not in self._arg_buffers:
+            self._arg_buffers[cache_key] = CL.cells(cache_key[1])
+        storage, arr = self._arg_buffers[cache_key]
         for cell, (_kind, v) in zip(storage, params):
             cell.value = v
-        rc = self.lib.cuLaunchKernel(function, gx, gy, gz, bx, by, bz, shared, stream, arr, None)
+        rc = self.lib.cuLaunchKernel(function, *launch_dims, shared, stream, arr, None)
         if rc != 0:
             self._check(rc, "cuLaunchKernel")
+
+    def prepare_launch(self, function, grid, block, shared: int, params, names=None, types=None, trailing=None,
+                       **_extra):
+        """The launch resolved once for a frozen plan's replay (`cuda_launch.prepare`): one cuLaunchKernel at replay;
+        None where `launch` would refuse or launch nothing."""
+        from nbxtensor.backend import cuda_launch as CL
+        return CL.prepare(self.lib.cuLaunchKernel, self._check, lambda: self._param_counts, function, grid, block,
+                          shared, params, trailing)
 
 
 def _profile_arch() -> str:

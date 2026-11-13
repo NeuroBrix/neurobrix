@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an Apple GPU: 968 -> 663 launches a token with the decode mask merged; the output bytes do not change.
 - A run's end no longer waits for its device on one card under the pool (`DeferredFrees.finish`): the deferred
   tensors are freed at once there, and a replayed decode step no longer waits for the whole GPU at every token.
+- A replayed step's launches are resolved once when the step is frozen (`prepare_launch` on the Metal and CUDA
+  drivers) and only encoded at each replay: on an Apple GPU a decode token is about a tenth faster (TinyLlama,
+  granite-1B); the output bytes do not change.
 
 ### Fixed
 - A decode step's slab (`StepSlab`) carves again: its record of carved sizes was never set since
