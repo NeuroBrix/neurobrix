@@ -4,7 +4,7 @@ A kernel runs on its device after the call that launched it returns: a tensor dr
 launched would be freed under that reader. A run keeps what it drops in a `DeferredFrees` and releases it in batches —
 when the batch reaches a byte cliff or a tensor count; earlier when a throttled reading of the device's free memory
 shows the device within a reserve of its end (with the pool off only: under the pool a freed block stays parked and no
-memory comes back to the device); at the end of the run — every device owning one of them synchronised first. While it
+memory comes back to the device); at the end of the run (`finish`: synchronised first where a mid-run release is). While it
 lives, a batch is also the allocator's out-of-memory reclaimer (`DeviceAllocator.register_oom_reclaim_hook`).
 
 The thresholds are the caller's policy, handed in; the queue and the order of its frees are the library's.
@@ -96,6 +96,15 @@ class DeferredFrees:
             return None
         self.release(sync=self._sync_mid_run)
         return Drain(reason, tensors, nbytes)
+
+    def finish(self) -> int:
+        """The run's end: the batch freed, synchronising first only where a mid-run release would (several devices, or
+        the pool off). On one device under the pool a block handed back is parked and reissued only to work queued
+        after its readers, and a block that leaves the pool for the driver is freed by a call that waits for it itself
+        (Metal's free flushes its queue; cudaFree synchronises): the end of a run needs no wait of its own. A replayed
+        decode step recorded this one as a device synchronisation at every token (2 a token on TinyLlama, Metal
+        2026-11-13). The bytes freed."""
+        return self.release(sync=self._sync_mid_run)
 
     def release(self, sync: bool = True) -> int:
         """Free the batch now, after synchronising every device owning one of its tensors (`sync`); the bytes freed."""

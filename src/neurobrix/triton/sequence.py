@@ -3708,8 +3708,8 @@ class TritonSequence(SequenceSteps):
                 _log.debug(f"[NBX_DEFERRED_DRAIN] single-dev drain #{_drain_stats[0]}: {_drained.tensors} tensors, "
                            f"{_drained.nbytes/1e9:.2f} GB, trigger={_drained.reason}")
 
-        # All kernels submitted — every device synchronised, then the deferred tensors freed
-        _frees.release()
+        # All kernels submitted — the deferred tensors freed, synchronised first only where it is needed (finish)
+        _frees.finish()
 
         if _drain_stats is not None and _drain_stats[0] > 0:
             _log.debug(f"[NBX_DEFERRED_DRAIN] single-dev totals: "

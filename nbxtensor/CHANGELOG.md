@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A decode token makes fewer device copies: a small-M matrix product writes each row's GEMV straight into its output
   (`mv_wrapper(..., out=)`), and the paged KV cache hands a step's K and V to its append kernel as views. TinyLlama on
   an Apple GPU: 968 -> 663 launches a token with the decode mask merged; the output bytes do not change.
+- A run's end no longer waits for its device on one card under the pool (`DeferredFrees.finish`): the deferred
+  tensors are freed at once there, and a replayed decode step no longer waits for the whole GPU at every token.
 
 ### Fixed
 - A decode step's slab (`StepSlab`) carves again: its record of carved sizes was never set since
