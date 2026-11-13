@@ -64,7 +64,9 @@ def device_memory_gb(device_idx: int) -> "int | None":
     if nbytes is None:
         if idx not in _MEASURED_MEMORY:
             from nbxtensor.memory.allocator import DeviceAllocator
-            _MEASURED_MEMORY[idx] = int(DeviceAllocator.device_total_bytes(idx))
+            # no card visible at that index (the count is 0 without a runtime): None; a refused read rises
+            visible = idx < DeviceAllocator.device_count()
+            _MEASURED_MEMORY[idx] = int(DeviceAllocator.device_total_bytes(idx)) if visible else 0
         nbytes = _MEASURED_MEMORY[idx]
     return memory_gb(nbytes / (1 << 20)) if nbytes and nbytes > 0 else None
 

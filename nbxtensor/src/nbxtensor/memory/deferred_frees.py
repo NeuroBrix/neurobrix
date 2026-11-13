@@ -89,7 +89,7 @@ class DeferredFrees:
             reason = "cliff"
         elif self._pressure_gate and nbytes >= self._floor and at - self._last_check >= self._interval:
             self._last_check = at
-            if not 0 <= DeviceAllocator.device_free_bytes() < self._reserve:
+            if not DeviceAllocator.device_free_bytes() < self._reserve:     # a refused read rises (qa 2026-11-13)
                 return None
             reason = "pressure"
         else:

@@ -140,8 +140,8 @@ def memory_allocated(device_idx=None) -> int                   # live bytes hand
 def pool_cached_bytes(device_idx=None) -> int                  # bytes parked in the pool's free blocks
 def blocks_in_use(device_idx=None) -> dict                     # {address: bytes} of the blocks tensors hold
 def device_free_bytes(device_idx=None) -> int                  # the driver's free bytes (None: current device)
-def device_total_bytes(device_idx=None) -> int                 # the device's total memory; -1 when not known
-def free_memory_mb(index: int) -> Optional[float]              # the driver's free memory in MB; None when not known
+def device_total_bytes(device_idx=None) -> int                 # the device's total memory (refused: DeviceQueryError)
+def free_memory_mb(index: int) -> float                        # the driver's free memory in MB (refused: DeviceQueryError)
 def peak_device_bytes() -> Optional[int]                       # the most one device held at once since the start
 def host_pinned_allocated() -> int                             # live pinned host bytes
 def empty_cache_pool() -> int                                  # the pool's parked blocks given back; bytes freed
@@ -3077,11 +3077,14 @@ def drain(index: Optional[int] = None) -> None   # every stream of a device drai
 def mem_info(index: Optional[int] = None) -> Tuple[int, int]   # (free, total) bytes, as the runtime reports them
 def most_free() -> int                   # the device with the most free memory; the current device restored
 class DeviceQueryError(RuntimeError)     # a device question the runtime refused: the call, the device, its code
+NoGpuRuntime                             # (backend.runtime) no GPU runtime on this host: the one refusal meaning no device
 ```
 
 No device is a fact, a refusal is an error: `count()` is 0 only on a host with no GPU runtime
 (`nbxtensor.backend.runtime.NoGpuRuntime`) or when the runtime answers its own "no device" code (the backend table's
-`no_device_rc`); any other refusal of a device question raises `DeviceQueryError`.
+`no_device_rc`); any other refusal of a device question raises `DeviceQueryError` — the one-device memory reads
+included (`mem_info`, and `nbxtensor.memory`'s `free_memory_mb`, `device_free_bytes`, `device_total_bytes`: a device
+the process does not see, a refused selection or read, a failed restore of the current device).
 
 `set_backend_has_fp64` and `declare_backend_capability` (nbx_tensor.py:420,519) mutate module globals
 today. In v1 the record is built once, when the backend is detected. A device's fp64 is a fact the

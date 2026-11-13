@@ -6,8 +6,12 @@ driver older than its runtime read as "no GPU"; `most_free_device` and `visible_
 query failed (the walk then picked among the others, or listed fewer devices), and a failed restore of the current
 device was not raised.
 
-What this test does if the code is wrong: a refusal comes back as 0, as a smaller list or as another device, or the
-current device is not restored after a failed walk — red.
+qa (2026-11-13), on the same family: `free_memory_mb` and `device_total_bytes` ignored the runtime's code (0.0 and 0
+for rc=700) and swallowed the refusal (None, -1), and Prism's budget reader then built a card of 0 MB from a broken
+driver; `mem_get_info` raised a plain RuntimeError; an interrupt in the walk skipped the restore.
+
+What this test does if the code is wrong: a refusal comes back as 0, None, -1, a smaller list or another device, a
+card of 0 MB reaches Prism, or the current device is not restored after a failed or interrupted read — red.
 
 Run: python -m pytest nbxtensor/tests/test_a_device_question_the_runtime_refuses_is_raised_by_name.py
 """
@@ -87,28 +91,28 @@ def test_any_other_refusal_to_count_is_raised_with_its_code(runtime):
 
 
 def test_the_most_free_device_is_chosen_the_lowest_on_a_tie(runtime):
-    runtime([5, 9, 9, 2])
+    fake = runtime([5, 9, 9, 2])
     assert DeviceAllocator.most_free_device() == 1
-    assert runtime.restored == [0]
+    assert set(runtime.restored) == {0} and fake.current == 0
 
 
 def test_a_device_that_cannot_be_selected_is_named_never_skipped(runtime):
     fake = runtime([5, 9, 7], refuse={("select", 1): 101})
-    with pytest.raises(DeviceQueryError, match=r"cudaSetDevice\(1\) failed with error 101: device 1 of the 3"):
+    with pytest.raises(DeviceQueryError, match=r"cudaSetDevice\(1\) failed with error 101"):
         DeviceAllocator.most_free_device()
     assert runtime.restored == [0] and fake.current == 0          # back where it was, the walk failed or not
 
 
 def test_a_device_whose_memory_cannot_be_read_is_named_never_skipped(runtime):
-    runtime([5, 9, 7], refuse={("info", 2): 2})
+    fake = runtime([5, 9, 7], refuse={("info", 2): 2})
     with pytest.raises(DeviceQueryError, match=r"cudaMemGetInfo failed with error 2 on device 2"):
         DeviceAllocator.visible_device_memory()
-    assert runtime.restored == [0]
+    assert set(runtime.restored) == {0} and fake.current == 0
 
 
 def test_a_failed_restore_is_raised(runtime):
     runtime([5, 9], restore_fails=True)
-    with pytest.raises(DeviceQueryError, match=r"the current device 0 could not be restored after the walk"):
+    with pytest.raises(DeviceQueryError, match=r"the current device 0 could not be restored after reading device 1"):
         DeviceAllocator.most_free_device()
 
 
@@ -130,3 +134,45 @@ def test_a_refusal_beside_a_refused_selection_is_said_not_raised_instead(runtime
     with pytest.raises(RuntimeError, match=r"set_device\(4\) refused by the runtime \(error 101\) — and counting"):
         DeviceAllocator.set_device(4)
     assert fake.current == 0
+
+
+BROKEN = {("info", 0): 700, ("info", 1): 700}          # cudaErrorIllegalAddress: a driver that refuses every read
+
+
+@pytest.mark.parametrize("read", [lambda: DeviceAllocator.free_memory_mb(1), lambda: DeviceAllocator.device_total_bytes(1),
+                                  lambda: DeviceAllocator.device_free_bytes(1), lambda: DeviceAllocator.mem_get_info(1),
+                                  lambda: DeviceAllocator.device_total_bytes(), lambda: DeviceAllocator.device_free_bytes()],
+                         ids=["free_memory_mb", "device_total_bytes", "device_free_bytes", "mem_get_info",
+                              "total of the current", "free of the current"])
+def test_a_runtime_answering_700_is_raised_never_read_as_zero(runtime, read):
+    fake = runtime([5, 9], refuse=BROKEN)
+    with pytest.raises(DeviceQueryError, match=r"cudaMemGetInfo failed with error 700 on device"):
+        read()
+    assert fake.current == 0
+
+
+def test_a_device_the_process_does_not_see_is_refused_never_none(runtime):
+    runtime([5, 9])
+    with pytest.raises(DeviceQueryError, match=r"device 7: the process sees 2 device"):
+        DeviceAllocator.free_memory_mb(7)
+
+
+def test_prism_never_builds_a_card_of_0_mb_from_a_broken_driver(runtime, monkeypatch):
+    runtime([5, 9], refuse=BROKEN)
+    from neurobrix.core.prism import memory_budget as B
+    with pytest.raises(DeviceQueryError, match=r"error 700"):
+        B._read_through_the_runtime(1, None)
+
+
+def test_an_interrupt_during_a_read_still_restores_the_current_device(runtime):
+    fake = runtime([5, 9])
+    read = fake.mem_get_info
+
+    def interrupted():                           # the read of device 1, after the walk switched to it
+        if fake.current == 1:
+            raise KeyboardInterrupt
+        return read()
+    fake.mem_get_info = interrupted
+    with pytest.raises(KeyboardInterrupt):
+        DeviceAllocator.most_free_device()
+    assert runtime.restored == [0] and fake.current == 0

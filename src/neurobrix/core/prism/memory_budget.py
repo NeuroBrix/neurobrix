@@ -183,16 +183,12 @@ def read_device_sharing(index: int) -> DeviceReading:
 def _read_through_the_runtime(index: int, facts) -> DeviceReading:
     """The card's capacity and free memory as the runtime answers (it selects the card: a context), beside whatever
     sharing facts the seam gave."""
-    free = _nbx_memory.free_memory_mb(index)
-    try:
-        total = _nbx_memory.device_total_bytes(index) / (1024 * 1024)
-    except Exception:  # noqa: BLE001 — the profile supplies the capacity when the driver does not
-        total = None
+    free = _nbx_memory.free_memory_mb(index)                       # a refused read rises: never a card of 0 MB (qa)
+    total = _nbx_memory.device_total_bytes(index) / (1024 * 1024)
     if facts is None:
-        return DeviceReading(kind="device", capacity_mb=float(total or 0), free_mb=float(free or 0),
+        return DeviceReading(kind="device", capacity_mb=float(total), free_mb=float(free),
                              measured=False, source="no sharing reading for this device")
-    return DeviceReading(kind="device", capacity_mb=float(total or facts.get("total_mb") or 0),
-                         free_mb=float(free if free is not None else facts.get("free_mb") or 0),
+    return DeviceReading(kind="device", capacity_mb=float(total), free_mb=float(free),
                          display_active=bool(facts.get("display_active")),
                          held_by_others_mb=float(facts.get("held_by_others_mb") or 0.0),
                          own_context_mb=float(facts.get("own_context_mb") or 0.0),

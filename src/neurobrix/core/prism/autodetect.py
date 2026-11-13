@@ -44,7 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
 from neurobrix.core.prism import launch_lines
 import logging
-from nbxtensor import memory as _nbx_memory
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
 DEFAULT_PROFILE_PATH = HARDWARE_DIR / "default.yml"
 
@@ -2416,7 +2416,7 @@ def runtime_card_facts(index: int) -> dict:
         if total is None or total <= 0 or not facts or facts.get("own_context_mb") is None:
             return {}
         return {"runtime_total_mb": int(total // (1024 * 1024)), "runtime_context_mb": int(round(facts["own_context_mb"]))}
-    except Exception:  # noqa: BLE001 — no runtime here: the facts are absent, said by the shadow's refusal
+    except _nbx_device.NoGpuRuntime:  # no runtime here: the facts are absent, said by the shadow's refusal
         return {}
 
 

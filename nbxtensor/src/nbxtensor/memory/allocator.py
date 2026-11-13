@@ -433,8 +433,8 @@ class DeviceAllocator:
         raise DeviceQueryError(f"{fn} failed with error {rc} on {_rt.gpu_backend()}: the runtime is there and refuses "
                                f"to count its devices (a driver older than the runtime, or a broken install)")
 
-    @staticmethod
-    def free_memory_mb(index: int) -> "Optional[float]":
+    @classmethod
+    def free_memory_mb(cls, index: int) -> float:
         """The driver's FREE memory on device `index`, in MB, or None when the
         runtime cannot answer.
 
@@ -447,20 +447,7 @@ class DeviceAllocator:
         previously-current device restored: cudaMemGetInfo / hipMemGetInfo via
         ctypes, no torch (R33).
         """
-        try:
-            if int(index) < 0 or int(index) >= DeviceAllocator.device_count():
-                return None            # cudaSetDevice REPORTS a bad ordinal; it does not raise
-            dm = _rt.device_memory()
-            prev = DeviceAllocator.get_device()
-            dm.set_device(int(index))
-            _rc, free_b, _total_b = dm.mem_get_info()
-            try:
-                DeviceAllocator.restore_device(prev)
-            except Exception:
-                pass
-            return free_b / (1024 * 1024)
-        except Exception:
-            return None
+        return cls.mem_get_info(int(index))[0] / (1024 * 1024)
 
     @classmethod
     def most_free_device(cls) -> int:
@@ -483,43 +470,9 @@ class DeviceAllocator:
 
     @classmethod
     def _each_device_memory(cls, ndev: int) -> list[tuple[int, int]]:
-        """`[(free, total)]` bytes of devices 0..ndev-1 from the runtime, the previously-current device restored after.
-        A device the runtime refuses (selecting it, or reading its memory) raises `DeviceQueryError` with the device and
-        the code; so does a failed restore. The fast-path cache is dropped either way: the walk issued raw device
-        switches (C2)."""
-        dm, table = _rt.device_memory(), _rt.backend_table()
-        prev = cls.get_device()
-        out: list[tuple[int, int]] = []
-        walk_error = restore_error = None
-        try:
-            for i in range(ndev):
-                rc = dm.set_device(i)
-                if rc != 0:
-                    cls.clear_last_error()
-                    raise DeviceQueryError(f"{table.get('set_device', 'set_device')}({i}) failed with error {rc}: "
-                                           f"device {i} of the {ndev} the runtime counts cannot be selected")
-                rc, free_b, total_b = dm.mem_get_info()
-                if rc != 0:
-                    cls.clear_last_error()
-                    raise DeviceQueryError(f"{table.get('mem_get_info', 'mem_get_info')} failed with error {rc} on "
-                                           f"device {i}")
-                out.append((int(free_b), int(total_b)))
-        except Exception as exc:                    # raised below, after the restore, with the restore's own failure
-            walk_error = exc
-        try:                                        # back to the device that was current, whatever the walk met
-            cls.restore_device(prev)
-        except Exception as exc:
-            restore_error = exc
-        _rt.invalidate_current_device_cache()
-        if walk_error is not None and restore_error is not None:
-            raise DeviceQueryError(f"{walk_error}; and the current device {prev} could not be restored after it: "
-                                   f"{restore_error}") from walk_error
-        if walk_error is not None:
-            raise walk_error
-        if restore_error is not None:
-            raise DeviceQueryError(f"the current device {prev} could not be restored after the walk: "
-                                   f"{restore_error}") from restore_error
-        return out
+        """`[(free, total)]` bytes of devices 0..ndev-1, each read by `_one_device_memory` (refused by name, the current
+        device restored in `finally`, an interrupt included: qa 2026-11-13)."""
+        return [cls.mem_get_info(i) for i in range(ndev)]
 
     @classmethod
     def visible_device_memory(cls) -> list[tuple[int, int]]:
@@ -627,20 +580,20 @@ class DeviceAllocator:
             if prof is None or not getattr(prof, "devices", None):
                 return 0
             frac = float(_arch_memory_param("alloc_pool_parked_cap_fraction", 0.0))
-            cap = 0
-            if frac > 0:
-                total = DeviceAllocator.device_total_bytes(dev)
-                # A limit imposed on the process (`set_limit`: an application's rung, a census) is the device the
-                # plan was sized for: the pool parks a fraction of IT, as it would on a card of that size — measured
-                # 2026-10-27, mochi-1-preview triton at the 8 GB rung on a 32 GB card parked its 9 GB text encoder
-                # arena (cap 16 GB) and peaked at 22.6 GB where a card of 8 GB would have freed it
-                limit = DeviceAllocator._imposed_bytes(dev)   # the card the application holds this process to
-                if limit is not None and total > 0:
-                    total = min(total, int(limit))
-                if total > 0:
-                    cap = int(total * frac)
         except Exception:
             return 0
+        cap = 0
+        if frac > 0:
+            total = DeviceAllocator.device_total_bytes(dev)   # a refused read rises: never an unbounded pool (qa)
+            # A limit imposed on the process (`set_limit`: an application's rung, a census) is the device the
+            # plan was sized for: the pool parks a fraction of IT, as it would on a card of that size — measured
+            # 2026-10-27, mochi-1-preview triton at the 8 GB rung on a 32 GB card parked its 9 GB text encoder
+            # arena (cap 16 GB) and peaked at 22.6 GB where a card of 8 GB would have freed it
+            limit = DeviceAllocator._imposed_bytes(dev)   # the card the application holds this process to
+            if limit is not None and total > 0:
+                total = min(total, int(limit))
+            if total > 0:
+                cap = int(total * frac)
         DeviceAllocator._pool_cap_bytes[dev] = cap
         return cap
 
@@ -1402,77 +1355,24 @@ class DeviceAllocator:
             return sum(DeviceAllocator._cuda_peak_bytes.values())
         return DeviceAllocator._cuda_peak_bytes.get(device_idx, 0)
 
-    @staticmethod
-    def device_free_bytes(device_idx: Optional[int] = None) -> int:
-        """Driver-free bytes on `device_idx` (None = current device), via
-        cudaMemGetInfo/hipMemGetInfo through ctypes (R33: no torch).
+    @classmethod
+    def device_free_bytes(cls, device_idx: Optional[int] = None) -> int:
+        """Driver-free bytes on `device_idx` (None = current device), the bytes the pool keeps parked included: they
+        are reclaimable on demand (the malloc OOM path flushes them), so every feasibility probe (the SDPA chunk
+        decision, the drain pressure gate, the conv3d chunk-stream gate) reads the headroom it read with the pool
+        off (2026-09-02). A refused read raises `DeviceQueryError` (until 2026-11-13: -1, and 0 for a refused rc).
+        Read-only feasibility probe: device-wide (other processes included), never an accounting API."""
+        free = cls.mem_get_info(device_idx)[0]
+        if cls._pool_enabled:
+            d = device_idx if device_idx is not None else cls.get_device()
+            free += cls._POOL.cached.get(d, 0)
+        return free
 
-        Returns -1 when the query is unavailable (CPU-only host, runtime
-        load failure) so callers can distinguish "unknown" from "0 bytes
-        free". Read-only feasibility probe for wrapper-internal memory
-        streaming gates (conv3d temporal chunk-streaming) — deliberately
-        NOT an accounting API (device-wide, includes other processes) and
-        NOT a per-launch kernel-config source (hardware params stay in the
-        vendor YAMLs)."""
-        prev_dev = None
-        try:
-            dm = _rt.device_memory()
-            if (device_idx is not None
-                    and DeviceAllocator.get_device() != device_idx):
-                # Probe on another device: switch, query, RESTORE (the
-                # allocator's own doctrine — a GC-site free of a cuda:N
-                # pointer must never leave cuda:N current; the C3 fast path
-                # contracts that the runtime current device is the caller's).
-                prev_dev = DeviceAllocator.get_device()
-                DeviceAllocator.set_device(device_idx)
-            _rc, free_b, _total_b = dm.mem_get_info()
-            free = int(free_b)
-            # Pool-aware (2026-09-02): bytes parked in the free-list are
-            # reclaimable on demand (the malloc OOM path flushes them, the
-            # autotune guard flushes them), so every feasibility probe —
-            # the SDPA chunk decision, the drain pressure gate, the conv3d
-            # chunk-stream gate — reads the same headroom it read with the
-            # pool off. Without this the probes under-read free memory by
-            # the parked bytes and shrank their chunks on edge rows.
-            if DeviceAllocator._pool_enabled:
-                d = device_idx if device_idx is not None else DeviceAllocator.get_device()
-                free += DeviceAllocator._POOL.cached.get(d, 0)
-            return free
-        except Exception:
-            return -1
-        finally:
-            if prev_dev is not None:
-                try:
-                    DeviceAllocator.restore_device(prev_dev)
-                except Exception:
-                    pass
-
-    @staticmethod
-    def device_total_bytes(device_idx: Optional[int] = None) -> int:
-        """Total device memory on `device_idx` (None = current device) via
-        cudaMemGetInfo/hipMemGetInfo through ctypes; -1 when unavailable.
-        Same contract and caveats as `device_free_bytes`."""
-        prev_dev = None
-        try:
-            dm = _rt.device_memory()
-            if (device_idx is not None
-                    and DeviceAllocator.get_device() != device_idx):
-                # Probe on another device: switch, query, RESTORE (the
-                # allocator's own doctrine — a GC-site free of a cuda:N
-                # pointer must never leave cuda:N current; the C3 fast path
-                # contracts that the runtime current device is the caller's).
-                prev_dev = DeviceAllocator.get_device()
-                DeviceAllocator.set_device(device_idx)
-            _rc, _free_b, total_b = dm.mem_get_info()
-            return int(total_b)
-        except Exception:
-            return -1
-        finally:
-            if prev_dev is not None:
-                try:
-                    DeviceAllocator.restore_device(prev_dev)
-                except Exception:
-                    pass
+    @classmethod
+    def device_total_bytes(cls, device_idx: Optional[int] = None) -> int:
+        """Total device memory on `device_idx` (None = current device); a refused read raises `DeviceQueryError`
+        (until 2026-11-13: -1, and 0 for a refused rc)."""
+        return cls.mem_get_info(device_idx)[1]
 
     @staticmethod
     def open_window(device_idx: int) -> int:
@@ -1742,25 +1642,62 @@ class DeviceAllocator:
             if prev is not None and prev != device_idx:
                 DeviceAllocator.restore_device(prev)
 
-    @staticmethod
-    def mem_get_info(device_idx: Optional[int] = None) -> Tuple[int, int]:
-        """(free_bytes, total_bytes) of a device, from the runtime."""
-        dm = _rt.device_memory()
-        mem_fn = _rt.backend_table().get("mem_get_info", "cudaMemGetInfo")   # named in the refusal, as before
-        prev = None
+    @classmethod
+    def mem_get_info(cls, device_idx: Optional[int] = None) -> Tuple[int, int]:
+        """(free_bytes, total_bytes) of a device, from the runtime; a refusal raises `DeviceQueryError`."""
+        return cls._one_device_memory(device_idx)
+
+    @classmethod
+    def _one_device_memory(cls, device_idx: Optional[int]) -> Tuple[int, int]:
+        """(free, total) bytes of device `device_idx` (None: the current one) from the runtime. A device the process
+        does not see, a refused selection or a refused read raises `DeviceQueryError` with the call, the device and
+        the code; the previously-current device is restored in `finally` (an interrupt included), and a failed
+        restore raises too. `mem_get_info` is its one caller and every one-device memory question answers through
+        `mem_get_info` (qa, 2026-11-13: two of them read a refused runtime as 0 bytes, and Prism built a card of 0 MB
+        from a broken driver)."""
+        dm, table = _rt.device_memory(), _rt.backend_table()
+        prev = cls.get_device()
         if device_idx is not None:
-            prev = DeviceAllocator.get_device()
-            if prev != device_idx:
-                DeviceAllocator.set_device(device_idx)
+            seen = cls.device_count()
+            if not 0 <= int(device_idx) < seen:
+                raise DeviceQueryError(f"device {device_idx}: the process sees {seen} device(s)")
+        switch = device_idx is not None and int(device_idx) != prev
+        walk_error = None
         try:
-            ret, free_b, total_b = dm.mem_get_info()
-            if ret != 0:
-                DeviceAllocator.clear_last_error()
-                raise RuntimeError(f"{mem_fn} failed with error {ret}")
+            if switch:
+                rc = dm.set_device(int(device_idx))
+                if rc != 0:
+                    cls.clear_last_error()
+                    raise DeviceQueryError(f"{table.get('set_device', 'set_device')}({device_idx}) failed with error "
+                                           f"{rc}")
+            rc, free_b, total_b = dm.mem_get_info()
+            if rc != 0:
+                cls.clear_last_error()
+                raise DeviceQueryError(f"{table.get('mem_get_info', 'mem_get_info')} failed with error {rc} on device "
+                                       f"{prev if device_idx is None else device_idx}")
             return int(free_b), int(total_b)
+        except DeviceQueryError as exc:
+            walk_error = exc
+            raise
         finally:
-            if prev is not None and prev != device_idx:
-                DeviceAllocator.restore_device(prev)
+            if switch:
+                cls._restore_after_read(prev, device_idx, walk_error)
+
+    @classmethod
+    def _restore_after_read(cls, prev: int, device_idx: int, walk_error) -> None:
+        """Back to device `prev` after reading `device_idx`, the fast-path cache dropped (the read switched devices
+        raw, C2); a failed restore raises `DeviceQueryError`, naming the read's own refusal too when there was one
+        (one error: Python 3.10 has no add_note)."""
+        try:
+            cls.restore_device(prev)
+        except Exception as exc:
+            if walk_error is not None:
+                raise DeviceQueryError(f"{walk_error}; and the current device {prev} could not be restored after it: "
+                                       f"{exc}") from walk_error
+            raise DeviceQueryError(f"the current device {prev} could not be restored after reading device "
+                                   f"{device_idx}: {exc}") from exc
+        finally:
+            _rt.invalidate_current_device_cache()
 
     @staticmethod
     def stream_synchronize(stream: int):

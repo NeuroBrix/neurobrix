@@ -67,17 +67,18 @@ def blocks_in_use(device_idx=None) -> dict:
 
 
 def device_free_bytes(device_idx=None) -> int:
-    """The driver's free bytes on `device_idx` (None: the current device)."""
+    """The driver's free bytes on `device_idx` (None: the current device), the pool's parked bytes included; a refusal
+    raises `DeviceQueryError`."""
     return _allocator().device_free_bytes(device_idx)
 
 
 def device_total_bytes(device_idx=None) -> int:
-    """The device's total memory on `device_idx` (None: the current device); -1 when the runtime cannot answer."""
+    """The device's total memory on `device_idx` (None: the current device); a refusal raises `DeviceQueryError`."""
     return _allocator().device_total_bytes(device_idx)
 
 
 def free_memory_mb(index: int):
-    """The driver's free memory on device `index`, in MB; None when the runtime cannot answer."""
+    """The driver's free memory on device `index`, in MB; a refusal raises `DeviceQueryError`."""
     return _allocator().free_memory_mb(index)
 
 

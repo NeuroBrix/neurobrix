@@ -27,5 +27,8 @@ def test_free_is_positive_and_at_most_the_card():
     assert D.get_device() == D.get_device()
 
 
-def test_an_unanswerable_index_is_none_not_a_raise():
-    assert D.free_memory_mb(10**6) is None
+def test_a_device_the_process_does_not_see_is_refused_by_name():
+    """Until 2026-11-13 it answered None, and Prism read None as a card of 0 MB (qa)."""
+    from nbxtensor.memory.allocator import DeviceQueryError
+    with pytest.raises(DeviceQueryError, match=r"device 1000000: the process sees \d+ device"):
+        D.free_memory_mb(10**6)

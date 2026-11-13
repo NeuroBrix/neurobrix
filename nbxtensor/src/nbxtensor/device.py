@@ -9,15 +9,18 @@ replaced by a default.
 from typing import Optional, Tuple
 
 __all__ = ["count", "current", "select", "select_for_launch", "synchronize", "drain", "mem_info", "most_free",
-           "DeviceQueryError"]
+           "DeviceQueryError", "NoGpuRuntime"]
 
 
 def __getattr__(name):
-    """`DeviceQueryError` (the refusal a device question raises), read from the allocator only when asked: importing
-    the door loads no device runtime."""
+    """`DeviceQueryError` (the refusal a device question raises) and `NoGpuRuntime` (no GPU runtime on this host),
+    read from their modules only when asked: importing the door loads no device runtime."""
     if name == "DeviceQueryError":
         from nbxtensor.memory.allocator import DeviceQueryError
         return DeviceQueryError
+    if name == "NoGpuRuntime":                # a host with no GPU runtime: the one refusal that means "no device"
+        from nbxtensor.backend.runtime import NoGpuRuntime
+        return NoGpuRuntime
     raise AttributeError(f"module 'nbxtensor.device' has no attribute {name!r}")
 
 

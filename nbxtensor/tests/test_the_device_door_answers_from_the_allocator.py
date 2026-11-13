@@ -64,5 +64,6 @@ def test_a_refusal_reaches_the_caller_unchanged(monkeypatch):
 def test_the_door_exports_exactly_its_names():
     from nbxtensor import device
     assert sorted(device.__all__) == sorted(["count", "current", "select", "select_for_launch", "synchronize",
-                                             "drain", "mem_info", "most_free", "DeviceQueryError"])
+                                             "drain", "mem_info", "most_free", "DeviceQueryError",
+                                             "NoGpuRuntime"])
     assert all(callable(getattr(device, n)) for n in device.__all__)
