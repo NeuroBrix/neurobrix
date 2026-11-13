@@ -230,33 +230,7 @@ class TritonExtDriver(Driver):
                 f"Binding the shorter of the two leaves the rest unbound and "
                 f"says nothing.")
 
-        D = _ext()
-        pointers: List[int] = []
-        scalar_types: List[str] = []
-        scalar_vals: List[Tuple[str, int]] = []
-        for (kind, value), ty in zip(params, types):
-            if kind == "ptr":
-                if not int(value):
-                    raise RuntimeError(f"kernel {kernel_name(function)!r} was handed a null pointer parameter")
-                pointers.append(int(value))
-            else:
-                scalar_types.append(ty)
-                scalar_vals.append((kind, int(value)))
-        packed = None
-        if scalar_types:
-            total, offsets = D._compute_scalar_layout(scalar_types)
-            limit = getattr(D, "_SETBYTES_LIMIT", 4096)
-            if total > limit:
-                raise RuntimeError(f"packed scalar args are {total} bytes, over Metal's {limit}-byte setBytes limit")
-            buf = bytearray(total)
-            for (kind, val), ty, off in zip(scalar_vals, scalar_types, offsets):
-                width = _KIND_WIDTH.get(kind)
-                if width is None:
-                    raise RuntimeError(f"the Metal launch cannot pack a parameter of kind {kind!r} (Triton type "
-                                       f"{ty!r})")
-                struct.pack_into({1: "<B", 2: "<H", 4: "<I", 8: "<Q"}[width], buf, off,
-                                 val & ((1 << (8 * width)) - 1))
-            packed = bytes(buf)
+        pointers, packed = _pointers_and_scalars(function, params, types)
         # The emitter's own trailing parameters, bound LAST and in its order (print, then assert), each a zeroed
         # block whose head word is a running count the kernel bumps: triton-ext's `planKernelAbi`.
         from nbxtensor.backend import metal_dispatch as MD
@@ -275,6 +249,50 @@ class TritonExtDriver(Driver):
             row[0] += 1; row[1] += spent
         if printed is not None:
             _print_records(trailing.print_layout, printed)
+
+    def prepare_launch(self, function, grid, block, shared: int, params: Sequence[Tuple[str, Any]], names=None,
+                       types=None, trailing=None, extents=None):
+        """The launch resolved once for a frozen plan's replay (`metal_dispatch.bind`), or None where it must stay live:
+        a kernel with trailing print / assert blocks (one block a launch, read after it). The same refusals as
+        `launch`, made here once."""
+        if types is None or len(params) != len(types):
+            return None                                 # `launch` refuses these by name, at the live launch
+        if trailing and (trailing.print_layout or trailing.assert_layout):
+            return None
+        from nbxtensor.backend import metal_dispatch as MD
+        pointers, packed = _pointers_and_scalars(function, params, types)
+        return MD.bind(function, pointers, packed, grid, block, exposes=bool(trailing and trailing.exposes_addresses),
+                       reads=bool(trailing and trailing.reads_addresses), shared=int(shared or 0),
+                       barrier=bool(trailing and trailing.cross_tg_barrier))
+
+
+def _pointers_and_scalars(function, params, types):
+    """(the pointer arguments in order, the scalars packed in one block at triton-ext's offsets or None)."""
+    D = _ext()
+    pointers: List[int] = []
+    scalar_types: List[str] = []
+    scalar_vals: List[Tuple[str, int]] = []
+    for (kind, value), ty in zip(params, types):
+        if kind == "ptr":
+            if not int(value):
+                raise RuntimeError(f"kernel {kernel_name(function)!r} was handed a null pointer parameter")
+            pointers.append(int(value))
+        else:
+            scalar_types.append(ty)
+            scalar_vals.append((kind, int(value)))
+    if not scalar_types:
+        return pointers, None
+    total, offsets = D._compute_scalar_layout(scalar_types)
+    limit = getattr(D, "_SETBYTES_LIMIT", 4096)
+    if total > limit:
+        raise RuntimeError(f"packed scalar args are {total} bytes, over Metal's {limit}-byte setBytes limit")
+    buf = bytearray(total)
+    for (kind, val), ty, off in zip(scalar_vals, scalar_types, offsets):
+        width = _KIND_WIDTH.get(kind)
+        if width is None:
+            raise RuntimeError(f"the Metal launch cannot pack a parameter of kind {kind!r} (Triton type {ty!r})")
+        struct.pack_into({1: "<B", 2: "<H", 4: "<I", 8: "<Q"}[width], buf, off, val & ((1 << (8 * width)) - 1))
+    return pointers, bytes(buf)
 
 
 def _now() -> float:

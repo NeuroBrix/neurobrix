@@ -2730,8 +2730,10 @@ STATE.site_of(filename) -> bool   # the caller's predicate: which stack frame na
 install_seams() -> None    # once: Triton's launch property, the allocator interceptor, NBXTensor.item's guard
 arm_launch_recorder(on: bool) -> None
 KERNEL, MEMCPY, MEMSET, SETDEV, SYNC, H2D   # the action tags
+BOUND                       # a KERNEL action the driver resolved once (`prepare_launch`): the direct replay's, never recorded
 class FrozenPlan(records, slab, arena_list, input_slots, scan_limit=None, extra_scan=(), scan_slots=None)
     .replay(arena) -> None  # rebound inputs copied in, the actions run (graphs or direct), arena restored, outputs fresh
+                            # (the direct replay runs each launch as the driver resolved it once, where it can)
     .crosses_cards() -> bool
 plan_of(state) / drop_plan(plans, sig)    # a plan's resources, and their release (slabs retired, graph destroyed)
 heap_copy(t) -> NBXTensor ; copy_into(frozen, new) -> None   # the copies by logical values (views kept in order)
@@ -2828,6 +2830,16 @@ def stored_config(d)                         # a recorded configuration back as 
 def config_dict(cfg) -> dict                 # a Triton config as a certified directory records it
 ```
 
+### `nbxtensor.backend.cuda_launch` — a CUDA launch's refusals, dimensions and argument cells
+
+```python
+def refuse(param_counts, function, params, names, trailing) -> None   # the live launch's refusals, by name
+def dims(grid, block) -> Optional[tuple]      # (gx, gy, gz, bx, by, bz); None for an empty grid
+def cells(kinds) -> (storage, pointer_array)  # one C cell per parameter kind, the array over them
+class BoundCudaLaunch                         # .run(stream): one cuLaunchKernel over its own cells
+def prepare(launch, check, param_counts, function, grid, block, shared, params, trailing) -> Optional[BoundCudaLaunch]
+```
+
 ### `nbxtensor.backend.launcher_contract` — the contract a launch driver meets (BACKENDS.md section 1)
 
 `nbxtensor.backend.launcher_contract`
@@ -2879,6 +2891,11 @@ def raise_failed_asserts() -> None
     # After a flush: raise for the first launch whose assert failed.
 def dispatch(pipe, stream, pointers, scalars, trailing, grid, block, exposes=False, reads=False, shared=0, barrier=False)
     # Encode one launch on the stream's serial compute encoder.
+def bind(pipe, pointers, scalars, grid, block, exposes=False, reads=False, shared=0, barrier=False) -> BoundLaunch
+    # A launch with no trailing buffer resolved once (the checks, each pointer's allocation), refused by name as
+    # bind_pointer refuses.
+class BoundLaunch
+    # .run(stream): encode the resolved launch only (a frozen plan's replay: its addresses never move)
 ```
 
 `nbxtensor.backend.metal_device`
@@ -3320,6 +3337,8 @@ class Driver                   # what a backend implements: load a binary, launc
 class ModuleDriver(Driver)     # the base of the drivers that load a vendor binary as a module (CUDA, HIP, Level Zero)
 def ctypes_slot(kind: str)     # the C cell one launch parameter of this kind lives in
 class CudaDriver(Driver)       # libcuda through ctypes
+    # .prepare_launch(function, grid, block, shared, params, ...) -> a launch resolved once (one cuLaunchKernel at
+    # replay) or None where .launch would refuse; the Metal driver's prepare_launch answers the same (BoundLaunch)
 class HipDriver(Driver)        # the HIP runtime's module API (hsaco code objects; proven against a stand-in, no AMD card has run it)
 class CudaCompiledKernel       # the result of compiling once, launched many times (contract object)
 def register_driver(driver: Optional[Driver]) -> None   # install the driver this process launches through
