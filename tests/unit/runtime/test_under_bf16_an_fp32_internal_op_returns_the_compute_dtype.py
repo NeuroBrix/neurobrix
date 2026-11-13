@@ -87,12 +87,13 @@ def test_the_triton_rule_refuses_an_unstated_graph_dtype_under_bf16():
             T.amp_fp32_output_dtype("bfloat16", g, False, False)
 
 
-def test_the_triton_rule_under_fp16_is_the_contract_s_whatever_the_graph():
+def test_the_triton_rule_under_fp16_is_the_contract_s_on_a_half_graph_and_the_record_s_on_a_wider_one():
     for g in _GRAPHS + (None,):
         assert T.amp_fp32_output_dtype("float16", g, False, False) == "float32"
-        assert T.amp_fp32_output_dtype("float16", g, True, False) == "float16"
         assert T.amp_fp32_output_dtype("float16", g, False, True) == "float16"
         assert T.amp_fp32_output_dtype("float16", g, True, True) == "float16"
+        wider = g in ("float32", "float64")      # a float32 model: the range contract alone never narrows (Kokoro)
+        assert T.amp_fp32_output_dtype("float16", g, True, False) == ("float32" if wider else "float16")
 
 
 def test_the_triton_rule_refuses_a_compute_dtype_that_is_not_half():

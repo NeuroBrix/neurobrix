@@ -47,9 +47,14 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
       always fits bfloat16's range, and the model's own forward returns its input's dtype there.
     * bfloat16 on a graph of another floating dtype (a float32 model computed in bfloat16): float32, the dtype the
       model's forward returned. A graph dtype that is no floating dtype is refused by name.
-    * float16: float16 only under the precision contract — `safe` (narrows every such op) or `narrowed` (this op is
-      in the narrowed set); float32 otherwise. An op `built` in float32 inside a half graph is the model's own
-      float32 island: only `narrowed` brings it to float16, never `safe`."""
+    * float16 on a half graph: float16 only under the precision contract — `safe` (narrows every such op) or
+      `narrowed` (this op is in the narrowed set); float32 otherwise. An op `built` in float32 inside a half graph is
+      the model's own float32 island: only `narrowed` brings it to float16, never `safe`.
+    * float16 on a WIDER graph (a float32 model computed in float16): float32 unless `narrowed`, as under bfloat16 —
+      the model's forward returned float32 there. `safe` is a RANGE fact (every value fits float16); it says nothing
+      of the precision a float32 model needs: Kokoro-82M's harmonic source is a running phase (a cumulative sum
+      reaching thousands of radians) that float16 stores to a few radians, and the voice became noise (the owner's
+      ears, 2026-11-13). Only an op the record narrows (its precision measured) comes down."""
     if compute_dtype == "bfloat16":
         if graph_dtype not in _GRAPH_FLOAT_NAMES:
             raise ValueError(
@@ -58,6 +63,8 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
         return "bfloat16" if graph_dtype == "bfloat16" else "float32"
     if compute_dtype == "float16":
         if built == "float32" and graph_dtype in _HALF_GRAPH_NAMES:
+            return "float16" if narrowed else "float32"
+        if graph_dtype in _GRAPH_FLOAT_NAMES and graph_dtype not in _HALF_GRAPH_NAMES:
             return "float16" if narrowed else "float32"
         return "float16" if (safe or narrowed) else "float32"
     raise ValueError(f"amp_fp32_output_dtype: compute dtype {compute_dtype!r} is not a half dtype — the cast-back "

@@ -39,12 +39,22 @@ def test_under_bfloat16_the_output_follows_the_graph():
 def test_under_float16_only_the_contract_narrows():
     for g in _GRAPHS:
         assert amp_fp32_output_dtype("float16", g, False, False) == "float32"
-        assert amp_fp32_output_dtype("float16", g, True, False) == "float16"
         assert amp_fp32_output_dtype("float16", g, False, True) == "float16"
+    for g in ("float16", "bfloat16"):                          # a half graph: the range contract narrows every such op
+        assert amp_fp32_output_dtype("float16", g, True, False) == "float16"
     for g in ("float16", "bfloat16"):                          # a built fp32 island: only `narrowed` brings it down
         assert amp_fp32_output_dtype("float16", g, True, False, "float32") == "float32"
         assert amp_fp32_output_dtype("float16", g, False, True, "float32") == "float16"
-    assert amp_fp32_output_dtype("float16", "float32", True, False, "float32") == "float16"
+
+
+def test_a_float32_model_under_float16_keeps_float32_unless_the_record_narrows():
+    """`safe` is a range fact; a float32 model's precision is not: Kokoro-82M's harmonic source (a running phase of
+    thousands of radians) stored in float16 became noise on the Triton engine (2026-11-13). On a graph wider than half,
+    only `narrowed` (the record's measured set) brings an fp32-internal output down — as under bfloat16."""
+    for g in ("float32", "float64"):
+        for built in (None, "float32"):
+            assert amp_fp32_output_dtype("float16", g, True, False, built) == "float32"
+            assert amp_fp32_output_dtype("float16", g, True, True, built) == "float16"
 
 
 @pytest.mark.parametrize("compute", ["float32", "float64", "int8"])

@@ -98,7 +98,7 @@ def _w(dag, engine="triton", c="float16", bf16=False, contract=NONE, tiling=None
 
 
 # A decoder block's tail: conv -> NHWC -> rms_norm -> NCHW -> residual add -> conv -> add.
-def _block():
+def _block(graph="float32"):
     T = {"input::z": _t([1, 8, 4, 4], is_input=True),
          "param::w": _t([8, 8, 3, 3]), "param::nw": _t([8]),
          "c0": _t([1, 8, 4, 4]), "p0": _t([1, 4, 4, 8]), "r0": _t([1, 4, 4, 8]),
@@ -111,7 +111,7 @@ def _block():
          _op("add::0", "aten::add", ["p1", "input::z"], ["a0"]),
          _op("conv::1", "aten::convolution", ["a0", "param::w"], ["c1"]),
          _op("add::1", "aten::add", ["c1", "a0"], ["a1"])]
-    return _dag(T, O, ["input::z"], ["a1"])
+    return _dag(T, O, ["input::z"], ["a1"], graph=graph)
 
 
 def test_an_uncontracted_rms_norm_keeps_fp32_and_the_residual_follows():
@@ -140,7 +140,9 @@ def test_triton_sequential_rms_norm_is_reached_by_the_flag_only():
     assert _w(_block(), "triton_sequential", contract=narrow_only)["r0"] == "float32"
     assert _w(_block(), "triton", contract=narrow_only)["r0"] == "float16"
     safe = PrecisionContract(True, frozenset(), frozenset())
-    assert _w(_block(), "triton_sequential", contract=safe)["r0"] == "float16"
+    assert _w(_block("float16"), "triton_sequential", contract=safe)["r0"] == "float16"
+    # a float32 model: the range contract alone never narrows (Kokoro's harmonic source, 2026-11-13)
+    assert _w(_block(), "triton_sequential", contract=safe)["r0"] == "float32"
 
 
 def test_a_conv_resets_to_c():
@@ -532,10 +534,13 @@ def test_under_fp16_a_tuple_norm_output_follows_the_contract_like_a_tensor():
     contract the tuple keeps the fp32 its kernel wrote. Injection: the tuple rule back in `amp_fp32_out` ->
     'float32' under the narrow set, RED."""
     narrow = PrecisionContract(True, frozenset(), frozenset({"ln::0"}))
+    safe_only = PrecisionContract(True, frozenset(), frozenset())
     for eng in ("triton", "triton_sequential"):
         assert _w(_norm_tuple(), eng, contract=NONE)["y"] == "float32", eng
-        for k in (narrow, PrecisionContract(True, frozenset(), frozenset())):
-            assert _w(_norm_tuple(), eng, contract=k)["y"] == "float16", (eng, k)
+        for k in (narrow, safe_only):
+            assert _w(_norm_tuple("float16"), eng, contract=k)["y"] == "float16", (eng, k)
+        assert _w(_norm_tuple(), eng, contract=narrow)["y"] == "float16", eng      # the record narrows any graph
+        assert _w(_norm_tuple(), eng, contract=safe_only)["y"] == "float32", eng   # a float32 model: range is no precision
         assert _w(_norm_tuple("bfloat16"), eng, c="bfloat16", bf16=True)["y"] == "bfloat16"
     # the single-tensor norm still narrows under the contract
     assert _w(_block(), contract=narrow.__class__(True, frozenset(), frozenset({"rms::0"})))[

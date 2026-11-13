@@ -42,8 +42,10 @@ def test_the_rule_is_unchanged_for_an_op_built_at_the_half_dtype():
     for built in ("float16", None):
         assert T.amp_fp32_output_dtype("float16", "float16", True, False, built) == "float16"
         assert T.amp_fp32_output_dtype("float16", "float16", False, False, built) == "float32"
-    # an fp32 graph coerced to fp16 compute: every op is built fp32; the flag rules as before
-    assert T.amp_fp32_output_dtype("float16", "float32", True, False, "float32") == "float16"
+    # an fp32 graph coerced to fp16 compute: every op is built fp32 and the range flag alone narrows none of them —
+    # only the record's narrowed set does (Kokoro-82M's harmonic source, 2026-11-13)
+    assert T.amp_fp32_output_dtype("float16", "float32", True, False, "float32") == "float32"
+    assert T.amp_fp32_output_dtype("float16", "float32", True, True, "float32") == "float16"
 
 
 def test_the_built_dtype_is_read_from_the_record_s_top_level():

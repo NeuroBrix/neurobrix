@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Kokoro-82M speaks with its own voice on the Triton engine.** A model built in float32 and run in half precision keeps
+  float32 wherever its own forward keeps it, unless the model's calibration record measured that op safe in half: the
+  voice's harmonic source (a running phase of thousands of radians) is computed whole, and the Triton engine's voice
+  matches the vendor's reference render and the PyTorch engine's.
+
 - **`neurobrix import` installs only the container the hub states.** The downloaded `.nbx` is checked against the
   sha256 the hub publishes for it, whatever host served the bytes; another archive is refused by name with both
   values, kept beside the store as `<name>.nbx.unverified` and never extracted.

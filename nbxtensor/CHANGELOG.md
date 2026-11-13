@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `nbxtensor.dtype.outputs.amp_fp32_output_dtype`: under float16 compute on a graph built wider than half (float32,
+  float64), an op computed in float32 inside stores float32 unless the record narrows it; the range contract (`safe`)
+  narrows half graphs only, as the bfloat16 rule already keeps a float32 model's float32 outputs.
 - `nbxtensor.memory.kv_host_tier.host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes)` takes a
   page's parts and sizes the page itself.
 - A decode step that stabilizes its allocations serves them from one recycled `StepSlab` from its first stabilized run.
