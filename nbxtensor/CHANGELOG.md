@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`mv_wrapper(..., out=)`), and the paged KV cache hands a step's K and V to its append kernel as views.
 - A run's end on one card under the pool frees its deferred tensors without waiting for the device
   (`DeferredFrees.finish`); several cards, or the pool off, still wait first.
+- A replayed step's launches are resolved once when the step is frozen (`prepare_launch` on the Metal and CUDA
+  drivers) and only encoded at each replay.
 - `nbxtensor.memory.kv_host_tier.host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes)` takes a
   page's parts and sizes the page itself.
 - A decode step that stabilizes its allocations serves them from one recycled `StepSlab` from its first stabilized run.

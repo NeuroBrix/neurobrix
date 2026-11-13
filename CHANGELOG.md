@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Text generation is faster on Apple GPUs.** A generated token makes fewer copies and waits for the GPU only to read
-  its result: TinyLlama-1.1B and granite-3.1-1B-A400M generate 128 tokens about a tenth faster on an M4 Pro, with the
-  same output.
+- **Text generation is faster on Apple GPUs.** A generated token makes fewer copies, waits for the GPU only to read its
+  result, and replays its launches as prepared once: TinyLlama-1.1B and granite-3.1-1B-A400M generate 128 tokens about
+  a fifth faster on an M4 Pro, with the same output.
 
 - **A language model split across two cards scores every sequence of a batch.** When the last layer and the output head
   sit on different cards, each sequence's last position reaches the head through the tensor library's card-to-card
