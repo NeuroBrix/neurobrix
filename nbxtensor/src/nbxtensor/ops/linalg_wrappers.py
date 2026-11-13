@@ -570,8 +570,7 @@ def mm(a, b, _epilogue: int = 0) :
         dev_str = (f"cuda:{a._device_idx}" if hasattr(a, '_device_idx')
                    else 'cuda')
         c = NBXTensor.empty((M, N), device=dev_str, dtype=dtype_out)
-        for i in range(M):
-            c[i] = mv_wrapper(bt, a[i])
+        _gemv_rows(bt, a, c, M)
         return _apply_matmul_epilogue(c, _epilogue)
 
     a = a.contiguous()
@@ -975,8 +974,20 @@ def dot_wrapper(x, y) :
 # MV (matrix-vector multiply)
 # ---------------------------------------------------------------------------
 
-def mv_wrapper(mat, vec) :
-    """Matrix-vector multiply: out[i] = sum_j(mat[i, j] * vec[j]).
+def _gemv_rows(bt, a, c, M: int) -> None:
+    """Each of the M rows' GEMV into the output `c`: written in place when the product's dtype is the output's, else
+    copied (converted) as before, the same rounding."""
+    in_place = _matmul_out_dtype(bt) == c.nbx_dtype
+    for i in range(M):
+        if in_place:
+            mv_wrapper(bt, a[i], out=c[i])
+        else:
+            c[i] = mv_wrapper(bt, a[i])
+
+
+def mv_wrapper(mat, vec, out=None) :
+    """Matrix-vector multiply: out[i] = sum_j(mat[i, j] * vec[j]); written into `out` (a vector of N, any stride, the
+    matmul's output dtype) when given — a small-M matmul's row, so no result is copied twice.
 
     The SIMT gemv_vec kernel (ops/gemv_vec.py, adopted 2026-08-24 over the FlagGems mv kernel: its (BLOCK_N,)
     per-chunk-reduced accumulator, all of K inside one program in fixed order — no split-K atomics). Its tile —
@@ -994,7 +1005,11 @@ def mv_wrapper(mat, vec) :
     if vec.stride(0) == 0:
         vec = vec.contiguous()          # justified: a broadcast vector has no stride to walk
     N, K = mat.shape
-    out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
+    if out is None:
+        out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
+    elif tuple(out.shape) != (N,) or out.nbx_dtype != _matmul_out_dtype(mat):
+        raise ValueError(f"mv: out is {tuple(out.shape)} {out.nbx_dtype}, the product is ({N},) "
+                         f"{_matmul_out_dtype(mat)}")
     set_device(mat)
     from nbxtensor.ops.gemv_vec import gemv_vec_kernel
     gemv_vec_kernel[lambda META: (triton.cdiv(N, META['BLOCK_N']),)](
@@ -1185,7 +1200,8 @@ def upsample_linear1d_wrapper(x, output_size, align_corners: bool = False,
 def mm_cost(a, b, epilogue: int = 0, native_bf16=None, force_accum=None, contract_half=None):
     """`mm` on `a` [M, K] and `b` [K, N] (`_cost.Spec`s), in the wrapper's order: the operands cast to
     `launch_keys.mm_dtypes` (a dense copy each); then, at M <= 4, `a` made contiguous, the output [M, N] and, per row,
-    the GEMV's own output (N at `matmul_out_dtype` for one row) — and a full copy of the weight when its rows are not
+    the GEMV's own output (N at `matmul_out_dtype` for one row) only when that dtype is not the output's (else the row
+    is written in place) — and a full copy of the weight when its rows are not
     K-contiguous (`mv_wrapper`: `b.t()` must have stride 1 along K; a pre-transposed weight view has it, a row-major
     one does not) — each freed once copied into the output's row, then an epilogue (SiLU, GELU) makes its output while
     the GEMM's is alive; above, `a` made contiguous, `b` only when broadcast (a zero stride), the output at
@@ -1225,7 +1241,8 @@ def mm_cost(a, b, epilogue: int = 0, native_bf16=None, force_accum=None, contrac
         k_contiguous_rows = int(b.strides[0]) == 1          # b.t() has stride 1 along K
         for _ in range(M):
             copy = None if k_contiguous_rows else st.alloc("the weight made K-contiguous (mv)", b.nbytes)
-            r = st.alloc("a row's GEMV output", N * dtype_size(row_out))
+            # the row written in place into the output when the product's dtype is the output's (`mm`), else its own
+            r = None if row_out == out else st.alloc("a row's GEMV output", N * dtype_size(row_out))
             if copy is not None:
                 st.free(copy)
             st.free(r)
