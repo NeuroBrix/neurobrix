@@ -435,8 +435,8 @@ class DeviceAllocator:
 
     @classmethod
     def free_memory_mb(cls, index: int) -> float:
-        """The driver's FREE memory on device `index`, in MB, or None when the
-        runtime cannot answer.
+        """The driver's FREE memory on device `index`, in MB. A device the process
+        does not see, or a runtime that refuses, raises `DeviceQueryError`.
 
         The planner's door to the machine as it IS. `DeviceState.free_mb` was
         `capacity - used_mb` with `used_mb` the plan's own accounting — on a

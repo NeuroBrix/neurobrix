@@ -308,15 +308,39 @@ def measure(repo: Path = REPO, config: dict = None) -> dict:
                 elif taken and _against(rel, f"{target}.{taken}", config["direction"]):
                     st["direction"].append(f"{rel} -> {target}.{taken}")
             st["reach"] += _reaches(tree)
-            hits = tensor_hits(tree, rules) if rules else []
+            hits = _unjustified(rel, tensor_hits(tree, rules), rules, st) if rules else []
             if hits:
                 st["tensor_logic"][rel] = hits
             st["modules"][rel] = len(held)
             if held and ast.get_docstring(tree) is None:
                 st["mute"].append(rel)
         st["private"], st["direction"] = sorted(set(st["private"])), sorted(set(st["direction"]))
+        if rules:                                    # an entry whose file is gone or holds none of its hits is stale
+            seen = {(rel, what) for rel, what in st.get("justified_seen", [])}
+            st["justified_mismatch"] = st.get("justified_mismatch", []) + [
+                f"{e['path']}: {e['what']} justified x{e['count']}, found 0"
+                for e in rules.get("justified", []) if (e["path"], e["what"]) not in seen]
         state[name] = st
     return state
+
+
+def _unjustified(rel: str, hits: list, rules: dict, st: dict) -> list:
+    """`hits` less those `tensor_logic.justified` accepts for this file: an entry {path, what, count, reason} accepts
+    exactly `count` hits of `what` (a JUSTIFIED line is policy, not tensor work: its reason says why, and qa reviews the
+    list). A missing reason is refused at once; a count that no longer matches keeps the hits counted and is refused."""
+    out = list(hits)
+    for e in rules.get("justified", []):
+        if e.get("path") != rel:
+            continue
+        if not str(e.get("reason") or "").strip() or not isinstance(e.get("count"), int):
+            raise ValueError(f"tools/brick_ratchet.json tensor_logic.justified: {e} needs a reason and a count")
+        mine = [h for h in out if h[2] == e["what"]]
+        st.setdefault("justified_seen", []).append((rel, e["what"]))
+        if len(mine) != e["count"]:
+            st.setdefault("justified_mismatch", []).append(f"{rel}: {e['what']} justified x{e['count']}, found {len(mine)}")
+            continue
+        out = [h for h in out if h[2] != e["what"]]
+    return out
 
 
 def offenders(state: dict, config: dict) -> dict:
@@ -329,6 +353,8 @@ def offenders(state: dict, config: dict) -> dict:
         out[name] = {"functions": over, "private": st["private"], "direction": st["direction"], "reach": st["reach"],
                      "modules": {m: n for m, n in st["modules"].items() if n > config["max_module_code_lines"]},
                      "mute": st["mute"], "tensor_logic": {m: len(h) for m, h in st["tensor_logic"].items()}}
+        if st.get("justified_mismatch"):            # a refusal of this run only, never a baseline figure
+            out[name]["justified_mismatch"] = st["justified_mismatch"]
     return out
 
 
@@ -359,6 +385,8 @@ def check(found: dict, baseline: dict) -> list:
     for name, now in found.items():
         base = baseline.get(name) or {"functions": {}, "private": [], "direction": [], "reach": 0, "modules": {}, "mute": []}
         worse += _tensor_grown(name, now["tensor_logic"], base.get("tensor_logic", {}))
+        worse += [f"{name} tensor logic: {m} — a JUSTIFIED entry must match its file exactly (remove it when its hits "
+                  f"are gone)" for m in now.get("justified_mismatch", [])]
         stale += [f"{name} tensor logic: {rel} {n} -> {now['tensor_logic'].get(rel, 0)}"
                   for rel, n in base.get("tensor_logic", {}).items() if now["tensor_logic"].get(rel, 0) < n]
         worse += _grown(f"{name} function", now["functions"], base["functions"], "code lines, depth")

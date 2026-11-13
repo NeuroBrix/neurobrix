@@ -631,6 +631,8 @@ def digest(t, algorithm: str, nbytes: int | None = None, **params) -> str
     # hashlib.new(algorithm, bytes, **params).hexdigest() over the elements in row-major order, the first nbytes
 def values_at(t, positions) -> list[float]
     # the values at row-major flat positions, each element read alone after a device synchronisation
+def label(t) -> str
+    # shape, dtype, device and the object's id, for a diagnostic line ("-" for None): never the tensor's address
 ```
 
 ### `nbxtensor.ops.fused_upsample_conv` — a convolution streamed in bands of output rows

@@ -21,6 +21,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location("brick_ratchet", REPO / "tools" / "brick_ratchet.py")
 B = importlib.util.module_from_spec(_spec)
@@ -30,7 +32,7 @@ CONFIG = {"packages": {"pkg": {"root": "pkg", "top": "pkg", "max_code_lines": 5,
           "max_module_code_lines": 30,
           "direction": [{"in": "pkg/core/", "never": ["pkg.door", "nbxtensor.backend.launcher"]}],
           "tensor_logic": json.loads((REPO / "tools" / "brick_ratchet.json").read_text())["tensor_logic"]
-          | {"packages": ["pkg"]}}
+          | {"packages": ["pkg"], "justified": []}}
 
 CLEAN = {
     "pkg/__init__.py": "",
@@ -173,6 +175,40 @@ def test_one_more_tensor_mechanism_in_the_engine_is_refused_and_said_to_belong_i
     assert len(out) == 1 and "pkg/door.py holds 1" in out[0] and "had none" in out[0] and "nbxtensor" in out[0], out
     out = _refusals(tmp_path, {"pkg/flow.py": '"""Moves a block."""\n'})
     assert out and all(r.startswith("resolved, run --update") for r in out) and "pkg/flow.py" in out[0], out
+
+
+def _with_justified(entries):
+    return CONFIG | {"tensor_logic": CONFIG["tensor_logic"] | {"justified": entries}}
+
+
+MEMCPY = "nbxtensor.memory.allocator.DeviceAllocator.memcpy"
+
+
+def test_a_justified_hit_is_not_counted_and_one_more_of_it_is_refused(tmp_path):
+    """A JUSTIFIED entry (policy, not tensor work, with its reason; qa reviews the list) accepts exactly its count."""
+    _write(tmp_path, CLEAN)
+    cfg = _with_justified([{"path": "pkg/flow.py", "what": MEMCPY, "count": 1, "reason": "a test's reason"}])
+    found = B.offenders(B.measure(tmp_path, cfg), cfg)
+    assert "pkg/flow.py" not in found["pkg"]["tensor_logic"] and "justified_mismatch" not in found["pkg"]
+    _write(tmp_path, {"pkg/flow.py": CLEAN["pkg/flow.py"] + "    DA.memcpy(s, d, n, 2)\n"})
+    out = B.check(B.offenders(B.measure(tmp_path, cfg), cfg), found)
+    assert any("justified x1, found 2" in r for r in out), out
+    assert any("pkg/flow.py holds 2" in r for r in out), out       # the hits stay counted while the entry is wrong
+
+
+def test_a_justified_entry_whose_hits_are_gone_is_refused(tmp_path):
+    _write(tmp_path, CLEAN)
+    cfg = _with_justified([{"path": "pkg/flow.py", "what": MEMCPY, "count": 1, "reason": "a test's reason"},
+                           {"path": "pkg/gone.py", "what": MEMCPY, "count": 1, "reason": "a file deleted since"}])
+    out = B.check(B.offenders(B.measure(tmp_path, cfg), cfg), B.offenders(B.measure(tmp_path, CONFIG), CONFIG))
+    assert any("pkg/gone.py" in r and "found 0" in r for r in out), out
+
+
+def test_a_justified_entry_without_its_reason_is_refused(tmp_path):
+    _write(tmp_path, CLEAN)
+    cfg = _with_justified([{"path": "pkg/flow.py", "what": MEMCPY, "count": 1, "reason": " "}])
+    with pytest.raises(ValueError, match="needs a reason and a count"):
+        B.measure(tmp_path, cfg)
 
 
 def test_an_import_of_a_name_out_of_a_forbidden_package_is_against_direction(tmp_path):

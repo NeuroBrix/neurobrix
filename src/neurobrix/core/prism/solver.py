@@ -5397,12 +5397,9 @@ class PrismSolver:
                 pool = min(pool, declared_host)
             return DeviceReading(kind="device", capacity_mb=pool, free_mb=min(free, pool), unified=True,
                                  measured=bool(getattr(host, "measured", False)), source=str(getattr(host, "source", "")))
+        from nbxtensor.device import NoGpuRuntime
         try:
-            r = read_device_sharing(dev.index)
-            if r.capacity_mb <= 0:
-                r = DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=r.free_mb or float(dev.memory_mb),
-                                  display_active=r.display_active, held_by_others_mb=r.held_by_others_mb,
-                                  own_context_mb=r.own_context_mb, measured=r.measured, source=r.source)
+            r = read_device_sharing(dev.index)          # a driver that refuses raises DeviceQueryError: the plan refused
             # A card this process has not touched yet holds no context of ours, and the run creates one there the
             # moment it places anything on it: the profile's measured runtime context (the figure the census shadow
             # reads). Read as 0, every card but the first was budgeted 306 MB over what the run gets — the 4-card
@@ -5431,11 +5428,9 @@ class PrismSolver:
                 over = r.capacity_mb - float(total)
                 r = dataclasses.replace(r, capacity_mb=float(total), free_mb=max(0.0, r.free_mb - over))
             return r
-        except ProfileFactMissing:
-            raise                           # the profile's gap, not a reading that failed: refused by name
-        except Exception as exc:  # noqa: BLE001 — a reading that cannot be taken is a shared pool, said
+        except NoGpuRuntime:              # a plan for a target profile on a host with no GPU runtime: its card, unmeasured
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
-                                 measured=False, source=f"no reading: {type(exc).__name__}")
+                                 measured=False, source="no GPU runtime on this host: the profile's capacity, unmeasured")
 
     @staticmethod
     def _less_the_system_share(profile, installed: float) -> float:
