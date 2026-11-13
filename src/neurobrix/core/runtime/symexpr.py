@@ -2,7 +2,7 @@
 
 A container's graph.json carries symbolic values as JSON trees: in `symbolic_shape.dims` (a
 tensor's extents), in the size lists of view/reshape/expand/factory ops, and at the scalar slots
-of ops whose value follows the request (a `linspace` bound, an `arange` end). Forge emits them
+of ops whose value follows the request (a `linspace` bound, an `arange` end). the container builder emits them
 (`SymInt.to_json` for integers, `tracer/symbolic/extent_provenance.py` for reals); every runtime
 reader evaluates them HERE — the ATen shape resolver (`shape_resolver.py`), the Triton symbol
 resolver (`triton/symbols.py`), both compiled sequences' expression arguments, both sequential
@@ -21,10 +21,10 @@ Nodes (census of the 166 cached graphs, 2026-10-04: symbol, add, sub, mul, floor
                                                  a literal wrapped in a dict
   a bare string                                  a symbol id
 
-`truediv` and `sqrt` are REAL: they give a Python float (Forge records the eager arithmetic the
+`truediv` and `sqrt` are REAL: they give a Python float (the container builder records the eager arithmetic the
 vendor ran — MochiRoPE's `+-height * (area / (height * width)) ** 0.5 / 2`). The evaluation follows
-Python's semantics exactly, so a recorded expression evaluates at the trace grid to the value the
-trace saw.
+Python's semantics exactly, so a recorded expression evaluates at the build grid to the value the
+build saw.
 
 Every evaluation names its SLOT. A SHAPE slot (a tensor extent, a size-list element) must give an
 int; a real reaching it refuses by name (`RealInShapeSlot`) — an extent can never silently become

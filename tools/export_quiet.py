@@ -5,7 +5,7 @@ WHAT THIS COST, 2026-09-12
 ---------------------------
 Four jobs were started against one NFS export at the same time: a 21.5 GB
 container upload reading from it, a 118 GB snapshot download writing to it, a GPU
-run loading weights from it, and traces reading from it. The export stopped
+run loading weights from it, and builds reading from it. The export stopped
 serving bulk I/O — a 100 MB read timed out at 60 s while `ls` still answered in
 milliseconds — and it stayed down for eleven minutes after every one of those
 processes had been killed.

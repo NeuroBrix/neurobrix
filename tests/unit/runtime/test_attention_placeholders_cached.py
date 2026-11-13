@@ -70,7 +70,7 @@ def test_expanded_attention_bias_is_not_materialised_and_results_are_equal():
     q = torch.randn(B, H, Sq, D, device="cuda", dtype=torch.float16)
     k = torch.randn(B, H, Sk, D, device="cuda", dtype=torch.float16)
     v = torch.randn(B, H, Sk, D, device="cuda", dtype=torch.float16)
-    small = (torch.rand(B, 1, 1, Sk, device="cuda") > 0.2).float() * -1e4    # fp32 traced mask
+    small = (torch.rand(B, 1, 1, Sk, device="cuda") > 0.2).float() * -1e4    # fp32 built mask
     expanded = small.expand(B, H, Sq, Sk)                                      # zero-stride view
     prepared = CO._cast_attn_mask(expanded, q)
     assert tuple(prepared.shape) == (B, H, Sq, Sk) and prepared.dtype == torch.float16

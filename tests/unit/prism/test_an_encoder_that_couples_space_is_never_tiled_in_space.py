@@ -100,7 +100,7 @@ def test_the_coupling_is_read_from_the_graph(mid_op, coupled):
 def test_a_graph_whose_spatial_extent_is_frozen_cannot_be_read():
     from neurobrix.core.prism.profiler import spatial_coupling
     g = _encoder_graph(None)
-    g["tensors"]["x"]["symbolic_shape"]["dims"][-1] = W_IN       # width frozen at its trace value
+    g["tensors"]["x"]["symbolic_shape"]["dims"][-1] = W_IN       # width frozen at its build value
     uid, why = spatial_coupling(g)
     assert uid == "" and "not symbols" in why, why
 
@@ -147,7 +147,7 @@ def test_a_coupled_encoder_within_the_card_is_not_tiled_and_the_plan_says_why(tm
 
 
 def test_a_vendor_whose_reference_tiles_declares_it_and_keeps_its_tile(tmp_path, monkeypatch):
-    """The single exception: the vendor's own reference tiles (Allegro's VAE has no untiled encode), declared by Forge
+    """The single exception: the vendor's own reference tiles (Allegro's VAE has no untiled encode), declared by the container builder
     from the registry with its source (`components/<c>/vendor_tiling.json`, its clip graph's digest beside it) — and
     then the cut is the VENDOR's: the spec names its method, never a tile size Prism chose."""
     import hashlib

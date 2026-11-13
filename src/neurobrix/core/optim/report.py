@@ -28,7 +28,7 @@ def graph_fingerprint(raw_bytes: bytes) -> str:
     """sha256 of the graph.json bytes — the cache-invalidation anchor.
 
     The optimization cache key is (graph_fingerprint, pass name, pass
-    version): any re-trace or pass upgrade invalidates by construction.
+    version): any rebuild or pass upgrade invalidates by construction.
     """
     return hashlib.sha256(raw_bytes).hexdigest()
 
@@ -52,8 +52,8 @@ class AnalysisReport:
     n_tensors: int
     findings: list[Finding] = field(default_factory=list)
     # Build-side bug signatures surfaced by the analysis (e.g. a slice
-    # end frozen at a symbolic dim's trace extent). NEVER optimization
-    # sites — they are reported for a fix at the source (the tracer),
+    # end frozen at a symbolic dim's build extent). NEVER optimization
+    # sites — they are reported for a fix at the source (the builder),
     # per the frozen-dim doctrine.
     suspects: list[Finding] = field(default_factory=list)
     schema_version: int = REPORT_SCHEMA_VERSION

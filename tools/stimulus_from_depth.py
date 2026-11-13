@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""Choose a trace stimulus by evaluating the graph's OWN depth expressions.
+"""Choose a build stimulus by evaluating the graph's OWN depth expressions.
 
 WHY THIS EXISTS, AND WHAT IT COST NOT TO HAVE IT
 ------------------------------------------------
 On 2026-09-12 the `Wan2.1-VACE` encoder stimulus was raised 9 -> 17 to lift its
 temporal axis out of the collision zone {0, 1, 2}. The number 17 was chosen from
 the INPUT extent, and the input extent is not where the defect lives. Read from
-the re-traced graph, `aten.expand::9`'s CHANNEL slot is
+the rebuilt graph, `aten.expand::9`'s CHANNEL slot is
 
     ((((2 + (s1 - 13)) - 4) // 2 - 1) // 2 + 1) * 384
 
 — a temporal downsampling chain multiplied into a channel count. Evaluate it:
 
-    s1 = 17  ->  1   (the trace saw 1 * 384 = 384 and agreed with itself)
+    s1 = 17  ->  1   (the build saw 1 * 384 = 384 and agreed with itself)
     s1 = 81  ->  17  (the runtime computed 17 * 384 = 6528 and refused)
 
 The stimulus moved the INPUT out of the zone and left that DEPTH at exactly 1,
 where `[B, T*C, H, W]` and `[B*T, C, H, W]` are still the same shape. A full
-trace -> build -> local -> run chain was spent to learn a number the graph could
+build -> build -> local -> run chain was spent to learn a number the graph could
 have been asked for. The smallest stimulus that clears that depth is 25.
 
 WHAT IT ANSWERS
 ---------------
-Given a graph traced at ANY stimulus, the recorded expressions are functions of
+Given a graph built at ANY stimulus, the recorded expressions are functions of
 the symbols. So evaluate them:
 
   * a dim that DEPENDS on the symbol and lands in {0,1,2} is REACHABLE — a larger
@@ -43,8 +43,8 @@ component, and saying only the first half is how "diagnosed" gets written in the
 
 TWO PASSES, AND THAT IS THE POINT
 ---------------------------------
-You cannot evaluate a graph you have not traced. So: trace once at any value,
-ask this, re-trace at what it says. The first trace is the instrument, not the
+You cannot evaluate a graph you have not built. So: build once at any value,
+ask this, rebuild at what it says. The first build is the instrument, not the
 deliverable.
 
 Usage:
@@ -156,7 +156,7 @@ def analyse(graph: dict, symbol_id: str, ceiling: int = 512) -> dict:
     base = {sid: trace for sid, (_, trace) in table.items()
             if isinstance(trace, int)}
     if symbol_id not in base:
-        raise KeyError(f"{symbol_id} is not a declared symbol with a trace value")
+        raise KeyError(f"{symbol_id} is not a declared symbol with a build value")
 
     reachable, plateau, elsewhere = [], [], 0
     for tid, i, node in variable_dims(graph):
@@ -251,7 +251,7 @@ def main() -> int:
     print(f"Stimulus from depth — {len(paths)} graph(s), {len(out)} symbol(s)\n")
     for r in sorted(need, key=lambda r: -r["plateau_dims"])[:40]:
         rec = r["recommended"]
-        verdict = ("clear at its trace value" if r["trace_value_is_clear"]
+        verdict = ("clear at its build value" if r["trace_value_is_clear"]
                    else (f"RAISE {r['trace_value']} -> {rec}" if rec
                          else f"NO stimulus <= 512 clears it"))
         print(f"  {r['component']}  '{r['name']}' (s={r['trace_value']})")
@@ -261,7 +261,7 @@ def main() -> int:
                   f"symbol at all — no stimulus of any axis reaches them")
             for s in r["plateau_sample"]:
                 print(f"         {s}")
-    print(f"\n  symbols whose own trace value sits in the zone at some depth: {moved}")
+    print(f"\n  symbols whose own build value sits in the zone at some depth: {moved}")
     print(f"  symbols with a structural plateau beside them: {plateaued}")
     print("\n  A recommendation without its plateau is half an answer: the stimulus "
           "corrects\n  what it reaches, and the rest needs the rule asserted at the "

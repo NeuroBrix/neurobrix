@@ -1,5 +1,5 @@
 """ONE precision contract, both engines (the owner, 2026-10-25 15:26): on hardware that computes bf16 natively the
-model's tensors are bf16, weights and activations; fp32 only for a traced island, a calibration island, or a kernel's
+model's tensors are bf16, weights and activations; fp32 only for a built island, a calibration island, or a kernel's
 internal accumulation that is not stored. The Triton branch kept fp32 past an island because its self-managed GEMMs
 and convolutions took their operands as they came and stored wide (2 017 policy sites on Sana's transformer, the Mac,
 06:40), and `bmm` / decode rows (M <= 4) stored fp32 on every hardware.

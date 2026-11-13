@@ -9,7 +9,7 @@ it proved — PixArt-XL-1024 at 2048x1024, text encoder in 6 pieces, peak 8 129.
     input::attention_mask::dim_1) is not bound at runtime ... Bound: ['s0', 's3'].
 
 Piece 3 uses `s1` and no input handed to it carries `s1`: the hidden states carry `s3`, a second
-symbol the trace minted for the same 120-token extent from `input_ids`. Pieces 4-5 lose the batch
+symbol the build minted for the same 120-token extent from `input_ids`. Pieces 4-5 lose the batch
 symbol too. 26 runs on the Mac failed this way (PixArt-XL-1024, PixArt-Sigma-XL-1024, Flex.1-alpha,
 Open-Sora-v2, SANA-Video).
 
@@ -23,7 +23,7 @@ resolvers accept) is BOUND. No weights, no card: the binding, executed, not a pl
 What this does NOT prove, stated: the VALUES bound. The inputs are shaped from the same symbolic
 dims the binding reads, so a value comparison would be true by construction (the reviewer's point,
 2026-09-24) and is not made; and binding does not depend on size, so the three sizes below guard
-only against a trace value leaking into a binding. The values, at batch 1/2/8 in every engine, are
+only against a build value leaking into a binding. The values, at batch 1/2/8 in every engine, are
 the executed gate's: `tests/regression/test_a_streamed_component_computes_what_it_computes_whole.py`
 (whole vs pieces, bit-identical).
 
@@ -31,7 +31,7 @@ A limit, stated: `_walk_symbols` enumerates the reference forms the resolvers ac
 forms `build_segment_graph` walks to choose its carriers. A new form taught to a resolver and to
 neither walker would pass here and fail at runtime; the executed gate is the one that would see it.
 
-Sizes: each symbol at its trace value, at 2x, and far (7x + 1), one value per symbol NAME.
+Sizes: each symbol at its build value, at 2x, and far (7x + 1), one value per symbol NAME.
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ SWEEP = ["Open-Sora-v2", "DeepSeek-Coder-V2-Lite-Instruct",
 RUNGS = [4096, 6144, 8192, 16384]
 # A container whose defaults declare no request is given one explicitly — without it the plan
 # refuses before streaming is tried and the cell proves nothing. Open-Sora-v2's 2026-09-13 build
-# declares no resolution (Forge dd2fa21 adds the vendor's); its traced extent is used here.
+# declares no resolution (the container builder dd2fa21 adds the vendor's); its built extent is used here.
 REQUESTS = {"Open-Sora-v2": dict(height=112, width=176, num_frames=51, temporal_compression=4)}
 SCALES = {"trace": lambda t: t, "twice": lambda t: 2 * t, "far": lambda t: 7 * t + 1}
 
@@ -161,12 +161,12 @@ def _plan(monkeypatch, model, h, w, host_free, rung, request=None):
 
 
 def _whole_bindings(graph, scale):
-    """The whole component bound at one size: every symbol at scale(trace), one value per NAME."""
+    """The whole component bound at one size: every symbol at scale(build), one value per NAME."""
     syms = (graph.get("symbolic_context") or {}).get("symbols") or {}
     by_name = {}
     for sid, info in syms.items():
         if not isinstance(info.get("trace_value"), int):
-            raise AssertionError(f"symbol {sid} declares no trace value: {info}")
+            raise AssertionError(f"symbol {sid} declares no build value: {info}")
         by_name.setdefault(info.get("name") or sid, scale(int(info["trace_value"])))
     return {sid: by_name[info.get("name") or sid] for sid, info in syms.items()}
 

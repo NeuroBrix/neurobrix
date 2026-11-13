@@ -96,7 +96,7 @@ _MEDIA = {
 # The campaign's bound on a request whose length the vendor's default leaves open: a decode
 # loop's token budget, a denoiser's step count. The comparison is between two arms on the SAME
 # request — the vendor's aesthetic default buys nothing and can make a row ungateable: Allegro's
-# 100 steps at 3.5 min each are 5.8 h for ONE arm, 23 h for the four a retrace gate needs, and
+# 100 steps at 3.5 min each are 5.8 h for ONE arm, 23 h for the four a rebuild gate needs, and
 # the row timed out at 7200 s twice (2026-09-07/08). Four steps exercise the same graph, every op
 # of the loop, in a gateable hour. A family stimulus value wins over the bound (loop below), so a
 # family whose YAML names the flag keeps its own.
@@ -107,8 +107,8 @@ _REQUEST_BOUND = {"llm": ["--max-tokens", "64", "--temperature", "0"],
                   "audio_llm": ["--max-tokens", "64"],
                   "multimodal": ["--max-tokens", "64", "--temperature", "0"],
                   "video": ["--steps", "4"],
-                  # image: the two arms of a retrace gate must render the SAME number of steps.
-                  # A container declares its own in `flow.generation`, and a retrace that ADDS
+                  # image: the two arms of a rebuild gate must render the SAME number of steps.
+                  # A container declares its own in `flow.generation`, and a rebuild that ADDS
                   # that declaration changes the length under the comparison: Flex.1-alpha's old
                   # container rendered 20 (the runtime's default, nothing declared) against the
                   # new container's 25, and the gate read 17.2 dB — two different renders, not a
@@ -1894,7 +1894,7 @@ def has_verdict(model_out: Path) -> bool:
 
 
 def held_by_retrace(retrace_out: Path) -> set:
-    """Every model of a retrace campaign whose recorded gate is not a PASS: listed in its
+    """Every model of a rebuild campaign whose recorded gate is not a PASS: listed in its
     models file (phase lists) or holding a state.json without a PASS gate — its cache slot may
     change under a measurement (a restore of the previous object, an install of the new
     build), so a lever or a proof must not measure it until it is gated."""
@@ -1938,7 +1938,7 @@ def main():
                         "at the door, before its first arm starts. Opt-in: "
                         "without it nothing is refused.")
     r.add_argument("--hold-from", default=None, metavar="RETRACE_OUT",
-                   help="skip every model a retrace campaign at this path still holds (listed in its phase files or "
+                   help="skip every model a rebuild campaign at this path still holds (listed in its phase files or "
                         "carrying a state without a PASS gate): its cache slot may change under the measurement")
     r.add_argument("--probe", action="store_true",
                    help="the R33 lever: one complete --triton request per model under the sys.modules probe")
@@ -2058,9 +2058,9 @@ def main():
                 f"{time.strftime('%Y-%m-%d %H:%M:%S')} refused before any arm ran\n{_refusal}\n")
             continue
         if m in held:
-            # A container still short of its retrace gate: its cache slot moves (a restore, an
+            # A container still short of its rebuild gate: its cache slot moves (a restore, an
             # install) — CogVideoX-2b's proof row straddled an install at 14:34 on 2026-09-07.
-            print(f"[zoo] {m}: held by the retrace campaign (no PASS gate yet in {args.hold_from}), skipped", flush=True); continue
+            print(f"[zoo] {m}: held by the rebuild campaign (no PASS gate yet in {args.hold_from}), skipped", flush=True); continue
         lock = out / m / ".running"
         if lock.exists():
             held = lock.read_text().strip()

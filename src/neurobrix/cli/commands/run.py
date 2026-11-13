@@ -311,7 +311,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # silently absent for the models that need them.
     # The container's own output size — the SAME authority the executor renders at when
     # the request names none (`resolution.container_size`, 2026-09-21): a plan budgeted
-    # at the VAE's trace extent while the flow decoded 81 frames at 480x832 asked 24.8 GB
+    # at the VAE's build extent while the flow decoded 81 frames at 480x832 asked 24.8 GB
     # at one conv against a 19.7 GB plan. A request-side fact still outranks it.
     from neurobrix.core.runtime.resolution.container_size import container_output_size
     # The topology as the executor reads it: the cache path's own file (the container
@@ -341,7 +341,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # OPTIONAL by nature: a model without a VAE has no scale factor, a model
     # without a temporal axis has no compression. Absent is a legitimate answer
     # for these two, and only for these two.
-    # The VAE scale in the container's own spellings (manifest, defaults, trace), the
+    # The VAE scale in the container's own spellings (manifest, defaults, build), the
     # same brick the executor reads: without it the plan's spatial symbols bind to nothing.
     from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
     vae_scale = _rt("vae_scale_factor", args, cached_defaults, _fam_defaults,
@@ -361,7 +361,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # a phonemizer container (the audio flow's condition — `phoneme_vocab` declared, no
     # tokenizer module) runs its text components at len(phoneme ids), computed by the SAME
     # function the flow calls (`g2p.phoneme_ids`). Without it every `seq_len` symbol bound to
-    # its trace extent: Kokoro planned 23 phonemes and ran 94 (census 2026-09-28).
+    # its build extent: Kokoro planned 23 phonemes and ran 94 (census 2026-09-28).
     seq_len = None
     _vocab = cached_defaults.get("phoneme_vocab")
     _prompt = getattr(args, 'prompt', None)
@@ -689,7 +689,7 @@ def cmd_run(args):
         log.error(f"Error: {e}")
         sys.exit(1)
 
-    # Multimodal-strict build/mode coherence: a Janus-style .nbx is traced
+    # Multimodal-strict build/mode coherence: a Janus-style .nbx is built
     # for ONE generation_type at build time. If the user asks for a mode the
     # build cannot serve, error clearly here instead of running the image AR
     # path and writing image tokens to a .txt.

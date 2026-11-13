@@ -32,7 +32,7 @@ Preprocessing types implemented here:
       consumer). v1 = single image, max_slice_nums 1 (no slicing):
       smart-resize to the scale_resolution budget, normalize by the
       topology's mean/std, pack to the patch-major [1, N, C*p*p]
-      layout the traced vpm graph consumes.
+      layout the built vpm graph consumes.
 """
 
 from typing import Optional
@@ -424,9 +424,9 @@ def minicpm_adaptive_slice_np(image_path: str, preprocessing_cfg: dict) -> dict:
         patches = patches.permute(0, 1, 3, 2).reshape(C, p, -1)   # [C, p, L*p]
 
     and the model wrapper (get_vision_embedding) packs
-    `i.flatten(end_dim=1).permute(1, 0)` -> [L*p, C*p]. The traced vpm
+    `i.flatten(end_dim=1).permute(1, 0)` -> [L*p, C*p]. The built vpm
     graph consumes the PATCH-MAJOR form [1, N, C*p*p] whose definitional
-    inverse (the trace wrapper's repack) is
+    inverse (the build wrapper's repack) is
     reshape(B, N, C, p, p).permute(0, 2, 3, 1, 4).reshape(B, C, p, N*p)
     — i.e. row n = patch (row-major over the gh x gw grid), inner order
     (c, i, j). The equivalent direct numpy packing from the CHW array:

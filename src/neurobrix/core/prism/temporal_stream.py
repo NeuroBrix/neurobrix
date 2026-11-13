@@ -1,9 +1,9 @@
 """A component's temporal stream, as Prism reads and prices it (decision of 2026-10-16 18:40 / 21:30).
 
-Forge derives, from a causal video component's traced clip graph, two graphs and a declaration
-(`components/<c>/stream_first.json`, `stream_next.json`, `stream.json`; Forge `tools/derive_temporal_stream.py`): the
+the container builder derives, from a causal video component's built clip graph, two graphs and a declaration
+(`components/<c>/stream_first.json`, `stream_next.json`, `stream.json`; the container builder `tools/derive_temporal_stream.py`): the
 first chunk's graph (the clip graph plus the states it leaves) and the graph of every later chunk (the states in and
-out). Run chunk by chunk they ARE the clip graph — proven in Forge, float64 — where no op is global over time; where one
+out). Run chunk by chunk they ARE the clip graph — proven in the container builder, float64 — where no op is global over time; where one
 is (a group norm over [C, T, H, W]), they are the vendor's own chunked function, and the declaration carries the
 vendor's schedule with its source (`vendor_chunks`).
 
@@ -146,7 +146,7 @@ def clip_output_frames(clip: Dict[str, Any], decl: Dict[str, Any], smap: Dict[st
 
 
 def load_vendor_tiling(cache_path: Path, comp: str) -> Optional[Dict[str, Any]]:
-    """The component's vendor tiling declaration (`components/<c>/vendor_tiling.json`, Forge
+    """The component's vendor tiling declaration (`components/<c>/vendor_tiling.json`, the container builder
     `tracer/vendor_tiling.py`): the cut its vendor's own reference makes, with its source. None when it carries none;
     refused by name when derived from another graph than the component's."""
     d = Path(cache_path) / "components" / comp

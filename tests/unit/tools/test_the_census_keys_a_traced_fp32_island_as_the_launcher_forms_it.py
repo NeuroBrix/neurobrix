@@ -1,5 +1,5 @@
 """The derived census keys an op by the operands the KERNEL receives. For the trace's own fp32 island (an AMP_FP16 op,
-not self-managed, traced float32 in a half graph) both engines take the fp32 wrap a contract island takes, so the key
+not self-managed, built float32 in a half graph) both engines take the fp32 wrap a contract island takes, so the key
 derivation must read it through the same set — or it keys the half dtypes the launcher never forms (Allegro-TI2V's
 and CogVideoX's conditioning conv: depthwise_conv2d_kernel keyed fp16 in the table, launched fp32, chain52 2026-10-25;
 the Apple class alike, the Mac 10:30). Seen red before `traced_island_uids` existed (the keys came out at the compute

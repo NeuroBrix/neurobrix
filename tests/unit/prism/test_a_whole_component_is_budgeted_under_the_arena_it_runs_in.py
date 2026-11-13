@@ -52,7 +52,7 @@ def _plan(monkeypatch, mode):
 
 def test_the_vae_that_died_whole_under_triton_is_tiled_by_the_plan(monkeypatch):
     plan = _plan(monkeypatch, "triton")
-    # Since 2026-10-17 the VAE is cut in its exact TIME chunks (the stream Forge derives from its graph), no longer
+    # Since 2026-10-17 the VAE is cut in its exact TIME chunks (the stream the container builder derives from its graph), no longer
     # in spatial tiles its group norms would not see whole: either way not whole, and under what the card refused.
     tiling = getattr(plan, "component_tiling", None) or {}
     stream = getattr(plan, "component_stream", None) or {}

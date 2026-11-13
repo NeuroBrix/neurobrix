@@ -62,7 +62,7 @@ def test_the_inputs_are_deterministic_and_an_index_stays_in_its_extent():
 
 def test_the_nbxtensor_side_runs_the_dtype_the_engine_runs_never_the_trace_record():
     # Allegro's patch-embedding conv as the Apple census derived it: a bf16 component whose graph recorded the op's
-    # output as float16 (its trace dtype). The engine dispatches it at bf16 (census key ... 'bf16', 'bf16', 'bf16');
+    # output as float16 (its build dtype). The engine dispatches it at bf16 (census key ... 'bf16', 'bf16', 'bf16');
     # the bench once took the recorded float16 and timed an fp16 key no certificate holds, swept at runtime (03/11)
     inst = {"key": "ce761272518bca25", "op_type": "aten::convolution", "dtypes": ["bfloat16"] * 3,
             "output_dtypes": ["float16"], "op_uid": "aten.convolution::0", "compute_dtype": "bfloat16",

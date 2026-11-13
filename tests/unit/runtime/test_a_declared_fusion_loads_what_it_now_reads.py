@@ -3,7 +3,7 @@
 2026-09-13: Ming-Lite-Omni under --triton, quiet rig, frozen tree. The MoE
 fusion of a LM packaged under a non-llm family runs when the flow declares
 it, at execute time — after the weights were loaded from the un-fused graph,
-in which no op consumes the experts the trace never routed to. The fused
+in which no op consumes the experts the build never routed to. The fused
 kernel read them all and met None. Register entry 54: after the declared
 fusion the executor recomputes the consumed set and loads the difference
 through its own loader, in both engines.
@@ -31,7 +31,7 @@ def _executor(tmp_path, monkeypatch, mode):
     ex._component_handler = None
     monkeypatch.setattr(ex, "_placement_torch_dtype", lambda: torch.float32, raising=False)
     tensors = {f"param::{n}": {"is_parameter": True, "weight_name": n} for n in PARAMS}
-    # the trace routed to expert 0 only
+    # the build routed to expert 0 only
     # the layer's router (a top-k over 2 experts) is still in the order: unfused
     ex._dag = {"tensors": tensors,
                "ops": {"op0": {"input_tensor_ids": ["param::block.0.attn.key.weight",

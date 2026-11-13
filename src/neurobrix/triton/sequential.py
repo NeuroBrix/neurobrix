@@ -39,7 +39,7 @@ class TritonSequentialDispatcher:
         self.activations_fp16_safe = activations_fp16_safe
         from nbxtensor.ops.wrappers import has_native_bf16 as _has_bf16
         from nbxtensor.ops import wrappers as _w
-        # graph_dtype: the component's traced `torch_dtype` (the AMP_FP32 cast-back rule
+        # graph_dtype: the component's built `torch_dtype` (the AMP_FP32 cast-back rule
         # reads it under bf16 compute) — the caller hands the DAG's own.
         self._dtype_engine = TritonDtypeEngine(
             compute_dtype, has_native_bf16=_has_bf16(), graph_dtype=graph_dtype, stores_fp64=stores_fp64)
@@ -197,7 +197,7 @@ class TritonSequentialDispatcher:
                   op_record: Optional[Dict[str, Any]] = None) -> Any:
         """Dispatch a single op to Triton kernel (`op_uid` keys the precision
         contract's per-op islands; `op_record` is the op's graph entry, read
-        for the traced `output_dtypes` — see TritonDtypeEngine.wrap_op)."""
+        for the built `output_dtypes` — see TritonDtypeEngine.wrap_op)."""
         clean = op_type.replace("aten::", "").replace("custom::", "")
         base = clean.split(".")[0]
 

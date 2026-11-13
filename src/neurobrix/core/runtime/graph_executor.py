@@ -598,7 +598,7 @@ class GraphExecutor:
 
         The declared pass runs whenever ANY router is still unfused — not only
         when none is fused: an llm-family graph fused undeclared at __init__
-        with 47 of 48 routers would otherwise run the 48th with its traced
+        with 47 of 48 routers would otherwise run the 48th with its built
         routing, unrefused. The declared pass fuses it or refuses it by name.
         """
         self._moe_norm_topk_prob = norm_topk_prob
@@ -633,7 +633,7 @@ class GraphExecutor:
             )
             # A rewrite that adds readers loads what it now reads. The
             # weights were chosen from the un-fused graph, in which no op
-            # consumes the experts the trace never routed to; the fused
+            # consumes the experts the build never routed to; the fused
             # kernel reads them all (2026-09-13, Ming-Lite-Omni triton:
             # `moe_fused::block.0` met None — register 54).
             if _n_fused() > n_before:
@@ -652,7 +652,7 @@ class GraphExecutor:
                 if op.get("op_type") == "custom::moe_fused":
                     _a = op.setdefault("attributes", {})
                     if _a.get("routing_from_graph"):
-                        # The renormalisation was READ off the traced graph (the dense
+                        # The renormalisation was READ off the built graph (the dense
                         # stacked block: sum + div present or not) — the vendor code's
                         # own answer. A registry flag that contradicts it is a defect
                         # of the data, named here, never patched over either way.
@@ -717,7 +717,7 @@ class GraphExecutor:
         """
         Set runtime resolution for positional embedding scaling.
 
-        Called by RuntimeExecutor when resolution differs from trace-time.
+        Called by RuntimeExecutor when resolution differs from build-time.
         Stores resolution; scaling happens after weights are loaded.
 
         Args:
@@ -738,7 +738,7 @@ class GraphExecutor:
 
         This is called from load_weights() when:
         1. We have computable buffer specs registered from graph.json
-        2. We have runtime resolution set (different from trace-time)
+        2. We have runtime resolution set (different from build-time)
 
         For each computable buffer, calls the appropriate computation method
         based on the computation_spec stored in graph.json.
@@ -748,7 +748,7 @@ class GraphExecutor:
 
         if not hasattr(self, "_maybe_to_nbx"):
             # Bind helper once. A computed-at-runtime buffer (sincos 2D pos
-            # embed, interpolated pos embed, traced buffer) is produced as an
+            # embed, interpolated pos embed, built buffer) is produced as an
             # array and enters the engine's container HERE: torch on the ATen
             # branch (cast + placed exactly as before), NBXTensor on the
             # Triton branch — no torch on that path (R33).
@@ -770,7 +770,7 @@ class GraphExecutor:
             self._maybe_to_nbx = _maybe_to_nbx
 
         if self._runtime_height is None or self._runtime_width is None:
-            # No runtime resolution set - use traced constant (should already be loaded)
+            # No runtime resolution set - use built constant (should already be loaded)
             return
 
         computed_count = 0
@@ -809,7 +809,7 @@ class GraphExecutor:
                 computed_count += 1
             elif method == "traced_buffer":
                 # Init-computed buffer absent from the snapshot weights,
-                # shipped verbatim as traced data (e.g. CogVideoX's composite
+                # shipped verbatim as built data (e.g. CogVideoX's composite
                 # learned pos embedding [1, text_len + T*H*W, dim] — not
                 # 2D-interpolable; the graph's own symbolic slicing handles
                 # dynamic lengths).
@@ -835,7 +835,7 @@ class GraphExecutor:
                     traced_grid_h=params.get("traced_grid_h"),
                     traced_grid_w=params.get("traced_grid_w"),
                     embed_dim=params.get("embed_dim"),
-                    traced_data=spec.get("traced_data"),  # Base64-encoded traced tensor
+                    traced_data=spec.get("traced_data"),  # Base64-encoded built tensor
                     patch_size=params.get("patch_size", 2),  # Transformer patch size
                 )
                 self._weights[weight_name] = self._maybe_to_nbx(tensor)
@@ -929,16 +929,16 @@ class GraphExecutor:
         Bilinearly interpolate learned positional embeddings at runtime resolution.
 
         This is used for models like PixArt that use learned (not sincos) pos_embed.
-        The traced embedding is reshaped to 2D, bilinearly interpolated, then reshaped back.
+        The built embedding is reshaped to 2D, bilinearly interpolated, then reshaped back.
 
         Args:
-            weight_name: Weight name for loading traced tensor
+            weight_name: Weight name for loading built tensor
             runtime_height: Runtime pixel height
             runtime_width: Runtime pixel width
-            traced_grid_h: Traced grid height (from trace time)
-            traced_grid_w: Traced grid width (from trace time)
+            traced_grid_h: Built grid height (from build time)
+            traced_grid_w: Built grid width (from build time)
             embed_dim: Embedding dimension
-            traced_data: Base64-encoded traced tensor (if stored in spec)
+            traced_data: Base64-encoded built tensor (if stored in spec)
             patch_size: Transformer patch size (default 2 for PixArt)
 
         Returns:
@@ -968,7 +968,7 @@ class GraphExecutor:
         runtime_seq = runtime_grid_h * runtime_grid_w
 
         if traced_seq == runtime_seq:
-            # No interpolation needed - load traced tensor directly
+            # No interpolation needed - load built tensor directly
             if weight_name in self._weights:
                 return self._weights[weight_name]
             # Buffer not in safetensors (e.g., pos_embed.pos_embed is a computed buffer).
@@ -985,13 +985,13 @@ class GraphExecutor:
                     runtime_height=runtime_height,
                     runtime_width=runtime_width,
                     embed_dim=embed_dim,
-                    base_size=traced_grid_h,  # base_size = grid_size at trace resolution
+                    base_size=traced_grid_h,  # base_size = grid_size at build resolution
                     interpolation_scale=1.0,
                     vae_scale=vae_scale,
                     patch_size=patch_size,
                 )
 
-        # Get the traced positional embedding
+        # Get the built positional embedding
         traced_embed = None
 
         # Try to load from traced_data (base64 encoded)
@@ -1036,7 +1036,7 @@ class GraphExecutor:
             return np.ascontiguousarray(out)
         import torch
         import torch.nn.functional as F
-        if not is_torch_tensor(traced_embed):  # the traced array, placed as before
+        if not is_torch_tensor(traced_embed):  # the built array, placed as before
             traced_embed = torch.from_numpy(traced_embed).to(dtype=self._placement_torch_dtype(), device=self.device)
         pos_2d = traced_embed.squeeze(0).transpose(0, 1).reshape(1, embed_dim, traced_grid_h, traced_grid_w)
 
@@ -1205,7 +1205,7 @@ class GraphExecutor:
 
         # MoE Fusion Pass: detect and fuse MoE expert subgraphs BEFORE any execution.
         # CRITICAL: This runs for ALL modes (compiled, native, triton).
-        # Without fusion, MoE models use hardcoded trace-time routing indices → garbage output.
+        # Without fusion, MoE models use hardcoded build-time routing indices → garbage output.
         from .graph.moe_fusion import detect_and_fuse_moe
         self._dag = detect_and_fuse_moe(
             self._dag, self.family,
@@ -1286,7 +1286,7 @@ class GraphExecutor:
         # The ENGINE-side counterpart of R19's build-side prune, and not
         # redundant with it: R19 has only been applied to six rebuilt
         # models, the loaded graph is post-MoE-fusion, and a build that
-        # arrives from the hub cannot be re-traced. Same contract as
+        # arrives from the hub cannot be rebuilt. Same contract as
         # R19 — side-effecting ops and random draws are ROOTS, because
         # tid-reachability is not liveness.
         if os.environ.get("NBX_OPTIM_DEAD_CODE") == "1":
@@ -1315,7 +1315,7 @@ class GraphExecutor:
         # that rewrites the graph (attention rescale normalisation, expert
         # fusion, horizontal fusion, dead code): the calibration record is
         # signed and its islands walked on the graph the engines execute,
-        # not on the trace as loaded (doctrine review 2026-09-05: a record
+        # not on the build as loaded (doctrine review 2026-09-05: a record
         # signed on the rewritten graph was refused at every later load).
         if self._dtype_engine is not None:
             self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
@@ -1361,7 +1361,7 @@ class GraphExecutor:
         # _precompile_dispatch_table removed — old triton dispatch path eliminated
 
         # DtypeEngine handles mixed precision at the op level.
-        # No DAG rewriting needed — graph annotations stay as-is (from trace).
+        # No DAG rewriting needed — graph annotations stay as-is (from build).
         # Weights loaded at Prism dtype. DtypeEngine wraps each op at compile time:
         # - Stability ops (softmax, rsqrt, layer_norm): upcast to fp32, recast after
         # - Compute ops (mm, bmm, conv): ensure inputs in compute_dtype
@@ -1513,7 +1513,7 @@ class GraphExecutor:
         """Record on every SDPA op whether its K input arrives transposed.
 
         PyTorch's SDPA math decomposition computes `Q @ K.transpose(-2,-1)`,
-        so a traced graph hands the attention op a K in (batch, heads,
+        so a built graph hands the attention op a K in (batch, heads,
         head_dim, seq) rather than (batch, heads, seq, head_dim). Every
         engine has to put it back — and until now each one recognised the
         situation by comparing shapes at run time:
@@ -1531,8 +1531,8 @@ class GraphExecutor:
 
         The graph knows the answer without guessing: the transpose is IN it.
         This pass walks K's producer chain and counts the transposes of the
-        last two axes; an odd count means K is pre-transposed. The traced
-        shapes cross-check the walk whenever the trace itself is
+        last two axes; an odd count means K is pre-transposed. The built
+        shapes cross-check the walk whenever the build itself is
         unambiguous, and a disagreement raises rather than picks a side.
         """
         assert self._dag is not None
@@ -1596,7 +1596,7 @@ class GraphExecutor:
             witness = None
             if (q_shape and k_shape and len(q_shape) == 4 and len(k_shape) == 4
                     and q_shape[-1] != q_shape[-2]):
-                # The trace is unambiguous: a K in (b, h, head_dim, seq) has
+                # The build is unambiguous: a K in (b, h, head_dim, seq) has
                 # Q's head_dim where its own seq belongs.
                 if k_shape[-2] == q_shape[-1] and k_shape[-1] != q_shape[-1]:
                     witness = True
@@ -1659,7 +1659,7 @@ class GraphExecutor:
         pre-scaling mul ops AND set scale=s in the SDPA attributes. This causes
         double-scaling: total = sqrt(s)^2 * s = s^2 instead of s.
 
-        Detection: For each SDPA op with scale=s, trace Q and K inputs back through
+        Detection: For each SDPA op with scale=s, build Q and K inputs back through
         passthrough ops (expand, clone, _to_copy, transpose). If both arrive at mul
         ops with scalars whose product ≈ s, the pre-scaling is redundant.
 
@@ -1674,7 +1674,7 @@ class GraphExecutor:
             for tid in op.get("output_tensor_ids", []):
                 tensor_to_producer[tid] = uid
 
-        # Ops that pass values through without changing them (for tracing)
+        # Ops that pass values through without changing them (for building)
         _PASSTHROUGH = frozenset({
             "aten::expand", "aten::clone", "aten::contiguous",
             "aten::_to_copy", "aten::view", "aten::_unsafe_view",
@@ -1722,7 +1722,7 @@ class GraphExecutor:
             if len(in_tids) < 3:
                 continue
 
-            # Trace Q (input[0]) and K (input[1]) back to their producer mul ops
+            # Build Q (input[0]) and K (input[1]) back to their producer mul ops
             q_mul_uid = _trace_to_mul(in_tids[0])
             k_mul_uid = _trace_to_mul(in_tids[1])
             if q_mul_uid is None or k_mul_uid is None:
@@ -1810,7 +1810,7 @@ class GraphExecutor:
         # shares storage (UMT5 final_norm reassembled to custom.rms_norm whose
         # output keeps the `aten.mul::N` tid sharing slot with `aten.view::N`),
         # the view's storage chain is freed by liveness GC even though the
-        # output slot is "protected" -> None at gather. protect_tensor traces
+        # output slot is "protected" -> None at gather. protect_tensor builds
         # the view chain and pins every storage source. Data-driven from the
         # authoritative DAG outputs; no-op when the output already stands alone.
         if self._ctx is not None:
@@ -1834,9 +1834,9 @@ class GraphExecutor:
         triton/promotion.py (triton / triton_sequential) already apply.
 
         Without it, view/reshape/expand/_unsafe_view shape args keep the FROZEN
-        trace spatial dims (e.g. the Mochi VAE unflatten target
+        build spatial dims (e.g. the Mochi VAE unflatten target
         [1, T, 28, 44, 2048] where 28 = 2*s_height(14), 44 = 2*s_width(22)),
-        so at any runtime resolution != trace the op-by-op oracle crashes
+        so at any runtime resolution != build the op-by-op oracle crashes
         ("shape [1,9,28,44,-1] invalid for input of size ...") while the other
         three modes adapt. _spatial_promotion_pass rewrites those literals to
         the scaled height/width symbols, so the resolver substitutes the runtime
@@ -1871,7 +1871,7 @@ class GraphExecutor:
         token embedding, the head and the norms by name, outside the graph;
         `consumed_in_loader_space` keeps those whatever this set says.) Measured 2026-09-09 on DeepSeek-Coder-V2-Lite: 2169 of
         5371 parameters have no consumer, **11781 MB of 30638**, 38% of the
-        component. They are MoE experts the trace never routed to; the graph
+        component. They are MoE experts the build never routed to; the graph
         holds a `mm` per expert it did route to, and none for the rest.
 
         Computed from the FINAL dag, after any fusion pass, so a transform
@@ -1934,7 +1934,7 @@ class GraphExecutor:
           an RNNT decoder's LSTM leaves. Every non-block key is loaded,
           whatever the graph says (blunt on purpose: a layer-streaming
           segment reloads the embedding and head with every segment). What the filter saves (MoE experts the
-          trace never routed to) lives inside blocks; what the flows read
+          build never routed to) lives inside blocks; what the flows read
           today carries no block segment — OBSERVED on the flows in the
           tree on 2026-09-13, not guaranteed by any gate: a flow that read
           a block weight by name outside the graph would meet None at its
@@ -2558,9 +2558,9 @@ class GraphExecutor:
     def _reconcile_weight_keys(self) -> None:
         """Reconcile weight dict keys with graph param names.
 
-        Handles prefix hierarchy mismatches between traced model structure
+        Handles prefix hierarchy mismatches between built model structure
         and HF safetensors structure. For example:
-          Trace:  model.language_model.block.0.attn.key.weight
+          Build:  model.language_model.block.0.attn.key.weight
           Import: language_model.model.block.0.attn.key.weight
 
         Both are neurotaxed but the model wrapper hierarchy differs.
@@ -2760,8 +2760,8 @@ class GraphExecutor:
 
         COMPUTABLE BUFFERS:
         If a tensor has is_computable=True, it needs runtime computation instead
-        of loading the traced constant. This is used for sincos pos_embed that
-        needs to be recomputed at runtime resolution (not the trace resolution).
+        of loading the built constant. This is used for sincos pos_embed that
+        needs to be recomputed at runtime resolution (not the build resolution).
 
         ZERO HARDCODE: dtype from graph tensor metadata (SOURCE OF TRUTH).
         ZERO FALLBACK: Error if constant marked but no data (unless computable).
@@ -2847,7 +2847,7 @@ class GraphExecutor:
         # Shape vs bytes reconciliation. Some graphs declare the FULL shape
         # of a seq-dependent buffer (e.g. DeepSeek RoPE cos/sin_cached:
         # declared (max_position, head_dim) but bytes stored at (trace_seq_len,
-        # head_dim)). The native path gets the trace shape for free via
+        # head_dim)). The native path gets the build shape for free via
         # torch.load's pickled metadata; we have to derive it from bytes.
         # Find the dim to shrink so that the shape matches byte count.
         dtype_bytes = _isz.itemsize(dtype_str)     # config/dtypes.yml; an unknown dtype is refused
@@ -3476,7 +3476,7 @@ class GraphExecutor:
         # the NBX live_tracked counter every N ops as
         # `[OP_TRACE path=tritonseq op_idx=N op_uid=U live_mb=X out_ptr=P]`
         # so a sequential vs triton_sequential bisection has comparable
-        # per-op traces. P-SANA-4KPX-RUNTIME 2026-05-07.
+        # per-op builds. P-SANA-4KPX-RUNTIME 2026-05-07.
         import os as _os_tsq
         _tsq_per = int(_os_tsq.environ.get("NBX_TRITONSEQ_LIVE_DUMP_EVERY",
                                             "0") or "0")
@@ -3794,7 +3794,7 @@ class GraphExecutor:
             for dead_tid in dead_at_op.get(op_idx, ()):
                 store.pop(dead_tid, None)
 
-            # Tensor-value fingerprint trace AFTER op runs, BEFORE
+            # Tensor-value fingerprint build AFTER op runs, BEFORE
             # kill_slots evicts. Mirrors [VALUE_TRACE path=native] in
             # _execute_all_ops for sequential vs triton_sequential
             # value diff. Gated by NBX_VALUE_DUMP_EVERY=N.
@@ -3813,7 +3813,7 @@ class GraphExecutor:
                     _log.debug(f"[VALUE_TRACE path=tritonseq op_idx={op_idx} "
                                f"op_uid={op_uid} ERR={_e_vdt}]")
 
-            # Per-op symmetric trace (post-cleanup, before next op runs).
+            # Per-op symmetric build (post-cleanup, before next op runs).
             if _tsq_per > 0 and op_idx % _tsq_per == 0:
                 try:
                     from nbxtensor.memory.allocator import DeviceAllocator as _DA_ts
@@ -4152,7 +4152,7 @@ class GraphExecutor:
                 # encoder_hidden_states is [B, 1, S, D]; the flow provides the
                 # standard 3D [B, S, D]) — the vendor pipeline unsqueezes at
                 # the boundary and so must we. Data-driven from graph.json,
-                # zero model knowledge: insert a unit dim ONLY where the trace
+                # zero model knowledge: insert a unit dim ONLY where the build
                 # shape is concretely 1 AND no shape symbol sources from that
                 # dim (symbol-sourced dims — batch, seq — legitimately vary
                 # and are never insertion points). Ambiguity (≠1 candidate)
@@ -4175,17 +4175,17 @@ class GraphExecutor:
                         _cands = []
                         for _pos, _d in enumerate(_sshape):
                             # A symbolized dim can still be a structural unit
-                            # (the tracer symbolizes trace-value-1 dims too);
+                            # (the builder symbolizes trace-value-1 dims too);
                             # candidacy is decided by the simulation checks
                             # below (concrete-unit facing + batch coherence),
                             # not by symbol presence alone.
                             if _d != 1:
                                 continue
                             # Simulate the insertion and validate against the
-                            # trace shape: every spec dim that is CONCRETELY 1
+                            # build shape: every spec dim that is CONCRETELY 1
                             # must face a runtime 1 — a structural unit dim
                             # never varies — EXCEPT position 0 (batch-first
-                            # convention: a batch traced at 1 legitimately
+                            # convention: a batch built at 1 legitimately
                             # becomes 2 under CFG batching). Symbolic/non-unit
                             # dims vary freely. Exactly one surviving
                             # candidate = unambiguous insertion.
@@ -4205,7 +4205,7 @@ class GraphExecutor:
                                 _cands.append(_pos)
                         if len(_cands) == 1:
                             val = val.unsqueeze(_cands[0])
-                # Convert to expected dtype from graph; a traced float64 is held as this device
+                # Convert to expected dtype from graph; a built float64 is held as this device
                 # stores it (`DtypeEngine.storage_dtype`, the one owner of that narrowing)
                 expected_dtype = dtype_resolver.get_input_dtype(input_name)
                 if expected_dtype is not None and self._dtype_engine is not None and expected_dtype.is_floating_point:
@@ -4271,7 +4271,7 @@ class GraphExecutor:
         return ctx
 
     def _patch_seq_len_in_ops(self, bound_symbols: Dict[str, int]) -> None:
-        """Replace trace-time seq_len values with runtime values in op attributes.
+        """Replace build-time seq_len values with runtime values in op attributes.
 
         The compiled path does this via _promote_seq_len_scalars_to_symbolic + ExprArg.
         For sequential mode, we patch from SAVED ORIGINALS each call (AR-safe).
@@ -4404,7 +4404,7 @@ class GraphExecutor:
         """Adapt constant_T_* weights to match runtime seq_len.
 
         RoPE cos/sin tables are captured at trace_seq_len. If runtime seq_len
-        differs, narrow (runtime < trace) or extend (runtime > trace) the
+        differs, narrow (runtime < build) or extend (runtime > build) the
         tables. Sequential-mode equivalent of
         `CompiledSequence.update_seq_dependent_constants()`.
 
@@ -4627,7 +4627,7 @@ class GraphExecutor:
         # Sequential parity instrumentation — mirrors NBX_LIVE_DUMP_EVERY in
         # triton/sequence.py. Every N ops, log torch.cuda.memory_allocated()
         # so a sequential vs triton_sequential bisection has comparable per-op
-        # live-watermark traces. Cheap (env read once + memory_allocated call
+        # live-watermark builds. Cheap (env read once + memory_allocated call
         # every N ops). Disabled by default (env var unset).
         import os as _os_nat
         _native_per = int(_os_nat.environ.get("NBX_NATIVE_LIVE_DUMP_EVERY", "0") or "0")
@@ -4655,7 +4655,7 @@ class GraphExecutor:
                 # NAN/INF guard for TRITON ops only
                 self._check_nan_inf(op_uid, op_type, exec_type)
 
-                # Tensor-value fingerprint trace BEFORE op_outputs[op_uid]
+                # Tensor-value fingerprint build BEFORE op_outputs[op_uid]
                 # is deleted. Mirrors the [VALUE_TRACE] format in
                 # _run_triton_sequential. Gated by NBX_VALUE_DUMP_EVERY=N.
                 import os as _os_vd
@@ -4691,7 +4691,7 @@ class GraphExecutor:
                     # Sum live across all CUDA devices — Sana 4Kpx VAE
                     # runs on cuda:2 per Prism placement, but other
                     # components may use other devices. Aggregate so
-                    # the trace matches the NBX `_cuda_live_bytes` sum.
+                    # the build matches the NBX `_cuda_live_bytes` sum.
                     _live = 0.0
                     _peak = 0.0
                     import torch
@@ -4846,8 +4846,8 @@ class GraphExecutor:
                     value = None
 
             # The entry dtype is ONE rule, the resolver's (`tensor_resolver.get_input_dtype`, as the
-            # op-by-op path applies it in `_prepare_execution`): an input traced at or below the
-            # compute width enters at the compute dtype, one traced wider at its traced width as
+            # op-by-op path applies it in `_prepare_execution`): an input built at or below the
+            # compute width enters at the compute dtype, one built wider at its built width as
             # the device stores it, a SEAM in the dtype its producer gave it (None: no cast —
             # narrowed here, an fp32 island became bf16 at every piece entry and the compiled
             # pieces diverged 1.1 % from the whole component, PixArt T5, 2026-09-24). This site
@@ -5242,7 +5242,7 @@ class GraphExecutor:
 
         The fused op replaces ~893 individual ops per MoE layer with dynamic
         routing + expert FFN + scatter-add. Without this, native mode uses
-        hardcoded trace-time routing indices → garbage output.
+        hardcoded build-time routing indices → garbage output.
         """
         import torch  # the ATen branch's path
         import torch.nn.functional as F
@@ -5835,7 +5835,7 @@ class GraphExecutor:
         if hidden.shape[-1] != expected_hidden_dim:
             return None
         # Unflatten: the pre-lm_head tensor is the (B*S, D) view per the
-        # traced lm_head matmul. Restore (batch, seq, hidden) using the
+        # built lm_head matmul. Restore (batch, seq, hidden) using the
         # caller-provided batch (CFG image-AR runs at batch=2).
         if hidden.ndim == 2:
             total = hidden.shape[0]
@@ -5984,7 +5984,7 @@ class GraphExecutor:
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
         # The load says when a component arrives; the release says when it leaves — the two lines a
-        # per-second memory trace is aligned on to read which components a peak held (the Mac's unified
+        # per-second memory build is aligned on to read which components a peak held (the Mac's unified
         # overruns peaked at a component load, 2026-10-14; nothing said whether the previous one had left).
         if _released:
             _log.debug(f"   [{'Triton' if str(self.mode).startswith('triton') else 'Compiled'}] "

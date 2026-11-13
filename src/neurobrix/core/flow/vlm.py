@@ -255,7 +255,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             modal_embeds = modal_embeds.to(dtype=dtype)
             n_modal = modal_embeds.shape[1]
             if has_deepstack:
-                # The tracer names the vision tuple's flattened extras
+                # The builder names the vision tuple's flattened extras
                 # output_1..N ((hidden, [deepstack x3]) return); each is
                 # [n_modal, H_text], row-aligned with the merged hidden.
                 for k in range(1, len(ds_input_names) + 1):
@@ -630,7 +630,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         tower → projection chain, LM with IN-GRAPH bool-mask splice.
 
         Grounded on the MiniCPM-o-4_5 build (first consumer) — graph
-        input contracts read from the traced DAGs:
+        input contracts read from the built DAGs:
           vpm(all_pixel_values [1,N,588] , patch_attention_mask [1,1,N]
               bool, tgt_sizes [[gh,gw]] int32) → [1, N, 1152]
           resampler(x [1,N,1152], tgt_sizes) → [1, 64, 4096]
@@ -1114,7 +1114,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         modality mask/embed pairs, 3-D M-RoPE positions.
 
         Grounded on the Ming-Lite-Omni-1.5 build (first consumer) — the
-        traced DAG contracts, quoted from the graphs:
+        built DAG contracts, quoted from the graphs:
 
           vision(hidden_states [n_patch, C*Tp*P*P], grid_thw [1, 3])
               -> [t*(h/2)*(w/2), vision_out_hidden]
@@ -1148,7 +1148,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         get_rope_index without second_per_grid_ts), audio runs are
         text-like on all three planes, and every run starts at
         max(previous) + 1. The [16, 24, 24] section split is applied
-        IN-GRAPH by the traced rotary; the flow only supplies positions.
+        IN-GRAPH by the built rotary; the flow only supplies positions.
 
         ZERO FALLBACK: every id, token count and template comes from the
         topology / the request; a missing one raises by name.

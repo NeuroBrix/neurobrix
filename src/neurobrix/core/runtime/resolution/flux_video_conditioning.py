@@ -1,14 +1,14 @@
 """FLUX-video (Open-Sora-v2) positional-id + cond synthesis (compiled mode).
 
 Open-Sora-v2's MMDiT is a FLUX-style **packed-latent video** denoiser. The vendor
-pipeline prepares, OUTSIDE the traced graph:
+pipeline prepares, OUTSIDE the built graph:
   * a packed image latent  img    [B, num_tokens, C*p^2]
   * FLUX 3-axis positional  img_ids [B, num_tokens, 3] over the (T, H/p, W/p) grid
   * text positional ids     txt_ids [B, txt_seq, 3]  (all zeros)
   * a channel-concat cond   cond   [B, num_tokens, (C+1)*p^2]
 For pure T2V the cond is all-zeros (mask + masked-reference are both empty — the
 vendor `prepare_inference_condition` t2v branch leaves them zero). These tensors
-are not produced by any traced component, so NeuroBrix synthesizes them at runtime.
+are not produced by any built component, so NeuroBrix synthesizes them at runtime.
 
 DATA-DRIVEN + gated: only fires for a loop denoiser that declares an ``img_ids``
 input (FLUX-family only — CogVideoX / Wan / Mochi do not). Inert for every other

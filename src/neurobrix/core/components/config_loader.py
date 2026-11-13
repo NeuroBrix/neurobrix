@@ -5,7 +5,7 @@ Loads and normalizes component configuration from cache files.
 
 Sources:
 1. components/{name}/profile.json - Architectural config (from HuggingFace)
-2. components/{name}/runtime.json - Runtime attributes (from trace)
+2. components/{name}/runtime.json - Runtime attributes (from build)
 
 ZERO FALLBACK: Raises explicit errors if required files are missing.
 """

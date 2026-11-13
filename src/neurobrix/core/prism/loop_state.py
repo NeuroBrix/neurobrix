@@ -73,7 +73,7 @@ def mismatches(graph: Dict[str, Any], state_input: str, env: Dict[str, int]) -> 
 def kept_neighbours(graph: Dict[str, Any], state_input: str, env: Dict[str, int],
                     sym: str) -> Tuple[Optional[int], Optional[int]]:
     """The nearest extents of `sym` below and above its value at which the loop keeps the state (every other symbol
-    as bound): searched down to the symbol's own minimum and up to its maximum, or to twice its value where the trace
+    as bound): searched down to the symbol's own minimum and up to its maximum, or to twice its value where the build
     declares none — a loop keeps a stride's multiples, and a stride is never larger than the extent it divides."""
     def kept(v):
         e = dict(env, **{sym: v})

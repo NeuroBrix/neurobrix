@@ -100,7 +100,7 @@ class NativeATenDispatcher:
             # compiled (`ScalarArg(self.device)`) and Triton
             # (`cuda:{device_idx}`) paths do. Taking the trace's index
             # literally refused chatterbox's sequential oracle under a pinned
-            # card (`cuda:1` in its trace, one card visible: "invalid device
+            # card (`cuda:1` in its build, one card visible: "invalid device
             # ordinal", 2026-09-06; 48 of the zoo's containers carry such an
             # index).
             if self._runtime_device:
@@ -231,7 +231,7 @@ class NativeATenDispatcher:
                 return inp
 
             # Check for graph capture bug: expected scalar/empty but got tensor
-            # Compare graph-recorded shapes (what tracer expected) vs actual input shape
+            # Compare graph-recorded shapes (what builder expected) vs actual input shape
             graph_input_shapes = attributes.get("input_shapes", [])
             graph_output_shapes = attributes.get("output_shapes", [])
 
@@ -368,7 +368,7 @@ class NativeATenDispatcher:
                 inputs = [q, k, v] + list(inputs[3:])
                 # A FLOATING attn_mask must track the (possibly AMP-upcast)
                 # query dtype — torch SDPA rejects a half mask against a
-                # float query (omni vision block-diagonal mask, traced
+                # float query (omni vision block-diagonal mask, built
                 # additive-fp16 by the vendor interface). Bool masks are
                 # dtype-invariant and pass through untouched.
                 if (len(inputs) > 3 and isinstance(inputs[3], torch.Tensor)
@@ -376,13 +376,13 @@ class NativeATenDispatcher:
                         and inputs[3].dtype != q.dtype):
                     inputs[3] = inputs[3].to(q.dtype)
 
-        # [MULTI-RESOLUTION FIX] Upsample ops have hardcoded output_size from trace time.
+        # [MULTI-RESOLUTION FIX] Upsample ops have hardcoded output_size from build time.
         # When scale factors (scales_h, scales_w) are available, recompute output_size
         # from actual input tensor dimensions to support multi-resolution inference.
         if base_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
                          "_upsample_nearest_exact2d"):
             # inputs[0] = input tensor
-            # inputs[1] = output_size (hardcoded from trace time)
+            # inputs[1] = output_size (hardcoded from build time)
             # inputs[2] = scales_h (if available)
             # inputs[3] = scales_w (if available)
             # _upsample_nearest_exact2d shares this exact arg layout.
@@ -407,7 +407,7 @@ class NativeATenDispatcher:
 
         # [MULTI-RESOLUTION FIX — 1D] Same for 1D upsample (Kokoro prosody
         # predictor F0/N branches upsample the duration-expanded sequence x2).
-        # The traced output_size froze 2*trace_len (e.g. [68]); at a different
+        # The built output_size froze 2*trace_len (e.g. [68]); at a different
         # runtime sum(durations) the frozen size mismatches the actual input
         # (124 vs 68 → add broadcast crash). The compiled/triton paths already
         # resolve the length from the actual tensor; recompute here from the
@@ -514,10 +514,10 @@ class NativeATenDispatcher:
                             inputs = [valid_tensors] + list(inputs[1:])
 
             # [DERIVED SCALARS] native_group_norm's functional signature
-            # carries N, C, HxW as SCALAR args — the graph bakes their trace
+            # carries N, C, HxW as SCALAR args — the graph bakes their build
             # values, but they are fully derived from the input tensor (HxW
             # especially: for a video VAE it is the flattened T*H*W product,
-            # frozen at the frugal trace size, e.g. 550 = 5*10*11 against a
+            # frozen at the frugal build size, e.g. 550 = 5*10*11 against a
             # runtime 3*60*90). Recompute from the live input so the op
             # tracks the runtime shape.
             if (base_name == "native_group_norm" and len(inputs) >= 7
@@ -528,13 +528,13 @@ class NativeATenDispatcher:
                 inputs = ([inputs[0], inputs[1], inputs[2], _n, _c, _hxw]
                           + list(inputs[6:]))
 
-            # [DERIVED SIZES] upsample ops traced from F.interpolate(scale_factor=)
+            # [DERIVED SIZES] upsample ops built from F.interpolate(scale_factor=)
             # carry output_size=None + scale factors; the raw aten op resolves the
             # null size to 0 ("input (W: 49920) and output (W: 0)"). Recompute the
             # size from the LIVE input × scale — the sequential mirror of compiled
             # _make_upsample (Kokoro F0 / HiFT SineGen resample class). Scales take
             # precedence over a recorded size, exactly like the compiled wrapper
-            # (a baked trace size must not survive at other lengths).
+            # (a baked build size must not survive at other lengths).
             if (base_name.startswith(("upsample_", "_upsample_"))
                     and inputs and isinstance(inputs[0], torch.Tensor)):
                 _x = inputs[0]

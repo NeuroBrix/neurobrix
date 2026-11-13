@@ -6,9 +6,9 @@ THE TWO TIMES THIS WAS PAID, BOTH ON 2026-09-12
 * A build was reported in flight from a `model.nbx.building` at 26.1 GB while the
   flight recorder already said `failed`. The size was real; it was the size of a
   corpse. Two hours.
-* A verification step was placed after a re-trace without checking it could SEE
-  the re-trace: the run read `~/.neurobrix/cache` (1448 ops, time=9) while the
-  re-trace had written `.cache/graphs` (2271 ops, time=17). The step was not
+* A verification step was placed after a rebuild without checking it could SEE
+  the rebuild: the run read `~/.neurobrix/cache` (1448 ops, time=9) while the
+  rebuild had written `.cache/graphs` (2271 ops, time=17). The step was not
   wrong about what it read. It read the wrong thing, and said PASS.
 
 Neither is a reasoning error and neither would have been caught by reading the

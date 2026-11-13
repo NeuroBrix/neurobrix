@@ -1,6 +1,6 @@
 """The flow's generating language model is priced at the longest pass it runs: its prompt, at most the prompt budget its
 cache is sized with (`defaults.prompt_margin`, the state engine's own figure) — never at the whole cache in one pass.
-Before: its sequence axis took the trace extent under the placement floor; Janus-Pro-7B (traced at 704 positions =
+Before: its sequence axis took the build extent under the placement floor; Janus-Pro-7B (built at 704 positions =
 576 image tokens + 128) priced its text logits over 5 x 704 rows, a 1 375 MB activation figure (KV included) where the
 run held ~300 MB beside its weights and cache (the Dell's split on a V100, 2026-10-28), and on the idle Mac its lazy
 plan overshot the pool by 388 MB and fell to layer_streaming. RED on lot-2026-10-28. No card."""

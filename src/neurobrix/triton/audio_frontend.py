@@ -183,7 +183,7 @@ def resolve_preprocessing(preprocessing: str, input_shape) -> str:
 
 
 def fit_features(feats: np.ndarray, input_shape) -> np.ndarray:
-    """Features padded / truncated to the first stage's trace dims (mirror of the torch path) —
+    """Features padded / truncated to the first stage's build dims (mirror of the torch path) —
     the extent the encoder then runs at, which the derived census binds from."""
     if input_shape and len(input_shape) == feats.ndim and feats.ndim >= 3:
         for d in range(1, len(input_shape)):

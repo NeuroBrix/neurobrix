@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Which components hold a TEMPORAL LOOP THE TRACER UNROLLED?
+"""Which components hold a TEMPORAL LOOP THE BUILDER UNROLLED?
 
 WHY THIS IS ASKED
 -----------------
-A causal video VAE processes frames in chunks. If the tracer unrolls that loop,
+A causal video VAE processes frames in chunks. If the builder unrolls that loop,
 the graph holds one copy of the chunk body per chunk and the chunk count is fixed
-at the trace stimulus. Such a component is NOT symbolic in time however many
+at the build stimulus. Such a component is NOT symbolic in time however many
 symbols its table declares: a graph unrolled for five chunks cannot process
 eighty-one frames, and the symbolic machinery then folds the temporal factor into
 a neighbouring slot rather than failing honestly.
@@ -17,9 +17,9 @@ chunk count k = (T-1)//4+1 — 3 chunks to 5 moves the four groups 8 -> 14,
 
 TWO KINDS OF LINE, AND THEY DO NOT READ THE SAME
 -------------------------------------------------
-  MEASURED   two trace points exist for this component, so the dependence of the
+  MEASURED   two build points exist for this component, so the dependence of the
              op count on the stimulus is fitted, not guessed.
-  INFERRED   one trace point. The signature is the module-repetition histogram
+  INFERRED   one build point. The signature is the module-repetition histogram
              agreeing with this graph's own k. It is evidence, not a fit, and a
              single graph cannot distinguish "r modules because k chunks" from
              "r modules because the architecture has r of them".
@@ -30,8 +30,8 @@ distinction. This one refuses to.
 LIVE OR THEORETICAL
 -------------------
 An unrolled component is only a LIVE limit if the request asks for a chunk count
-other than the traced one. The container states its own default frame count, so
-the comparison is available without running anything: traced k against runtime k.
+other than the built one. The container states its own default frame count, so
+the comparison is available without running anything: built k against runtime k.
 
 Usage:
     python tools/temporal_unroll_census.py
@@ -137,7 +137,7 @@ def census(root: Path, second_point: Path | None):
         k_run = chunks(run_frames, compression) if isinstance(run_frames, int) else None
         sig = signature(graph, k_trace)
 
-        # A SECOND TRACE POINT turns the line from inferred to measured.
+        # A SECOND BUILD POINT turns the line from inferred to measured.
         row_kind, fit = "INFERRED", None
         if second_point:
             other = second_point / model / comp / "graph.json"
@@ -172,7 +172,7 @@ def main() -> int:
     ap.add_argument("--root", default=os.environ.get(
         "NEUROBRIX_CACHE", str(_atelier.root("cache"))))
     ap.add_argument("--second-point", default=None,
-                    help="a second trace tree (e.g. .cache/graphs) for MEASURED lines")
+                    help="a second build tree (e.g. .cache/graphs) for MEASURED lines")
     ap.add_argument("--threshold", type=float, default=0.90,
                     help="share of ops in k-explained module groups to call it unrolled")
     ap.add_argument("--json", action="store_true")
@@ -211,25 +211,25 @@ def main() -> int:
               f"{r['share_explained']:>6.2f}  {verdict}")
 
     measured = [r for r in rows if r.get("kind") == "MEASURED"]
-    print(f"\n  MEASURED lines (two trace points, slope fitted): {len(measured)}")
+    print(f"\n  MEASURED lines (two build points, slope fitted): {len(measured)}")
     for r in measured:
         f = r["fit"]
         print(f"    {r['component']}: {f['points']} -> {f['ops_per_chunk']:.0f} "
               f"ops per chunk")
-    print(f"  INFERRED lines (one trace point, histogram signature): "
+    print(f"  INFERRED lines (one build point, histogram signature): "
           f"{len(rows) - len(measured)}")
     live = [r for r in suspect if r["k_runtime"] is not None
             and r["k_runtime"] != r["k_trace"]]
     print(f"\n  carrying the signature : {len(suspect)} of {len(rows)}")
     print(f"  containers affected    : "
           f"{len({r['component'].split('/')[0] for r in suspect})}")
-    print(f"  LIVE (runtime chunk count differs from the traced one): {len(live)}")
+    print(f"  LIVE (runtime chunk count differs from the built one): {len(live)}")
     for r in live:
-        print(f"    {r['component']}: traced {r['k_trace']} chunks, runtime "
+        print(f"    {r['component']}: built {r['k_trace']} chunks, runtime "
               f"{r['k_runtime']} ({r['runtime_frames']} frames)")
     print("\n  An INFERRED line is evidence, not a fit: one graph cannot separate "
           "'r copies\n  because k chunks' from 'r copies because the architecture "
-          "has r of them'.\n  Converting one costs a second trace, nothing more.")
+          "has r of them'.\n  Converting one costs a second build, nothing more.")
     return 0
 
 

@@ -5,12 +5,12 @@ prism-time-score.md §2), read from its graph with the request's shapes — the 
   flops            the multiply-adds of the ops that carry them, two flops each: products (mm, addmm, bmm, baddbmm,
                    matmul, linear), convolutions, attention (QK^T and PV) and the fused MoE's experts; every other op
                    counts one per output element
-  weight_bytes     the parameters and buffers the run reads, once each, at their traced width
-  activation_bytes every op's inputs read and outputs written that are not parameters, at their traced width; a view
+  weight_bytes     the parameters and buffers the run reads, once each, at their built width
+  activation_bytes every op's inputs read and outputs written that are not parameters, at their built width; a view
                    (`_VIEWS`) moves nothing
 
 The figures are the inputs of a roofline (`max(flops / throughput, bytes / bandwidth)`); the widths a component is
-EXECUTED at (`core.prism.runtime_widths`) replace the traced ones where the caller has them.
+EXECUTED at (`core.prism.runtime_widths`) replace the built ones where the caller has them.
 """
 from __future__ import annotations
 

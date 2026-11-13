@@ -1,4 +1,4 @@
-"""The output dtype of an op, read from its traced record or decided by the half cast-back rule (nbxtensor.dtype.outputs):
+"""The output dtype of an op, read from its built record or decided by the half cast-back rule (nbxtensor.dtype.outputs):
 one definition every engine imports, torch-free."""
 import itertools
 
@@ -41,7 +41,7 @@ def test_under_float16_only_the_contract_narrows():
         assert amp_fp32_output_dtype("float16", g, False, False) == "float32"
         assert amp_fp32_output_dtype("float16", g, True, False) == "float16"
         assert amp_fp32_output_dtype("float16", g, False, True) == "float16"
-    for g in ("float16", "bfloat16"):                          # a traced fp32 island: only `narrowed` brings it down
+    for g in ("float16", "bfloat16"):                          # a built fp32 island: only `narrowed` brings it down
         assert amp_fp32_output_dtype("float16", g, True, False, "float32") == "float32"
         assert amp_fp32_output_dtype("float16", g, False, True, "float32") == "float16"
     assert amp_fp32_output_dtype("float16", "float32", True, False, "float32") == "float16"

@@ -12,7 +12,7 @@ classes, all of one class — a stage whose length the flow learns only from VAL
   recorded 8 keys, all from the prefill.
 
 Kokoro is the fourth audio model and is NOT walked, on purpose: its Triton decoder runs every
-block at exactly the traced frame length (`triton/flow/audio.py`, `_try_chunked_forward` pads the
+block at exactly the built frame length (`triton/flow/audio.py`, `_try_chunked_forward` pads the
 last block), so its keys do not depend on how many frames the durations predict — it verified at
 0 misses the same day.
 

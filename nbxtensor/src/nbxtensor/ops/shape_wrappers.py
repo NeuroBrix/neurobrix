@@ -252,7 +252,7 @@ def upsample_nearest1d_wrapper(
     # which raises on a list. Unwrap to a scalar. When a scale is present the 2D
     # wrapper recomputes OW = IW * scale from the LIVE input — exactly what a
     # variable-length audio vocoder (HiFiGAN/iSTFTNet/DAC/S3Gen) needs so the
-    # output tracks the runtime token count rather than the baked trace length.
+    # output tracks the runtime token count rather than the baked build length.
     if isinstance(scales, (list, tuple)):
         scale_w = scales[0] if len(scales) else None
     else:
@@ -266,9 +266,9 @@ def upsample_nearest2d_wrapper(
 ) :
     """Upsample nearest 2D. Wrapper from FlagGems.
 
-    PyTorch's traced graph stores both `output_size` (concrete trace
+    PyTorch's built graph stores both `output_size` (concrete build
     value) and `scales_h/w` (the upsampling ratio). When the runtime
-    input size differs from the trace size — Sana 4Kpx: trace 64×64
+    input size differs from the build size — Sana 4Kpx: build 64×64
     latent → runtime 128×128, and every cascading decoder upsample
     inherits the doubling — `output_size` no longer matches
     `IH * scales_h`. Native PyTorch recomputes from the live input
@@ -285,8 +285,8 @@ def upsample_nearest2d_wrapper(
         OH, OW = output_size, output_size
 
     # Recompute output size from runtime input when scale factors are
-    # given. Bit-identical when trace == runtime; corrects the cascade
-    # when they differ (Sana 4Kpx and any other graph traced at a
+    # given. Bit-identical when build == runtime; corrects the cascade
+    # when they differ (Sana 4Kpx and any other graph built at a
     # smaller spatial size than runtime).
     if scales_h is not None:
         OH = int(IH * float(scales_h))

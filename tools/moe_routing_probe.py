@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""MoE routing probe — does the executed graph carry trace-time expert bounds?
+"""MoE routing probe — does the executed graph carry build-time expert bounds?
 
-The alert: a MoE trace burns the per-expert token counts of the trace batch into
+The alert: a MoE build burns the per-expert token counts of the build batch into
 `aten::slice` bounds (topk -> sort -> floor_divide -> index -> per-expert slice).
-Those bounds depend on values the router produced at trace time, not on seq_len,
+Those bounds depend on values the router produced at build time, not on seq_len,
 so no symbolic shape can cover them. If such a slice still sits in
 `execution_order` when the model runs, every generation routes with the trace's
 expert histogram.
@@ -200,7 +200,7 @@ def main() -> int:
         print(f"  ops dict {r['ops_before']} -> {r['ops_after']}  |  execution_order {r['order_before']} -> {r['order_after']}")
         print(f"  aten::sum              : {r['aten_sum']}")
         if r["surviving_examples"]:
-            print("  SURVIVING (executed with trace bounds):")
+            print("  SURVIVING (executed with build bounds):")
             for e in r["surviving_examples"]:
                 print(f"    {e['uid']} [{e['start']}:{e['end']}] of buffer {e['buffer']} @ {e['parent']}")
         print()

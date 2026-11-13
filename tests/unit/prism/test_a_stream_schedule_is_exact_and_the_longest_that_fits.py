@@ -81,7 +81,7 @@ def test_a_declaration_derived_from_another_graph_is_refused(tmp_path):
 
 def test_a_vendor_tiling_declaration_that_says_when_is_refused(tmp_path):
     """A vendor declaration is the vendor's reference cut or does not exist (decision 2026-10-17 20:08): one carrying
-    `when` — the retired 'memory' path, or 'always' — is refused by name until Forge re-derives it. Red if the loader
+    `when` — the retired 'memory' path, or 'always' — is refused by name until the container builder re-derives it. Red if the loader
     reads it: the plan would take a cut no reference makes."""
     import hashlib
     import json

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Vendor-of-record transcription for the Voxtral class (transformers stack
-the artifact is traced from): fp16, greedy, the processor's own
+the artifact is built from): fp16, greedy, the processor's own
 long-form contract (`apply_transcription_request` → fixed 30 s windows
 stacked on the batch axis, one BEGIN_AUDIO). Writes the transcript and
 the wall time; the engine's long-form gate (D-AUDIOLLM-LONGFORM) compares

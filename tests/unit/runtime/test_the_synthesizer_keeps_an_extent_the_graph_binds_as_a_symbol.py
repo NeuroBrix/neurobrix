@@ -4,7 +4,7 @@ dimension as a symbol (`s1`, source `input::inputs_embeds::dim_1`) and runs at a
 (Qwen3-Omni, 2026-09-21: `shape '[-1, 1, 23]' is invalid for input of size 639`).
 
 A dimension the graph binds as a symbol is never sliced. A dimension the graph carries as a
-literal (a frozen extent, a trace defect at the source) is still cut to the literal — the only
+literal (a frozen extent, a build defect at the source) is still cut to the literal — the only
 way that graph runs — and the cut is said in clear.
 
 Shapes: 213 is Omni's real prompt length here (196 image tokens plus text), 23 the trace's

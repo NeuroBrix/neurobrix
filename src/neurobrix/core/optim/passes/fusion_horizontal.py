@@ -306,7 +306,7 @@ def apply_fusion_horizontal(dag: dict, plan: dict) -> int:
         # input_tensor_ids made the engine read the dim scalar as the
         # tensor list — "cat() received an invalid combination of
         # arguments - got (int, dim=int)" on six audio cells,
-        # 2026-08-19. Copied from a traced cat rather than guessed.
+        # 2026-08-19. Copied from a built cat rather than guessed.
         member_wtids = [m["weight_tid"] for m in members]
         ops[cat_uid] = {
             "op_uid": cat_uid,
@@ -332,7 +332,7 @@ def apply_fusion_horizontal(dag: dict, plan: dict) -> int:
             "input_tensor_ids": [src, w_fused],
             "output_tensor_ids": [wide_out],
             # Tensor operands travel in args as {"type": "tensor"}, and
-            # args[0] is the tensor itself — the same encoding a traced
+            # args[0] is the tensor itself — the same encoding a built
             # mm carries. Emitting an empty attrs dict left the engine
             # with no operands to bind.
             "attributes": {
@@ -356,7 +356,7 @@ def apply_fusion_horizontal(dag: dict, plan: dict) -> int:
                 "input_tensor_ids": [wide_out],
                 # dim, start, end, step — the decomposed-ATen form both
                 # engines already dispatch.
-                # Traced form: args[0] is the tensor, then dim, start,
+                # Built form: args[0] is the tensor, then dim, start,
                 # end — no step — with the same three values mirrored
                 # as named fields.
                 "attributes": {

@@ -52,8 +52,8 @@ PYTORCH_BRANCH_FILES = {"kernels/metadata_ops.py", "core/runtime/torch_allocator
 NOT_SEMANTIC = {
     ("core/prism/chunked_region.py", "region_carriers"): "a region's carrier tensors, Prism's tiling plan",
     ("core/module/tiling_engine.py", "_detect_pixel_shuffle_broadcast_chains"): "graph pattern detection",
-    ("triton/promotion.py", "_promote_int"): "symbolic seq_len promotion of trace constants (a graph pass)",
-    ("triton/promotion.py", "_promote_int_value"): "symbolic seq_len promotion of trace constants (a graph pass)",
+    ("triton/promotion.py", "_promote_int"): "symbolic seq_len promotion of build constants (a graph pass)",
+    ("triton/promotion.py", "_promote_int_value"): "symbolic seq_len promotion of build constants (a graph pass)",
     ("core/prism/solver.py", "_arena_over_allocation"): "Prism's decision on a fact of the library (the arena's "
         "bytes, nbxtensor.memory.layout; the device's largest allocation, the profile) — COST.md section 2",
     ("core/prism/solver.py", "_store_arena_over_allocation"): "Prism's decision on a fact of the library (an expert "

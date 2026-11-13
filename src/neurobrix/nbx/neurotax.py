@@ -25,7 +25,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-#: The one version of the neurotaxe (the owner, 2026-09-26: "NeuroTax 5.0, one version"). Forge
+#: The one version of the neurotaxe (the owner, 2026-09-26: "NeuroTax 5.0, one version"). the container builder
 #: writes it in the manifest (`neurotax_version`); the runtime loader refuses by name a container
 #: whose keys were written under another version — a key the parser no longer emits is a key no
 #: reader will find (the MoE fusion's expert match, first of them).
@@ -33,7 +33,7 @@ from dataclasses import dataclass
 #: the vendors' router token), diffusers' `attn1` is `attn` (was `self_attn`).
 #: The vocabulary completed over the catalogue (2026-10-04) IS 5.0 (the owner, 2026-10-04 02:05: no
 #: public engine reads the partial vocabulary of 2026-09-27): 362 tokens it refused are translated,
-#: and every container is written once with the complete vocabulary (Forge `tools/neurotax_rename.py`).
+#: and every container is written once with the complete vocabulary (the container builder `tools/neurotax_rename.py`).
 #: The version string cannot tell a partial container from a complete one; the parser's own law
 #: does — `refuse_non_canonical`, at load. After the release a new model ADDS synonyms and never
 #: changes a key already emitted, so 5.0 stays and existing containers never move.
@@ -730,7 +730,7 @@ class SynonymRegistry:
         "_mel_filters": "mel_filters",
         "fb": "mel_filters",
         "window": "window",
-        # Module buffers the trace lifts into a graph as constants (no shard holds them; the graph
+        # Module buffers the build lifts into a graph as constants (no shard holds them; the graph
         # names them by the module's path, so the parser names them too).
         "mean": "mean",                      # an image normaliser's mean (SwinIR / HAT)
         "rotary_pos_emb": "pos_rotary",      # a vision tower's 2-D rotary table (not `rotary_embed`:

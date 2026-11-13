@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """A WEIGHT's shape is architectural. It can never depend on a request dimension.
 
-Principle 1 says a dim left concrete where a symbol belongs is a tracer bug. The inverse is
-equally a tracer bug and nothing looked for it: a SYMBOL where a constant belongs. An
-activation's dims follow the request; a parameter's dims follow the model, and a tracer that
+Principle 1 says a dim left concrete where a symbol belongs is a builder bug. The inverse is
+equally a builder bug and nothing looked for it: a SYMBOL where a constant belongs. An
+activation's dims follow the request; a parameter's dims follow the model, and a builder that
 binds one to the other has mistaken a coincidence for a relationship.
 
 WHAT IT COST, measured 2026-09-23
 ---------------------------------
-mochi-1-preview was retraced at `--trace-spatial 30,54`. At those values
+mochi-1-preview was rebuilt at `--trace-spatial 30,54`. At those values
 
     time(10) + width(54) == 64 == the attention head dim
 
-so the tracer bound `param::pos_frequencies` axis 2 — the head dim — to `s1 + s3`. At the
+so the builder bound `param::pos_frequencies` axis 2 — the head dim — to `s1 + s3`. At the
 container's own default request that resolves to 14 + 106 = 120 against an activation of 64,
 and every run dies in denoise step 1:
 
     Cannot broadcast (2, 22260, 24, 64) and (11872, 24, 120)
 
-The same container retraced at `26,30` (10 + 30 = 40, no collision) carries the literal 64 and
+The same container rebuilt at `26,30` (10 + 30 = 40, no collision) carries the literal 64 and
 runs. Seven runs were spent finding that, because the two builds sat in different caches and
 nothing anywhere said one of them was malformed.
 
@@ -78,7 +78,7 @@ def offending_contractions(graph: dict):
     number by construction: a symbol there is the mirror of a symbol on the parameter itself —
     a coincidence mistaken for a relationship. Measured 2026-09-27 on PixArt-XL-2-1024-MS: the
     timestep sinusoid's half-width 128 (Timesteps(num_channels=256), typed inside diffusers) was
-    bound to the latent height (128 at the 1024 trace); off the trace aten.addmm::0 received
+    bound to the latent height (128 at the 1024 build); off the build aten.addmm::0 received
     2x160 against the 256x1152 time projection."""
     out = []
     tensors = graph.get("tensors") or {}
@@ -146,7 +146,7 @@ def main() -> int:
         for comp, bad in comps.items():
             tid, axis, expr = bad[0]
             print(f"    {comp}: {tid} axis {axis} is a {expr.get('type')!r} "
-                  f"(trace {expr.get('trace')}), and {len(bad) - 1} more")
+                  f"(build {expr.get('trace')}), and {len(bad) - 1} more")
     total = sum(len(v) for comps in contractions.values() for v in comps.values())
     print(f"\n{len(contractions)} container(s), {total} activation dim(s) contracted against a weight that are not literals\n")
     for model, comps in sorted(contractions.items(), key=lambda kv: -sum(len(v) for v in kv[1].values())):
@@ -155,7 +155,7 @@ def main() -> int:
         for comp, bad in comps.items():
             uid, tid, axis, expr = bad[0]
             print(f"    {comp}: {uid} contracts {tid} axis {axis}, a {expr.get('type')!r} "
-                  f"(trace {expr.get('trace')}), against a weight; and {len(bad) - 1} more")
+                  f"(build {expr.get('trace')}), against a weight; and {len(bad) - 1} more")
     return 1 if (found or contractions) else 0
 
 

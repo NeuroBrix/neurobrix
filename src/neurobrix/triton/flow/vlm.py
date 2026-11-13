@@ -1145,7 +1145,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         linear_proj_audio, both with an in-graph F.normalize tail), TWO
         in-graph modality mask/embed pairs spliced by masked_scatter, and
         3-D M-RoPE positions. See the compiled docstring for the graph
-        contracts quoted from the traced DAGs.
+        contracts quoted from the built DAGs.
 
         Every host-side build (masks, positions, mel, ids) is numpy
         (allowed CPU glue); every device tensor is NBXTensor."""

@@ -6,7 +6,7 @@ of a run, in consumption order: an image encoder's posterior sample
 each stochastic scheduler step. The ATen branch carries that generator as
 `VariableResolver.sampling_generator()` and draws the initial noise and the
 scheduler noise from it — but an RNG op INSIDE a graph (`aten::randn_like`
-for a traced posterior sample, `aten::rand` for a vocoder phase) drew from
+for a built posterior sample, `aten::rand` for a vocoder phase) drew from
 torch's GLOBAL generator, seeded with the SAME seed at the CLI. Two streams
 from one seed re-emit one sequence: a [1, 16, 1, 60, 90] posterior draw from
 the global stream equals, element for element, the first frame of the

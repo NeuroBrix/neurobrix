@@ -1,6 +1,6 @@
 """A causal video component run in temporal chunks by the ENGINE equals the same component run whole, in every engine.
 
-Forge derives the stream from the clip graph (`components/<c>/stream_first.json`, `stream_next.json`, `stream.json`)
+the container builder derives the stream from the clip graph (`components/<c>/stream_first.json`, `stream_next.json`, `stream.json`)
 and proves it in float64 with ATen. This file proves the engine's half: the real `GraphExecutor` running the clip graph
 whole, and the stream brick (`core/module/temporal_stream_runner.run_stream`) driving the two chunk graphs on piece
 executors that BORROW the whole executor's weights (`LayerStreamingStrategy._piece_executor`), on the container's own
@@ -8,13 +8,13 @@ weights, at a small extent, give the same output to the engine's float32 noise.
 
 What it would do if the code were wrong:
   * a state not fed back, fed under the wrong name, or read from a memory the next run overwrote: the frames after the
-    first chunk read other context — off by order 1 (the Forge proof's zero-state injection measured 1.4);
+    first chunk read other context — off by order 1 (the container builder proof's zero-state injection measured 1.4);
   * a chunk written at the wrong place on the output's time axis: the output differs at those frames;
   * the piece executors not holding the weights: the run refuses by name.
 
 The containers are the cache's (`neurobrix.core.paths.cache_dir`, NEUROBRIX_CACHE for a stage); a machine without the
 container, or a container not yet carrying its stream, skips the case by name. CogVideoX's stream is the vendor's
-chunked function, not its clip graph (its group norms read the chunk): proven against the vendor in Forge
+chunked function, not its clip graph (its group norms read the chunk): proven against the vendor in the container builder
 (tests/test_a_vendor_chunked_vae_is_the_declared_stream.py), not here.
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ def _case(model, comp):
         pytest.skip(f"{model}/{comp}: not in this machine's cache ({c})")
     decl = ts.load(c, comp)
     if decl is None:
-        pytest.skip(f"{model}/{comp}: the container carries no stream yet (Forge tools/derive_temporal_stream.py)")
+        pytest.skip(f"{model}/{comp}: the container carries no stream yet (the container builder tools/derive_temporal_stream.py)")
     return c, decl
 
 

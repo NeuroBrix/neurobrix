@@ -21,7 +21,7 @@ from nbxtensor.shape import view_strides
 
 # Diagnostic (default-off): log when the metadata expand/view runtime-resolution
 # fixes actually fire. Used for R23 footprint screening (does a fix fire on a
-# trace==runtime model like an LLM?). Zero cost when unset.
+# build==runtime model like an LLM?). Zero cost when unset.
 _META_RESOLVE_DEBUG = os.environ.get("NBX_DEBUG_META_RESOLVE")
 def _meta_resolve_log(msg):
     if _META_RESOLVE_DEBUG:
@@ -109,14 +109,14 @@ def _resolve_view_shape(x, shape):
     """Reconcile a trace-baked view/reshape shape with the runtime numel.
 
     NBXTensor.view does NOT validate numel — it re-strides blindly over the same
-    data_ptr, so a baked trace dim that differs at runtime becomes a silent
-    out-of-bounds view (not an error, unlike torch). The graph bakes trace-time
+    data_ptr, so a baked build dim that differs at runtime becomes a silent
+    out-of-bounds view (not an error, unlike torch). The graph bakes build-time
     shapes; a variable-length model's runtime numel can differ (Kokoro predictor
     view::9: input [1,640,14], baked shape [1,640,23]). Mirror of compiled_ops.py
     view_or_reshape's -1 inference: when the baked product mismatches the input
     numel, infer the single changed dim, preferring the axis whose inferred size
     matches the input's actual dim there. Bit-identical when product == numel
-    (trace==runtime) → returns the shape unchanged. Returns a list.
+    (build==runtime) → returns the shape unchanged. Returns a list.
     """
     shape = list(shape)
     _report_invented_shape(x, shape)
@@ -129,7 +129,7 @@ def _resolve_view_shape(x, shape):
     for d in shape:
         prod *= d
     if prod == numel:
-        return shape  # exact (trace==runtime) — no change, byte-identical
+        return shape  # exact (build==runtime) — no change, byte-identical
     # numel mismatch: collect positions whose -1 inference divides evenly
     candidates = []
     for i in range(len(shape)):
@@ -156,7 +156,7 @@ def _resolve_view_shape(x, shape):
 
 def _meta_view(x, shape):
     """The graph's aten.view: a VIEW whenever ATen's would be one (`nbxtensor.shape.view_strides`), a strided input included — the
-    graph was traced under ATen, where this op copies nothing. `NBXTensor.view` copies a non-contiguous input, and
+    graph was built under ATen, where this op copies nothing. `NBXTensor.view` copies a non-contiguous input, and
     mochi-1-preview's VAE held a 3 GB copy per permute -> view the graph never priced (8 GB rung, 2026-10-28)."""
     if isinstance(shape, (list, tuple)):
         shape = tuple(_resolve_view_shape(x, shape))
@@ -202,11 +202,11 @@ def _meta_contiguous(x, *args, **kwargs):
 
 def _meta_expand(x, size):
     # Multi-resolution fix — mirror of compiled_ops.py _make_expand. The graph
-    # bakes trace-time expand sizes; at runtime a variable-length model's actual
+    # bakes build-time expand sizes; at runtime a variable-length model's actual
     # input dim can differ (Kokoro predictor: d.T seq 23->14, alignment frames
     # 34->62). expand can only broadcast from 1, so when the input's actual dim is
     # non-1 and differs from the baked target, the actual dim is the only valid
-    # size — use it. Bit-identical for trace==runtime models (actual == target →
+    # size — use it. Bit-identical for build==runtime models (actual == target →
     # no override); restores R30 parity with compiled.
     if isinstance(size, (list, tuple)) and len(size) == len(x.shape):
         new_size = list(size)
@@ -282,7 +282,7 @@ def _meta_select(x, dim, index):
 
 def _meta_slice_scatter(x, src, dim=0, start=None, end=None, step=1):
     """aten.slice_scatter: a copy of `x` with `src` written where `x[..., start:end:step]` lies (along `dim`) —
-    the functional form of an in-place write into a slice view (a traced graph records it for, e.g., Swin's
+    the functional form of an in-place write into a slice view (a built graph records it for, e.g., Swin's
     shifted-window mask `img_mask[:, h, w, :] = cnt`). The slice is `_meta_slice`'s, the same bounds rules."""
     out = x.clone()
     _meta_slice(out, dim, start, end, step).copy_(src)
@@ -323,7 +323,7 @@ def _meta_fill(x, value):
         # mirrors that (graph_executor._resolve_sequential_arg) — but the triton
         # COMPILED arena leaves the slot None, so the value reaches fill as None.
         # Default to 0 here so both triton paths match the native 0-default (HAT
-        # OCAB counter; the value is a trace-time artefact, not runtime data).
+        # OCAB counter; the value is a build-time artefact, not runtime data).
         value = 0
     out = NBXTensor.empty(x._shape, x._dtype, f"cuda:{x._device_idx}")
     return out.fill_(value)
@@ -460,7 +460,7 @@ def _meta_index(x, indices):
     if any(list(t.shape) != base_shape for t in idx_tensors[1:]):
         # PyTorch broadcasts differing index shapes together (right-aligned,
         # size-1 dims stretch). First real consumer: the T5 attention-mask
-        # application traced with a pad-realistic stimulus (Allegro) —
+        # application built with a pad-realistic stimulus (Allegro) —
         # extended_mask indexing uses [(1,1,1,1), (1,1,1,512)]. Compute the
         # common broadcast shape, expand every index (NBXTensor.expand is a
         # zero-copy stride view), and fall through to the joint flat-select.

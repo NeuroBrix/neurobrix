@@ -5,7 +5,7 @@ agreement, not quality; a video model's gate request is the smallest that exerci
 resolution at the model's floor). Quality is judged once per model and branch at the real request. On the mq25
 landing gate Allegro-TI2V took 1.2-1.6 h per run; fourteen cells above ten minutes have been carried by record since.
 
-The model's gate values are carried by its container (`extracted_values._global.gate`, written by Forge from the
+The model's gate values are carried by its container (`extracted_values._global.gate`, written by the container builder from the
 registry with their source), read by `trace_request.gate_request` over the judging request; the harness's cells run
 it and the census covers it beside the judging request.
 

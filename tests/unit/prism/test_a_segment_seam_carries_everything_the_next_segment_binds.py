@@ -33,7 +33,7 @@ DeepSeek-Coder-V2-Lite-Instruct (16 GB V100, `NBX_FORCE_STRATEGY=layer_streaming
 3. **A symbol's SOURCE still named an input the segment does not have.** Carrying the
    symbolic shape is not enough — the binding must point at a tensor this segment receives.
    The first repair RE-SOURCED the symbol to a seam dim with the same id; it could not serve a
-   trace with two ids for one extent (PixArt's T5: `s1` from attention_mask, `s3` from
+   build with two ids for one extent (PixArt's T5: `s1` from attention_mask, `s3` from
    input_ids; the hidden states carry `s3`, a later piece uses `s1` — the Mac's render died
    there, 8e786e70). Now the segment CARRIES the component input the symbol binds from: the
    source is unchanged, the input is declared, the strategy hands it in. The executed binding
@@ -218,7 +218,7 @@ def test_a_seam_tensor_keeps_its_dtype_at_every_engines_entry(seg1):
     eng.compute_dtype = parse_dtype("bfloat16")
     eng.stores_fp64 = False
     assert eng._target_dtype_for_input(_alias(seg1), seg1["tensors"]) is None
-    # a component input traced at the compute width IS cast to the compute dtype; one traced wider enters at its
+    # a component input built at the compute width IS cast to the compute dtype; one built wider enters at its
     # width (the entry rule of 2026-10-18) — a seam alone is left as it comes
     assert eng._target_dtype_for_input("x", {"x": {"dtype": "float16"}}) == parse_dtype("bfloat16")
     assert eng._target_dtype_for_input("x", {"x": {"dtype": "float32"}}) == parse_dtype("float32")

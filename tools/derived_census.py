@@ -167,9 +167,9 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
 
 def _fixed_tensors(g: dict) -> set:
     """Tensors computed from parameters and constants alone: they cannot depend on the request,
-    so their shape is the traced one, whatever their annotation says (Flex's transposed
+    so their shape is the built one, whatever their annotation says (Flex's transposed
     context-embedder weight annotates T5's 4096 width with the image-token symbol — 4096 at the
-    trace)."""
+    build)."""
     key = id(g)
     hit = _FIXED.get(key)
     if hit is not None and hit[0] is g:
@@ -215,7 +215,7 @@ _FIXED = {}
 
 def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dict):
     """The `shape(tid)` every key reads at one binding: a parameter's stored shape, a symbolic
-    dim resolved by the runtime's `SymbolResolver`, a literal as traced — and a dim a
+    dim resolved by the runtime's `SymbolResolver`, a literal as built — and a dim a
     value-derived axis carries (`carried` {tid: {dim: (axis uid, fn)}}) at fn(the axis's extent)
     when `axis_values` names that axis."""
     from neurobrix.triton.symbols import SymbolResolver
@@ -234,12 +234,12 @@ def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dic
         if isinstance(ss, dict) and ss.get("dims"):
             conc = ss.get("concrete") or T[tid].get("shape") or []
             for i, d in enumerate(ss["dims"]):
-                # An expression whose own recorded trace value is not the tensor's extent at the
-                # trace contradicts itself (a symbol on a broadcast dim, a product chain that
+                # An expression whose own recorded build value is not the tensor's extent at the
+                # build contradicts itself (a symbol on a broadcast dim, a product chain that
                 # multiplied a dim into itself): nothing correct can be derived from it.
                 if isinstance(d, dict) and "trace" in d and i < len(conc) and d["trace"] != conc[i]:
                     raise AnnotationContradiction(f"{comp}: {tid} dim {i} ({d.get('type')}) records "
-                                                  f"trace {d['trace']} for an extent of {conc[i]}")
+                                                  f"build {d['trace']} for an extent of {conc[i]}")
             out = [res.resolve(d) for d in ss["dims"]]
             if min(out, default=0) < 0:
                 # a binding outside the request range the graph's own algebra admits: a key
@@ -346,10 +346,10 @@ def _reads_key(reads: dict):
 def traced_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
     """The ops `TritonDtypeEngine.wrap_op` wraps fp32 for the TRACE's own fp32 island (core/dtype/traced_island,
     2026-10-25) — in wrap_op's order: under a half compute dtype, an op that is no self-managed wrapper, in the
-    AMP_FP16 class, whose traced floating inputs and output are all float32 inside a half graph. The wrap is the one a
+    AMP_FP16 class, whose built floating inputs and output are all float32 inside a half graph. The wrap is the one a
     contract island gets (`_wrap_fp32`: every float operand cast to fp32, `_NBX_COMPUTE_DTYPE` fp32 for the call), so
     the launcher forms the same keys for both — the key derivation reads them through one set. Allegro-TI2V's
-    conditioning conv and CogVideoX's (aten.convolution, traced fp32 in a float16 graph) were keyed half here while
+    conditioning conv and CogVideoX's (aten.convolution, built fp32 in a float16 graph) were keyed half here while
     the launcher formed depthwise_conv2d_kernel fp32 (chain52, 2026-10-25 08:25; the Apple class alike)."""
     if cdtype not in ("float16", "bfloat16"):
         return frozenset()
@@ -365,7 +365,7 @@ def traced_island_uids(ops: dict, graph_dtype, cdtype) -> frozenset:
     return frozenset(out)
 
 
-#: {(graph id, compute dtype): (the graph, its traced fp32 island)} — served only to that very graph object
+#: {(graph id, compute dtype): (the graph, its built fp32 island)} — served only to that very graph object
 _TRACED: dict = {}
 #: {graph id: (the graph, its attention op uids)}
 _SDPA_UIDS: dict = {}
@@ -411,7 +411,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
-        unhandled[f"component not derivable, annotation contradicts its trace — {e}"] += 1
+        unhandled[f"component not derivable, annotation contradicts its build — {e}"] += 1
         return []
     if out_dtypes is not None:
         out_dtypes.update(rt)          # every tensor's runtime dtype at this binding: what a flow reads after it
@@ -475,7 +475,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
                                     sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
                                     unhandled, tf_u, decode_kv, loaded_dt=dt0)
         except AnnotationContradiction as e:
-            unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
+            unhandled[f"annotation contradicts its build — {str(e).split(' dim ')[0]}"] += 1
             continue
         except LK.ConvRowOverBand as e:
             unhandled[f"conv row over the band budget — {e}"] += 1
@@ -587,7 +587,7 @@ def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
     """A matmul's contraction length: the activation's last dim must equal the weight's first —
     the op cannot run otherwise. When the two annotations disagree at the request, the weight's
     (a parameter's stored extent, never moved by a request) is the op's contract, and the
-    activation's annotation collided with a trace value (mochi's 3072 features annotated as a
+    activation's annotation collided with a build value (mochi's 3072 features annotated as a
     spatial expression that gives 3168): derived from the contract, the collision named."""
     if k_act == k_weight:
         return k_act
@@ -689,7 +689,7 @@ def declared_moe_lm(model: str):
 
 
 class AnnotationContradiction(ValueError):
-    """A container's symbolic dim contradicts its own trace extent (a Forge annotation defect)."""
+    """A container's symbolic dim contradicts its own build extent (a container builder annotation defect)."""
 
 
 class NegativeExtent(ValueError):
@@ -738,8 +738,8 @@ def first_full_binding(model: str, comp: str, lo: int, hi: int, inputs_of) -> in
 #     frames in [1, 50] from its 50-wide duration projection (the vendor's `max_dur`); a row
 #     count is in [1, numel(input)]. An unbounded range is refused by name, never guessed.
 #   * the CONE: every dim downstream that carries the axis, as a function of the extent — a dim
-#     equal to a carried input dim's traced extent inherits it; a convolution, a scaled upsample
-#     and a concatenation carry it by their own arithmetic, checked against the trace. A dim no
+#     equal to a carried input dim's built extent inherits it; a convolution, a scaled upsample
+#     and a concatenation carry it by their own arithmetic, checked against the build. A dim no
 #     rule explains in an extent-moving op, or a carried extent that collides with another
 #     input dim, is refused by name.
 # `derive_component` then derives the cone at every key class of the axis (`census.bisect_extent`).
@@ -776,7 +776,7 @@ _UPSAMPLE_SCALES = {"aten::upsample_nearest1d": 2, "aten::upsample_nearest2d": 2
 
 
 def _arg(o: dict, i: int, name: str = None):
-    """An op's traced argument by position (its value for a scalar or a list), or by its
+    """An op's built argument by position (its value for a scalar or a list), or by its
     recorded attribute name; None when absent."""
     at = o.get("attributes") or {}
     if name is not None and name in at:
@@ -865,7 +865,7 @@ def value_range(g: dict, tid: str, shape) -> tuple:
 
 
 class ValueAxis:
-    """One value-derived axis: the op that sizes it (`uid`), the dim it sizes, its traced extent,
+    """One value-derived axis: the op that sizes it (`uid`), the dim it sizes, its built extent,
     the dims it carries downstream (`carry` {tid: {dim: fn(extent)}}) and the ops reading them
     (`cone_ops`); `refused` names why it cannot be classed (then nothing else is trusted)."""
 
@@ -930,12 +930,12 @@ def _carry_op(ax: ValueAxis, g: dict, uid: str):
     k = o["op_type"]
     ins = o.get("input_tensor_ids") or []
     outs = o.get("output_tensor_ids") or []
-    probe = (ax.trace + 1, 3 * ax.trace + 7)          # two extents off the trace: tells functions apart
+    probe = (ax.trace + 1, 3 * ax.trace + 7)          # two extents off the build: tells functions apart
     tshape = lambda t: list(T[t]["shape"])
 
     def checked(fn, extent, what):
         if fn(ax.trace) != extent:
-            raise ValueDerivedAxisRefused(f"{uid} ({k}): {what} gives {fn(ax.trace)} at the trace "
+            raise ValueDerivedAxisRefused(f"{uid} ({k}): {what} gives {fn(ax.trace)} at the build "
                                           f"where the graph holds {extent}")
         return fn
     for oi, ot in enumerate(outs):
@@ -1000,7 +1000,7 @@ def _carry_op(ax: ValueAxis, g: dict, uid: str):
                                             None if en is None else int(en), int(sp or 1))]))
                 dims[i] = checked(fn, e, "the slice's extent")
                 continue
-            # the generic rule: an output dim equal to a carried input dim's traced extent carries it
+            # the generic rule: an output dim equal to a carried input dim's built extent carries it
             cands = [ax.carry[t][j] for t in ins if t in ax.carry for j in ax.carry[t]
                      if j < len(tshape(t)) and tshape(t)[j] == e]
             free = {tshape(t)[j] for t in ins if t in T for j in range(len(tshape(t)))
@@ -1011,7 +1011,7 @@ def _carry_op(ax: ValueAxis, g: dict, uid: str):
                                                   f"carried extent and another input's dim")
                 if len({tuple(c(n) for n in probe) for c in cands}) > 1:
                     raise ValueDerivedAxisRefused(f"{uid} ({k}): output dim {i} ({e}) matches two "
-                                                  f"carried extents that differ off the trace")
+                                                  f"carried extents that differ off the build")
                 dims[i] = cands[0]
             elif k in _EXTENT_MOVING and e != 1 and e not in free:
                 raise ValueDerivedAxisRefused(f"{uid} ({k}): output dim {i} ({e}) moves a carried "
@@ -1049,7 +1049,7 @@ def value_axes(model: str, comp: str) -> list:
             ax.inert = True
             ax.outputs = [t for t in (g.get("output_tensor_ids") or []) if t in reach]
         elif ax.trace <= 1:
-            ax.refused = (f"traced at {ax.trace}: its carried dims cannot be told from a broadcast's")
+            ax.refused = (f"built at {ax.trace}: its carried dims cannot be told from a broadcast's")
         else:
             try:
                 for u in order[pos + 1:]:
@@ -1358,7 +1358,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             at = o.get("attributes") or {}
             if kind.startswith("aten::conv_transpose"):
                 # aten::conv_transpose{1,2}d(input, weight, bias, stride, padding, output_padding, groups, dilation),
-                # traced positionally: `conv_transpose1d_wrapper` reorders them onto conv_transpose_wrapper
+                # built positionally: `conv_transpose1d_wrapper` reorders them onto conv_transpose_wrapper
                 nd_ = len(shape(ins[1])) - 2
                 _v = lambda i, d: (_arg(o, i) if _arg(o, i) is not None else d)     # noqa: E731
                 at = {"transposed": True, "stride": _v(3, [1] * nd_), "padding": _v(4, [0] * nd_),
@@ -1369,7 +1369,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             if not bool(at.get("transposed", False)) and x_s[1] != w_s[1] * groups_:
                 # The weight fixes a convolution's input channels (the op cannot run otherwise);
                 # an annotation that makes them a function of a spatial symbol collides with a
-                # trace value (real-esrgan-x4: 192 channels annotated as an expression that
+                # build value (real-esrgan-x4: 192 channels annotated as an expression that
                 # gives 896 at 448 px). Derived from the contract; the collision is named.
                 unhandled[f"NOTE conv input channels from the weight ({w_s[1] * groups_}), the "
                           f"annotation says {x_s[1]} — a channel/extent collision in the container"] += 1
@@ -1414,7 +1414,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                                             contract_half=contract.safe, output_padding=at.get("output_padding", 0))
         elif kind == "aten::lstm":
             # aten::lstm(input, (h0, c0), params, has_biases, num_layers, dropout, train,
-            # bidirectional, batch_first) — `lstm_wrapper`'s signature, the args as traced
+            # bidirectional, batch_first) — `lstm_wrapper`'s signature, the args as built
             a_ = (o.get("attributes") or {}).get("args") or []
             val = lambda i: a_[i].get("value") if i < len(a_) else None
             x_s = shape(ins[0])
@@ -1469,7 +1469,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
         elif kind in ("aten::stft", "aten::istft"):
             # stft(x, n_fft, hop_length, win_length, window, normalized, onesided, return_complex);
             # istft(x, n_fft, hop_length, win_length, window, ...) — `stft_wrapper` /
-            # `istft_wrapper` with the args as traced (a 1-D signal / a 2-D spectrum is one row)
+            # `istft_wrapper` with the args as built (a 1-D signal / a 2-D spectrum is one row)
             a_ = (o.get("attributes") or {}).get("args") or []
             val = lambda i: a_[i].get("value") if i < len(a_) and isinstance(a_[i], dict) else None
             n_fft = val(1)
@@ -1719,7 +1719,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     for ax in [a for grp in value_axes(model, comp) for a in grp] + _INERT_AXES[(model, comp)]:
         if ax.outputs and not ax.refused:
             # the next stage would be fed this output at the trace's extent: a value-derived
-            # extent crossing a stage boundary is not derived yet — named, never fed as traced
+            # extent crossing a stage boundary is not derived yet — named, never fed as built
             unhandled[f"{comp}: value-derived axis {ax.uid} reaches its outputs "
                       f"{', '.join(ax.outputs)} — a later stage fed from it is not derived"] += 1
     for i, tid in enumerate(g.get("output_tensor_ids") or []):
@@ -1829,7 +1829,7 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
         sites.append(("decode KV length", P + 1, max(P + int(mt), reach), decode))
         if image_ar:
             def one(comp, lead):
-                """The component's single input at its trace shape, the leading dim `lead`."""
+                """The component's single input at its build shape, the leading dim `lead`."""
                 g = raw_graph(model, comp)
                 sp = next(t for t in g["tensors"].values() if t.get("input_name"))
                 return {sp["input_name"]: [lead, *sp["shape"][1:]]}
@@ -2661,7 +2661,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     _defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
         if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
     # A component an extent site drives is derived at every class of that extent, not at the
-    # plan's one binding (which binds a value-derived axis to its trace).
+    # plan's one binding (which binds a value-derived axis to its build).
     _audio = (REPO / request[request.index("--audio") + 1]) if "--audio" in request else None
     _mt_req = args.max_tokens if getattr(args, "max_tokens", None) is not None else None
     _image = getattr(args, "input_image", None)
@@ -2726,7 +2726,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     if flow.get("type") == "rnnt":
         # the greedy decoder's LSTM runs through `lstm_wrapper` directly, one step at a time in
         # float32 (`TritonRNNTEngine._run_lstm_np`: [T=1, B=1, I], the weights cast once) — its
-        # launches outside any op, its geometry the component's own traced lstm
+        # launches outside any op, its geometry the component's own built lstm
         from nbxtensor.ops import launch_keys as LK_
         from nbxtensor.dtype.nbx_dtype import NBXDtype as _Dt
         for st in (flow.get("audio") or {}).get("stages") or []:

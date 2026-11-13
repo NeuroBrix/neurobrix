@@ -375,7 +375,7 @@ def test_a_record_that_observed_nothing_never_switches_the_contract_on(tmp_path,
 
 
 def test_grid_sampler_2d_promotes_input_and_grid_under_the_contract():
-    """The trace carries aten::grid_sampler_2d (the autocast table names the
+    """The build carries aten::grid_sampler_2d (the autocast table names the
     composite grid_sampler): fp16 features and an fp32 grid must meet on the
     widest dtype, or the kernel refuses (GLM-4.1V visual, 2026-09-05)."""
     eng = DtypeEngine(torch.float16, activations_fp16_safe=True)

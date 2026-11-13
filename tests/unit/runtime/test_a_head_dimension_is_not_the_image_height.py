@@ -1,12 +1,12 @@
 """A head dimension is fixed by the weights, not by the request (2026-09-23, Sana).
 
-Sana_1600M_1024px_MultiLing has 70 attention heads of 32, and at its traced 1024 px the
-latent is 32x32 — so the head dim and the latent height are both 32. The tracer bound the
+Sana_1600M_1024px_MultiLing has 70 attention heads of 32, and at its built 1024 px the
+latent is 32x32 — so the head dim and the latent height are both 32. The builder bound the
 head dim to the HEIGHT symbol:
 
     aten.view::12  (2, 2240, 1024) -> [s_batch, 70, s6(height), tokens]
 
-At the traced size s6 resolves to 32 and the split is right. At 4096 px s6 is 128, the
+At the built size s6 resolves to 32 and the split is right. At 4096 px s6 is 128, the
 head dim becomes 128, the element count no longer matches, and `metadata_ops._reshape`
 invents a shape — the run dies at the first attention op with
 

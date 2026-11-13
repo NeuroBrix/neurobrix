@@ -76,7 +76,7 @@ class InputResolver:
         """
         # Check if component has declared connections
         # UNIVERSAL: Use connections from topology (same pattern for all model types)
-        # Connections are generated at trace time (Phase C) for all models including forward_pass
+        # Connections are generated at build time (Phase C) for all models including forward_pass
         if comp_name in self._connections_index:
             connections = self._connections_index[comp_name]
             if connections:  # Has actual connection mappings

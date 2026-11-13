@@ -16,12 +16,12 @@ the two are not redundant:
   - The loaded graph is not the stored graph: MoE fusion has run, so
     reachability is computed over what will really execute.
   - A build can arrive from the hub already published; the engine
-    cannot re-trace it, but it can refuse to execute what nothing
+    cannot rebuild it, but it can refuse to execute what nothing
     reads.
 
 === THE CONTRACT IS R19'S, AND IT WAS PAID FOR ===
 
-Tid-reachability is NOT liveness. The tracer functionalises in-place
+Tid-reachability is NOT liveness. The builder functionalises in-place
 writes: `dst[:, k] = v` becomes slice -> temporary view -> `copy`, and
 that copy gets a FRESH output tid nothing consumes. The engines execute
 `aten::copy` as `x.copy_(src)` — a real mutation of the input's
@@ -41,7 +41,7 @@ functionally and stay eligible. Random draws are retained too: the
 seeded stream's draw ORDER is the cross-engine determinism contract.
 
 The analyzer's own dead-code detector does NOT model this (its
-mutating-suffix test never fires, because the tracer strips the
+mutating-suffix test never fires, because the builder strips the
 underscore), so its count is an upper bound and this planner is
 deliberately stricter.
 """

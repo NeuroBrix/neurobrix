@@ -12,7 +12,7 @@ from neurobrix.core.runtime import symexpr as _symexpr
 
 class UnboundSymbolError(RuntimeError):
     """A symbol the container declares that the runtime did not bind — refused by name.
-    The trace value is a witnessed extent of one stimulus, never a value (2026-09-21)."""
+    The build value is a witnessed extent of one stimulus, never a value (2026-09-21)."""
 
 
 def impossible_extent_context(err, args, resolver) -> str:
@@ -50,7 +50,7 @@ class SymbolResolver:
         declares impossible.
 
         Mirror of the ATen binder's `_bind_symbol` (core/runtime/shape_resolver.py):
-        the tracer nests the contract as
+        the builder nests the contract as
         `{"name": "time", "source": "...", "constraints": {"min": 1}}`, and
         every one of the zoo's 673 symbols carries a min of 1 — so this
         refuses a batch, seq_len, height, width or time of zero or below.
@@ -88,12 +88,12 @@ class SymbolResolver:
 
             # Value-sourced symbol: "input::grid_thw::val_1" → the symbol
             # binds from the tensor's DATA at flat index 1, not from a shape
-            # dim (dynamic-resolution grid values, promoted at trace by the
+            # dim (dynamic-resolution grid values, promoted at build by the
             # SymValueSources pass). NBXTensor.numpy() is the R33-pure host
             # read (numpy is allowed CPU glue). Error contract mirrors the
             # compiled binder (shape_resolver.py): out-of-range index =
             # broken build-side value-source output → RAISE, never fall
-            # back to the frozen trace grid; missing tensor = warn, leave
+            # back to the frozen build grid; missing tensor = warn, leave
             # unbound.
             if isinstance(src, str) and src.startswith("input::") and "::val_" in src:
                 parts = src.rsplit("::val_", 1)
@@ -139,7 +139,7 @@ class SymbolResolver:
                     val = tensor.shape[dim]
                     self._bind(sym_id, val)
                 # An input the flow did not provide binds NOTHING: the symbol stays
-                # unbound and refuses by name when it is used (never the trace value).
+                # unbound and refuses by name when it is used (never the build value).
                 continue
 
             # Dict format: {"tensor_id": "...", "dim": 0}

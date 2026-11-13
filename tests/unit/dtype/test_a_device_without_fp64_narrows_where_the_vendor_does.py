@@ -5,7 +5,7 @@ Measured 2026-10-08 on the M4 Pro (native, apple-on-mq20 75837c5c):
   Wan2.1-T2V-1.3B-Diffusers  `_load_constant_native` -> `tensor.to("mps")` of a float64 constant:
                              "Cannot convert a MPS Tensor to float64 dtype as the MPS framework
                              doesn't support float64" (`measure/Wan2.1-T2V-1.3B-Diffusers.native.log`)
-  Flex.1-alpha               op `aten.arange::2`, traced `dtype=torch.float64`: the same refusal
+  Flex.1-alpha               op `aten.arange::2`, built `dtype=torch.float64`: the same refusal
                              (`measure/Flex.1-alpha.native.log`)
 The vendor's diffusers runs both in float32 / complex64 on MPS (its RoPE picks
 `torch.float32 if is_mps else torch.float64`). Every Apple profile declares

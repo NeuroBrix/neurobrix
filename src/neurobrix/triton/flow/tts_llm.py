@@ -183,7 +183,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         speech_head_np = float32_host(speech_head_w).astype(np.float32)
 
         # -- CFG detection (DATA-DRIVEN, R30 mirror of core via the centralized
-        #    engine). The t3_cfg backbone is traced batch=1, so CFG runs
+        #    engine). The t3_cfg backbone is built batch=1, so CFG runs
         #    SEQUENTIALLY: two batch=1 forwards (cond / text-zeroed uncond) per
         #    step, then the pure CFG formula. Models with no guidance_scale ->
         #    disabled (cond-only path unchanged, R23-safe). --
@@ -201,7 +201,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
             _log.debug(f"   [{lm_name}] CFG enabled via TritonCFGEngine "
                        f"(guidance_scale={guidance_scale}, sequential)")
 
-        # -- Build conditioning embeddings (DATA-DRIVEN: run the traced cond_enc
+        # -- Build conditioning embeddings (DATA-DRIVEN: run the built cond_enc
         #    GRAPH, NOT a hand-rolled perceiver). R30 mirror of core
         #    _build_conditioning: cond_enc = spkr_enc + Perceiver resampler +
         #    emotion_adv_fc -> cat -> [1, 34, 1024]. Inputs from the embedded
@@ -463,7 +463,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
         self, speech_emb_np: np.ndarray,
         speech_pos_emb_np: Optional[np.ndarray], speaker_emb,
     ) -> np.ndarray:
-        """Build conditioning by running the traced cond_enc GRAPH (zero torch).
+        """Build conditioning by running the built cond_enc GRAPH (zero torch).
 
         R30 mirror of core _build_conditioning: cond_enc is the data-driven
         T3CondEnc graph (spkr_enc + Perceiver resampler + emotion_adv_fc ->
@@ -526,7 +526,7 @@ class TritonTTSLLMEngine(ComponentFlowHandler):
 # Module-level helpers (zero torch)
 # -----------------------------------------------------------------
 
-# The conditioning encoder component the flow runs (T3CondEnc, traced as its own graph).
+# The conditioning encoder component the flow runs (T3CondEnc, built as its own graph).
 COND_ENCODER = "cond_enc"
 
 

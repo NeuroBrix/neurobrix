@@ -269,7 +269,7 @@ class GraphAnalyzer:
                             detail = f"{t} of {t} (composes to identity)"
             elif t == "aten::slice":
                 # Symbolic honesty (slice-attrs doctrine): a concrete
-                # end that merely EQUALS the trace extent of a SYMBOLIC
+                # end that merely EQUALS the build extent of a SYMBOLIC
                 # dim is the signature of a trace-frozen bound — a
                 # build-side coverage bug to surface, never an
                 # optimization site. Only the to-the-end sentinel, a
@@ -529,8 +529,8 @@ class GraphAnalyzer:
             tin = self._tensor_inputs(op)
             outs_t = op.get("output_tensor_ids") or []
             if tin and outs_t:
-                # Shape key honest to symbolic extents (concrete trace
-                # shapes would over-group at coincident trace values).
+                # Shape key honest to symbolic extents (concrete build
+                # shapes would over-group at coincident build values).
                 groups[(
                     op["op_type"],
                     canon_source(tin[0]),

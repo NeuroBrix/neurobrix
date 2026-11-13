@@ -29,7 +29,7 @@ Two kinds of cell:
     the real `LayerStreamingStrategy`.
   * `test_the_pieces_compute_what_the_whole_computes` — the dish: granite-speech's LM (a SwiGLU
     stack, so a boundary CAN land on a fused op — the T5 of the first executed gate has none)
-    whole vs its planned pieces, bit for bit, at the trace size (1, 23) and two others, one far.
+    whole vs its planned pieces, bit for bit, at the build size (1, 23) and two others, one far.
 
 Needs a card: `CUDA_VISIBLE_DEVICES=<n>` (the executors are built on it). Without one this FAILS.
 """
@@ -69,10 +69,10 @@ BOUNDARY_CELLS = [
 #  * Qwen3-Omni at 6 144 and 12 288 (it streams at 16 384, the cell above): the plan refuses before streaming — the KV check counts what a
 #    plan keeps (fb8ab8f9) and the thinker's residents fill the rung. The Mac's rows predate it.
 
-# (mode, batch, seq): the trace size (1, 23), 64 and far (301), in every engine where the whole
+# (mode, batch, seq): the build size (1, 23), 64 and far (301), in every engine where the whole
 # runs. NOT batch: the whole LM fails at batch 2 in every engine before a piece exists — its
 # causal mask `aten.where::0` is declared [23, 23], concrete, and evaluates to [b*s, b*s] (a
-# frozen dim of the trace, queued for Forge; owed-proofs).
+# frozen dim of the build, queued for the container builder; owed-proofs).
 EXEC_CELLS = ([(m, 1, s) for m in ("triton", "triton_sequential") for s in (23, 64, 301)]
               + [("sequential", 1, 64), ("compiled", 1, 64)])
 
@@ -167,7 +167,7 @@ def test_the_pieces_compute_what_the_whole_computes(mode, batch, seq, tmp_path):
     report = json.loads(out.read_text())
     assert report["pieces"] >= 2, report
     # The size is the one asked for, not the trace's: a dim the harness could not bind from a
-    # symbol keeps its traced extent, and the cell would then prove the trace size again.
+    # symbol keeps its built extent, and the cell would then prove the build size again.
     assert all(sh[1] == seq for sh in report["inputs"].values() if len(sh) >= 2), report["inputs"]
     assert all(o["whole_shape"][1] == seq for o in report["outputs"].values()), report["outputs"]
     for name, o in report["outputs"].items():

@@ -11,11 +11,11 @@ Three figures the activation profile missed, each measured on a card running moc
     the op runs: `runtime_widths` returns them (`ExecutedWidths.casts`) and the profile adds them to the op's in-op
     figure. The Triton engine's wrappers copy alike (`TritonDtypeEngine.wrap_op`).
   * a state's width: it enters the next chunk as a SEAM, in the dtype its producer ran at (`seams=`), never at
-    its traced dtype.
+    its built dtype.
 
 What each test would do if the code were wrong: `handed_inputs` ignored — the peak equals the no-input figure (red);
 the casts not returned or not added — the two estimates are equal (red); the seam seed ignored — the width is the
-traced 2 bytes (red).
+built 2 bytes (red).
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ NONE = conservative_contract("test: no contract")
 
 
 def _t(shape, dtype=None, **kw):
-    """A traced tensor. A component INPUT is traced at the component's dtype (float16 here) unless the test says
-    otherwise: it enters at the compute dtype (`runtime_widths`: an input traced wider enters at its width, the rule
-    of 2026-10-18); a seam keeps its producer's traced dtype; anything else is traced float32 as these graphs were."""
+    """A built tensor. A component INPUT is built at the component's dtype (float16 here) unless the test says
+    otherwise: it enters at the compute dtype (`runtime_widths`: an input built wider enters at its width, the rule
+    of 2026-10-18); a seam keeps its producer's built dtype; anything else is built float32 as these graphs were."""
     if dtype is None:
         dtype = "float16" if kw.get("is_input") and not kw.get("seam_alias_of") else "float32"
     return {"shape": list(shape), "dtype": dtype, **kw}
@@ -104,7 +104,7 @@ def test_a_state_enters_as_the_seam_its_producer_made():
     T = {"input::s": _t([64], dtype="float16", is_input=True, seam_alias_of="stream.state_out::0::out_0"),
          "o": _t([64], dtype="float16")}
     g = _dag(T, [_op("neg::0", "aten::neg", ["input::s"], ["o"])], ["input::s"], ["o"], graph="float16")
-    assert _widths(g, "compiled")["input::s"] == 2                       # traced, no producer known
+    assert _widths(g, "compiled")["input::s"] == 2                       # built, no producer known
     assert _widths(g, "compiled", seams={"input::s": "float32"})["input::s"] == 4
     assert _widths(g, "triton", seams={"input::s": "float32"})["input::s"] == 4
 

@@ -2,8 +2,8 @@
 whole — the executed half of the streaming gate (the bound half is
 `tests/unit/prism/test_every_streamed_piece_binds_every_symbol_it_uses.py`).
 
-The T5 text encoder of the PixArt-XL-2-1024-MS container (the second trace of the same repository, `PixArt-XL-1024`, went on 2026-09-26; its cells with it) — formerly `PixArt-XL-1024`
-(the 2026-05-20 build the Mac rendered) and `PixArt-XL-2-1024-MS` (the 2026-09-21 retrace, the name
+The T5 text encoder of the PixArt-XL-2-1024-MS container (the second build of the same repository, `PixArt-XL-1024`, went on 2026-09-26; its cells with it) — formerly `PixArt-XL-1024`
+(the 2026-05-20 build the Mac rendered) and `PixArt-XL-2-1024-MS` (the 2026-09-21 rebuild, the name
 Hugging Face uses) — planned under the Mac's own reading (11 198 MB free) with the 8 192 MB rung
 imposed, at the Mac's 2048x1024 request: the plan that died in piece 3 on the Mac (8e786e70). Each
 cell loads the encoder once WHOLE and once through the real `LayerStreamingStrategy` over the
@@ -20,15 +20,15 @@ Two defects this sees, both measured 2026-09-24 on card 3:
     every piece then diverged 0.15-0.25 % from the same ops run whole (rel L2 0.46 % at the output),
     while the whole component run twice was bit-identical.
 
-Sizes (rule 1): batch at its trace value 1, at 2, and far at 8, in every engine where the WHOLE
+Sizes (rule 1): batch at its build value 1, at 2, and far at 8, in every engine where the WHOLE
 component runs at that size. Two holes, named because the whole component fails there before any
 piece exists (not streaming defects; a cell there would judge the whole, not the pieces):
   * compiled mode, batch 2 and 8, both containers: the whole T5 fails
     (`aten.add::7 ... tensor a (128) must match tensor b (64)`) — a compiled-engine batch defect;
   * PixArt-XL-1024, torch sequential, batch 2 and 8: the whole T5 fails on the 2026-05-20 build's
-    mis-traced dims (`s3*4096` for an extent of 120) — the retrace does not carry them.
+    mis-built dims (`s3*4096` for an extent of 120) — the rebuild does not carry them.
 Sequence length is NOT varied: PixArt-XL-1024 froze its T5 relative-position bias at
-[1, 64, 120, 120] at trace (named, a tracer defect of that build).
+[1, 64, 120, 120] at build (named, a builder defect of that build).
 
 Needs a card: `CUDA_VISIBLE_DEVICES=<n>`. Without one this FAILS with that sentence — a streaming
 gate that skipped is one that never ran.

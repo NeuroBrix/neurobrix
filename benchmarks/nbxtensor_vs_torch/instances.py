@@ -247,7 +247,7 @@ def _instances_at(DC, CL, model, comp, comp_v, g, syms, cdtype, has_native_bf16,
         skipped[f"{comp_v}@{sorted(syms.items())}"] = f"derivation refused: {type(e).__name__}: {e}"
         return
     # the dtype facts the engine's dispatcher runs the op under, as the census derived its key: the component's
-    # compute dtype, the graph's traced dtype (the AMP cast-back floor) and the precision contract's role for the op
+    # compute dtype, the graph's built dtype (the AMP cast-back floor) and the precision contract's role for the op
     contract = DC._contract(model, comp_v, rg, cdtype)
     gdtype = str(rg.get("torch_dtype") or g.get("torch_dtype") or "").replace("torch.", "") or None
     producers = {t: u for u, o in rg["ops"].items() for t in (o.get("output_tensor_ids") or [])}

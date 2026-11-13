@@ -87,7 +87,7 @@ def test_the_daemon_states_no_batch_and_no_dtype_of_its_own():
 
 
 def _head_graph():
-    """A linear head as the trace writes it: aten::t of the weight, then aten::mm with the hidden rows."""
+    """A linear head as the build writes it: aten::t of the weight, then aten::mm with the hidden rows."""
     t = lambda shape, **kw: {"shape": list(shape), "dtype": "float16", **kw}                     # noqa: E731
     op = lambda uid, kind, ins, outs: {"op_uid": uid, "op_type": kind, "input_tensor_ids": ins,   # noqa: E731
                                        "output_tensor_ids": outs,

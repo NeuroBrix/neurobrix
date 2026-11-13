@@ -13,10 +13,10 @@ derives the cone at every key class of the axis.
 What this test would do if the code were wrong: a derivation reading the trace's extent only
 (the bisection removed) forms one frame class — the exhaustive comparison and the 240-frame class
 fail; a cone rule that dropped the transposed convolution's arithmetic leaves the 2F convolution at
-the trace — the exhaustive comparison fails; an unbounded repeat read as a number instead of
+the build — the exhaustive comparison fails; an unbounded repeat read as a number instead of
 refused passes the refusal case silently — it fails.
 
-Shapes: a synthetic predictor at 23 phonemes traced to 34 frames, the Kokoro geometry (640
+Shapes: a synthetic predictor at 23 phonemes built to 34 frames, the Kokoro geometry (640
 channels, a stride-2 depthwise transposed convolution, a 2.0 upsample); derived on a committed
 V100 profile's ladders against the exhaustive enumeration of every extent in the envelope.
 """
@@ -60,7 +60,7 @@ L_ = lambda v: {"type": "list", "value": v}
 
 
 def graph():
-    """The predictor's value chain and cone, as Forge records them: durations [1, s1, 50] ->
+    """The predictor's value chain and cone, as the container builder records them: durations [1, s1, 50] ->
     sigmoid -> sum(-1) -> /1.0 -> round -> clamp(min 1) -> int64 -> squeeze -> repeat_interleave
     [34]; the alignment [1, s1, 34] (eq against the phoneme index); bmm with the encoding
     [1, 640, s1]; a stride-2 transposed depthwise convolution to 68; a 2.0 upsample to 68; a
@@ -78,7 +78,7 @@ def graph():
         outs = []
         for i, (shp, dt) in enumerate(outs_shapes):
             tid = f"{uid}::out_{i}"
-            # Forge's annotation: the phoneme axis (23 at the trace) is the symbol s1 everywhere
+            # Forge's annotation: the phoneme axis (23 at the build) is the symbol s1 everywhere
             t[tid] = _t(shp, dt, sym=[S1 if d == 23 else d for d in shp])
             outs.append(tid)
         ops[uid] = _op(uid, kind, ins, outs, args, **attrs)
@@ -125,7 +125,7 @@ def _Contract():
 @pytest.fixture
 def synthetic(monkeypatch):
     """The synthetic graph served as the component's runtime graph; the plan-time contract empty
-    and every tensor at its traced dtype (fp32 throughout) — what is under test is the axis."""
+    and every tensor at its built dtype (fp32 throughout) — what is under test is the axis."""
     _census._bind_target("c4140-4xv100-16GB-nvlink", None)     # a committed V100 profile: its ladders
     from neurobrix.core.prism.loader import load_profile
     from nbxtensor.ops import wrappers as W
@@ -245,7 +245,7 @@ def test_a_given_output_size_or_a_constant_is_not_value_derived(synthetic):
 
 
 def test_an_axis_no_kernel_reads_is_inert_not_refused(synthetic):
-    """A row count only indexed downstream (a vision tower's cu_seqlens from its grid, traced at 1)
+    """A row count only indexed downstream (a vision tower's cu_seqlens from its grid, built at 1)
     moves no key: listed inert, never refused — a refusal there would unwrite a whole model for an
     axis that forms nothing."""
     g = graph()
@@ -268,7 +268,7 @@ def test_an_extent_carried_through_padding_and_slicing_but_reaching_no_kernel_is
     """A vision tower's cu_seqlens: the row count padded by one at the front, sliced back, its
     VALUES bucketized into an index that gathers the encoding a matmul reads — the values reach a
     kernel, the extent none. The padding and the slice carry the extent (each checked at the
-    trace); the axis is inert, and nothing is refused."""
+    build); the axis is inert, and nothing is refused."""
     g = graph()
     keep = g["execution_order"].index("aten.unsqueeze::0")
     for uid in g["execution_order"][keep:]:

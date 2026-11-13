@@ -1,14 +1,14 @@
 """The compiled mode runs the spatial promotion even when every seq_len symbol collides with a weight dim.
 
-`CompiledSequence._promote_seq_len_scalars_to_symbolic` returned early when no seq_len trace value was
+`CompiledSequence._promote_seq_len_scalars_to_symbolic` returned early when no seq_len build value was
 collision-safe, and the spatial pass (height/width rebinding, and the correction of a slice end bound to a
-spatial symbol by trace coincidence) sits after that point. Two containers of the catalogue meet it:
+spatial symbol by build coincidence) sits after that point. Two containers of the catalogue meet it:
 PixArt-XL-2-1024-MS's transformer (text length 120, also a weight extent) and mochi-1-preview's (256). PixArt
 at 768x1024 then died in --compiled at aten.addmm::0 on (2x160 @ 256x1152) — its timestep embedding's
-`emb[:, :128]` had been traced with the end bound to the latent HEIGHT (128 at the traced 1024 px) — while
+`emb[:, :128]` had been built with the end bound to the latent HEIGHT (128 at the built 1024 px) — while
 both Triton modes, which call the spatial pass themselves, rendered the image (2026-09-26).
 
-The graph below is that shape in miniature: a seq_len symbol whose trace value is a weight dim, spatial
+The graph below is that shape in miniature: a seq_len symbol whose build value is a weight dim, spatial
 symbols, and a slice of a non-spatial tensor whose end is the height symbol.
 """
 from __future__ import annotations

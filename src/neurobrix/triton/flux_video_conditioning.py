@@ -2,11 +2,11 @@
 
 R33/R34-pure mirror of ``core/runtime/resolution/flux_video_conditioning.py``.
 Open-Sora-v2's MMDiT is a FLUX-style packed-latent video denoiser; the vendor
-pipeline prepares, OUTSIDE the traced graph:
+pipeline prepares, OUTSIDE the built graph:
   * FLUX 3-axis positional  img_ids [B, num_tokens, 3] over the (T, H/p, W/p) grid
   * text positional ids     txt_ids [B, txt_seq, 3]  (all zeros)
   * a channel-concat cond   cond    [B, num_tokens, (C+1)*p^2]  (all zeros for T2V)
-None are produced by any traced component, so NeuroBrix synthesizes them at
+None are produced by any built component, so NeuroBrix synthesizes them at
 runtime. ``img_ids`` is the FLUX positional grid that EmbedND turns into the
 rotary cos/sin — it MUST bit-match compiled or the (correct) half-split rotary
 rotates by the wrong positions.

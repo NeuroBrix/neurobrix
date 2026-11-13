@@ -1,15 +1,15 @@
 """The compiled sequence re-keys no literal, and a graph not written at the fixed point is refused.
 
 The compiled sequence's cross-branch compensation re-keyed an expand / view / reshape literal
-equal to the trace value of the only expression of that value in the graph. On graphs the
+equal to the build value of the only expression of that value in the graph. On graphs the
 single write leaves at the symbolic fixed point it could only corrupt literals (2026-10-04):
 
 * Ming-Lite-Omni-1.5 `model.model`: the re-propagated MoE token counts (`s0*s1*6 - 1106`,
-  trace 4) became the only expressions of trace 4, and the GQA broadcast `expand [s0,4,4,s1,128]`
+  build 4) became the only expressions of build 4, and the GQA broadcast `expand [s0,4,4,s1,128]`
   and its merge `_unsafe_view [s0,16,s1,128]` were rewritten from them: 2176 heads at a
   275-token prompt, "size of tensor a (16) must match the size of tensor b (2176)".
 * Sana_1600M_4Kpx_BF16 `vae view::31`: the literal 4096 was merged into an expression of
-  trace 1024 and evaluated at 4K to 1536.
+  build 1024 and evaluated at 4K to 1536.
 
 The pass is deleted (owner, 2026-10-04: no compensation, fix at the source, zero fallback) and
 the loader refuses, by name, a container whose graphs do not declare the fixed point
@@ -52,7 +52,7 @@ def _op(op_type, src, dst, in_shape, dims, key):
 
 
 def _ming_dag():
-    """Ming's first GQA chain beside one re-propagated MoE count of trace value 4."""
+    """Ming's first GQA chain beside one re-propagated MoE count of build value 4."""
     s0, s1 = _sym("s0", 5), _sym("s1", 37)
     rows = {"type": "mul", "left": {"type": "mul", "left": s0, "right": s1, "trace": 185},
             "right": 6, "trace": 1110}
@@ -80,7 +80,7 @@ def _ming_dag():
 
 def _sana_vae_dag():
     """Sana's vae `view::31` [s0,1024,4,s1,s2] -> [s0,4096,s1,s2] beside an expression of
-    trace value 1024."""
+    build value 1024."""
     s0, s1, s2 = _sym("s0", 1), _sym("s1", 128), _sym("s2", 128)
     e1024 = {"type": "mul", "left": {"type": "mul", "left": s0, "right": 32, "trace": 32},
              "right": {"type": "floordiv", "left": s1, "right": 4, "trace": 32}, "trace": 1024}

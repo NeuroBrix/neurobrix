@@ -4,7 +4,7 @@ ATen Native Operations - Pure PyTorch
 
 These operations manipulate shapes, indices and constants.
 ZERO unsafe type hardening — original dtypes are preserved.
-All ops use the aten::* format (native ATen trace).
+All ops use the aten::* format (native ATen build).
 """
 
 import json as _json
@@ -304,7 +304,7 @@ def _reshape(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     BATCH-AWARE FALLBACK:
     If total elements don't match but the mismatch is cleanly at dim 0
     (batch dimension), we scale dim 0 proportionally. This handles cases
-    where CFG creates batch=2 during trace but runtime uses batch=1.
+    where CFG creates batch=2 during build but runtime uses batch=1.
     """
     data = inputs[0]
 
@@ -363,10 +363,10 @@ def _reshape(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
             pass          # an instrument must never change the run it measures
 
     # Case 2: Batch Merge Pattern (V2 graphs with CFG)
-    # Pattern: [batch*k, features] -> [batch, features*k] during trace
+    # Pattern: [batch*k, features] -> [batch, features*k] during build
     # At runtime: [runtime_batch*k, features] -> [runtime_batch, features*k]
-    # Example: [4, 384] -> [2, 768] (trace) becomes [2, 384] -> [1, 768] (runtime)
-    # NOTE: For proper seq_len handling, re-trace with symbolic_tracker that marks
+    # Example: [4, 384] -> [2, 768] (build) becomes [2, 384] -> [1, 768] (runtime)
+    # NOTE: For proper seq_len handling, rebuild with symbolic_tracker that marks
     # seq_len as dynamic at SOURCE - not patched at runtime.
     if len(shape_list) == 2 and data.ndim == 2:
         trace_batch = shape_list[0]  # e.g., 2
@@ -765,7 +765,7 @@ def _expand(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     aten::expand(Tensor self, int[] size, *, bool implicit=False) -> Tensor
 
     RELATIVE EXPANSION:
-    The graph captures absolute shapes during tracing. At runtime, we need to
+    The graph captures absolute shapes during building. At runtime, we need to
     adapt based on actual input shapes. Strategy:
     - Compare graph_input_shape vs graph_output_shape
     - If dimension unchanged: use data.shape[i] (dynamic)
@@ -828,7 +828,7 @@ def _expand(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
             final_shape.insert(0, data_dim)
         else:
             # Mismatch - try to use data_dim if target was graph-specific
-            # This handles cases where graph was traced with different batch size
+            # This handles cases where graph was built with different batch size
             final_shape.insert(0, data_dim)
 
         target_idx -= 1

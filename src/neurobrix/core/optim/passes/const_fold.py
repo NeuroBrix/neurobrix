@@ -19,7 +19,7 @@ Deliberate exclusions (evidence-driven, recorded in the design doc):
     materialize weight-sized copies where a view is free.
   - symbolic ops: an op whose attributes or output shape carry a
     symbol depends on a runtime extent; folding it would freeze the
-    trace value (the slice-attrs doctrine).
+    build value (the slice-attrs doctrine).
   - custom:: consumers: fused ops (e.g. custom::moe_fused) consume
     tensors through attribute contracts the planner does not model —
     any tensor they touch stays live and unfolded.
@@ -122,7 +122,7 @@ def plan_const_fold(dag: dict) -> dict | None:
     # ---- const closure (concrete only) -------------------------------
     # Pinned tensors are excluded from the SEEDS too: a param a mutator
     # writes into is not a constant — a const op reading it re-read the
-    # mutated value at its position in the trace order every forward.
+    # mutated value at its position in the build order every forward.
     const_tids: set[str] = {
         tid for tid, t in tensors.items()
         if t.get("is_parameter") and tid not in custom_pinned

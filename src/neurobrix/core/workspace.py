@@ -1,7 +1,7 @@
 """Where model data lives, read from configuration. Nothing downloads a copy.
 
 A snapshot is downloaded ONCE, into the configured snapshots root, and every
-consumer reads it THERE — the build toolchain traces from it, vendor tools and
+consumer reads it THERE — the build toolchain builds from it, vendor tools and
 oracles load from it, the engine's own third-party fallbacks resolve against it.
 
 The rule exists because a bare hub id handed to `from_pretrained` silently

@@ -127,7 +127,7 @@ def load_component_weights(
 
       * a parameter that NO op in the graph consumes is never read during
         execution, so loading it is pure cost. DeepSeek-Coder-V2-Lite carries
-        11781 MB of such weights — MoE experts the trace never routed to — out
+        11781 MB of such weights — MoE experts the build never routed to — out
         of 30638 MB, 38% of the component.
       * streaming a component at layer granularity means holding one segment's
         weights at a time, which is this same call with a smaller set.

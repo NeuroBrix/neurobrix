@@ -51,7 +51,7 @@ def test_the_per_frame_length_gives_the_vendor_s_timesteps(engine):
 
 @pytest.mark.parametrize("engine", [_torch, _triton])
 def test_the_per_frame_length_moves_with_the_request_s_frames(engine):
-    """A second length, far from the trace: 33 latent frames at 252 tokens each."""
+    """A second length, far from the build: 33 latent frames at 252 tokens each."""
     s = engine(PER_FRAME)
     s.set_timesteps(4, image_seq_len=33 * 252, frames=33)
     alpha = (1.0 + (3.0 - 1.0) / (4096 - 256) * (252 - 256)) * np.sqrt(33)

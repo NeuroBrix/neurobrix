@@ -151,7 +151,7 @@ def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str:
     (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
     when that is half (fp16 bits from bf16 on hardware computing fp16, the bf16 bits kept under
     bf16), to float32 otherwise; float64 / complex128 are held as the branch holds them
-    (`dtype.itemsize.storage_dtype`); every other dtype is kept as traced. The loader and Prism's width
+    (`dtype.itemsize.storage_dtype`); every other dtype is kept as built. The loader and Prism's width
     pass both ask it."""
     if traced == "bfloat16":
         return compute if compute in ("float16", "bfloat16") else "float32"

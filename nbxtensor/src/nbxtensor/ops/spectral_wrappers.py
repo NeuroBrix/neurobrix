@@ -393,7 +393,7 @@ def stft_wrapper(x, n_fft, hop_length=None, win_length=None, window=None,
     """aten::stft — framing + window + rfft → complex spectrogram
     [.., n_fft//2+1, num_frames]. Built on the existing rfft (fft_r2c_wrapper,
     which already covers pow2 and non-pow2 N); framing via NBXTensor.unfold.
-    `center` is applied upstream by the traced graph (an explicit pad op), so the
+    `center` is applied upstream by the built graph (an explicit pad op), so the
     op-level stft frames without re-padding. Model-agnostic, R33-pure.
 
     Mirrors torch.stft: real input → onesided complex spectrogram. Used by the

@@ -336,7 +336,7 @@ class TritonAutoregressiveHandler:
         generated_tokens = generator.get_generated_tokens()
         strategy.process_output(generated_tokens, self.ctx)
 
-        # Zero Outsider (ZO-0): SNAC codec traced into the .nbx → run it as a
+        # Zero Outsider (ZO-0): SNAC codec built into the .nbx → run it as a
         # stage with NBXTensor codes (R30 mirror of the compiled path; no `snac`).
         self._run_snac_codec_decoder(generated_tokens, generator.max_tokens)
 
@@ -357,7 +357,7 @@ class TritonAutoregressiveHandler:
         return self.ctx.variable_resolver.resolve_all()
 
     def _run_snac_codec_decoder(self, generated_tokens, max_tokens: int) -> None:
-        """ZO-0 (triton): decode orpheus SNAC tokens through the TRACED
+        """ZO-0 (triton): decode orpheus SNAC tokens through the BUILT
         codec.decoder, NBXTensor end-to-end. Redistributes the 7-tokens/frame
         stream into the 3 SNAC codebooks (pure python) and runs the codec as a
         stage via _execute_component. No `snac` import."""
@@ -467,8 +467,8 @@ class TritonAutoregressiveHandler:
 
         # CFG branch (image-AR only): tokenize unconditional variant and
         # concat → batch=2. Mirrors core/flow/autoregressive.py _tokenize:
-        # graphs for Janus's gen_head/gen_embed/gen_aligner were traced at
-        # batch=2 and the LM's RoPE bmm was traced at batch=2 as well, so
+        # graphs for Janus's gen_head/gen_embed/gen_aligner were built at
+        # batch=2 and the LM's RoPE bmm was built at batch=2 as well, so
         # prefill MUST run at batch=2 for shapes to bind correctly.
         use_cfg = False
         if is_image_ar:
@@ -570,7 +570,7 @@ class TritonAutoregressiveHandler:
         # load_graph_from_dict) used the default True and the fused op's attrs
         # were never patched, so DeepSeek (norm_topk_prob=False) silently ran
         # with True → expert contributions normalized incorrectly → gibberish
-        # output. top_k / num_experts are extracted from the trace by the
+        # output. top_k / num_experts are extracted from the build by the
         # fusion pass itself, so only norm_topk_prob needs propagating.
         if lm_config:
             num_experts = lm_config.get("num_experts")
@@ -619,7 +619,7 @@ class TritonAutoregressiveHandler:
                              if isinstance(_pos_shape, (list, tuple)) else 2)
 
         # DeepStack-lineage visual inputs — R30 mirror of the compiled
-        # _create_session: declared trace shapes so a pure-text request
+        # _create_session: declared build shapes so a pure-text request
         # feeds empty stubs (TritonLMSession._add_visual_stubs).
         visual_stub_specs = {
             tid[len("input::"):]: (spec or {}).get("shape")
@@ -988,7 +988,7 @@ class TritonImageStrategy:
     def get_logits(self, hidden: NBXTensor, step_idx: int) -> NBXTensor:
         """Run gen_head on last hidden position, CFG-combine if enabled.
 
-        Head was traced with batch=2 (CFG) but runs correctly at batch=1
+        Head was built with batch=2 (CFG) but runs correctly at batch=1
         via symbolic dim binding — so we split cond/uncond and run twice,
         matching native ImageStrategy.
         """
@@ -1017,7 +1017,7 @@ class TritonImageStrategy:
     def embed_token(self, next_token: NBXTensor, step_idx: int) -> NBXTensor:
         """Look up VQ codebook embedding via gen_embed.
 
-        gen_embed graph is one op (aten::embedding) traced with input shape
+        gen_embed graph is one op (aten::embedding) built with input shape
         (2, 1). The codebook is (16384, 8). We pass the raw sampled token
         without the LM-vocab offset — gen_embed indexes the VQ codebook.
         """

@@ -1,14 +1,14 @@
 """A weight's shape is architectural. It can never depend on a request dimension.
 
-Principle 1 says a dim left CONCRETE where a symbol belongs is a tracer bug. The inverse is
-equally a tracer bug and nothing looked for it: a SYMBOL where a constant belongs. An
-activation's dims follow the request; a parameter's dims follow the model. A tracer that binds
+Principle 1 says a dim left CONCRETE where a symbol belongs is a builder bug. The inverse is
+equally a builder bug and nothing looked for it: a SYMBOL where a constant belongs. An
+activation's dims follow the request; a parameter's dims follow the model. A builder that binds
 one to the other has mistaken a coincidence for a relationship, and the coincidence holds only
-at the trace values.
+at the build values.
 
 WHAT IT COST, 2026-09-23
 ------------------------
-mochi-1-preview was retraced at `--trace-spatial 30,54`. At those values
+mochi-1-preview was rebuilt at `--trace-spatial 30,54`. At those values
 
     time(10) + width(54) == 64 == the attention head dim
 
@@ -17,7 +17,7 @@ own default request that resolves to 14 + 106 = 120 against an activation of 64:
 
     Cannot broadcast (2, 22260, 24, 64) and (11872, 24, 120)
 
-Seven runs were spent finding it, because a second build of the same model — retraced at
+Seven runs were spent finding it, because a second build of the same model — rebuilt at
 `26,30`, where 10 + 30 = 40 and nothing collides — carried the literal 64 and ran, and the two
 sat in different caches with nothing anywhere saying one was malformed.
 
@@ -33,11 +33,11 @@ Eleven of 59 cached containers offend today, across 599 parameter dims.
 The pin was first written from a census that printed only the FIRST offending component per
 container, and this gate went red on its own first run: mochi's `vae` offends as well as its
 `transformer`. That is the cheapest possible activation proof — the cell caught a component its
-own author had missed, before any injection was needed. They are DATA, not code — each needs a retrace,
+own author had missed, before any injection was needed. They are DATA, not code — each needs a rebuild,
 and several belong to models nobody is working on this week. A cell asserting zero would be red
 from birth and would be disabled within a day, which is worse than no cell. So the set is
 pinned: a twelfth container, or a new component inside a known one, turns this red. Shrinking
-the set is also flagged, because a container that quietly stops offending has been retraced and
+the set is also flagged, because a container that quietly stops offending has been rebuilt and
 the pin should record it.
 """
 from __future__ import annotations
@@ -54,12 +54,12 @@ import sys
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
 
 #: Containers whose PARAMETERS carry at least one non-literal dim, measured 2026-09-23.
-#: Each is a Forge defect awaiting a retrace, not a licence. The value is the component set,
+#: Each is a container builder defect awaiting a rebuild, not a licence. The value is the component set,
 #: so a known-bad container gaining a NEW bad component is still caught.
-#: Empty since 2026-10-29: the retraces fixed every container listed (the scan read 166 graphs of the shared cache and
+#: Empty since 2026-10-29: the rebuilds fixed every container listed (the scan read 166 graphs of the shared cache and
 #: found no parameter dim that is not a literal — mochi-1-preview's pos_freqs [3, 24, 64] among them); the two
 #: upscaler aliases it also held (Real-ESRGAN-x4, real-esrgan-x8) name no container of the catalogue (one model, one
-#: name). A container joining it again is a new Forge defect, named by the gate below.
+#: name). A container joining it again is a new the container builder defect, named by the gate below.
 KNOWN_OFFENDERS: dict = {}
 
 
@@ -84,14 +84,14 @@ def found():
 # ───────────────────────── the invariant ─────────────────────────
 
 def test_no_container_outside_the_known_set_has_a_symbolic_weight_dim(found):
-    """The gate. A twelfth container joining this list is a new Forge defect."""
+    """The gate. A twelfth container joining this list is a new the container builder defect."""
     new = {m: sorted(c) for m, c in found.items() if m not in KNOWN_OFFENDERS}
     assert not new, (
-        "a container's WEIGHT has a dim that is not a literal, which means the tracer bound an "
-        "architectural constant to a request dimension. It holds only at the trace values and "
+        "a container's WEIGHT has a dim that is not a literal, which means the builder bound an "
+        "architectural constant to a request dimension. It holds only at the build values and "
         "fails at any other request.\n"
         f"  new: {json.dumps(new, indent=2)}\n"
-        "  Run `python tools/weights_are_not_symbolic.py` for the detail, and retrace at "
+        "  Run `python tools/weights_are_not_symbolic.py` for the detail, and rebuild at "
         "spatial values whose SUM and PRODUCT cannot equal any architectural constant.")
 
 
@@ -103,7 +103,7 @@ def test_no_known_offender_gained_a_new_component(found):
 
 
 def test_a_container_that_stopped_offending_is_recorded(found):
-    """Shrinking is good news and still fails, so the pin records the retrace instead of
+    """Shrinking is good news and still fails, so the pin records the rebuild instead of
     quietly drifting out of date. Delete the entry when this fires."""
     fixed = sorted(m for m in KNOWN_OFFENDERS if m not in found and (CACHE / m).is_dir())
     assert not fixed, (
@@ -135,7 +135,7 @@ def test_the_detector_is_wider_than_sums():
 
 def test_an_ACTIVATION_with_a_symbolic_dim_is_NOT_flagged():
     """The whole point. An activation's dims SHOULD follow the request — flagging those would
-    condemn every correctly traced graph in the cache and make the gate worthless."""
+    condemn every correctly built graph in the cache and make the gate worthless."""
     g = {"tensors": {"aten.mul::0::out_0": {"is_parameter": False, "symbolic_shape": {"dims": [
         {"type": "symbol", "id": "s0", "trace": 2}, 24, 64]}}}}
     assert _tool().offending_parameters(g) == []
@@ -157,7 +157,7 @@ def test_a_weight_with_no_symbolic_shape_at_all_is_NOT_flagged():
 
 def test_the_retrace_that_avoids_the_collision_produces_a_LITERAL(): 
     """Both mochi builds exist on this rack and differ exactly here. This is the fix, measured:
-    trace spatial values whose sum cannot equal the head dim, and the head dim stays a literal."""
+    build spatial values whose sum cannot equal the head dim, and the head dim stays a literal."""
     good = Path("~/nbx/builds/scratch_cache/mochi-1-preview/components/transformer/graph.json")
     bad = CACHE / "mochi-1-preview" / "components" / "transformer" / "graph.json"
     if not (good.exists() and bad.exists()):
@@ -165,8 +165,8 @@ def test_the_retrace_that_avoids_the_collision_produces_a_LITERAL():
     t = _tool()
     dims_of = lambda p: ((json.loads(p.read_text())["tensors"]["param::pos_frequencies"]
                           .get("symbolic_shape") or {}).get("dims") or [])
-    assert isinstance(dims_of(good)[2], int), "the 26,30 retrace should carry a literal head dim"
+    assert isinstance(dims_of(good)[2], int), "the 26,30 rebuild should carry a literal head dim"
     assert dims_of(good)[2] == 64
-    assert isinstance(dims_of(bad)[2], dict), "the 30,54 retrace should carry an expression"
+    assert isinstance(dims_of(bad)[2], dict), "the 30,54 rebuild should carry an expression"
     assert dims_of(bad)[2]["type"] == "add" and dims_of(bad)[2]["trace"] == 64
     assert t.offending_parameters(json.loads(good.read_text())) == []

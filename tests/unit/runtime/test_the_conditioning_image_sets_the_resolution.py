@@ -3,19 +3,19 @@
 Two decisions were being taken separately about one quantity. The image
 processor keeps the source image's own size when no `--height/--width` is given
 — its own comment says so — while the resolution cascade independently derived
-the size from the TRACED latent. On 2026-09-12 Allegro-TI2V met its own 448x448
+the size from the BUILT latent. On 2026-09-12 Allegro-TI2V met its own 448x448
 conditioning image at a pipeline running 144x208 and died on *"Expected size 18
-but got size 56"*: the traced latent extent against the image's.
+but got size 56"*: the built latent extent against the image's.
 
 The order this pins, and it is the whole answer:
 
     explicit --height/--width          request-side, and explicit
     the container's declared defaults  build-side, and deliberate
     the conditioning image             request-side, and specific
-    the traced latent                  a stimulus, not an intention
+    the built latent                  a stimulus, not an intention
     the family constant                last resort
 
-A request-side fact outranks a build-side one, and a stimulus chosen at trace
+A request-side fact outranks a build-side one, and a stimulus chosen at build
 time is the last thing that should decide what a user gets.
 
 Run: PYTHONPATH=src python -m pytest tests/unit/runtime/test_the_conditioning_image_sets_the_resolution.py
@@ -66,7 +66,7 @@ def test_a_zero_extent_is_silence():
 
 
 def test_the_image_outranks_the_traced_latent():
-    """The measured Allegro case: a 448x448 image against a 18x26 traced latent.
+    """The measured Allegro case: a 448x448 image against a 18x26 built latent.
 
     Without this the pipeline runs at 144x208 while the processor hands it a
     448x448 tensor, and the two meet at a broadcast.

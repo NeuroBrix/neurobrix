@@ -12,11 +12,11 @@ What each test would do if the code were wrong: without the installation the fir
 plan for the component (RED, seen); a detector that installed in-place adds regardless of the
 estimate's own threshold would make the second test find a plan (RED).
 
-SIZE IS THE REQUEST'S, NOT THE TRACE'S (2026-10-12). Sana_1600M_4Kpx_BF16's VAE retraced at its
-own 7x10 latent (Forge 4730493) carries 224x320 traced extents at its merge adds; the detectors read
-the DAG's traced `output_shapes`, every add fell under the 1 GiB threshold, and the 3072x4096 plan
+SIZE IS THE REQUEST'S, NOT THE TRACE'S (2026-10-12). Sana_1600M_4Kpx_BF16's VAE rebuilt at its
+own 7x10 latent (the container builder 4730493) carries 224x320 built extents at its merge adds; the detectors read
+the DAG's built `output_shapes`, every add fell under the 1 GiB threshold, and the 3072x4096 plan
 priced and installed none of them (15 360 -> 18 432 MB). The third test holds the request's sizing:
-SEEN RED with `_request_shape_of` returning None (the traced extents) — no candidate, no plan.
+SEEN RED with `_request_shape_of` returning None (the built extents) — no candidate, no plan.
 """
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ def test_an_add_the_estimate_prices_out_of_place_installs_nothing():
 
 
 def _symbolic_graph(trace_h: int, trace_w: int, scale: int) -> dict:
-    """The same residual add, its spatial dims SYMBOLIC (latent height/width x scale), traced small."""
+    """The same residual add, its spatial dims SYMBOLIC (latent height/width x scale), built small."""
     def dim(sym, trace):
         return {"type": "mul", "left": {"type": "symbol", "id": sym, "trace": trace}, "right": scale,
                 "trace": trace * scale}
@@ -97,7 +97,7 @@ def _symbolic_graph(trace_h: int, trace_w: int, scale: int) -> dict:
 
 
 def test_an_add_is_sized_at_the_request_not_at_the_trace():
-    g = _symbolic_graph(7, 10, 32)         # traced at 224x320: 36 MiB fp32-equivalent, under 1 GiB
+    g = _symbolic_graph(7, 10, 32)         # built at 224x320: 36 MiB fp32-equivalent, under 1 GiB
     request = InputConfig(batch_size=1, height=3072, width=4096, dtype="float16", vae_scale=32)
     solver = PrismSolver()
     assert solver._identify_inplace_add_candidates_static(g) == []          # the trace's answer
@@ -141,7 +141,7 @@ def test_a_plan_from_the_chain_branch_carries_the_request_sized_adds(monkeypatch
 def test_the_runtime_refuses_a_plan_without_the_in_place_decision_by_name():
     import pytest
     from neurobrix.core.module.tiling_engine import OpLevelTilingEngine, OpLevelTilingPlan
-    g = _graph(4096, 4096)                 # an add the trace extents alone would put in place
+    g = _graph(4096, 4096)                 # an add the build extents alone would put in place
 
     class _Exec:
         mode = "compiled"

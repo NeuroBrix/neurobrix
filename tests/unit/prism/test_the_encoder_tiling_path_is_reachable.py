@@ -13,16 +13,16 @@ Two cells reach it, and they reach different depths:
   CogVideoX-5b-I2V and Wan2.1-VACE-1.3B `vae_encoder`. Before the fix all three RAISED on
   entry, including the ones that should simply be declined. None is in the D2 class the tail
   was written for (measured 2026-09-24):
-    - Allegro-TI2V: TILED, because its container was rewritten. The old trace froze the batch at
+    - Allegro-TI2V: TILED, because its container was rewritten. The old build froze the batch at
       a literal 1 (`aten.view::1` sized [1, s0*s1, 128, s2, s3]), folding the batch symbol into
       time — ((b*t + 1)//2 + 1)//2, no time map in one symbol — and the encoder was declined
-      with that expression named. Forge rewrote the container on 2026-10-04 23:20:41 (graph
+      with that expression named. the container builder rewrote the container on 2026-10-04 23:20:41 (graph
       c1861e72 -> f587fc4b, campaigns/2026_10_04_frozen_scan/STATE.md line 213): the cache's
       vae_encoder graph holds no `s0*s1` any more, and its time map is ((s1 + 1)//2 + 1)//2 in s1
       alone. A down-map of one symbol, tiled in space with the whole clip in every tile — the
       same spec as Wan2.1-VACE (tile 264, overlap 40, t_axis_out 1, no t_tile, rung 16 384).
       The time-map test below reads that from the container, so a stale container is named.
-    - CogVideoX-5b-I2V: traced at t = 1, so it has no temporal ratio to read: declined.
+    - CogVideoX-5b-I2V: built at t = 1, so it has no temporal ratio to read: declined.
     - Wan2.1-VACE: causal ((t - 1)//4 + 1). Since 2026-09-26 that class is tiled in space with
       the whole clip in every tile, and since 2026-10-04 at any frame count — 88 included,
       which is off its 4k+1 lattice and was declined for it, though no tile of it is taken in

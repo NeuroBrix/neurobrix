@@ -1,9 +1,9 @@
-"""The placement map binds the request's own extents as asked; the trace floor is for a guess.
+"""The placement map binds the request's own extents as asked; the build floor is for a guess.
 
-`build_symbol_map(placement_floor=True)` floored EVERY named symbol at its trace value, one axis
+`build_symbol_map(placement_floor=True)` floored EVERY named symbol at its build value, one axis
 at a time. The floor was written for a guessed binding — Qwen3-Omni's audio axis named `seq_len`
-taking the global text length (~128) instead of its 441-frame trace, 2026-08-10 — and it also
-caught the request's frames, height and width, which are not guesses. Wan2.1-VACE traced at
+taking the global text length (~128) instead of its 441-frame build, 2026-08-10 — and it also
+caught the request's frames, height and width, which are not guesses. Wan2.1-VACE built at
 480x832 and asked at 832x480 (the vendor's portrait size, the same area) priced its width at the
 trace's 104 latent columns where it asked for 60: a 104x104 grid, the transformer 18.04 GiB
 instead of 10.41 GiB, and the plan fell from lazy_sequential to cpu_streaming (2026-09-29).
@@ -52,7 +52,7 @@ class _Flow:
 
 
 def test_the_flows_batch_is_priced_at_the_flows_batch():
-    """Wan2.2-I2V's transformer traced at batch 3 (a collision-free stimulus, R39); the flow runs
+    """Wan2.2-I2V's transformer built at batch 3 (a collision-free stimulus, R39); the flow runs
     the CFG pair, 2. Floored, the plan priced 3 (12.26 GiB for 8.2) and fell to cpu_streaming."""
     g = dict(GRAPH, symbolic_context={"symbols": dict(GRAPH["symbolic_context"]["symbols"], s0={
         "name": "batch", "trace_value": 3, "source": "input::hidden_states::dim_0"}), "expressions": {}})
@@ -62,7 +62,7 @@ def test_the_flows_batch_is_priced_at_the_flows_batch():
 
 
 def test_an_image_encoder_is_priced_at_the_view_the_run_feeds_it():
-    """Wan2.1-I2V's image encoder declares `height`/`width` symbols (trace 224) on `pixel_values`; the
+    """Wan2.1-I2V's image encoder declares `height`/`width` symbols (build 224) on `pixel_values`; the
     run feeds it the CLIP view of the build's own processor (224x224), whatever the request. Bound by
     name, the unfloored map priced the request's latent grid (60x104 at 480x832) — a guess the old
     per-axis floor only covered by coincidence (review 2026-09-29). The flow binds the view."""

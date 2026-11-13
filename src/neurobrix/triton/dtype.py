@@ -108,7 +108,7 @@ _FP16_NEED_FP32: FrozenSet[str] = frozenset({"div"})
 AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "addcdiv", "addcmul", "atan2", "bilinear", "cross",
     "dot", "vdot", "grid_sampler", "grid_sampler_2d", "grid_sampler_3d", "index_put",
-    # grid_sampler_2d/3d: the ATen names the trace carries (the autocast
+    # grid_sampler_2d/3d: the ATen names the build carries (the autocast
     # table lists the composite `grid_sampler`); input and grid must agree
     # on the widest float type — under the contract the sampled features
     # arrive fp16 and the grid fp32 (GLM-4.1V visual, 2026-09-05).
@@ -124,7 +124,7 @@ _FLOATING = frozenset({NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NB
 # one-element operand of `where`.
 #
 # A finite value beyond a half dtype's range (a finfo(fp32).min mask sentinel a
-# graph traced in fp32 carries as a literal) becomes +-inf when it is written
+# graph built in fp32 carries as a literal) becomes +-inf when it is written
 # into that dtype. The vendor, running in the half dtype, uses finfo(half).min,
 # which is finite. Measured 2026-09-26 on PixArt-XL-2-1024-MS's T5: the mask's
 # `aten.where::0` filled 13 200 positions with -inf in bf16 where the ATen branch
@@ -389,7 +389,7 @@ class TritonDtypeEngine:
         # Whether this branch computes and stores float64 / complex128 on its device
         # (`triton_has_fp64`, from the vendor profile); False holds them in float32 / complex64.
         self.stores_fp64 = bool(stores_fp64)
-        # The component's GRAPH dtype — the container's traced `torch_dtype` — read by
+        # The component's GRAPH dtype — the container's built `torch_dtype` — read by
         # the AMP_FP32 cast-back rule under bf16 (`amp_fp32_output_dtype`).
         self.graph_dtype: Optional[str] = graph_dtype_name(graph_dtype)
         # On pre-Ampere (no native bf16) the weight loader upcasts fp16
@@ -436,11 +436,11 @@ class TritonDtypeEngine:
     def _target_dtype_for_input(self, tid, graph_tensors):
         """Resolve the expected NBXDtype for an input tensor id.
 
-        A floating graph input traced at or below the compute dtype's width → compute_dtype (Prism);
-        one traced WIDER enters at its traced width, as this branch stores it (`storage_dtype`:
+        A floating graph input built at or below the compute dtype's width → compute_dtype (Prism);
+        one built WIDER enters at its built width, as this branch stores it (`storage_dtype`:
         float64 → float32 where the branch holds no fp64) — its first consumer casts it as that op's
         class dictates, exactly as for any wide tensor inside the graph. Narrowing every float
-        input to the compute dtype rounded a value the graph needs whole: a timestep traced float64
+        input to the compute dtype rounded a value the graph needs whole: a timestep built float64
         fed to a bf16 component on Metal entered as bf16, which holds integers exactly only to 256
         (777 → 776; Allegro's halo, 2026-10-18). Non-floating graph dtype → preserved.
         Unknown / missing → None (no cast). The compiled branch's rule is the same sentence
@@ -469,7 +469,7 @@ class TritonDtypeEngine:
         if graph_dt is None:
             return None
         if graph_dt in _FLOATING:
-            # Wider than the graph's OWN parameters (core/dtype/entry_width): a model traced float32
+            # Wider than the graph's OWN parameters (core/dtype/entry_width): a model built float32
             # throughout is at its width, not wider (orpheus-3b, 2026-10-18).
             from neurobrix.core.dtype.entry_width import enters_at_traced_width
             if not enters_at_traced_width(_itemsize.itemsize(graph_dt), _itemsize.itemsize(self.compute_dtype),
@@ -529,10 +529,10 @@ class TritonDtypeEngine:
         # A complex-producing op never receives a half input — mirror of the
         # ATen branch's first rule, ahead of the islands for the same reason:
         # an island is a precision choice among REAL dtypes and cannot retype
-        # a traced complex128 to complex64 by levelling its float64 input.
+        # a built complex128 to complex64 by levelling its float64 input.
         if traced_output_is_complex(op_record):
             return self._wrap_complex_output(func)
-        # The op's traced output dtype — the vendor's dtype for this op (the cast-back floor).
+        # The op's built output dtype — the vendor's dtype for this op (the cast-back floor).
         traced = traced_output_dtype_name(op_record)
 
         # The calibration record's islands come FIRST: a pinned op computes

@@ -1,18 +1,18 @@
 """Permanent TWO-SIZE upscaler cells — the spatial twin of the
-"gates under trace length are blind" lesson dies as a CLASS here.
+"gates under build length are blind" lesson dies as a CLASS here.
 
 Every artifact runs `nbx upscale` COLD at TWO input sizes, on both
 engines, with output dimensions verified:
 
-  * its OWN trace size, read from the installed container (so the
+  * its OWN build size, read from the installed container (so the
     cell follows any future stimulus change instead of hardcoding
-    one) — this half catches regressions introduced BY a re-trace;
-  * an OFF-TRACE size — the half that catches everything a
+    one) — this half catches regressions introduced BY a rebuild;
+  * an OFF-BUILD size — the half that catches everything a
     trace-sized gate is structurally blind to.
 
 Both halves are load-bearing. When the swin2sr recovery config was
 first attached under `flow.stages`, it silently redefined the
-model's flow and dropped a component: the off-trace cell merely
+model's flow and dropped a component: the off-build cell merely
 stayed red, while the TRACE-SIZE cell flipped green->red and made
 the regression attributable in one cycle (2026-08-28).
 
@@ -56,7 +56,7 @@ from one_name import cli_name  # noqa: E402  (the one name a command line passes
 REPO = Path(__file__).resolve().parents[2]
 CACHE = _atelier.root("cache")
 OFF_TRACE_HW = (448, 448)  # the committed bench asset's size
-# A RECTANGULAR off-trace size, multiples of every family window (8, 16).
+# A RECTANGULAR off-build size, multiples of every family window (8, 16).
 # The square 448 is structurally blind to any H<->W confusion: nH == nW,
 # so a half-symbolized window_reverse renders perfectly there and shreds
 # every rectangle (caught 2026-08-29 by a manual odd-size smoke AFTER the
@@ -70,7 +70,7 @@ CELLS = [
     # Hard PASS since 2026-08-28: the collision-free stimulus plus the
     # window-count recovery closed D-RETRACE-SWIN2SR-SYMBOLIC, and this
     # cell XPASSed on all four combinations. The xfail was removed with
-    # the re-trace, never left to rot into a silent pass.
+    # the rebuild, never left to rot into a silent pass.
     pytest.param("swin2SR-classical-sr-x4-64", id="swin2sr"),
     # The two pth-route Swin artifacts, added 2026-08-29 with the
     # window-UNALIGNED size below: their whole defect class lived
@@ -89,7 +89,7 @@ OFF_TRACE_UNALIGNED_HW = (200, 300)
 
 
 def _trace_hw(model: str) -> tuple[int, int]:
-    """The artifact's OWN trace spatial size, read from its container."""
+    """The artifact's OWN build spatial size, read from its container."""
     for graph in sorted((CACHE / model / "components").glob("*/graph.json")):
         tensors = (json.loads(graph.read_text()) or {}).get("tensors", {})
         for tid, info in tensors.items():
@@ -139,8 +139,8 @@ def test_upscale_two_sizes(model: str, size: str, mode: str,
     hw = {"trace": None, "offtrace": OFF_TRACE_HW,
           "offtrace_unaligned": OFF_TRACE_UNALIGNED_HW}[size] or _trace_hw(model)
     if size != "trace" and hw == _trace_hw(model):
-        pytest.skip("off-trace size coincides with the trace size — "
-                    "pick a different off-trace size")
+        pytest.skip("off-trace size coincides with the build size — "
+                    "pick a different off-build size")
     if mode == "triton" and model == "hat-l-x4":
         pytest.skip("hat triton support in progress (docs/upscalers)")
     scale = _upscale_factor(model)
@@ -210,10 +210,10 @@ def _tone_params() -> list:
     """One cell per (artifact, engine, size).
 
     TWO SIZES, for the same reason the shape cells above run two: a value
-    defect can be invisible at the trace size and gross off it. swin2sr-x2
-    proved it on 2026-08-28 — after its re-trace it measured within
+    defect can be invisible at the build size and gross off it. swin2sr-x2
+    proved it on 2026-08-28 — after its rebuild it measured within
     tolerance at 112x80 and rendered at a mean of 41 against an input of
-    181 at 448x448. A tone gate pinned to the trace size would have called
+    181 at 448x448. A tone gate pinned to the build size would have called
     that artifact fixed.
 
     An artifact carrying a KNOWN defect is marked xfail(strict=True) —
@@ -229,8 +229,8 @@ def _tone_params() -> list:
         for engine in cfg["engines"]:
             for size in ("trace", "offtrace", "offtrace_rect"):
                 # A defect can be scoped to a size, or to one engine at
-                # one size: swin2sr-x2 after its re-trace fails compiled
-                # at both sizes and triton only off-trace, and marking a
+                # one size: swin2sr-x2 after its rebuild fails compiled
+                # at both sizes and triton only off-build, and marking a
                 # cell that genuinely passes would XPASS and go red.
                 if isinstance(defect, dict):
                     reason = (defect.get(f"{engine}-{size}")
@@ -260,15 +260,15 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
         pytest.skip(f"bench asset missing: {asset}")
 
     # The trace-size half keeps the tonal verdict readable even for an
-    # artifact that freezes off-trace: letting it crash would hide the
+    # artifact that freezes off-build: letting it crash would hide the
     # tone behind an exit 1 (observed 2026-08-28 on swinir / hat). The
-    # off-trace half is where a shape-dependent value defect shows.
+    # off-build half is where a shape-dependent value defect shows.
     from PIL import Image
 
     hw = {"trace": None, "offtrace": OFF_TRACE_HW,
           "offtrace_rect": OFF_TRACE_RECT_HW}[size] or _trace_hw(model)
     if size != "trace" and hw == _trace_hw(model):
-        pytest.skip("off-trace size coincides with the trace size")
+        pytest.skip("off-trace size coincides with the build size")
     src = tmp_path / f"tone_in_{model}_{size}.png"
     Image.open(asset).convert("RGB").resize(
         (hw[1], hw[0]), Image.LANCZOS).save(src)
@@ -295,7 +295,7 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
         f"{model}/{mode}: output mean {out_mean:.2f} vs input {in_mean:.2f} "
         f"(delta {d_mean:.2f} > {tol['mean_abs_delta_vs_input']}). An "
         f"upscaler preserves low-frequency content; this size of shift is a "
-        f"tonal defect, not resampling. Check whether the traced unit "
+        f"tonal defect, not resampling. Check whether the built unit "
         f"dropped a parent-forward normalisation.")
 
     d_bg = [abs(o - i) for o, i in zip(out_bg, in_bg)]

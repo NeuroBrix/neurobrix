@@ -88,7 +88,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         executor = self.ctx.executors[comp_name]
 
         # Slow model input shape [B, N+1, T] — read the codebook-row count (N+1).
-        # The full-grid generation feeds variable length, so the trace seq dim is
+        # The full-grid generation feeds variable length, so the build seq dim is
         # not needed (symbolic seq); only the row count is structural.
         dag = getattr(executor, '_dag', None)
         n_codebooks = 11
@@ -333,7 +333,7 @@ class TritonDualAREngine(ComponentFlowHandler):
             _decode(codes_np)
 
     def _try_chunked_forward(self, comp_name: str) -> bool:
-        """Run chunked forward if input seq_len exceeds graph's trace-time seq_len."""
+        """Run chunked forward if input seq_len exceeds graph's build-time seq_len."""
         executor = self.ctx.executors.get(comp_name)
         if executor is None:
             return False

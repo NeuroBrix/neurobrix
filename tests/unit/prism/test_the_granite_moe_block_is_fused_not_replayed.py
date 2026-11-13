@@ -1,13 +1,13 @@
-"""The granite-style MoE block fuses instead of replaying trace-time routing.
+"""The granite-style MoE block fuses instead of replaying build-time routing.
 
-granitemoe traces topk BEFORE softmax, dispatches by sorted index through
-split_with_sizes whose sizes are BAKED at trace time, and stores its experts
+granitemoe builds topk BEFORE softmax, dispatches by sorted index through
+split_with_sizes whose sizes are BAKED at build time, and stores its experts
 STACKED ([E, 2F, H] input_linear, [E, H, F] output_linear). Replayed as
-traced, any prompt that routes differently than the trace dies at the baked
+built, any prompt that routes differently than the build dies at the baked
 sizes — measured: "split_with_sizes expects split_sizes to sum exactly to
-512 ... got [0, 6, 0, 23, ...]" (sum 184, the trace prompt's routing).
+512 ... got [0, 6, 0, 23, ...]" (sum 184, the build prompt's routing).
 
-This test drives the REAL traced graph when the container is in the local
+This test drives the REAL built graph when the container is in the local
 cache (machine-gated skip otherwise, same policy as the reshape-rung cells)
 and asserts the rewrite: every router fused, zero split_with_sizes left,
 one inserted softmax per layer (granite's softmax-after-topk equals

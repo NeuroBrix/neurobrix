@@ -3,7 +3,7 @@
 Video models do not share one 5D latent layout: Wan's transformer and VAE both
 take [B, C, T, H, W], while CogVideoX's transformer takes [B, T, C, H, W] and
 its VAE [B, C, T, H, W] — the vendor pipeline permutes between the denoising
-loop and the decode. That permute lives in pipeline code, outside every traced
+loop and the decode. That permute lives in pipeline code, outside every built
 component, so the runtime must reproduce it at the boundary.
 
 This module derives the required permutation purely from EXISTING contract
@@ -12,7 +12,7 @@ data — no new fields, no model names:
 - The state tensor's axis roles come from `runtime/variables.json`
   `global.latents.resolver.shape_source` (each axis maps to a runtime
   quantity: batch_size / latent_frames / latent_height / latent_width, or the
-  component channel attribute), which the builder derives from the traced
+  component channel attribute), which the builder derives from the built
   transformer's named symbol dims.
 - The consumer's expected axis roles come from its graph input tensor's
   symbolic dims (named symbols batch/time/height/width; the concrete 5D dim

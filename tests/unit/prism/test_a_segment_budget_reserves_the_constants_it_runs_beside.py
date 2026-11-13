@@ -94,7 +94,7 @@ def test_an_unknown_constant_dtype_is_REFUSED_not_assumed():
 
 def test_a_computable_buffer_is_NOT_counted():
     """The loader skips its `constant_data` and recomputes it at runtime resolution, so its
-    traced size is not what it occupies. Counting it would over-reserve."""
+    built size is not what it occupies. Counting it would over-reserve."""
     t = {"constant": True, "constant_data": "eA==", "shape": [1024, 1024],
          "dtype": "float32", "is_computable": True, "weight_name": "w",
          "computation_spec": {}}

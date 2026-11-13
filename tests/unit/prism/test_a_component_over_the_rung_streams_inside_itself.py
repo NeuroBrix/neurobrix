@@ -23,13 +23,13 @@ machine pinned, the rung imposed through the door. Three causes, each a rule of 
    component whose reserve weighs most is streamed too, until the segments fit; the KV check then
    prices the cut's own window, not every streamed peak summed.
 
-RETRACED (2026-10-05): Wan2.1-I2V-14B-480P-Diffusers and Allegro-TI2V were excluded by name: they
+REBUILT (2026-10-05): Wan2.1-I2V-14B-480P-Diffusers and Allegro-TI2V were excluded by name: they
 refused because their `vae_encoder` graphs FROZE the time axis — Wan2.1's output is
 `[1, 3, 16, h', w']` (batch and latent time concrete; Wan2.2's is `[s0, f(s1), 16, h', w']`) and
 Allegro's `[1, (s0*s1 ...), 4, h', w']` (batch fused into time, the known batch freeze). No tile maps
-the time symbol, and the graph cannot run the request's frames anyway: a Forge re-trace (principle 1),
+the time symbol, and the graph cannot run the request's frames anyway: a container builder rebuild (principle 1),
 not a Prism rule. With that encoder's activations brought under the rung, both plan layer_streaming
-(probe, 2026-10-04) — it is their only cause. Forge re-traced both encoders (2026-10-04); they are
+(probe, 2026-10-04) — it is their only cause. the container builder rebuilt both encoders (2026-10-04); they are
 now in STREAMED, and the door that named them asserts their time axis stays one symbol.
 
 SEEN RED on e5f03258 (2026-10-04): every plan cell refused (the five texts above), the dead-output
@@ -65,7 +65,7 @@ import trace_request as TR  # noqa: E402
 
 MB = 1024 * 1024
 MODES = ["triton", "triton_sequential", "compiled"]
-#: Wan2.1-I2V-14B-480P and Allegro-TI2V joined on 2026-10-05: Forge re-traced their `vae_encoder`
+#: Wan2.1-I2V-14B-480P and Allegro-TI2V joined on 2026-10-05: the container builder rebuilt their `vae_encoder`
 #: with a symbolic time axis (topologies of 2026-10-04 23:31 and 23:18), the frozen-encoder door
 #: below turned red as it was written to, and both now plan layer_streaming at the top rung.
 STREAMED = ["CogVideoX-5b-I2V", "Wan2.2-I2V-A14B-Diffusers",
@@ -75,7 +75,7 @@ STREAMED = ["CogVideoX-5b-I2V", "Wan2.2-I2V-A14B-Diffusers",
 #: (1 024 patches, 0.05 GiB — test_a_vision_tower_is_priced_at_the_requests_image.py) its components fit and
 #: the plan holds them on the device, never streamed, never refused, never on the host.
 WHOLE_AT_THE_IMAGE = ["Ming-Lite-Omni-1.5"]
-#: The encoders the door named, now re-traced: their time axis is ONE symbol (asserted below).
+#: The encoders the door named, now rebuilt: their time axis is ONE symbol (asserted below).
 RETRACED_ENCODER = ["Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
 
 

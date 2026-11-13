@@ -101,7 +101,7 @@ class KVCacheAttentionWrapper:
     - Device determined from incoming q tensor (lazy allocation)
     - Works automatically with FGP, TP, PP, Single GPU
 
-    The traced graph contains attention(Q, K, V) WITHOUT cache context.
+    The built graph contains attention(Q, K, V) WITHOUT cache context.
     This wrapper:
     1. Reads layer_idx from op annotation (preferred) OR uses call counter (fallback)
     2. Concatenates incoming K/V with cached values
@@ -220,7 +220,7 @@ class KVCacheAttentionWrapper:
     ) -> torch.Tensor:
         """
         Intercept SDPA for KV cache injection.
-        `enable_gqa` is the graph's own SDPA kwarg (a decoder traced with grouped keys, chatterbox's
+        `enable_gqa` is the graph's own SDPA kwarg (a decoder built with grouped keys, chatterbox's
         t3 backbone, 2026-10-18): the cache keeps the key-value heads unexpanded and re-expands them
         for the call, so the final SDPA names it only when its keys still carry fewer heads than q.
 
@@ -294,7 +294,7 @@ class KVCacheAttentionWrapper:
             k = k[:, :, :actual_len, :]
             v = v[:, :, :actual_len, :]
 
-        # GQA: The traced graph may expand K/V from num_kv_heads to num_heads
+        # GQA: The built graph may expand K/V from num_kv_heads to num_heads
         # via aten::expand before SDPA. Cache stores at num_kv_heads to save memory.
         # Un-expand before caching, re-expand after retrieval.
         incoming_heads = k.shape[1]
@@ -556,7 +556,7 @@ class KVCacheAttentionWrapper:
     def _sanitize_device_kwarg(kwargs: dict) -> dict:
         """Remap a baked graph device that is invalid in this process.
 
-        The tracer freezes the physical trace device (e.g. cuda:2) into
+        The builder freezes the physical build device (e.g. cuda:2) into
         aten::arange kwargs. The normal dispatch path rewrites it via the
         Prism runtime device (sequential_dispatcher._resolve_attr_value),
         but this KV-cache interceptor sits on a separate path and receives
@@ -606,7 +606,7 @@ class KVCacheAttentionWrapper:
             #   arange(start, end) — relative [start, end)  → [cache_len+start, cache_len+end)
             # The single-arg path is byte-identical to the prior behaviour (start=0).
             # The two-arg form is what Llama-class graphs emit for cache_position
-            # (arange(0, seq_len) with start frozen at 0 from trace); treating its
+            # (arange(0, seq_len) with start frozen at 0 from build); treating its
             # args[0]=0 as `end` previously produced arange(cache_len, cache_len) =
             # an EMPTY range, collapsing the RoPE cos/sin and the q/k seq dims at decode.
             if len(args) == 1:

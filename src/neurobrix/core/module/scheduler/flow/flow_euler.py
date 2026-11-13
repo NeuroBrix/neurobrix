@@ -108,7 +108,7 @@ class FlowEulerScheduler(FlowSchedulerBase):
         # Without this, the denoising direction is wrong and the latents never
         # leave the noise distribution (uniform-noise output). Gated on
         # invert_sigmas, so non-inverted flow models (Flux/SD3/Wan) are
-        # untouched. The model's own timestep scaling is inside the traced graph
+        # untouched. The model's own timestep scaling is inside the built graph
         # (see _get_component_timestep_scale), so we invert the raw [0,1] value.
         if self.invert_sigmas:
             timesteps = 1.0 - timesteps

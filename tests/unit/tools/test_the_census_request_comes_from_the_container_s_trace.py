@@ -1,24 +1,24 @@
-"""The census shadows a model at the request DERIVED from the current container's trace, and
+"""The census shadows a model at the request DERIVED from the current container's build, and
 refuses a request table that disagrees with it — by name, before any shadow runs.
 
-Measured (supervisor, 2026-09-28 17:22): Sana_1600M_1024px_MultiLing was retraced and its trace
+Measured (supervisor, 2026-09-28 17:22): Sana_1600M_1024px_MultiLing was rebuilt and its build
 moved to 960x1088. The census took its request from a static table (`requests.json`, 768x1024,
 derived from the OLD container) while the regression matrix derived 704x1088 from the new
-container's trace: 72 keys were certified for a request the verification never makes, and the
-zero-miss verification met 42 uncertified keys. The rule: after any retrace, a model's census is
-re-run on the NEW container at the request derived from the new trace — never a stale table.
+container's build: 72 keys were certified for a request the verification never makes, and the
+zero-miss verification met 42 uncertified keys. The rule: after any rebuild, a model's census is
+re-run on the NEW container at the request derived from the new build — never a stale table.
 
-The fake container below is traced at 960x1088 (a latent 30x34 under a VAE scale of 32), so the
+The fake container below is built at 960x1088 (a latent 30x34 under a VAE scale of 32), so the
 derivation the matrix uses (height at three quarters on the image lattice, width kept) gives
 704x1088. The three sizes and the fake's arithmetic are Sana's own.
 
 What this does if the code were wrong (seen RED on 093fcc88's tool, 2026-09-28):
   * no table: the old census shadowed the bare family request (`request_args`, no size flag),
-    i.e. the TRACE size 960x1088 the matrix never runs — `test_the_default_request_is_derived`
+    i.e. the BUILD size 960x1088 the matrix never runs — `test_the_default_request_is_derived`
     fails on the missing `--height 704 --width 1088`;
   * a stale table (768x1024): the old census shadowed the table's size silently —
     `test_a_stale_table_is_refused_by_name` fails because a shadow ran and no refusal exists;
-  * a table with no size on an image model: shadowed at the trace size — same failure;
+  * a table with no size on an image model: shadowed at the build size — same failure;
   * a table equal to the derived request passes on both, as it should.
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ sys.path.insert(0, str(REPO / "src"))
 import certified_census as CC  # noqa: E402
 
 MODEL = "FakeImage-960x1088"
-# computed by hand from the fake's trace: the image family's confirmation.size_fraction 0.5 -> 480x544,
+# computed by hand from the fake's build: the image family's confirmation.size_fraction 0.5 -> 480x544,
 # the height at three quarters -> 360, both on the 64 lattice -> 320x512 (704x1088 before the
 # confirmation request, 2026-09-28; the refusal's logic is unchanged, only the size it names)
 DERIVED = ["--height", "320", "--width", "512"]
@@ -44,7 +44,7 @@ STALE = ["--height", "768", "--width", "1024"]        # the old container's deri
 
 
 def _container(root: Path) -> Path:
-    """An image container traced at 960x1088: the smallest set the runtime loader accepts."""
+    """An image container built at 960x1088: the smallest set the runtime loader accepts."""
     from neurobrix.nbx.neurotax import NEUROTAX_VERSION
     d = root / MODEL
     (d / "runtime").mkdir(parents=True)
@@ -105,7 +105,7 @@ def test_the_default_request_is_derived(census):
     ords = _ordinary(calls)
     assert ords, f"no ordinary shadow ran: {row}"
     assert _size(ords[0]) == DERIVED, (
-        f"the census shadowed {ords[0]} — not the size derived from the container's trace {DERIVED}")
+        f"the census shadowed {ords[0]} — not the size derived from the container's build {DERIVED}")
     assert row["status"] == "ok", row
 
 
@@ -119,7 +119,7 @@ def test_a_table_equal_to_the_derivation_is_accepted(census):
 def test_a_stale_table_is_refused_by_name(census):
     req = ["--prompt", "a red apple on a wooden table", "--seed", "42", "--steps", "20", *STALE]
     row, calls = census([req])
-    assert calls == [], f"a shadow ran on a request the container's trace does not give: {calls}"
+    assert calls == [], f"a shadow ran on a request the container's build does not give: {calls}"
     assert row["status"] == "refused", row
     msg = row.get("refusal", "")
     assert MODEL in msg and "768x1024" in msg and "320x512" in msg, msg

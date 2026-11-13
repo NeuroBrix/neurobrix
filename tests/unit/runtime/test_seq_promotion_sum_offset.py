@@ -1,8 +1,8 @@
 """Unit test for the compiled seq_len scalar-promotion offset policy.
 
 Regression guard for the synthetic-sum fuzzy-match bug: when a graph has
-two seq_len symbols (e.g. trace values 14 and 1), the promotion pass
-synthesizes a combined symbol `_sum_sA_sB` (trace 15). The +1 offset
+two seq_len symbols (e.g. build values 14 and 1), the promotion pass
+synthesizes a combined symbol `_sum_sA_sB` (build 15). The +1 offset
 tolerance — designed for single-tracer-symbol `seq_len + 1` patterns —
 also applied to that synthetic sum, so a STRUCTURAL model constant 16
 (the rotate-half half-width of a 32-wide per-axis RoPE chunk) was
@@ -12,7 +12,7 @@ crashing the first RoPE mul in compiled mode while the sequential
 oracle (exact-match patching) passed.
 
 Policy under test:
-  - real tracer symbols: offset 0..1 allowed (seq_len + 1 slicing);
+  - real builder symbols: offset 0..1 allowed (seq_len + 1 slicing);
   - synthetic `_sum_*` symbols: EXACT match only (offset 0), which is
     the concatenated-sequence pattern the sums exist for and re-inherits
     the weight-dims collision guard checked at synthesis time.
@@ -25,7 +25,7 @@ from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence
 
 
 def _make_dag(slice_ends):
-    """Minimal DAG: two seq_len symbols (traces 14 and 9 → sum 23) and one
+    """Minimal DAG: two seq_len symbols (builds 14 and 9 → sum 23) and one
     aten::slice per requested end value."""
     ops = {}
     tensors = {
@@ -77,7 +77,7 @@ def _end_arg(ops, i):
 
 
 def test_sum_symbol_requires_exact_match():
-    """sum trace = 14 + 9 = 23: end=23 promotes (exact), end=24 must NOT
+    """sum build = 14 + 9 = 23: end=23 promotes (exact), end=24 must NOT
     promote via sum+1 (that fuzz is what captured structural constants)."""
     ops = _run_promotion([23, 24])
 
@@ -95,7 +95,7 @@ def test_sum_symbol_requires_exact_match():
 
 
 def test_single_symbol_keeps_plus_one_tolerance():
-    """Real tracer symbols keep the seq_len and seq_len+1 promotions."""
+    """Real builder symbols keep the seq_len and seq_len+1 promotions."""
     ops = _run_promotion([14, 15])
 
     exact = _end_arg(ops, 0)

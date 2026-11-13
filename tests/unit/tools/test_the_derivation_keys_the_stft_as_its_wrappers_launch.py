@@ -42,7 +42,7 @@ def _the_bound_target_is_restored():
 
 
 def _launches(kind, args, x_shape):
-    """The derivation's launches for one op (the hift / s3gen vocoder's args as traced)."""
+    """The derivation's launches for one op (the hift / s3gen vocoder's args as built)."""
     _census._bind_target("c4140-4xv100-16GB-nvlink", None)   # a committed V100 profile's ladders
     o = {"op_type": kind, "attributes": {"args": args}, "input_tensor_ids": ["x", "w"]}
     unhandled = collections.Counter()

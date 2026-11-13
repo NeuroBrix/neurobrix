@@ -1,4 +1,4 @@
-"""Run a component in temporal chunks through the stream Forge derived from its graph — one brick, both engines (R30).
+"""Run a component in temporal chunks through the stream the container builder derived from its graph — one brick, both engines (R30).
 
 The plan (`ExecutionPlan.component_stream`, `core/prism/temporal_stream.py`) names the schedule: the first chunk's
 input frames, then each next chunk's. The container carries the two graphs: the first chunk's (the clip graph plus the

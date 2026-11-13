@@ -1,5 +1,5 @@
 """A key-padding mask that BROADCASTS over the query axis ([B, 1, 1, Sk]) is applied
-as a mask by the compiled engine's attention — never mistaken for a trace-time
+as a mask by the compiled engine's attention — never mistaken for a build-time
 constant shorter than the sequence and replaced by `is_causal=True`.
 
 That mistake ran mochi-1-preview's joint video/text attention causally over the
@@ -77,7 +77,7 @@ def test_only_an_axis_between_one_and_the_sequence_is_short(extent, seq, short):
     assert CO._mask_axis_short(extent, seq) is short
 
 
-# ---- a GENUINELY short mask (its extent froze at the trace length) ----------------
+# ---- a GENUINELY short mask (its extent froze at the build length) ----------------
 # Static scan 2026-10-04 (every SDPA mask in the shared cache): masks frozen at 23x23 in ten language models (GLM-4.1V,
 # MiniCPM-o, Qwen3-30B/Coder/VL, Voxtral, canary-qwen, deepseek-moe, granite-1b),
 # 704x704 in Janus-Pro, 506x506 in the Sana-4K text encoder. The old branch replaced

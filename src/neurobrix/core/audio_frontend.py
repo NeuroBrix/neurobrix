@@ -4,7 +4,7 @@ The R30 mirror of `triton/audio_frontend.py` (`preprocess_phonemizer_input_np`):
 function for both engines (`core.module.audio.g2p.phoneme_ids`, its language gate first), the
 voicepack read from the container (`modules/voices/`). It lived in `core/flow/stages/kokoro.py`
 beside the native Kokoro stage handlers; those had no caller (the Kokoro predictor and decoder run
-their traced graphs, execution=forward, in both engines), and the module was removed on
+their built graphs, execution=forward, in both engines), and the module was removed on
 2026-10-04 (the supervisor's decision) — this function, the one part the audio flow reaches, moved
 here.
 """
@@ -39,7 +39,7 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
                                 request_voice(engine.ctx.variable_resolver.resolved,
                                               engine.ctx.pkg.defaults))
 
-    # Step 3: Feed the ACTUAL phoneme sequence — no padding to the trace seq_len.
+    # Step 3: Feed the ACTUAL phoneme sequence — no padding to the build seq_len.
     # The bert/text_encoder/predictor/decoder graphs carry a symbolic seq_len that
     # the runtime binds from the input_ids shape, so every stage runs at the true
     # length and the audio duration tracks the text. The previous code padded AND

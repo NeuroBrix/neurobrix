@@ -3,10 +3,10 @@
 
 Two kinds of line, and they do not read the same:
 
-  MEASURED   two trace points from the SAME tracer, slope fitted. A fit across
-             two tracer versions is not a fit, which is why the cached graphs
+  MEASURED   two build points from the SAME builder, slope fitted. A fit across
+             two builder versions is not a fit, which is why the cached graphs
              are not used as a first point.
-  INFERRED   one trace point. The claim rests on the chunk-loop module groups
+  INFERRED   one build point. The claim rests on the chunk-loop module groups
              matching a measured component's, group for group, at the same
              chunk count -- not on the graphs "looking alike".
 

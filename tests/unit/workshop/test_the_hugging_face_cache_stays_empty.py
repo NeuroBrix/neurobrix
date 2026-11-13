@@ -1,7 +1,7 @@
 """The Hugging Face hub cache must stay empty. A model is downloaded once.
 
 A snapshot is downloaded ONCE, into the configured snapshots root, and every
-consumer reads it THERE — the build toolchain traces from it, vendor tools and
+consumer reads it THERE — the build toolchain builds from it, vendor tools and
 oracles load from it, the engine resolves its third-party fallbacks against it.
 A second copy under `~/.cache/huggingface/hub` is a duplicate of NAS-resident
 data on the one filesystem that cannot hold it.

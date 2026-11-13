@@ -9,18 +9,18 @@ Measured 2026-09-17 on hat-s-x4 (M4 Pro, 26 GB unified), BEFORE this fix:
 
   1. the CLI never read the request's image size at all — height/width fell
      through to a cached or family default, or 1024;
-  2. every graph on this rack records TRACE literals, not symbols. All four
+  2. every graph on this rack records BUILD literals, not symbols. All four
      image models declare height/width in `symbolic_context` and ZERO of their
      tensors use them:
         real-esrgan-x2 0/1800   hat-s-x4 0/4660
         swin2SR        0/5163   swinir   0/4175
-     so the profiler sizes every activation at the trace, whatever was asked.
+     so the profiler sizes every activation at the build, whatever was asked.
 
 Note what the second fact does NOT license: refusing a model because its graph
 is frozen. real-esrgan-x2 has the same 0/1800 and renders 320x224 correctly from
-a 112x80 trace — the runtime resolves real shapes regardless. A "refuse when
+a 112x80 build — the runtime resolves real shapes regardless. A "refuse when
 frozen" rule would have refused four working models. So the estimate is SCALED
-by the pixel ratio the trace and the request imply, not refused.
+by the pixel ratio the build and the request imply, not refused.
 
 Why it matters: the per-cell memory gate is fed this number. Fed 278 MB it can
 refuse nothing — 278 x 1.25 fits any machine — and hat-s-x4 went on to hold
@@ -47,7 +47,7 @@ def test_scaling_is_derived_from_the_graph_and_the_request():
 
     solver = PrismSolver()
     base = 100_000_000
-    # 448x448 against a 112x80 trace is 200704/8960 = 22.4x
+    # 448x448 against a 112x80 build is 200704/8960 = 22.4x
     scaled = solver._scale_activations_to_request(_Comp(), base, _Req(448, 448))
     assert scaled == int(base * (448 * 448) / (112 * 80)), scaled
     assert scaled > base * 22

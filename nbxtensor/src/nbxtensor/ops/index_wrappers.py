@@ -214,7 +214,7 @@ def masked_fill(x, mask, value: float) :
 def is_nonzero_wrapper(x):
     """aten::is_nonzero — returns the scalar truthiness of a 1-element tensor.
 
-    PyTorch's native impl returns a Python bool, but traced graphs feed
+    PyTorch's native impl returns a Python bool, but built graphs feed
     the output back through tensor ops, so we return a 0-d NBXTensor
     (uint8) to match the graph's expected dtype surface.
     """
@@ -426,7 +426,7 @@ def masked_scatter_wrapper(x, mask, source) :
 
     First consumer: the MiniCPM-o llm.model graph (in-graph bool-mask
     modality splice — expanded [B, S, H] mask, flattened [n, H] source).
-    v1 contract: `mask` must match `x`'s shape exactly (the traced form);
+    v1 contract: `mask` must match `x`'s shape exactly (the built form);
     broadcasting masks raise a named error.
     """
     if tuple(mask.shape) != tuple(x.shape):

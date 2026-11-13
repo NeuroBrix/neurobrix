@@ -3,7 +3,7 @@ the plan prices with and the derived census keys with (one map for both):
 
 * the loop denoiser runs the CFG batch (2 under guidance), nothing else does — unless it embeds the
   guidance scale (a `guidance` input: no batch-2 pass);
-* a diffusion encoder runs at its tokenized length (its declared input shape), not its trace;
+* a diffusion encoder runs at its tokenized length (its declared input shape), not its build;
 * the denoiser's text axis is bound by SOURCE (the text input and its mask) at the FINALIZED length —
   never by symbol name (Flex names its image-token symbol `seq_len` too).
 
@@ -72,7 +72,7 @@ def test_without_a_flow_the_map_is_the_name_driven_one(tmp_path):
 def test_the_vace_control_encoder_runs_the_pair(monkeypatch):
     """Under the loop component's `vace_control_conditioning` flag the CLI feeds the component the
     image input reaches the (inactive, reactive) pair — batch 2, `image_dsp.VACE_CONTROL_CLIPS` —
-    and the plan was sized at 1 (the retraced VACE's encoder at 162 = 2 x 81 frames in its walk).
+    and the plan was sized at 1 (the rebuilt VACE's encoder at 162 = 2 x 81 frames in its walk).
     No flag, no pair. Injection: the rule removed from `overrides` -> RED."""
     import neurobrix.core.runtime.registry_flags as RF
     flags = {("transformer", "vace_control_conditioning"): True}

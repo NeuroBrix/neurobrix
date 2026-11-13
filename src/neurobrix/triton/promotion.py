@@ -1,6 +1,6 @@
 """Symbolic Promotion — shared between compiled and sequential triton modes.
 
-Promotes trace-time seq_len constants to symbolic references so that ops
+Promotes build-time seq_len constants to symbolic references so that ops
 like ones([23, 23]) become ones([s1, s1]) → ones([actual_seq_len, actual_seq_len]).
 
 Called by TritonSequence.compile() and _run_triton_sequential().
@@ -12,7 +12,7 @@ from typing import Dict, Optional
 
 def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
                             config_constants=None):
-    """Promote trace-time seq_len constants to symbolic references.
+    """Promote build-time seq_len constants to symbolic references.
 
     Mutates ops_meta args in-place. Safe to call multiple times
     (idempotent — already-promoted args are not re-promoted).
@@ -22,7 +22,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
         tensors: dag["tensors"] dict
         ops_meta: dag["ops"] dict
         config_constants: the component's architectural ints (profile.json
-            `config`) — a seq_len trace value equal to one of them is a
+            `config`) — a seq_len build value equal to one of them is a
             collision and is not promoted (R30 mirror of the compiled rule).
     """
     sym_ctx = dag.get("symbolic_context", {})
@@ -68,7 +68,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
         if tv not in weight_dims:
             safe[sid] = tv
 
-    # Handle ambiguous trace values — keep one if all same name
+    # Handle ambiguous build values — keep one if all same name
     tv_counts: Dict[int, list] = {}
     for sid, tv in safe.items():
         tv_counts.setdefault(tv, []).append(sid)
@@ -123,7 +123,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
     #  - An intermediate produced by aten::cos / aten::sin over an inline
     #    position-based computation (DeepSeek-MoE pattern — RoPE recomputed
     #    per forward; source shape's seq dim equals trace_seq_len).
-    # In both cases, the slice's trace-time `end` argument is trace_seq_len
+    # In both cases, the slice's build-time `end` argument is trace_seq_len
     # and must stay pinned to the full source dim so position_ids > runtime
     # seq_len can still index correctly.
     consumers: Dict[str, list] = {}
@@ -261,7 +261,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
     # element of input::position_ids (both executors bind symbols on
     # every component invocation); refs carry offset=1 so they resolve
     # to last_position + 1 = total length. Fallback (symbol unbound) is
-    # trace_value-1 + 1 = the original trace length — the pre-fix
+    # trace_value-1 + 1 = the original build length — the pre-fix
     # behaviour. The per-forward host read of position_ids is a few
     # bytes and only exists on graphs that carry this chain.
     _ROPE_LEN_SYM = "nbx_rope_len"
@@ -511,10 +511,10 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
     The seq_len pass only promotes symbols named "seq_len" — by design,
     that's the LLM contract. Image-diffusion graphs use named symbols
     "height", "width" (and occasionally "depth"); they were left out.
-    For Sana 1024 / PixArt 1024 the trace size happens to equal the
+    For Sana 1024 / PixArt 1024 the build size happens to equal the
     runtime size, so missing rebind is a silent no-op. For Sana 4Kpx
-    (trace 64×64 latent → runtime 128×128 latent) the missing rebind
-    surfaces as a literal `4096` (= trace H*W) / `64` (= trace H or W)
+    (build 64×64 latent → runtime 128×128 latent) the missing rebind
+    surfaces as a literal `4096` (= build H*W) / `64` (= build H or W)
     baked into `aten::expand` / `aten::view` shape args that should
     have been `s_h * s_w` / `s_h` / `s_w` respectively → the VAE
     crashes with `Cannot broadcast (1,1024,64,64) and (1,1024,128,128)`
@@ -524,7 +524,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
     has no such smoothing. So this is an engine-side regression masked
     by the LLM-only filter, surfaced after Layer 6.3 disabled the
     parasitic TilingEngine that previously tiled the VAE down to the
-    trace 64×64 size.
+    build 64×64 size.
 
     Strategy: position-aware promotion on view/expand/reshape/
     _unsafe_view/ones/zeros/full/new_zeros/new_ones shape args. The
@@ -536,11 +536,11 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
     disambiguating context: in a 2D-or-higher shape arg, position [-1]
     is canonically the W axis and position [-2] the H axis
     (channels-first images, which is the standard NeuroBrix tensor
-    layout). A value matching the H/W trace at that position is the
+    layout). A value matching the H/W build at that position is the
     spatial dim; a value matching H*W at any position is a flattened-
     spatial dim (B*HW or B*C*HW). Other matches stay literal.
 
-    Bit-perfect for trace == runtime models (Sana 1024, PixArt 1024,
+    Bit-perfect for build == runtime models (Sana 1024, PixArt 1024,
     every LLM): the resolver substitutes the symbol with its own
     trace_value, identical Python int output. Verified by the LLM
     harness 14/14 + Sana 1024 + PixArt × 4 modes regression.
@@ -569,11 +569,11 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
     # of those signals and 84 view pairs per PixArt block were left literal.
     #
     # The patch size is NOT inferred here. The patch-embed view is already
-    # symbolised correctly by the tracer, so the expression is HARVESTED from
+    # symbolised correctly by the builder, so the expression is HARVESTED from
     # the graph itself: any tokenisation scheme is covered, and a container
     # that carries no such sibling simply gets no token promotion rather than
     # a guess. Sub-expressions come with it, which is where the grid SIDES
-    # (the two `(s-2)//2+1`, trace 64) come from for the unpatchify.
+    # (the two `(s-2)//2+1`, build 64) come from for the unpatchify.
     def _expr_refs(expr, sid):
         if isinstance(expr, dict):
             if expr.get("type") == "symbol":
@@ -725,7 +725,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         return val, False
 
     def _expr_trace_value(expr):
-        """Get the trace-time value of an expression (for trace_value lookups)."""
+        """Get the build-time value of an expression (for trace_value lookups)."""
         if isinstance(expr, int):
             return expr
         if isinstance(expr, dict):
@@ -743,11 +743,11 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         wrong symbol.
 
         Sana 4Kpx VAE shape args contain expressions like `mul(s_batch=1, 64)`
-        for spatial dims (where 64 is the trace H/W). At runtime the batch
+        for spatial dims (where 64 is the build H/W). At runtime the batch
         symbol still resolves to 1, so the mul evaluates to 64 — i.e., the
-        spatial dim STAYS at trace size and never rebinds. The fix:
-        when an arithmetic expression's trace value equals a single spatial
-        trace (h_trace or w_trace) AND the expression isn't already
+        spatial dim STAYS at build size and never rebinds. The fix:
+        when an arithmetic expression's build value equals a single spatial
+        build (h_trace or w_trace) AND the expression isn't already
         anchored to a height/width symbol, REPLACE it with the canonical
         spatial symbol. This corrects the tracer's mis-attribution at
         engine load time without touching graph.json or the build side.
@@ -764,16 +764,16 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
             return expr, False
 
         # Don't override if any operand already references an
-        # INFORMATION-BEARING symbol — spatial OR any symbol with trace
-        # value > 1. The override exists for the degenerate tracer
+        # INFORMATION-BEARING symbol — spatial OR any symbol with build
+        # value > 1. The override exists for the degenerate builder
         # mis-attribution `mul(s_batch=1, 64)` (Sana 4Kpx), where the only
-        # referenced symbol has trace 1 and carries no shape information.
+        # referenced symbol has build 1 and carries no shape information.
         # An expression anchored to a meaningful symbol (e.g. SANA-Video's
-        # VAE temporal chain `2*(1+s_time)-1-...`, trace 9) is already
+        # VAE temporal chain `2*(1+s_time)-1-...`, build 9) is already
         # resolvable at runtime; stomping it with a value-matched spatial
-        # guess (trace 10 == height(10) - 1 by stimulus-dim coincidence)
+        # guess (build 10 == height(10) - 1 by stimulus-dim coincidence)
         # rewrote T' into `height - 1` and exploded the depth-to-space
-        # view at runtime T != trace (compiled SANA-Video f9: target 21
+        # view at runtime T != build (compiled SANA-Video f9: target 21
         # where the data said 3).
         def _references_meaningful_symbol(e):
             if isinstance(e, dict):
@@ -800,7 +800,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         if _references_meaningful_symbol(expr):
             return expr, False
 
-        # Look up trace value
+        # Look up build value
         tv = _expr_trace_value(expr)
         if tv is None or not isinstance(tv, int):
             return expr, False
@@ -824,12 +824,12 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
 
         Handles `mul`, `add`, `sub`, `floordiv`, `mod`, `neg`, `product`.
         Returns (new_expr, changed). After recursion, attempts to override
-        the entire expr if its trace value matches a spatial dim and
-        no spatial symbol is referenced inside (tracer mis-attribution).
+        the entire expr if its build value matches a spatial dim and
+        no spatial symbol is referenced inside (builder mis-attribution).
         """
         if not isinstance(expr, dict):
             return _promote_int_value(expr)
-        # Try whole-expression override first (the common tracer mistake).
+        # Try whole-expression override first (the common builder mistake).
         overridden, was_overridden = _override_misattributed_arith(expr)
         if was_overridden:
             return overridden, True
@@ -868,12 +868,12 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         """Apply spatial promotion to a flat shape list.
 
         Three complementary signals:
-        1. Any top-level int equal to trace `H*W` is promoted to a
+        1. Any top-level int equal to build `H*W` is promoted to a
            product symbol. Safe at any position because the product
            value is uniquely identifiable.
         2. An adjacent (H, W) pair of top-level ints is promoted to
            two single symbols. Adjacency disambiguates from isolated
-           channel dims that coincidentally equal trace H/W.
+           channel dims that coincidentally equal build H/W.
         3. Arithmetic expressions (`mul(s0, 4096)`) recurse into their
            int operands to promote `H*W` products. Required for view
            shape args where the leading B*H*W collapse is encoded as
@@ -921,7 +921,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         # entry of an activation shape is canonically the feature width, and
         # in PixArt the T5 stream is (B, 120, 4096) — 4096 is ALSO the text
         # hidden size. Promoting it there would break cross-attention while
-        # still reading bit-perfect at the traced size, where trace == runtime
+        # still reading bit-perfect at the built size, where build == runtime
         # hides every wrong promotion.
         if tok_expr is not None:
             for i in range(len(out) - 1):
@@ -930,9 +930,9 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     changed = True
 
         # Pass 5: the batch*token collapse that feeds a GEMM, `[B*T, C]`. The
-        # trace bakes the product as one int, so neither symbol is visible in
+        # build bakes the product as one int, so neither symbol is visible in
         # it. It carries exactly one unknown, which is what -1 is for — the
-        # same form the tracer itself emits at the sibling `view([s3, -1, C])`.
+        # same form the builder itself emits at the sibling `view([s3, -1, C])`.
         # ONLY for the reshaping family. In `aten::expand` a -1 means "keep this
         # dimension", not "infer it", so writing one there would silently change
         # the op's meaning instead of its extent.
@@ -963,11 +963,11 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         return out, changed
 
     # ---- a slice end bound to a spatial symbol BY COINCIDENCE --------------
-    # `_override_misattributed_arith` above corrects the tracer binding a spatial
-    # dim to a non-spatial symbol. This is the mirror mistake. PixArt -MS traced
+    # `_override_misattributed_arith` above corrects the builder binding a spatial
+    # dim to a non-spatial symbol. This is the mirror mistake. PixArt -MS built
     # at 1024 has a latent of 128 and a timestep embedding of 256 split in half
-    # and swapped; both halves are 128, so the tracer bound `emb[:, :128]`'s end
-    # to the HEIGHT symbol. Invisible at the traced size, and at 4096 px the half
+    # and swapped; both halves are 128, so the builder bound `emb[:, :128]`'s end
+    # to the HEIGHT symbol. Invisible at the built size, and at 4096 px the half
     # becomes 512, clamps to the full 256, and the first addmm dies on (2, 384).
     #
     # The discriminator is not the value — it is whether the sliced tensor has a
@@ -1014,8 +1014,8 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     _args[_i] = {"type": "scalar", "value": _tv}
 
         # ---- a spatial symbol standing in for a WEIGHT extent -------------
-        # Sana has 70 heads of 32 and, at its traced 1024 px, a latent of 32.
-        # The tracer bound the head dim to the height symbol, so at 4096 px the
+        # Sana has 70 heads of 32 and, at its built 1024 px, a latent of 32.
+        # The builder bound the head dim to the height symbol, so at 4096 px the
         # head dim became 128 and the first attention op died on an invented
         # batch: "bmm shape mismatch: (140, 33, 16384) @ (35, 16384, 128)".
         #
@@ -1089,7 +1089,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     continue                 # the extent is not fixed by the weights
                 if _span < 2:
                     # The entry maps 1:1 to an input dim, so there is no split to
-                    # reason about, and at the traced size the head dim and the
+                    # reason about, and at the built size the head dim and the
                     # latent side can be the same number (Sana: 70 heads of 32, a
                     # 32x32 latent). The PARTNER decides: a genuine spatial use
                     # names height AND width as bare entries together — Sana's VAE

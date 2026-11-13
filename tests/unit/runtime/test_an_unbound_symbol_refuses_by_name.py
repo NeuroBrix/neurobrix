@@ -1,14 +1,14 @@
 """ZERO FALLBACK for symbols (the owner, 2026-09-21): a symbol the runtime could not bind
-must REFUSE by name, never answer its trace value. Two defects of one day hid behind that
-fallback — Wan T2V's plan bound the VAE's spatial symbols to nothing and fell to the trace
+must REFUSE by name, never answer its build value. Two defects of one day hid behind that
+fallback — Wan T2V's plan bound the VAE's spatial symbols to nothing and fell to the build
 extent (1.74 GiB for a 35 GiB decode), and Qwen3-Omni's ATen sequential path evaluated
-`s1` at its trace value 23 while the context was 213 (`view [-1, 1, 23]` on 639 elements).
+`s1` at its build value 23 while the context was 213 (`view [-1, 1, 23]` on 639 elements).
 A refusal naming the symbol would have exposed both in a second.
 
 Each cell below binds NOTHING for the symbol and asks for it. What the test would do if the
-code were wrong: return 23 (the trace value) — which is what every one of these sites did.
+code were wrong: return 23 (the build value) — which is what every one of these sites did.
 The zero-bound cell: a symbol legitimately bound to 0 (a cache length at its first step) is
-BOUND, and must answer 0, never the trace value.
+BOUND, and must answer 0, never the build value.
 """
 from __future__ import annotations
 

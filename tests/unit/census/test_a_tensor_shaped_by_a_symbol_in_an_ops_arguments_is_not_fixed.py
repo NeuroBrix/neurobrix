@@ -1,4 +1,4 @@
-"""A tensor computed from parameters alone is FIXED (its traced shape, whatever its annotation) —
+"""A tensor computed from parameters alone is FIXED (its built shape, whatever its annotation) —
 unless an op on the way carries a symbol in its ARGUMENTS: then the request shapes it.
 
 MiniCPM-o-4_5's resampler repeats its learned query by the image-slice count — `repeat(query,
@@ -60,7 +60,7 @@ def test_a_query_repeated_by_a_symbol_argument_follows_the_request():
 
 
 def test_a_parameter_chain_without_a_symbol_argument_stays_fixed():
-    g = _graph([1, 3, 1], [192, 4096])          # the same chain with literal arguments: fixed, the traced shape
+    g = _graph([1, 3, 1], [192, 4096])          # the same chain with literal arguments: fixed, the built shape
     fixed = D._fixed_tensors(g)
     assert {"aten.repeat::0::out_0", "aten.view::0::out_0", "aten.t::0::out_0"} <= fixed
     shape = D._shape_fn(g, "resampler", {"s0": 1, "s1": 1024}, {}, {})

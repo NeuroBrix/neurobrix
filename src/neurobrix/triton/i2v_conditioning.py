@@ -172,7 +172,7 @@ def _build_condition_state_video_mask(ctx: Any, spec: dict,
 
     - masked_video: the conditioning image(s) at their frame indices, zeros
       elsewhere, VAE-encoded and latent-scaled. In this runtime the
-      vae_encoder COMPONENT output IS that latent — its traced graph
+      vae_encoder COMPONENT output IS that latent — its built graph
       internalizes encoder -> quant_conv -> moments -> mode * scaling_factor
       -> permute to frames-first [B, F, C, H, W]. The CLI synthesizes its
       pixel input (image at frame 0, zeros padded to num_frames) via the

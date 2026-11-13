@@ -370,7 +370,7 @@ def batch_norm_wrapper(
 
     training=False → inference batch_norm using running_mean/running_var.
     training=True  → statistics computed from the input — covers batch_norm
-                     training AND instance_norm / AdaIN, which the tracer emits
+                     training AND instance_norm / AdaIN, which the builder emits
                      as cudnn_batch_norm(training=True) with no affine and no
                      running buffers (it reshapes [N,C,L]→[1,N*C,L] first, so
                      each instance-channel normalises over the spatial axis).

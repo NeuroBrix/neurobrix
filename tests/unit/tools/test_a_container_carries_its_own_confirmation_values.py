@@ -7,7 +7,7 @@ step count is declared for the model in Forge's registry with its source, writte
 the in-place pass) into topology.json's extracted_values["_global"]["confirmation"], and read here
 over the family's `confirmation:` section. No model is named in the tool.
 
-The fake container below is a video container traced at 720x1280 (a latent 90x160 under a VAE scale
+The fake container below is a video container built at 720x1280 (a latent 90x160 under a VAE scale
 of 8) — the arithmetic is by hand: the family's size_fraction 0.5 -> 360x640, the height at three
 quarters -> 270, on the 32 lattice -> 256x640; under a stated minimum of 720x1280 it moves up to it.
 
@@ -19,7 +19,7 @@ What would this file do if the code were wrong?
   * an unknown key passed through as a flag -> the third fails;
   * the citation (`source`) emitted as a request flag -> the end-to-end test fails on `--source`;
   * a model's own judging size (height, width, num_frames: mochi-1-preview renders only at 480x848,
-    2026-10-13) ignored -> the own-size test fails on the off-trace 256x640 (seen RED before the
+    2026-10-13) ignored -> the own-size test fails on the off-build 256x640 (seen RED before the
     family named the keys); half a size accepted -> its last cell fails; a null family key emitted
     as a flag -> the first end-to-end cell fails on `--num-frames None`.
 """
@@ -74,7 +74,7 @@ def test_an_unknown_key_is_refused_by_name():
 
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
-    """A cache holding one video container traced at 720x1280; returns a writer of its topology."""
+    """A cache holding one video container built at 720x1280; returns a writer of its topology."""
     from neurobrix.nbx.neurotax import NEUROTAX_VERSION
     d = tmp_path / "cache" / MODEL
     (d / "runtime").mkdir(parents=True)

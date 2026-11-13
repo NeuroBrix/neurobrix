@@ -139,7 +139,7 @@ def _has_none_arg(args: tuple) -> bool:
     """Check if any arg is None, including inside list/tuple args.
 
     MoE routing produces dynamic-length unbind outputs. When fewer experts
-    are active than at trace time, excess slots are None. These None values
+    are active than at build time, excess slots are None. These None values
     can appear as top-level args OR inside list args (e.g. aten::index(t, [None])).
     """
     for a in args:
@@ -204,7 +204,7 @@ class SymbolArg:
 
     Fields:
         symbol_id: Symbol identifier (e.g., "s0", "s1")
-        trace_value: Value at trace time (fallback for graphs without symbolic context)
+        trace_value: Value at build time (fallback for graphs without symbolic context)
         offset: Constant offset added to resolved value (for seq_len + 1 cases)
     """
     symbol_id: str
@@ -229,7 +229,7 @@ class ExprArg:
 
     Fields:
         expr_dict: Raw expression dict from graph.json (evaluated recursively)
-        trace_value: Value at trace time (named in a refusal, never answered)
+        trace_value: Value at build time (named in a refusal, never answered)
     """
     expr_dict: dict
     trace_value: Any            # int for an extent, float for a real bound
@@ -368,7 +368,7 @@ class CompiledSequence(SequenceSteps):
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
         '_sdpa_kv_layout',  # op_uid -> (k_pre_transposed, v_pre_transposed), read from the graph at compile
-        '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
+        '_seq_dependent_constants',  # Constants with build-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
         '_op_blocks_cache',  # Cache for get_op_blocks() — immutable post-compile
@@ -421,7 +421,7 @@ class CompiledSequence(SequenceSteps):
         self.dtype = dtype
         # use_triton parameter kept for backward compat but triton mode uses triton/ package
 
-        # Extract graph's traced dtype for AMP policy decision
+        # Extract graph's built dtype for AMP policy decision
         graph_dtype_str = dag.get("torch_dtype", "")
         graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
 
@@ -521,7 +521,7 @@ class CompiledSequence(SequenceSteps):
         self._const_fold_plan: Optional[Dict[str, Any]] = None
         self._const_fold_sig: Optional[tuple] = None
 
-        # Seq-dependent constants: RoPE cos/sin with trace-time seq_len dimension.
+        # Seq-dependent constants: RoPE cos/sin with build-time seq_len dimension.
         # Populated at compile time, sliced at runtime after symbol binding.
         # Each entry: (slot, axis, symbol_id, trace_value)
         self._seq_dependent_constants: List[Tuple[int, int, str, int]] = []
@@ -648,14 +648,14 @@ class CompiledSequence(SequenceSteps):
         # pass is needed.
 
         # Phase -0.1: (deleted 2026-10-04) the cross-branch compensation, which
-        # re-keyed an expand/view/reshape literal equal to the trace value of
+        # re-keyed an expand/view/reshape literal equal to the build value of
         # the only expression of that value. Every graph the engine accepts is
         # at the build's re-propagation fixed point (the loader's door,
         # `nbx.fixed_point`), which carries each cross-branch dimension itself;
         # on such graphs the pass could only corrupt literals (Ming's GQA heads,
         # Sana-4K's VAE channels). The Triton branch never had it (R30).
 
-        # Phase 0: Promote trace-time seq_len constants to symbolic references
+        # Phase 0: Promote build-time seq_len constants to symbolic references
         # UNIVERSAL: Works for all LLMs, safe for diffusion models, collision-checked
         self._promote_seq_len_scalars_to_symbolic(tensors, ops_metadata)
 
@@ -665,7 +665,7 @@ class CompiledSequence(SequenceSteps):
         # Phase 1: Categorize tensors and assign slots in order: weights, inputs, intermediates
         self._categorize_and_assign_slots(tensors, ops_metadata, graph_output_ids)
 
-        # Phase 1b: Identify constant tensors with trace-time seq_len dimensions
+        # Phase 1b: Identify constant tensors with build-time seq_len dimensions
         # These need dynamic slicing at runtime (RoPE cos/sin from CPU-computed rotary_emb)
         self._identify_seq_dependent_constants(tensors)
 
@@ -734,7 +734,7 @@ class CompiledSequence(SequenceSteps):
         """
         Remove aten::detach ops — identity at inference time (no autograd).
 
-        Detach ops are captured by the tracer for every parameter access.
+        Detach ops are captured by the builder for every parameter access.
         They produce a new tensor ID that aliases the input tensor. We rewire
         all references to the output tensor to point to the input tensor instead,
         then remove the op from execution_order.
@@ -1176,26 +1176,26 @@ class CompiledSequence(SequenceSteps):
         """
         Universal symbolic promotion for sequence-length-derived constants.
 
-        When a graph is traced with a specific seq_len (e.g., 96), ops like
+        When a graph is built with a specific seq_len (e.g., 96), ops like
         aten::slice capture the seq_len as a concrete scalar. At runtime with
         a different seq_len, these baked values cause shape mismatches.
 
         This method detects such constants and promotes them to symbolic
         references that resolve dynamically at runtime.
 
-        Safety: Only promotes when the trace seq_len is COLLISION-SAFE
+        Safety: Only promotes when the build seq_len is COLLISION-SAFE
         (doesn't appear in any model weight dimension). This prevents
         false positives where a model constant happens to equal trace_seq_len.
 
         Works for:
-        - All LLMs (DeepSeek-V2, future models traced with collision-safe seq_len)
+        - All LLMs (DeepSeek-V2, future models built with collision-safe seq_len)
         - Diffusion models: no seq_len symbols → no promotion → unchanged
-        - Old LLMs (traced with collision-prone seq_len): collision detected → skipped
+        - Old LLMs (built with collision-prone seq_len): collision detected → skipped
         """
         symbolic_context = self.dag.get("symbolic_context", {})
         symbols = symbolic_context.get("symbols", {})
 
-        # Find seq_len symbols and their trace values
+        # Find seq_len symbols and their build values
         seq_len_symbols: Dict[str, int] = {}
         for sym_id, sym_info in symbols.items():
             if sym_info.get("name") == "seq_len":
@@ -1207,7 +1207,7 @@ class CompiledSequence(SequenceSteps):
             # No seq_len symbols (diffusion models, audio): skip the LLM
             # path but STILL run spatial promotion below — image VAEs have
             # named "height"/"width" symbols that need rebinding when the
-            # runtime spatial size differs from the trace size (Sana 4Kpx).
+            # runtime spatial size differs from the build size (Sana 4Kpx).
             from neurobrix.triton.promotion import _spatial_promotion_pass
             _spatial_promotion_pass(self.dag, tensors, ops_metadata,
                                     symbols, set(), set())
@@ -1216,16 +1216,16 @@ class CompiledSequence(SequenceSteps):
         # Collision check: if trace_value appears in any weight/buffer shape,
         # it could be a model constant (head_dim, hidden_size, etc.).
         # Only promote if collision-safe.
-        # Exclude constant_T_* tensors — these are trace-time computed buffers
+        # Exclude constant_T_* tensors — these are build-time computed buffers
         # (RoPE cos/sin, position embeddings) whose shapes inherently depend on
-        # the trace-time seq_len. Their dim matching the trace value is expected,
+        # the build-time seq_len. Their dim matching the build value is expected,
         # not a collision with a real model dimension.
         weight_dims: set = set()
         for tid, tdata in tensors.items():
             if tid.startswith("param::") or tid.startswith("buffer::"):
                 wname = tdata.get("weight_name", "")
                 if wname.startswith("constant_T_"):
-                    continue  # Skip trace-time computed constants
+                    continue  # Skip build-time computed constants
                 shape = tdata.get("shape", [])
                 for d in shape:
                     if isinstance(d, int):
@@ -1238,7 +1238,7 @@ class CompiledSequence(SequenceSteps):
                 safe_symbols[sym_id] = trace_val
 
         # Skip promotion for trace_values shared by multiple seq_len symbols.
-        # When s1, s3, s6 all have trace_value=23 (e.g., traced with trace_seq_len=23
+        # When s1, s3, s6 all have trace_value=23 (e.g., built with trace_seq_len=23
         # for all inputs), we can't determine which symbol a concrete "23" refers to.
         # Promoting to the wrong symbol causes runtime shape mismatches.
         trace_val_counts: Dict[int, int] = {}
@@ -1248,13 +1248,13 @@ class CompiledSequence(SequenceSteps):
         if ambiguous_vals:
             distinct_vals = set(safe_symbols.values())
             if len(distinct_vals) == 1:
-                # Every seq_len symbol shares ONE trace value → the component has a
+                # Every seq_len symbol shares ONE build value → the component has a
                 # single sequence length (Kokoro: the phoneme count flows through
                 # bert→text_encoder→predictor; also plain LLMs). They all bind to the
                 # same runtime length, so the "which symbol does this 23 mean" worry
                 # is moot — collapse to one canonical symbol and promote. Models with
                 # genuinely distinct lengths (FLUX img=256 + txt=512) have distinct
-                # trace values and fall through to the conservative skip below.
+                # build values and fall through to the conservative skip below.
                 canonical = next(iter(safe_symbols))
                 safe_symbols = {canonical: next(iter(distinct_vals))}
             else:
@@ -1265,7 +1265,7 @@ class CompiledSequence(SequenceSteps):
 
         # Also detect COMBINED seq_len values (sums of pairs).
         # FLUX-style models concatenate img+txt tokens, producing shapes like
-        # 768 = 256(img) + 512(txt). The tracer captures these as concrete values.
+        # 768 = 256(img) + 512(txt). The builder captures these as concrete values.
         seq_len_list = list(seq_len_symbols.items())
         for i, (sid_a, tv_a) in enumerate(seq_len_list):
             for sid_b, tv_b in seq_len_list[i+1:]:
@@ -1277,7 +1277,7 @@ class CompiledSequence(SequenceSteps):
 
         # Pre-computed RoPE table fix (runs regardless of safe_symbols).
         # TinyLlama-style models have cos_cached[2048,64] sliced to [trace_seq_len, 64]
-        # at trace time. The slice end must be replaced with the full table size so the
+        # at build time. The slice end must be replaced with the full table size so the
         # table is always available for absolute position indexing during decode.
         for op_uid, op_data in ops_metadata.items():
             op_type = op_data.get("op_type", "")
@@ -1306,7 +1306,7 @@ class CompiledSequence(SequenceSteps):
                 args[3] = {"type": "scalar", "value": full_size}
 
         if not safe_symbols:
-            # Every seq_len trace value collides with a weight dim, so no seq_len scalar is
+            # Every seq_len build value collides with a weight dim, so no seq_len scalar is
             # promoted — but the SPATIAL pass below is independent of seq_len and must still
             # run. Returning here skipped it: PixArt-XL-2-1024-MS (text length 120, also a weight
             # extent) and mochi-1-preview (256) lost their height/width rebinding and the
@@ -1321,19 +1321,19 @@ class CompiledSequence(SequenceSteps):
         promoted = 0
 
         # Offset tolerance policy:
-        # - Real tracer symbols match with offset 0..1 (the +1 covers the
+        # - Real builder symbols match with offset 0..1 (the +1 covers the
         #   `seq_len + 1` pattern in causal-mask / BOS slicing).
         # - Synthetic `_sum_sA_sB` symbols match EXACTLY (offset 0 only).
-        #   The sum is itself a heuristic guess (no tracer backing); stacking
+        #   The sum is itself a heuristic guess (no builder backing); stacking
         #   the +1 fuzz on top compounds two guesses and starts matching small
-        #   structural constants. Concrete case: two seq_len symbols traced at
+        #   structural constants. Concrete case: two seq_len symbols built at
         #   14 and 1 synthesize a sum of 15, whose +1 fuzz captured the
         #   rotate-half half-width constant 16 in per-axis RoPE slices —
         #   at runtime the slice end rebound to runtime_seq+1 and widened the
         #   rotated q/k chunk. Concatenated-sequence slicing (the reason sum
         #   symbols exist, e.g. img+txt = 256+512 = 768) matches the sum
         #   exactly. Exact matching also restores the weight-dims collision
-        #   guard for sums: the candidate then equals the sum trace value,
+        #   guard for sums: the candidate then equals the sum build value,
         #   which was collision-checked at synthesis.
         def _max_offset(sym_id: str) -> int:
             return 0 if sym_id.startswith("_sum_") else 1
@@ -1419,7 +1419,7 @@ class CompiledSequence(SequenceSteps):
                     # The shape may be a raw list OR the wrapped
                     # {"type":"list","value":[...]} form — unwrap it (the wrapped
                     # form was silently skipped, leaving e.g. zeros([B, seq, H])
-                    # frozen at the trace seq_len → the x_pad/mask buffers in
+                    # frozen at the build seq_len → the x_pad/mask buffers in
                     # Kokoro's text_encoder failed at runtime).
                     sa_wrapped = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
                     shape_items = shape_arg.get("value", []) if sa_wrapped else shape_arg
@@ -1448,8 +1448,8 @@ class CompiledSequence(SequenceSteps):
             # form (same as view/reshape below); unwrap it so a seq_len element
             # frozen in the size (e.g. RoPE position expand size [1,1,seq]) is
             # promoted. Without the unwrap the wrapped form was silently skipped,
-            # leaving the trace seq_len literal — at decode it broadcast the
-            # single position to the trace length (orpheus RoPE degeneracy).
+            # leaving the build seq_len literal — at decode it broadcast the
+            # single position to the build length (orpheus RoPE degeneracy).
             elif op_type == "aten::expand" and len(args) >= 2:
                 size_arg = args[1]
                 size_is_wrapped = isinstance(size_arg, dict) and size_arg.get("type") == "list"
@@ -1475,7 +1475,7 @@ class CompiledSequence(SequenceSteps):
 
             # aten::view / aten::reshape / aten::_unsafe_view
             # Shape args may contain seq_len — promote matching elements.
-            # SKIP if the tracer already did algebraic symbolization (shape list
+            # SKIP if the builder already did algebraic symbolization (shape list
             # has symbol refs). The tracer's algebraic propagation is authoritative:
             # it derives symbolic dims from input shapes, so concrete values in the
             # shape list were intentionally left concrete (e.g., head_dim=128 that
@@ -1485,7 +1485,7 @@ class CompiledSequence(SequenceSteps):
                 is_wrapped = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
                 shape_items = shape_arg.get("value", []) if is_wrapped else shape_arg
                 if isinstance(shape_items, (list, tuple)):
-                    # Check if tracer already symbolized this op (has symbol refs)
+                    # Check if builder already symbolized this op (has symbol refs)
                     has_tracer_symbols = any(
                         isinstance(elem, dict) and elem.get("type") == "symbol"
                         for elem in shape_items
@@ -1521,15 +1521,15 @@ class CompiledSequence(SequenceSteps):
         # The seq_len pass above only promotes symbols named "seq_len" — by
         # design, that's the LLM contract. Image-diffusion graphs use named
         # symbols "height" and "width" (and occasionally "depth"); they
-        # were left out. For Sana 1024 / PixArt 1024 the trace size happens
+        # were left out. For Sana 1024 / PixArt 1024 the build size happens
         # to equal the runtime size, so missing rebind is a silent no-op.
-        # For Sana 4Kpx (trace 64×64 latent → runtime 128×128 latent) the
-        # missing rebind surfaces as a literal `4096` (= trace H*W) / `64`
-        # (= trace H or W) baked into `aten::expand` / `aten::view` shape
+        # For Sana 4Kpx (build 64×64 latent → runtime 128×128 latent) the
+        # missing rebind surfaces as a literal `4096` (= build H*W) / `64`
+        # (= build H or W) baked into `aten::expand` / `aten::view` shape
         # args that should have been `s_h * s_w` / `s_h` / `s_w`. This
         # pass walks view/expand/reshape/ones/zeros/full/new_zeros/new_ones
         # and promotes adjacent (H, W) pairs at any cascade scale plus
-        # H*W flattened products. Bit-perfect on trace == runtime models
+        # H*W flattened products. Bit-perfect on build == runtime models
         # (resolver substitutes the symbol with its own trace_value).
         # Same implementation as triton/promotion.py — single source of
         # truth, mirrored across the native CompiledSequence and the
@@ -1540,9 +1540,9 @@ class CompiledSequence(SequenceSteps):
 
     def _identify_seq_dependent_constants(self, tensors: Dict[str, Any]) -> None:
         """
-        Identify constant tensors whose shape contains the trace-time seq_len.
+        Identify constant tensors whose shape contains the build-time seq_len.
 
-        RoPE cos/sin embeddings are computed on CPU during tracing and captured
+        RoPE cos/sin embeddings are computed on CPU during building and captured
         as constant tensors with shape [1, trace_seq_len, head_dim]. At runtime,
         seq_len varies — these constants must be sliced to [1, runtime_seq_len, head_dim].
 
@@ -1552,7 +1552,7 @@ class CompiledSequence(SequenceSteps):
         symbolic_context = self.dag.get("symbolic_context", {})
         symbols = symbolic_context.get("symbols", {})
 
-        # Find seq_len symbols and their trace values
+        # Find seq_len symbols and their build values
         seq_len_info: Dict[str, int] = {}
         for sym_id, sym_info in symbols.items():
             if sym_info.get("name") == "seq_len":
@@ -1563,7 +1563,7 @@ class CompiledSequence(SequenceSteps):
         if not seq_len_info:
             return
 
-        # Use the first seq_len symbol (all share the same trace value)
+        # Use the first seq_len symbol (all share the same build value)
         sym_id, trace_seq_len = next(iter(seq_len_info.items()))
 
         self._seq_dependent_constants = []
@@ -1598,7 +1598,7 @@ class CompiledSequence(SequenceSteps):
         constant — e.g., RoPE cos/sin degrades to position 0 after decode starts.
 
         For prefill (seq_len <= trace_seq_len): constant[:, :N, :] gives correct
-        RoPE values because positions 0..N-1 are a prefix of the trace-time table.
+        RoPE values because positions 0..N-1 are a prefix of the build-time table.
 
         For prefill (seq_len > trace_seq_len): recompute from inv_freq stored in
         the arena. RoPE cos/sin are deterministic functions of position and freq.
@@ -1629,7 +1629,7 @@ class CompiledSequence(SequenceSteps):
                 continue
 
             if runtime_seq_len <= original.shape[axis]:
-                # Slice: positions 0..N-1 are a prefix of the trace-time table
+                # Slice: positions 0..N-1 are a prefix of the build-time table
                 arena[slot] = original.narrow(axis, 0, runtime_seq_len)
             else:
                 # Extend: recompute RoPE cos/sin from inv_freq for positions 0..N-1
@@ -2512,7 +2512,7 @@ class CompiledSequence(SequenceSteps):
         """
         def resolve_symbol(_arena: TensorArena) -> int:
             # A bound symbol answers (0 included); an unbound one refuses by name — the
-            # trace value is a witnessed extent of one stimulus, never a value.
+            # build value is a witnessed extent of one stimulus, never a value.
             r = self._shape_resolver
             if r is not None:
                 runtime_vals = r.get_bound_symbols()
@@ -2536,7 +2536,7 @@ class CompiledSequence(SequenceSteps):
 
         Args:
             expr_dict: Expression dict from graph.json
-            trace_value: the witnessed trace value, named in a refusal (never answered)
+            trace_value: the witnessed build value, named in a refusal (never answered)
             slot: symexpr.SHAPE or symexpr.SCALAR
 
         Returns:
@@ -2722,7 +2722,7 @@ class CompiledSequence(SequenceSteps):
                 self._arena[slot] = tensor
 
         # Pre-populate constant weight slots NOT provided by the weight
-        # loader. These are trace-time orphan constants (e.g. the Python
+        # loader. These are build-time orphan constants (e.g. the Python
         # scalar `cnt` from a `mask[slice] = cnt` loop captured as
         # `param::constant_T_*` with no constant_data, or KV-cache init
         # tensors with shape [0]). Without this, their arena slot stays
@@ -2752,7 +2752,7 @@ class CompiledSequence(SequenceSteps):
             if self._arena[slot] is not None:
                 continue
             meta = tensors_meta.get(tensor_id, {})
-            # 0-dim scalar default (matches the trace shape `[]` for
+            # 0-dim scalar default (matches the build shape `[]` for
             # orphan scalars and tensor_resolver.py). A 1-dim `[0]`
             # default produced an ndim-1 tensor that broke aten::fill,
             # which requires a 0-dim value.
@@ -3348,7 +3348,7 @@ class CompiledSequence(SequenceSteps):
         The observability gate needs to tell two things apart, and the container
         cannot: an op a pre-execution pass legitimately removed, and a site
         something replaced without preserving its observability. Both look the
-        same when the only reference is `graph.json`'s traced `execution_order`
+        same when the only reference is `graph.json`'s built `execution_order`
         — and this repository already knows that graph.json is not the executed
         order — so the 233 gaps found across PixArt and Kokoro are today an
         upper bound containing an unknown number of honest removals.
@@ -3723,7 +3723,7 @@ class CompiledSequence(SequenceSteps):
                 # 1-element tuple when a data-dependent split yields a single
                 # chunk at the runtime resolution (e.g. HunyuanVAE
                 # chunk_nearest_interpolate -> n_chunks == 1 -> torch.chunk
-                # returns `(x,)`). The trace recorded one output slot, so the
+                # returns `(x,)`). The build recorded one output slot, so the
                 # tuple must be unwrapped to the tensor — single-tensor ops never
                 # return a tuple/list, so this is unambiguous. Reassign `result`
                 # so the downstream NaN/range trace sees the real tensor.
@@ -3743,7 +3743,7 @@ class CompiledSequence(SequenceSteps):
                 result_len = len(result) if isinstance(result, (tuple, list)) else 0
                 for i, s in enumerate(slots):
                     if i >= result_len:
-                        arena[s] = None  # Dynamic: fewer outputs than trace-time
+                        arena[s] = None  # Dynamic: fewer outputs than build-time
                         continue
                     item = result[i]
                     if nan_guard and isinstance(item, torch.Tensor) and item.is_floating_point():
@@ -4130,7 +4130,7 @@ class CompiledSequence(SequenceSteps):
                 census.observe(op.op_uid, result)
             if len(slots) == 1:
                 # Single-chunk multi-output op (split/chunk/unbind) returns a
-                # 1-element tuple for one traced slot — unwrap (see single-device
+                # 1-element tuple for one built slot — unwrap (see single-device
                 # branch above). Multi-device mirror.
                 if isinstance(result, (tuple, list)):
                     result = result[0] if len(result) >= 1 else None
@@ -4235,7 +4235,7 @@ class CompiledSequence(SequenceSteps):
 
     def _protect_storage_chain(self, tensor_id: str) -> None:
         """
-        Trace back through view-like ops to protect source tensors that
+        Build back through view-like ops to protect source tensors that
         share the same underlying PyTorch storage.
 
         View ops (view, slice, reshape, transpose, etc.) return tensors that

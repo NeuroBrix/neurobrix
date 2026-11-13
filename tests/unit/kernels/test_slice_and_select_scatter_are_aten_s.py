@@ -1,9 +1,9 @@
 """The Triton engine's slice_scatter / select_scatter are ATen's, element for element.
 
-They are the functional form Forge records for an in-place write into a slice / select view
+They are the functional form the container builder records for an in-place write into a slice / select view
 (`GraphBuilder.write_back_view`): Swin's shifted-window mask `img_mask[:, h, w, :] = cnt` reached the containers as a
 fill nothing read — an all-zero mask (2026-10-21). The compiled engine runs ATen's own ops; this holds the Triton
-metadata ops (kernels/dispatch.py `_meta_slice_scatter`, `_meta_select_scatter`) to them, at the bounds the trace
+metadata ops (kernels/dispatch.py `_meta_slice_scatter`, `_meta_select_scatter`) to them, at the bounds the build
 records: a negative start, a negative end, Python's open end (the int64 maximum), a step of two, a negative index.
 
 What this test does if the code is wrong: a write at the wrong place, a base mutated instead of copied, or a bound

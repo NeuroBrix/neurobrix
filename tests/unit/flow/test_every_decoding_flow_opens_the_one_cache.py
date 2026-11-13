@@ -238,7 +238,7 @@ def test_a_plan_with_the_declared_key_value_heads_fits_a_graph_whose_keys_are_ex
 
 
 def test_both_interceptors_accept_the_graphs_enable_gqa_kwarg():
-    """chatterbox's t3 backbone traces its SDPA with enable_gqa=True; the interceptors are called with the op's kwargs."""
+    """chatterbox's t3 backbone builds its SDPA with enable_gqa=True; the interceptors are called with the op's kwargs."""
     from neurobrix.core.runtime.graph.kv_cache_wrapper import KVCacheAttentionWrapper
     assert "enable_gqa" in inspect.signature(KVCacheAttentionWrapper.intercept_attention).parameters
     pytest.importorskip("triton")

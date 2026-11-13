@@ -7,7 +7,7 @@ cropping the centre. Without the step the engine denoises at the literal request
 asked for 512 renders colour noise: the vendor's own output at native 512 (the Dell's vendor oracle, diffusers
 0.37.0, `use_resolution_binning=False` against `True`, 2026-09-26).
 
-The container build records what the vendor ran, at trace, under `flow.resolution_binning`, and nothing here
+The container build records what the vendor ran, at build, under `flow.resolution_binning`, and nothing here
 re-codes a vendor table:
 
     {"default": bool,
@@ -17,7 +17,7 @@ re-codes a vendor table:
      "restore": "cover_resize_center_crop",
      "interpolate": {"mode": "bilinear", "align_corners": false}}
 
-A pipeline whose default is False and whose trace never binned carries only `default` and `source`.
+A pipeline whose default is False and whose build never binned carries only `default` and `source`.
 
 This is the shared half, and it is torch-free (R33): reading the contract, classifying a request, and planning
 the restore. The restore runs in each branch's flow on its own container, torch in `core/flow` and NBXTensor in
@@ -41,7 +41,7 @@ before the latents are prepared, and the decoded image is restored before post-p
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-# The vocabularies the engine executes. Forge writes what it SAW; a word outside these is a
+# The vocabularies the engine executes. the container builder writes what it SAW; a word outside these is a
 # contract this engine cannot honour, and it is refused, never approximated (ZERO FALLBACK).
 _CLASSIFY = ("nearest_ratio",)
 _RESTORE = ("cover_resize_center_crop",)

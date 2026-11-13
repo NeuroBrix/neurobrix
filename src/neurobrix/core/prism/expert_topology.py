@@ -255,7 +255,7 @@ def routing_reuse(cache_path, component: str) -> Optional[List[Tuple[float, floa
     experts an LRU cache of that many slots per layer finds, recorded from a decode (the Dell, Qwen3-30B-A3B,
     2026-10-28: 8 -> 0.30, 16 -> 0.53, 32 -> 0.74, 64 -> 0.93, 96 -> 0.96). Read as the calibration record is
     (`precision_contract.load_calibration`): the ARTIFACT's own section first (components/<component>/profile.json
-    `routing_reuse.hit_by_slots_per_layer`, embedded by Forge), else the ENGINE STORE beside the calibration records
+    `routing_reuse.hit_by_slots_per_layer`, embedded by the container builder), else the ENGINE STORE beside the calibration records
     (`<calibration STORE_ROOT>/<model>/<component>.routing_reuse.json` `curve`, written by the expert store at the end
     of a decode, `core/runtime/routing_reuse`). [(slots, hit)] ascending, or None when neither states one (the price
     then refuses by name). Card-less tests pin the store empty (`_pinned_machine.pin_no_calibration`)."""

@@ -1,7 +1,7 @@
 """A stacked-expert MoE block routed softmax-first is fused, routed-only.
 
 Qwen3-VL-30B-A3B-Thinking (transformers 4.57 `Qwen3VLMoeTextExperts`, inference
-form) traces every MoE layer DENSE: softmax(logits) -> topk -> sum + div (the
+form) builds every MoE layer DENSE: softmax(logits) -> topk -> sum + div (the
 renormalisation) -> cast -> scatter into zeros[T, E]; the hidden states repeated
 once per expert -> bmm(W_in[E, H, 2F]) -> split(F) -> silu(gate) * up ->
 bmm(W_out[E, F, H]) -> weighted by the routing matrix -> sum over the experts.
@@ -65,7 +65,7 @@ def _l(v):
 def qwen3vl_block(renorm=True, gate_piece=0, act="aten::silu", scale_routing=False,
                   escape=False, idx_reused=False, dtype="float64", cast_to=None,
                   largest=True):
-    """One MoE layer in the traced form of transformers 4.57's Qwen3-VL-MoE block
+    """One MoE layer in the built form of transformers 4.57's Qwen3-VL-MoE block
     (op for op as the container's graph.json, block.0), small sizes."""
     tensors, ops, order = {}, {}, []
 
@@ -357,14 +357,14 @@ def test_a_registry_that_contradicts_the_trace_is_named(renorm):
     (dict(largest=False), "SMALLEST"),
 ])
 def test_a_block_that_is_not_this_one_is_declined_by_name(variant, reason):
-    # an undeclared pass: declined, named, the graph left exactly as traced
+    # an undeclared pass: declined, named, the graph left exactly as built
     refusals = {}
     d2 = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(**variant)), "llm",
                                 refusals=refusals)
     assert not _fused_ops(d2), f"{variant} must not fuse"
     assert "topk" in refusals and reason in refusals["topk"], refusals
     assert d2["execution_order"] == qwen3vl_block(**variant)["execution_order"]
-    # a DECLARED MoE that no matcher fuses is refused, never run as traced in silence
+    # a DECLARED MoE that no matcher fuses is refused, never run as built in silence
     with pytest.raises(RuntimeError, match=f"left unfused .*{re.escape(reason)}"):
         _fuse(qwen3vl_block(**variant))
 

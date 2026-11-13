@@ -1,8 +1,8 @@
 """An activation dim contracted against a WEIGHT's dim is that weight's extent — a literal, never a symbol.
 
 2026-09-27: PixArt-XL-2-1024-MS's timestep sinusoid is 256 wide (Timesteps(num_channels=256), typed
-inside diffusers) and the tracer bound its half, 128, to the latent height (128 at the 1024 trace);
-off the trace aten.addmm::0 received 2x160 against the 256x1152 time projection. The parameter
+inside diffusers) and the builder bound its half, 128, to the latent height (128 at the 1024 build);
+off the build aten.addmm::0 received 2x160 against the 256x1152 time projection. The parameter
 itself carried no symbol, so the parameter half of tools/weights_are_not_symbolic.py was blind to
 it; this is the contraction half. Before it the function does not exist: this fails.
 """

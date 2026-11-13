@@ -934,7 +934,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # Fix pre-transposed K from graph math decomposition path.
     #
     # PyTorch's SDPA math path does bmm(Q, K.transpose(-2,-1)). When the
-    # tracer captures this, the graph stores K already transposed to
+    # builder captures this, the graph stores K already transposed to
     # (batch, heads, headdim, seq). Our Flash Attention kernel expects K
     # in standard (batch, heads, seq, headdim) format — same as Q and V.
     #

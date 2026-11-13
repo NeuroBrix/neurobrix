@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Which views break at a size other than the trace? — a census of the element-count law.
+"""Which views break at a size other than the build? — a census of the element-count law.
 
 A view preserves the element count. Its recorded output dims are symbolic expressions,
-so the law can be checked at ANY point of the symbols' domain, not only at the trace
+so the law can be checked at ANY point of the symbols' domain, not only at the build
 point where every recorded expression reproduces the witnessed shape by construction.
 This tool evaluates every view / reshape / _unsafe_view whose target carries an inferred
-`-1` slot at a SECOND point — every symbol at 2·trace + 1, an odd value off the trace
+`-1` slot at a SECOND point — every symbol at 2·build + 1, an odd value off the build
 that collides with nothing small — and names the sites where the input's element count
 is not what the output's dims imply. Such a site fails the first time the container
 runs at another length, another batch or another resolution.
 
-The case that engraved it, 2026-09-26: granite-speech-3.3-8b re-traced at seq 31 with
+The case that engraved it, 2026-09-26: granite-speech-3.3-8b rebuilt at seq 31 with
 batch 1 had its q-projection view [1, 31, 4096] -> [1, 31, 32, 128] recorded with the
 head count as `s0 + s1` (1 + 31 = 32). The trace-point check passed in all forty layers;
 at 209 tokens the sequential arm asked for [1, 209, 210, 128] and died. The same census
 over the shared cache named 22 components, three classes: an inferred slot written as an
 expression of the wrong symbols (granite), a batch frozen to the literal 1 in the target
-(the LLM `view(1, S, -1)` class), and an inferred slot frozen to its trace literal.
+(the LLM `view(1, S, -1)` class), and an inferred slot frozen to its build literal.
 
-Sites whose recorded dims do not even reproduce the trace are the CORRUPTED class
+Sites whose recorded dims do not even reproduce the build are the CORRUPTED class
 (symbolic dim != shape); they are counted apart, never evaluated, because a second
 point means nothing for a first point that is already wrong.
 
@@ -73,7 +73,7 @@ def evaluate(dim, env: dict) -> int:
 
 
 def second_point(symbols: dict) -> dict:
-    """Every symbol at 2·trace + 1: off the trace, odd, never 0, 1 or 2."""
+    """Every symbol at 2·build + 1: off the build, odd, never 0, 1 or 2."""
     return {sid: 2 * int((meta or {}).get("trace_value") or 1) + 1 for sid, meta in symbols.items()}
 
 
@@ -175,16 +175,16 @@ def main() -> int:
         return 0
     t = report["totals"]
     print(f"view element-count census over {root}: {t.get('graphs', 0)} graphs, "
-          f"{t.get('evaluated', 0)} inferred-slot views evaluated off-trace, "
-          f"{t.get('corrupted', 0)} skipped as corrupted at the trace point, "
+          f"{t.get('evaluated', 0)} inferred-slot views evaluated off-build, "
+          f"{t.get('corrupted', 0)} skipped as corrupted at the build point, "
           f"{t.get('unevaluable', 0)} unevaluable")
     for key, one in sorted(report["components"].items(), key=lambda kv: -len(kv[1].get("misbound") or [])):
         sites = one.get("misbound") or []
         if not sites:
             continue
         s = sites[0]
-        print(f"  {len(sites):5d}  {key}  e.g. {s['op']}: trace {s['trace_in']} -> {s['trace_out']}; "
-              f"off-trace {s['off_trace_in']} -> {s['off_trace_out']}, the element count implies "
+        print(f"  {len(sites):5d}  {key}  e.g. {s['op']}: build {s['trace_in']} -> {s['trace_out']}; "
+              f"off-build {s['off_trace_in']} -> {s['off_trace_out']}, the element count implies "
               f"{s['element_count_implies']} at slot {s['slot']}")
     print(f"components with a misbound inferred slot: {t.get('components_misbound', 0)} "
           f"({t.get('sites_misbound', 0)} sites)")

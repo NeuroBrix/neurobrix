@@ -287,7 +287,7 @@ def run_once_fwhisper(args, arm_env, tag, outdir) -> dict:
 
 def run_once_transformers(args, arm_env, tag, outdir) -> dict:
     """Vendor-of-record arm: the transformers stack the artifacts are
-    traced FROM (S2 addendum 2026-08-30). fp16, greedy, chrono on
+    built FROM (S2 addendum 2026-08-30). fp16, greedy, chrono on
     generate alone."""
     py = arm_env.get("TF_PYTHON",
                      _atelier.python("competitors"))

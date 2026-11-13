@@ -553,7 +553,7 @@ class ExecutionPlan:
     #: considered for tiling, {"exact": bool, "why": text, "op": the op that couples space or None}. A component
     #: whose entry is not exact is never tiled (owner, 2026-10-16: Prism chooses only exact cuts, read from the graph).
     tiling_exactness: Dict = field(default_factory=dict)
-    #: The components run in TEMPORAL CHUNKS through the stream Forge derived from their graph
+    #: The components run in TEMPORAL CHUNKS through the stream the container builder derived from their graph
     #: (`core/prism/temporal_stream.py`): {component: {"schedule": [first, next...] input frames, "frames": the
     #: request's, "reference": "clip" (chunked = the clip graph, no op global over time) | "vendor" (the vendor's own
     #: chunked function, declared with its source), "activation_bytes", "states"}}. The runtime runs the first chunk
@@ -813,7 +813,7 @@ def _graph_constant_bytes(graph: Optional[Dict], stores_fp64: bool) -> int:
     `PrismSolver._constants_store_fp64`.
 
     A computable buffer (`is_computable`) is deliberately NOT counted: the loader
-    skips its constant_data and recomputes it at runtime resolution, so its traced
+    skips its constant_data and recomputes it at runtime resolution, so its built
     size is not what it occupies.
 
     A dimension that is not a concrete int is skipped rather than guessed. That is a
@@ -2336,7 +2336,7 @@ class PrismSolver:
     def _declared_vae_scale(container) -> Optional[int]:
         """The VAE's spatial compression of this container, by its ONE derivation:
         `resolution.container_size.vae_scale_factor` — the manifest, then the defaults in both
-        spellings, then the trace — the brick the CLI binds the request with and the executor
+        spellings, then the build — the brick the CLI binds the request with and the executor
         sizes its latents with. None for a container without a latent space.
 
         Prism used to read a second one, `2 ** (len(block_out_channels) - 1)` from the VAE's
@@ -3901,8 +3901,8 @@ class PrismSolver:
         profiler's own resolution under the placement-floored symbol map the
         estimate binds (`_compute_memory`), so the plan installs exactly what
         the estimate priced. None when no request is given: the detectors then
-        read the DAG's traced extents, which are the trace's, not a request's
-        (Sana_1600M_4Kpx_BF16 retraced at a 7x10 latent, 2026-10-12: every
+        read the DAG's built extents, which are the trace's, not a request's
+        (Sana_1600M_4Kpx_BF16 rebuilt at a 7x10 latent, 2026-10-12: every
         merge add fell under the in-place threshold for a 3072x4096 decode)."""
         if input_config is None:
             return None
@@ -4009,7 +4009,7 @@ class PrismSolver:
         the runtime no longer re-detects (it refuses a plan without the
         decision), so the estimate and the execution cannot diverge.
         P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
-        Sized at `input_config` (`_request_shape_of`), never at the trace.
+        Sized at `input_config` (`_request_shape_of`), never at the build.
         """
         threshold_bytes = _ts.inplace_min_bytes()
         shape_of = self._request_shape_of(graph, input_config)
@@ -4357,7 +4357,7 @@ class PrismSolver:
             # under another memory model by the compiled one
             # (GraphExecutor.consumed_weight_names): on
             # DeepSeek-Coder-V2-Lite that is 11781 MB of 30638, MoE experts
-            # the trace never routed to. Sizing by the file made Prism plan
+            # the build never routed to. Sizing by the file made Prism plan
             # against 30638 MB while execution needed 18857 — the announced
             # budget and the executed one differing by 62%, in the direction
             # that REFUSES a model which fits.
@@ -4423,7 +4423,7 @@ class PrismSolver:
                     _pool_rules = self._pool_rules(profile)
                     # First pass: worst-case + overflow_ops detection.
                     #
-                    # THE WIDTH EACH ACTIVATION IS EXECUTED AT. A graph traced
+                    # THE WIDTH EACH ACTIVATION IS EXECUTED AT. A graph built
                     # in fp32 runs mostly at the compute dtype, not wholly: the
                     # engines keep AMP_FP32 outputs, fp32 matmul stores and
                     # whatever a wider operand reaches in fp32 unless the
@@ -4451,7 +4451,7 @@ class PrismSolver:
                         resident_bytes=weight_bytes or 0,
                         widths=widths,
                         # PLACEMENT estimate: no symbol binds below its
-                        # witnessed trace extent (the audio-tower
+                        # witnessed build extent (the audio-tower
                         # seq_len-misbinding class, D7 scoping note
                         # 2026-08-10). Per-request paths keep the
                         # unfloored map.
@@ -4616,18 +4616,18 @@ class PrismSolver:
                         f"weights is a guess wearing a measurement's clothes.")
                 # llm/image_vq without graph: no activation estimate (KV cache added below)
 
-            # The graph records TRACE literals, not symbols: measured 2026-09-17,
+            # The graph records BUILD literals, not symbols: measured 2026-09-17,
             # all four image models on this rack declare height/width symbols in
             # `symbolic_context` and ZERO of their tensors use them
             #   real-esrgan-x2 0/1800   hat-s-x4 0/4660
             #   swin2SR        0/5163   swinir   0/4175
-            # so the profiler sizes every activation at the trace, whatever was
+            # so the profiler sizes every activation at the build, whatever was
             # asked. hat-s-x4 planned the SAME 278 MB for a 448x448 request and a
             # 160x112 one — 22.4x the pixels, not one byte of difference — and the
             # per-cell gate was fed that number.
             #
             # The runtime executes at the REQUEST size regardless (real-esrgan
-            # renders 320x224 correctly from a 112x80 trace), so the estimate is
+            # renders 320x224 correctly from a 112x80 build), so the estimate is
             # scaled by the pixel ratio the two sizes imply. Derived from the
             # graph's own declared trace_value and the request; no per-model data.
             activation_bytes = self._scale_activations_to_request(
@@ -4687,7 +4687,7 @@ class PrismSolver:
         """The buffer added beside a component's weights and activations: none where the activation figure is the
         walk of the live set op by op (`activation_profiled`) — the weights are counted exactly from the index, and the
         walk holds what the run holds: Janus-Pro-7B triton whole on a V100-16GB peaked 14 151 MB for 14 100 of weights +
-        activations (rack, 2026-10-28), the compiled engine's per-op V100 trace of Open-Sora-v2's VAE stayed within
+        activations (rack, 2026-10-28), the compiled engine's per-op V100 build of Open-Sora-v2's VAE stayed within
         0.38 GB of the walk at every op (2026-10-23). The `overhead_factor` stays on a figure nobody walked."""
         if profiled:
             return 0
@@ -4758,7 +4758,7 @@ class PrismSolver:
         when the package declares num_experts > 1 — the flows apply the
         same pass at execute and the executor then loads what it adds.
         Sized on the un-fused graph, a MoE LM under a non-llm family
-        budgeted only the experts the trace routed to while the fused
+        budgeted only the experts the build routed to while the fused
         kernel reads them all — Qwen3-Omni's thinker at 5.2 GB planned,
         57 GB executed (2026-09-13). Weight bytes only: the activation
         profile and the layer partition still read the container's graph
@@ -4899,16 +4899,16 @@ class PrismSolver:
     def _scale_activations_to_request(self, comp, activation_bytes, input_config):
         """Scale a trace-sized activation estimate to the request actually made.
 
-        Graph tensor shapes are TRACE values — measured on this rack, all four
+        Graph tensor shapes are BUILD values — measured on this rack, all four
         image models declare height/width symbols and ZERO of their tensors use
         them (real-esrgan-x2 0/1800, hat-s-x4 0/4660, swin2SR 0/5163, swinir
         0/4175) — while op arguments carry the symbolic expressions. So the
-        profiler sizes every activation at the trace whatever was asked, and
+        profiler sizes every activation at the build whatever was asked, and
         hat-s-x4 planned the same 278 MB for a 448x448 request and a 160x112 one.
 
-        EVERY declared symbol carrying a trace value is followed, not only
+        EVERY declared symbol carrying a build value is followed, not only
         height and width: a sequence length or a frame count that differs
-        between trace and request scales the estimate exactly as a spatial
+        between build and request scales the estimate exactly as a spatial
         dimension does.
 
         Refuses by name rather than swallowing: a bare `except Exception:
@@ -4941,12 +4941,12 @@ class PrismSolver:
         # (1024/112)x(1024/80) = 117.03, and the plan read 1 917 396 MB of
         # activations — 1.87 TB for a model with 32 MB of weights.
         #
-        # A symbol the map leaves at its trace value is still followed here:
+        # A symbol the map leaves at its build value is still followed here:
         # that is the case this method exists for and it is unchanged.
         # The discriminator is whether the TENSORS carry the symbol, not whether
         # the map binds it. A bound symbol that no tensor uses changes nothing in
         # the profiler's peak, and skipping the scale for it would leave the
-        # estimate at its trace size — which is the defect this method exists to
+        # estimate at its build size — which is the defect this method exists to
         # remove. So: walk the structured `symbolic_shape` and collect the symbol
         # ids that actually appear in a dimension.
         def _symbol_ids_in(dim, into):
@@ -4978,13 +4978,13 @@ class PrismSolver:
             _map = _AP(graph).build_symbol_map(input_config)
             for _sid, _spec in syms.items():
                 if not isinstance(_spec, dict) or _sid not in used_by_tensors:
-                    continue          # no tensor carries it: the peak is at trace
+                    continue          # no tensor carries it: the peak is at build
                 _t = _spec.get("trace_value")
                 _m = _map.get(_sid)
                 if isinstance(_m, int) and isinstance(_t, int) and _m != _t:
                     bound_to_request.add(_sid)
             # a symbol the request's FLOW binds (`FlowBindings.overrides`: a VACE control pair, an encoder's length) is
-            # followed by the profiler whatever its value — equal to its trace, it was scaled again here
+            # followed by the profiler whatever its value — equal to its build, it was scaled again here
             if getattr(input_config, "flow", None) is not None:
                 bound_to_request.update(input_config.flow.overrides(graph, input_config))
         except Exception as _e:
@@ -5000,7 +5000,7 @@ class PrismSolver:
         followed = []
         # One DIMENSION contributes once, however many times it is declared.
         # PixArt-XL-1024's transformer declares `seq_len` at two symbol ids, and
-        # the product over declarations made a request of 300 against a trace of
+        # the product over declarations made a request of 300 against a build of
         # 120 read as x6.25 instead of x2.5 — a dimension counted twice, which is
         # how an over-estimate becomes a refusal of a model that runs. Height and
         # width are DIFFERENT dimensions and still contribute one factor each,
@@ -5015,12 +5015,12 @@ class PrismSolver:
             trace = spec.get("trace_value")
             name = spec.get("name")
             if trace in (None, 0) or not name:
-                continue                               # declared without a trace value
+                continue                               # declared without a build value
             if sym_id in bound_to_request:
                 continue                               # the profiler already followed it
             attr = self._SYMBOL_TO_REQUEST.get(name)
             if attr is None:
-                # SAY IT. A symbol carrying a trace value that this map does not
+                # SAY IT. A symbol carrying a build value that this map does not
                 # know is a dimension the estimate silently stops following, and
                 # that silence is how the plan read the same 22 993 MB at 8 and
                 # 9 frames while one ran and the other died.
@@ -5043,7 +5043,7 @@ class PrismSolver:
                     actual = int(actual) // int(input_config.guidance_passes)
             # Put the request into the SYMBOL's unit before dividing. A model
             # with a VAE declares its spatial symbols in latent rows/columns:
-            # measured 2026-09-17, Sana-1600M declares height/width with a trace
+            # measured 2026-09-17, Sana-1600M declares height/width with a build
             # value of 32 and a `trace_resolution` of 1024 — the symbol counts
             # latents, the request counts pixels, and 1024/32 is the VAE's own
             # compression, not a change of size. Taken raw it multiplied the
@@ -5853,7 +5853,7 @@ class PrismSolver:
         # so a model whose resident set lands in the [capacity − reserve,
         # capacity] window slipped through here after `_try_single_gpu`
         # correctly rejected it. DeepSeek-Coder-V2-Lite (29.96 GiB weights,
-        # tiny LLM trace-time activations): peak 30,575 MB vs raw capacity
+        # tiny LLM build-time activations): peak 30,575 MB vs raw capacity
         # 31,130 MB → accepted eager on one 32 GiB V100 → runtime OOM with
         # ~3 GiB eaten by CUDA context + workspaces + fragmentation. With
         # the reserve the cascade degrades to a multi-GPU strategy at
@@ -6163,7 +6163,7 @@ class PrismSolver:
 
             # BALANCED PIPELINE FILL: contiguous layer ranges, spread EVENLY so
             # each GPU keeps headroom for runtime activations + triton autotune
-            # workspace (neither fully modeled in the trace-time activation peak).
+            # workspace (neither fully modeled in the build-time activation peak).
             # A greedy "pack GPU0 to capacity" fill leaves the first GPU with no
             # room and OOMs/stalls under CFG batch=2 (Wan-I2V-14B: 27 GB weights on
             # cuda:2, ~2 GB free). Pick the minimum #GPUs whose EVEN weight share
@@ -6532,7 +6532,7 @@ class PrismSolver:
         # chunk's output.
         # Every tensor at the width the engine runs it at, read on the first chunk's graph (the clip plus its state
         # outputs: the clip's input and output are its tensors): a state holds the dtype its producer runs at and
-        # enters the next chunk as a SEAM in that dtype (Forge marks it so) — mochi's fp32 states under an fp16 VAE
+        # enters the next chunk as a SEAM in that dtype (the container builder marks it so) — mochi's fp32 states under an fp16 VAE
         # were priced at the compute dtype's half (2026-10-17).
         profile = getattr(self, "_profile", None)
         first_dag = decl["dags"]["first"]
@@ -6543,7 +6543,7 @@ class PrismSolver:
             raise RuntimeError(f"ZERO FALLBACK: {comp_name}'s first chunk graph outputs no state {missing[0]!r}")
         first_w = self._activation_widths(SimpleNamespace(name=comp_name, graph=first_dag), container, first_prof,
                                           dataclasses.replace(ic, chunk_frames=1), comp_dtype, profile)
-        # (no widths: every tensor at the traced dtype, the profiler's own `widths=None` convention)
+        # (no widths: every tensor at the built dtype, the profiler's own `widths=None` convention)
         width = (lambda tid: first_w[tid]) if first_w is not None else (lambda tid: dtype_bytes)
 
         def tensor_bytes(dag, tid):
@@ -6797,7 +6797,7 @@ class PrismSolver:
         from neurobrix.core.prism.profiler import spatial_coupling
         declared = self._vendor_tiling_declaration(comp_name)
         if declared:
-            # The vendor's reference itself tiles: the declaration, with its source, written by Forge from the
+            # The vendor's reference itself tiles: the declaration, with its source, written by the container builder from the
             # registry, is the one exception — and then the cut is the vendor's (`_vendor_tiling`), never a size
             # Prism chooses.
             self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {
@@ -6941,7 +6941,7 @@ class PrismSolver:
                 comp_name, graph, profile_j, mem, budget_bytes, rung_mb,
                 trace_size, out_spatial)
 
-        # Scale factor: what the graph MEASURES first — its traced input and output extents —
+        # Scale factor: what the graph MEASURES first — its built input and output extents —
         # then a declared upscale, then the block-count heuristic. The heuristic
         # 2^(len(block_out_channels)-1) counts one 2x upsample per block, which is not every
         # VAE's shape: SANA-Video's declares decoder_block_out_channels [256, 512, 1024]
@@ -7172,7 +7172,7 @@ class PrismSolver:
           the clip-start semantics, identical doctrine to the decode gate.
         - spatial ratio from the profile's block channel list
           (2^(len-1), the same law as decode) and verified against the
-          graph traces (trace_in / trace_out must equal it exactly).
+          graph builds (trace_in / trace_out must equal it exactly).
         - runtime extents must sit on the lattices the tiles are placed on:
           the spatial ratio always, the frame ratio only for the linear
           class (the causal class carries the whole clip in every tile).
@@ -7205,7 +7205,7 @@ class PrismSolver:
         if tmap is None:
             # The causal class (1 + (t-1)//r): no temporal tile, ever — but a spatial tile carrying
             # the whole clip is exact in time, the vendor's own tiled encode for these VAEs. The
-            # Wan encoders traced as one causal pass (2026-09-26) need it: at 81 frames of 352x832
+            # Wan encoders built as one causal pass (2026-09-26) need it: at 81 frames of 352x832
             # the first activation alone is 8.5 GiB, and the plan declined, so the run died.
             tmap = temporal_causal_downscale_ratio(graph)
             if tmap is None:
@@ -7222,14 +7222,14 @@ class PrismSolver:
         elif out_spatial and trace_size % out_spatial == 0:
             # No block list in this component's profile: an ENCODE alias of the VAE (Wan's
             # `vae_encoder`, module=vae, method=encode) whose configuration was written on the
-            # decode component. The ratio is then the graph's own traced in/out extent — a fact of
+            # decode component. The ratio is then the graph's own built in/out extent — a fact of
             # this graph, which the check below would have held the config to anyway.
             sp_ratio = trace_size // out_spatial
         else:
             return self._tiling_decline(
                 comp_name, f"no block list in its profile, and its build-time extents {trace_size} -> "
                            f"{out_spatial} do not divide")
-        # Trace coherence: the graph's own in/out spatial traces must agree
+        # Build coherence: the graph's own in/out spatial builds must agree
         # with the config-derived ratio, else decline (never guess geometry).
         if sp_ratio <= 1 or trace_size % sp_ratio != 0 \
                 or trace_size // sp_ratio != out_spatial:
@@ -10283,7 +10283,7 @@ class PrismSolver:
 
 @dataclass
 class ImportPlan:
-    """Plan for ONNX export (always CPU - GPU provides no benefit for symbolic tracing)."""
+    """Plan for ONNX export (always CPU - GPU provides no benefit for symbolic building)."""
     device: str
     can_load: bool
     reason: str

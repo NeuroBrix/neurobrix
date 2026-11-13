@@ -9,10 +9,10 @@ structural and inside one pass, and this walk is what names where.
 HOW THE TWO SIDES ALIGN
 -----------------------
 No hand-written correspondence table. Our container records `parent_module` per
-op — the vendor module path the op was traced from — and `NBX_DUMP_TIDS` writes
+op — the vendor module path the op was built from — and `NBX_DUMP_TIDS` writes
 `(component, op_uid, op_type, shape, head10, l2_norm)` per op. The vendor side
 (`tools/vendor_module_walk.py`) writes one record per module invocation. The two
-join on the module name the tracer already wrote down.
+join on the module name the builder already wrote down.
 
 Our stand-in for "the module's output" is the LAST recorded op whose
 `parent_module` is that module, in execution order. That is a stated heuristic,

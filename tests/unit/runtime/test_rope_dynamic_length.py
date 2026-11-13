@@ -4,7 +4,7 @@ Regression guard for the deepseek-moe degenerate-decode bug
 (2026-08-26): graphs that RECOMPUTE RoPE per forward via
 arange(seq_len) -> mul(inv_freq) -> cat -> cos/sin -> slice ->
 index(position_ids) had their arange/chain-shapes/slice-end
-un-promoted to the STATIC trace value. The table then never grew past
+un-promoted to the STATIC build value. The table then never grew past
 trace_seq_len rows, so the first forward whose absolute position
 reached trace_seq_len read out of bounds — garbage rotations,
 degenerate logits (observed: same 11 tokens as the compiled oracle,
@@ -221,8 +221,8 @@ def test_resolver_binds_last_position_plus_one():
 
 
 def test_an_unbound_ref_refuses_by_name():
-    """An unbound rope-length symbol used to answer its trace length plus the offset;
-    the trace value is a witnessed extent, not a value (2026-09-21) — it refuses."""
+    """An unbound rope-length symbol used to answer its build length plus the offset;
+    the build value is a witnessed extent, not a value (2026-09-21) — it refuses."""
     import pytest
     from neurobrix.triton.symbols import UnboundSymbolError
     r = SymbolResolver({"symbols": {}})

@@ -8,7 +8,7 @@ prompts sent to the ORIGINAL model on ollama, greedy, same seed.
 The comparison is deliberately NOT a byte gate. The vendor here is Q4_0 and we
 run fp16, so a difference in wording is the quantization talking, not a defect.
 What a frozen-routing defect would produce is categorical: coherence at the
-trace length alone. The table therefore reports, per length, the agreement with
+build length alone. The table therefore reports, per length, the agreement with
 the vendor AND whether the length is singled out.
 """
 from __future__ import annotations
@@ -90,7 +90,7 @@ def main() -> int:
           f"{'agree':>6}  text (ours)")
     print("-" * 112)
     for r in rows:
-        mark = " <= TRACE LENGTH" if r["len"] == args.trace_len else ""
+        mark = " <= BUILD LENGTH" if r["len"] == args.trace_len else ""
         print(f"{r['len']:>4} {r['rc']:>3} {str(r['identical']):>6} "
               f"{r['common_prefix_words']:>7} {r['our_words']:>6} "
               f"{r['agree_ratio']:>6}  {r['ours'][:56]!r}{mark}")
@@ -107,15 +107,15 @@ def main() -> int:
     print(f"every word agrees   : {len(full)}/{len(ok)}")
     if off_trace:
         mean_off = sum(r['common_prefix_words'] for r in off_trace) / len(off_trace)
-        print(f"mean vendor prefix  : off-trace {mean_off:.1f} words"
-              + (f" · at trace {at_trace[0]['common_prefix_words']} words"
+        print(f"mean vendor prefix  : off-build {mean_off:.1f} words"
+              + (f" · at build {at_trace[0]['common_prefix_words']} words"
                  if at_trace else ""))
-    # The discriminator: a frozen-routing defect is coherent at the trace length
-    # ALONE. If the trace length is not distinguished, the defect is not there.
+    # The discriminator: a frozen-routing defect is coherent at the build length
+    # ALONE. If the build length is not distinguished, the defect is not there.
     if at_trace and off_trace:
         singled_out = all(r["common_prefix_words"] < at_trace[0]["common_prefix_words"] / 2
                           for r in off_trace)
-        print(f"trace length singled out: {singled_out} "
+        print(f"build length singled out: {singled_out} "
               f"(True would mean the routing is frozen)")
 
     out = os.path.join(args.dir, "verdict_table.json")

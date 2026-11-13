@@ -172,7 +172,7 @@ def test_the_pinned_authority_reads_across_command_buffers():
 
 def test_the_resolver_slices_stacked_experts_by_the_traced_law():
     """gate = rows 0:F of W_in[e], up = rows F:2F, down = W_out[e] — the
-    exact halves the traced granite block splits at (aten.split at F on
+    exact halves the built granite block splits at (aten.split at F on
     the mm output's last dim)."""
     from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
     E, F, H = 4, 3, 5

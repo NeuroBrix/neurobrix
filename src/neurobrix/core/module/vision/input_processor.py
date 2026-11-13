@@ -19,7 +19,7 @@ Supported preprocessing types:
                       model_input_names, landed with GLM-4.1V)
   minicpm_adaptive_slice — LLaVA-UHD adaptive-slice NaViT contract
                       (MiniCPM-o class, landed with MiniCPM-o-4_5);
-                      returns a dict matching the traced vpm graph's
+                      returns a dict matching the built vpm graph's
                       input names {"all_pixel_values": [1, N, C*p*p]
                       float32, "patch_attention_mask": [1, 1, N] bool,
                       "tgt_sizes": [[gh, gw]] int32}
@@ -80,7 +80,7 @@ class ImageInputProcessor:
                 )
             out = image_dsp.minicpm_adaptive_slice_np(
                 str(image_path), preprocessor_config)
-            # Keys mirror the traced vpm graph's input:: names; dtypes are
+            # Keys mirror the built vpm graph's input:: names; dtypes are
             # the graph contract (float32 / bool / int32 — tgt_sizes values
             # feed in-graph position arithmetic and must stay exact ints).
             return {k: np.ascontiguousarray(v) for k, v in out.items()}

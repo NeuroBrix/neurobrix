@@ -1,6 +1,6 @@
 """A finite constant narrowed into a half dtype saturates to that dtype's extreme; it does not become infinite.
 
-A graph traced in fp32 carries finfo(fp32).min as a literal mask sentinel. The vendor, running in the half
+A graph built in fp32 carries finfo(fp32).min as a literal mask sentinel. The vendor, running in the half
 dtype, would have used finfo(half).min, which is finite. Measured 2026-09-26 on PixArt-XL-2-1024-MS's T5:
 the Triton branch's `aten.where::0` wrote -inf into 13 200 bf16 positions where the ATen branch kept the
 finite fp32 value. The ATen dtype engine already clamps fill and creation scalars to the half range; this is

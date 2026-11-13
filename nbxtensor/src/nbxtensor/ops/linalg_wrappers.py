@@ -1152,12 +1152,12 @@ def upsample_linear1d_wrapper(x, output_size, align_corners: bool = False,
                               scales=None) :
     """upsample_linear1d via bilinear2d: [N,C,L] → unsqueeze → [N,C,1,L] → bilinear2d → squeeze.
 
-    Like upsample_nearest2d_wrapper: the traced graph stores BOTH the concrete
-    trace output_size AND the scale factor. When the runtime input length differs
-    from trace (variable-length audio decoders — Kokoro iSTFT source generator
-    runs at 124 vs the 256 trace), the baked output_size is stale; PyTorch
+    Like upsample_nearest2d_wrapper: the built graph stores BOTH the concrete
+    build output_size AND the scale factor. When the runtime input length differs
+    from build (variable-length audio decoders — Kokoro iSTFT source generator
+    runs at 124 vs the 256 build), the baked output_size is stale; PyTorch
     recomputes from the live input when a scale is present, so we do the same:
-    out_l = round(runtime_input_len * scale). Bit-identical when trace == runtime
+    out_l = round(runtime_input_len * scale). Bit-identical when build == runtime
     (input_len * scale == baked output_size). Without this, a linear upsample
     would desync from its sibling nearest upsample (which already scale-recomputes).
     """

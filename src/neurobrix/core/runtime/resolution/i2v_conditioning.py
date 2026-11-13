@@ -56,7 +56,7 @@ def _to_channels_first(latent: torch.Tensor, latent_channels: int) -> torch.Tens
     """Arrange a 5D latent to [B, C, T, H, W] (channels at dim 1).
 
     The vae_encoder graph output can carry channels at dim 1 or dim 2 depending
-    on the traced layout; detect the channel axis by matching latent_channels.
+    on the built layout; detect the channel axis by matching latent_channels.
     """
     if latent.dim() != 5:
         return latent
@@ -91,7 +91,7 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
     (the patch_size_t branch is a no-op for models with patch_size_t=None, e.g.
     CogVideoX-5b-I2V).
 
-    The vae_encoder component's output IS the vendor's scaled latent: its traced
+    The vae_encoder component's output IS the vendor's scaled latent: its built
     graph ends with `mode * scaling_factor` (invert-aware) and the frames-first
     permute, as for state_video_mask below. Scaling it again here conditioned the
     denoiser on scaling_factor**2 * mode (0.49x for CogVideoX-5b-I2V, against the
@@ -130,7 +130,7 @@ def _build_condition_state_video_mask(ctx: Any, spec: dict,
     - masked_video: the conditioning image(s) at their frame indices, zeros
       elsewhere, VAE-encoded and latent-scaled (vendor lines 897-904,
       `input_video * (mask < 0.5)` then vae.encode * scale_factor). In this
-      runtime the vae_encoder COMPONENT output IS that latent — its traced
+      runtime the vae_encoder COMPONENT output IS that latent — its built
       graph internalizes encoder -> quant_conv -> moments -> mode *
       scaling_factor -> permute to frames-first [B, F, C, H, W] (mode instead
       of the vendor's generator-driven .sample(): deterministic, baked into

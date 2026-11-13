@@ -23,9 +23,9 @@ solves them itself from the profile and the graphs.
 A frozen dimension where a symbolic one is expected is detected BEFORE any key is harvested
 (`tools/where_the_symbol_chain_breaks.py`: a declared input symbol whose chain breaks on a
 literal written into a shape, or that no op ever carries): such a container is marked for
-retrace and contributes no key — Qwen3-Omni's view carried its trace length 23, and a census
+rebuild and contributes no key — Qwen3-Omni's view carried its build length 23, and a census
 that harvested it would certify shapes the model can only meet at one request. The list this
-produces is the hub's honest retrace queue.
+produces is the hub's honest rebuild queue.
 
 The proof (the only honest one): the census of a model already run must contain every key that
 model's replay cache holds, and nothing it cannot reach. First landed 2026-09-21: TinyLlama, six
@@ -35,11 +35,11 @@ comparison here.
     python tools/certified_census.py --hardware default-c5d28c27 --out nbx/campaigns/.../census.json
     python tools/certified_census.py --hardware default-c5d28c27 --models TinyLlama-1.1B-Chat-v1.0 --prove ~/.neurobrix/replay_cache/...
 
-The request each model is shadowed at is DERIVED from the current container's trace, by the
+The request each model is shadowed at is DERIVED from the current container's build, by the
 one derivation the regression matrix (the verification) uses too (`tools/trace_request.
 derived_request`): the family's judged request — the calibration section of `config/families/
 <family>.yml` plus the campaign's media and bounds (`precision_zoo_campaign.request_args`) — at
-the container's off-trace size for a family whose request names one. A request-dependent
+the container's off-build size for a family whose request names one. A request-dependent
 dimension (a prompt's token count, a step count, a height) enters the key exactly as the
 launcher forms it: the key is EXACT today, nothing buckets it, so the census covers the requests
 it is given and says so in `models[*].requests`.
@@ -48,7 +48,7 @@ A request table (`--requests-json`, whole requests per model) is accepted only w
 equals the derived one; its other flags (a prompt, a seed, a step count) are the table's. A
 table that disagrees is REFUSED for that model, by name, before any shadow runs — never its
 size taken silently, never the derived one either. Measured 2026-09-28: Sana_1600M_1024px_
-MultiLing was retraced (trace 960x1088); the census took 768x1024 from a table written from
+MultiLing was rebuilt (build 960x1088); the census took 768x1024 from a table written from
 the OLD container while the matrix derived 704x1088 from the new one — 72 keys certified for a
 request the verification never makes, 42 keys the zero-miss verification met uncertified.
 `--extra` may not carry a size flag for the same reason. The census's own extra request (the
@@ -74,7 +74,7 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as _zoo                       # noqa: E402  (run_group, CACHE)
-import trace_request as _trace                              # noqa: E402  (the request the container's trace gives)
+import trace_request as _trace                              # noqa: E402  (the request the container's build gives)
 import where_the_symbol_chain_breaks as _chain              # noqa: E402  (analyse)
 
 # Honor NEUROBRIX_CACHE (cache_dir's env door), so a census can run over a
@@ -107,7 +107,7 @@ def _device_count(hardware: str) -> int:
 
 def frozen_dims(model: str) -> list:
     """Rows where a declared input symbol is LOST: its chain breaks on a literal equal to its
-    trace value that is not a weight extent (the tool's own 'clean' class — a literal that is
+    build value that is not a weight extent (the tool's own 'clean' class — a literal that is
     also a weight extent is read one by one, never counted), or no op ever carries it."""
     rows = []
     for gp in sorted((CACHE / model / "components").glob("*/graph.json")):
@@ -119,7 +119,7 @@ def frozen_dims(model: str) -> list:
                 continue
             b = r.get("first_break")
             # A literal standing in an output SHAPE where the input carried the symbol is a
-            # lost dimension whatever else that number is: a buffer allocated at the trace
+            # lost dimension whatever else that number is: a buffer allocated at the build
             # length is frozen even when a weight shares the extent (chatterbox's 314).
             lost = r.get("never_carried") or (
                 b and b.get("relation") == "v" and (b.get("lost_in") == "shape" or not b.get("literal_is_a_parameter_extent")))
@@ -130,7 +130,7 @@ def frozen_dims(model: str) -> list:
             # the census printed `frozen: []`, and the model was harvested as if inspected.
             #
             # mochi-1-preview is the proof that the silence costs something. Its VAE breaks
-            # height and width at `aten._unsafe_view::1` on `v*2` (28 for a trace 14, 44 for
+            # height and width at `aten._unsafe_view::1` on `v*2` (28 for a build 14, 44 for
             # 22), 180 of its 353 five-dimensional activations carry concrete spatial dims,
             # and the consequence is measured: the profiler sizes `aten.silu::26` at
             # [1,256,84,56,88] = 0.20 GiB where the run allocates [1,128,84,480,848] = 8.15 GiB
@@ -152,7 +152,7 @@ def frozen_dims(model: str) -> list:
 def split_frozen(rows: list) -> tuple:
     """(adjudicated, unadjudicated) — a lost symbol against a derived-relation break.
 
-    The first is a defect and queues a retrace. The second is a QUESTION, and it is printed
+    The first is a defect and queues a rebuild. The second is a QUESTION, and it is printed
     so somebody answers it; 20 of the 59 containers in this cache carry one and every single
     one of them read `frozen: []` before this split existed.
     """
@@ -264,7 +264,7 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
 
 def _graph_sha(model: str) -> str:
     """A stable hash over every component graph.json of this model, so a
-    retrace (which changes a graph) invalidates exactly the keys harvested
+    rebuild (which changes a graph) invalidates exactly the keys harvested
     from it. Recorded per model in the census; a certifier or a later census
     diff can drop keys whose source graph_sha no longer matches the cache."""
     from neurobrix.kernels.census_table import container_sha     # the one hash Prism reads too
@@ -315,18 +315,18 @@ def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
 
 
 class RequestRefused(Exception):
-    """A request the current container's trace does not give — the census will not shadow it."""
+    """A request the current container's build does not give — the census will not shadow it."""
 
 
 def census_requests(model: str, fam: str, extra: list, table) -> list:
-    """The model's ordinary request(s): DERIVED from the container's trace (`trace_request.
+    """The model's ordinary request(s): DERIVED from the container's build (`trace_request.
     derived_request`, the regression matrix's own derivation) plus `--extra`, or the table's,
     each of which must ask for the derived size. Raises RequestRefused naming the model, both
     sizes and how to regenerate the table; nothing is taken silently from either side."""
     try:
         derived = _trace.derived_request(model, fam)
     except Exception as e:                    # said by name, never replaced by another request
-        raise RequestRefused(f"{model}: the request cannot be derived from the container's trace — "
+        raise RequestRefused(f"{model}: the request cannot be derived from the container's build — "
                              f"{type(e).__name__}: {e}") from e
     want = _trace.requested_size(derived)
     regen = (f"regenerate the table from the containers as they are now (`python tools/trace_request.py "
@@ -352,8 +352,8 @@ def census_requests(model: str, fam: str, extra: list, table) -> list:
         if got != want:
             raise RequestRefused(
                 f"{model}: the request table asks for size {_trace.size_text(got)} (request {i}) but the "
-                f"current container's trace gives {_trace.size_text(want)} — the table was not derived from "
-                f"this container (a retrace since it was written?). A census at a size the verification "
+                f"current container's build gives {_trace.size_text(want)} — the table was not derived from "
+                f"this container (a rebuild since it was written?). A census at a size the verification "
                 f"never runs certifies keys nobody asks for; {regen}.")
         reqs.append(req)
     return reqs
@@ -378,8 +378,8 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
         row.update(status="unreadable", frozen=frozen)
         return row
     if frozen:
-        # A frozen dimension is a retrace item for the queue — and STILL a census: the shadow
-        # runs and its keys are harvested (at the trace value of the frozen dimension), so the
+        # A frozen dimension is a rebuild item for the queue — and STILL a census: the shadow
+        # runs and its keys are harvested (at the build value of the frozen dimension), so the
         # model is certified for what it can run today. Dropping it harvested nothing for 17
         # of 59 containers (2026-09-21).
         row.update(status="retrace", frozen=frozen)
@@ -531,7 +531,7 @@ def main() -> int:
     ap.add_argument("--modes", default="triton", help="comma-separated served modes: triton, triton-sequential")
     ap.add_argument("--extra", nargs="*", default=[], help="flags appended to every request")
     ap.add_argument("--requests-json", default=None, help='{"<model>": [[flags...], ...]} — whole requests per model; each must ask for the size '
-                         'the current container\'s trace gives (tools/trace_request.py writes such a table)')
+                         'the current container\'s build gives (tools/trace_request.py writes such a table)')
     ap.add_argument("--timeout", type=int, default=3600, help="per shadow run, seconds")
     ap.add_argument("--jobs", type=int, default=2, help="shadow runs in flight (CPU-bound, no card)")
     ap.add_argument("--directory", default=None, help="<vendor>/<profile> of the certified directory to measure coverage against")
@@ -601,7 +601,7 @@ def main() -> int:
 
     t0 = time.time()
     rows = {}
-    # THE census table: a model whose own request censused replaces its rows (a retrace replaces, never
+    # THE census table: a model whose own request censused replaces its rows (a rebuild replaces, never
     # adds) THE MOMENT its census ends — a certifier reading the table meanwhile certifies it without
     # waiting for the whole catalogue (the supervisor, 2026-09-28 21:56); a model whose census failed
     # keeps its previous rows, said — a failed shadow is not the knowledge that a model forms no key.
@@ -670,7 +670,7 @@ def main() -> int:
     if a.out:
         write_json_atomic(Path(a.out), census)
     n_ok = sum(1 for r in rows.values() if r["status"] == "ok")
-    print(f"\n[census] {len(entries)} key(s) from {n_ok} model(s); retrace queue {len(census['retrace_queue'])}; "
+    print(f"\n[census] {len(entries)} key(s) from {n_ok} model(s); rebuild queue {len(census['retrace_queue'])}; "
           f"failed {len(census['failed'])} (refused {len(census['refused'])}); {census['wall_s']} s; table {table}")
     if a.directory:
         c = census["coverage"]

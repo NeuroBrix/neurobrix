@@ -3,7 +3,7 @@ its three contracts the container's graphs declare: the staged splice (a vision 
 `input::all_pixel_values` — MiniCPM-o), the M-RoPE masked splice (an LM graph declaring
 `input::image_pos_masks` — Ming-Lite-Omni), else the splice path (GLM-4.1V, Qwen3-Omni).
 
-Before (2026-10-03): only the splice path had sites; the two others fell to the plan's trace
+Before (2026-10-03): only the splice path had sites; the two others fell to the plan's build
 binding — Ming's vision tower at its trace's 17 020 patches, its LM at 37 tokens — and every
 component ran, the audio and generative legs included: 0 of Ming's 27 walked keys, 10 of
 MiniCPM-o's 44. The walk's own log is the reference: 256 vision tokens and a 275-token context

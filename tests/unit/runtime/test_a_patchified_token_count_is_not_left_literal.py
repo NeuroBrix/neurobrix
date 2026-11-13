@@ -2,7 +2,7 @@
 
 `_spatial_promotion_pass` was written for VAE decoders, whose graphs reference H, W and
 H*W and their UPSCALED multiples. A patch-embedded diffusion transformer divides instead:
-its token grid is (H/p)*(W/p). PixArt-XL-1024 traced at 1024 (latent 128) carries 84 pairs
+its token grid is (H/p)*(W/p). PixArt-XL-1024 built at 1024 (latent 128) carries 84 pairs
 of
 
     aten.view::21  [2, 4096, 1152] -> target [8192, 1152]        (8192 = 2 * 4096)
@@ -14,13 +14,13 @@ hidden state became (8, 4096, 1152) and at 4096 (32, 4096, 1152) — the tile co
 into the batch — and the run died 11 ops later on
 `Cannot broadcast (2, 1, 1152) and (32, 4096, 1152)`.
 
-Measured on the census shadow: 1024 (= the traced size) clean, 2048 and 4096 broken.
+Measured on the census shadow: 1024 (= the built size) clean, 2048 and 4096 broken.
 1536 came out CORRECT because its ratio 2.25 is not an integer and the invention could not
 scale the batch — a clean integer ratio is the dangerous one.
 
 The collision this must not cause: the T5 stream is (2, 120, 4096), so 4096 is ALSO the
 text feature width. Promoting it there would break the cross-attention while still looking
-bit-perfect at the traced size, where trace == runtime makes every wrong promotion invisible.
+bit-perfect at the built size, where build == runtime makes every wrong promotion invisible.
 
 Runnable: PYTHONPATH=src python3 -m pytest \
   tests/unit/runtime/test_a_patchified_token_count_is_not_left_literal.py -v
@@ -145,7 +145,7 @@ def test_the_unflatten_keeps_the_batch_and_follows_the_request(promoted):
     dag, r = promoted
     got = _applied(_resolved_target(dag, "aten.view::22", r), (BATCH * RUN_TOKENS, 1152))
     assert got == (BATCH, RUN_TOKENS, 1152), (
-        f"{got} — the token count stayed at its trace value and the overflow "
+        f"{got} — the token count stayed at its build value and the overflow "
         "was absorbed by the batch, which is the 2026-09-23 defect")
 
 

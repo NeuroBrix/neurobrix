@@ -1,6 +1,6 @@
 """An image-to-video condition is the vae_encoder component's output, scaled ONCE.
 
-The vae_encoder component's traced graph ends with `mode * scaling_factor` (invert-aware) and the frames-first
+The vae_encoder component's built graph ends with `mode * scaling_factor` (invert-aware) and the frames-first
 permute: its output IS the latent the vendor pipeline concatenates
 (CogVideoXImageToVideoPipeline.prepare_latents: `image_latents = scaling_factor * latent_dist.sample()`).
 The CogVideoX builder scaled it a second time, so CogVideoX-5b-I2V was conditioned on 0.49 x mode against the

@@ -222,7 +222,7 @@ def test_the_denoisers_packed_inputs_are_the_flows_own_shapes():
 
 def test_a_diffusion_prompt_is_tokenized_to_the_encoders_declared_length():
     """`diffusion_max_length` (TextProcessor's cascade): the encoder's declared input shape, then the
-    tokenizer's max — Open-Sora's T5 runs at 512 where its graph was traced at 31."""
+    tokenizer's max — Open-Sora's T5 runs at 512 where its graph was built at 31."""
     from neurobrix.core.module.text.processor import diffusion_max_length
     topo = {"components": {"text_encoder": {"shapes": {"input_ids": [1, 512]}}, "t2": {}}}
     assert diffusion_max_length(topo, "text_encoder", {}) == 512

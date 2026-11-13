@@ -2,7 +2,7 @@
 
 Regression guard for the op-by-op ORACLE decode crash (D5.3): TinyLlama-style
 models register a `cos_cached`/`sin_cached` buffer of shape
-[max_position_embeddings, head_dim] (e.g. [2048, 64]) and, in the traced
+[max_position_embeddings, head_dim] (e.g. [2048, 64]) and, in the built
 graph, slice it to [seq_len, head_dim] then index it by `position_ids`:
 
     cos = cos_cached[:seq_len]      # aten::slice, end == seq_len symbol

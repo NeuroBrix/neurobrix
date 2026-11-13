@@ -14,7 +14,7 @@ What it does. Given a component DAG, the compute dtype C, the engine, the hardwa
 `has_native_bf16`, the component's precision contract and (when known) the op-level tiling
 plan, `runtime_dtypes` walks the execution order with THE ENGINE'S rules and returns the
 dtype every tensor holds at runtime; `runtime_widths` returns the same as bytes per element.
-Non-floating tensors keep their traced dtype.
+Non-floating tensors keep their built dtype.
 
 Where the rules come from. Everything that can be CALLED is called: the Triton engine's AMP
 classes and its fp32-constant rule (`triton/dtype.py`), the stored-weight rule
@@ -149,7 +149,7 @@ _SDPA = frozenset({"scaled_dot_product_attention", "_scaled_dot_product_efficien
 _CAT = frozenset({"cat", "concat", "stack"})
 _CASTS = frozenset({"_to_copy", "to"})
 # Matmul-class ops whose Triton wrapper is not `mm`/`addmm`/`bmm` and whose store dtype
-# was not traced op by op here: priced fp32, the widest a matmul stores (conservative; one
+# was not built op by op here: priced fp32, the widest a matmul stores (conservative; one
 # `baddbmm` in the whole catalogue, the rest absent, 2026-09-28).
 _MATMUL_OTHER = frozenset({"mv", "addmv", "addr", "einsum", "baddbmm", "addbmm",
                            "dot", "vdot", "linalg_vecdot", "chain_matmul", "linalg_multi_dot"})
@@ -375,13 +375,13 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
     keys and values from the KV cache, in the cache's dtype (`core/flow/decoder_kv`), not from this step's projections.
     `casts`, when given, is filled with each op's operand casts
     ({uid: [(tensor id, dtype name)]}, `_Rules.operand_casts`). `seams`: {seam input tid: the dtype its producer
-    runs at}, from the caller that priced the producing graph — a seam enters in that dtype; absent, its traced
+    runs at}, from the caller that priced the producing graph — a seam enters in that dtype; absent, its built
     one. `shape_of(tid)` answers a tensor's shape at the
-    request (the matmul store rule reads M); absent, the traced shape answers. `stores_fp64`:
+    request (the matmul store rule reads M); absent, the built shape answers. `stores_fp64`:
     whether the engine priced holds float64 / complex128 on the profile, read by its OWN branch
     (`triton.dtype.triton_stores_fp64` for the Triton engines, `core.dtype.config.
     device_supports_fp64` for ATen). Where it is False the compiled branch holds no float64 /
-    complex128 tensor at all — it narrows every op traced wide (`DtypeEngine._make_fp64_ceiling`),
+    complex128 tensor at all — it narrows every op built wide (`DtypeEngine._make_fp64_ceiling`),
     every `_to_copy` target and every constant (`storage_dtype`), and MPS refuses a float64 tensor
     outright — so the ATen rules price that ceiling over every tensor.
     `attention_operands` is the planned hardware's `precision.attention_operands` (an SDPA whose
@@ -424,8 +424,8 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
         if name not in _FLOAT:
             out[tid] = name
         elif tid in graph_inputs or meta.get("is_input"):
-            # A component input traced at or below C's width is cast to C; one traced wider enters
-            # at its traced width as the branch stores it (TritonDtypeEngine._target_dtype_for_input;
+            # A component input built at or below C's width is cast to C; one built wider enters
+            # at its built width as the branch stores it (TritonDtypeEngine._target_dtype_for_input;
             # tensor_resolver.get_input_dtype + DtypeEngine.storage_dtype on the ATen branch); a SEAM
             # enters in the dtype its producer gave it.
             if is_seam_tensor(meta):
@@ -491,7 +491,7 @@ class _Rules:
         self.dag, self.c, self.engine = dag, c, engine
         self.stores_fp64 = bool(stores_fp64)
         self.half = c in _HALF
-        # The component's GRAPH dtype — the container's traced `torch_dtype`, the source
+        # The component's GRAPH dtype — the container's built `torch_dtype`, the source
         # both engines read (TritonSequence / TritonSequentialDispatcher / DtypeEngine
         # `graph_dtype`): the AMP_FP32 cast-back rule reads it under bf16 compute.
         self.graph_dtype = _tdt.graph_dtype_name(dag.get("torch_dtype"))
@@ -551,7 +551,7 @@ class _Rules:
     def default(self, op, fl) -> str:
         """An op no rule below names: the widest float operand (the elementwise/unary/layout
         wrappers allocate like their input, the binary ones like the wider operand). An op
-        with no float operand writes its traced dtype through the engine's remap. This is
+        with no float operand writes its built dtype through the engine's remap. This is
         the CONSERVATIVE choice for an unclassified op: never narrower than an operand."""
         w = self.widest(fl)
         if w is not None:
@@ -652,7 +652,7 @@ class _TritonRules(_Rules):
             n for n in _tdt.fp32_constant_names(self.dag, narrow, islands)}
 
     def complex_dtype(self, name: str) -> str:
-        # A complex output keeps the traced complex type; NBX complex is complex64 at most
+        # A complex output keeps the built complex type; NBX complex is complex64 at most
         # (sequence.py:2688-2689; `_wrap_complex_output`, dtype.py:527-528, 624-654).
         return _triton_remap(name, self.c, self.stores_fp64)
 
@@ -667,7 +667,7 @@ class _TritonRules(_Rules):
             return "float32"
         if self.embedded_constant(tid):
             # An embedded constant is bound by the loader's own rule (`constant_load_dtype`,
-            # GraphExecutor._load_constant_triton): its traced dtype, a bf16 one decoded to the
+            # GraphExecutor._load_constant_triton): its built dtype, a bf16 one decoded to the
             # half compute dtype — swin2SR's fp32 coordinates table stayed fp32, canary's bf16
             # positional table became fp16 (the census walk).
             from nbxtensor.dtype.operands import constant_load_dtype
@@ -684,11 +684,11 @@ class _TritonRules(_Rules):
         # (`_NBX_ACTIVATIONS_FP16_SAFE`, set from the contract, sequence.py:3025-3029) or the
         # op is in the record's narrow set, else fp32. Under fp16 the cast back is the
         # single-tensor one: a TUPLE result (`native_layer_norm`, `native_group_norm` — the
-        # op's traced outputs are several) keeps the fp32 its kernel wrote from the fp32
+        # op's built outputs are several) keeps the fp32 its kernel wrote from the fp32
         # inputs (triton/dtype.py `cast_back`, the fp16 contract held byte-identical by
         # decision 2026-09-28). Measured by the census walk: Kokoro's albert projections and
         # PixArt's VAE attention read the norm's output in fp32.
-        # The op's traced output dtype is the floor of the cast back: the vendor's own fp32
+        # The op's built output dtype is the floor of the cast back: the vendor's own fp32
         # island in a half graph is narrowed by the narrow set only, never by the flag.
         # a tuple result (a `native_*_norm`) is cast back like a tensor since 2026-10-25 (`_cast_floats_to` in the
         # fp32-internal wrap under fp16 too): no tuple rule
@@ -933,7 +933,7 @@ class _AtenRules(_Rules):
 
     def complex_dtype(self, name: str) -> str:
         # `_make_complex_output_wrapper` is a floor, never a leveller (engine.py:859-887):
-        # the traced complex type is kept, complex128 included.
+        # the built complex type is kept, complex128 included.
         return name
 
     def remap_explicit(self, name: str) -> str:

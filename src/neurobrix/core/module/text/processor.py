@@ -93,9 +93,9 @@ class TextProcessor:
         Get max tokenization length from config cascade.
 
         Priority:
-        1. Graph shape from topology (trace-time stimulus length — the size the
+        1. Graph shape from topology (build-time stimulus length — the size the
            encoder graph actually expects). For models with CHI (Sana), the graph
-           was traced with input_ids shape [1, 506] (CHI prefix + user prompt).
+           was built with input_ids shape [1, 506] (CHI prefix + user prompt).
            Tokenization MUST match the graph's expected input shape.
         2. max_sequence_length from tokenizer config (model design intent)
         3. ZERO FALLBACK crash
@@ -291,7 +291,7 @@ class TextProcessor:
         # Get max_length from graph input shape (DATA-DRIVEN).
         # CRITICAL: Use the text_encoder graph's input_ids shape, NOT max_sequence_length.
         # max_sequence_length is the POST-finalization output length (e.g. 300 for Sana),
-        # but the graph was traced with longer inputs (e.g. 506 for Sana with CHI prefix).
+        # but the graph was built with longer inputs (e.g. 506 for Sana with CHI prefix).
         # Tokenizing to the wrong length causes shape mismatch → NaN cascade.
         text_encoder_shapes = (
             self._topology.get("components", {})

@@ -167,7 +167,7 @@ def test_the_plan_states_the_budget_its_attention_was_priced_at():
 
 def test_the_compiled_resolvers_attention_op_reaches_the_cut(monkeypatch):
     """The compiled engine's own op (`CompiledOpResolver`, the graph's `_scaled_dot_product_efficient_attention`, as
-    Allegro's transformer traces it) cuts at the budget it was given — the path a run takes, not the entry alone."""
+    Allegro's transformer builds it) cuts at the budget it was given — the path a run takes, not the entry alone."""
     from neurobrix.core.runtime.graph import device_attention as DA
     from neurobrix.core.runtime.graph.compiled_ops import CompiledOpResolver
     seen = []

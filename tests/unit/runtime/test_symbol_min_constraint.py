@@ -1,6 +1,6 @@
 """A symbolic dim never binds below the extent the container declares.
 
-Every graph the tracer writes carries a constraint per symbol::
+Every graph the builder writes carries a constraint per symbol::
 
     "s1": {"name": "time", "trace_value": 9,
            "source": "input::args::dim_2",
@@ -11,7 +11,7 @@ every one of those mins is 1 — so the rule is simply that no batch, seq_len,
 height, width or time may bind to 0 or below.
 
 `SymbolicShapeResolver._bind_symbol` has always CLAIMED to validate this. It read
-`symbol_info.get("min", 0)` — a key that is not there, because the tracer
+`symbol_info.get("min", 0)` — a key that is not there, because the builder
 nests it under `constraints` — so the comparison was always against the
 default 0, and the validator has never rejected anything in the whole zoo.
 A validator that reads an absent key is silent, and silence is
@@ -149,5 +149,5 @@ def test_the_real_vace_table_refuses_the_extent_that_failed():
     r = SymbolicShapeResolver(ctx)
     with pytest.raises(ShapeResolutionError):
         r._bind_symbol(time_sym, 0, symbols[time_sym])
-    r._bind_symbol(time_sym, 9, symbols[time_sym])   # the traced extent
+    r._bind_symbol(time_sym, 9, symbols[time_sym])   # the built extent
     assert r._runtime_values[time_sym] == 9

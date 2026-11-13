@@ -259,7 +259,7 @@ class TextEncoderComponentHandler(ComponentHandler):
         # reaches the transformer blocks), so the COUNT of trailing zero-pad
         # tokens is part of the trained conditioning — diffusers Wan
         # `_get_t5_prompt_embeds` pads every prompt to max_sequence_length. The
-        # text-encoder graph was traced at a shorter stimulus length (e.g. 226),
+        # text-encoder graph was built at a shorter stimulus length (e.g. 226),
         # so the runtime output is shorter than the model's design length; pad it
         # up. Safe because the DiT's encoder_hidden_states seq dim is symbolic
         # (verified in the Wan transformer graph). Gated by `zero_pad_embeddings`

@@ -1,4 +1,4 @@
-"""A campaign holds off every model a retrace still holds: listed in a phase file, or carrying a
+"""A campaign holds off every model a rebuild still holds: listed in a phase file, or carrying a
 state whose gate is not a PASS. CogVideoX-2b's proof row straddled phase B's install at 14:34 on
 2026-09-07 — the held rule the levers' scheduler applied was missing from the campaign."""
 import json
@@ -19,5 +19,5 @@ def test_held_are_the_listed_and_the_ungated(tmp_path):
     _state(tmp_path, "Kokoro", {"ok": True, "verdict": "PASS"})                       # gated: free
     _state(tmp_path, "PixArt-XL", {"ok": True, "verdict": "PASS (the hub's object …)"})  # listed but PASS: free
     _state(tmp_path, "CogVideoX-2b", {"ok": False, "verdict": "FAIL"})                # held
-    _state(tmp_path, "Voxtral", None)                                                  # traced, no gate yet: held
+    _state(tmp_path, "Voxtral", None)                                                  # built, no gate yet: held
     assert C.held_by_retrace(tmp_path) == {"Wan-VACE", "CogVideoX-2b", "Voxtral"}

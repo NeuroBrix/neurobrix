@@ -1,5 +1,5 @@
-"""A graph input traced WIDER than the graph's own parameters enters at its traced width; one at their width enters at the compute dtype.
-(The first form of the rule measured against the compute dtype and made orpheus-3b, traced float32 throughout and run at fp16,
+"""A graph input built WIDER than the graph's own parameters enters at its built width; one at their width enters at the compute dtype.
+(The first form of the rule measured against the compute dtype and made orpheus-3b, built float32 throughout and run at fp16,
 feed a float32 input to its fp16 lm_head: gate red 2026-10-18 15:02. A graph without a floating parameter is measured
 against the compute dtype.)
 
@@ -26,7 +26,7 @@ NONE = conservative_contract("test: no contract")
 
 
 def _meta(dtype, params=None):
-    """The input `t` and, when given, the graph's parameters traced at `params`: the width the input is measured
+    """The input `t` and, when given, the graph's parameters built at `params`: the width the input is measured
     against (core/dtype/entry_width); without parameters the compute dtype is the measure."""
     meta = {"input::t": {"dtype": dtype, "shape": [2], "is_input": True, "input_name": "t"}}
     if params:
@@ -36,7 +36,7 @@ def _meta(dtype, params=None):
 
 @pytest.mark.parametrize("traced,params,compute,wide", [
     ("float32", "bfloat16", "bfloat16", True),    # Allegro's timestep: wider than the bf16 weights
-    ("float32", "float32", "float16", False),     # orpheus: traced float32 throughout, run at fp16 — the model's width
+    ("float32", "float32", "float16", False),     # orpheus: built float32 throughout, run at fp16 — the model's width
     ("float64", "float32", "float16", True),      # wider than fp32 weights
     ("float16", "float32", "float16", False),
 ])
@@ -46,7 +46,7 @@ def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compu
     meta = _meta(traced, params)
     assert traced_parameter_width(meta) == itemsize(params)
     assert enters_at_traced_width(itemsize(traced), itemsize(compute), meta) is wide
-    # the compiled resolver hands the traced dtype (the executor stores it through the DtypeEngine); the Triton
+    # the compiled resolver hands the built dtype (the executor stores it through the DtypeEngine); the Triton
     # engine hands the dtype as its branch stores it (no fp64 here)
     from neurobrix.core.runtime.graph.execution_context import ExecutionContext
     from neurobrix.core.runtime.graph.tensor_resolver import TensorResolver
@@ -61,7 +61,7 @@ def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compu
 
 
 def test_prism_prices_the_orpheus_input_at_the_compute_dtype():
-    """A model traced float32 throughout and run at fp16: its input seed is fp16, as its weights are."""
+    """A model built float32 throughout and run at fp16: its input seed is fp16, as its weights are."""
     meta = _meta("float32", "float32")
     dag = {"tensors": {**meta, "o": {"dtype": "float32", "shape": [2]}},
            "ops": {"neg::0": {"op_type": "aten::neg", "input_tensor_ids": ["input::t"], "output_tensor_ids": ["o"],

@@ -10,7 +10,7 @@ the Mac's `cc7d314b` on this rack:
    site is a fix that reads as applied.
 
 2. **A symbol's NAME does not carry its UNIT.** Sana-1600M declares
-   `height`/`width` with a trace value of 32 and a `trace_resolution` of 1024:
+   `height`/`width` with a build value of 32 and a `trace_resolution` of 1024:
    the symbol counts LATENT rows, the request counts PIXELS, and 1024/32 is the
    VAE's compression, not a change of size. Taken raw it multiplied the estimate
    by 32 per axis and Prism refused, by name, a model that had rendered on a
@@ -21,7 +21,7 @@ the Mac's `cc7d314b` on this rack:
    DECLARATIONS read a 2.5x request as 6.25x. Height and width are different
    dimensions and still contribute one factor each.
 
-The shapes are not decorative. 448x448 against a 112x80 trace is deliberately
+The shapes are not decorative. 448x448 against a 112x80 build is deliberately
 NON-square on both sides, so a bug that multiplies height by height, or that
 transposes the two, cannot pass: the answer 22.4 is reachable only as
 (448/112) x (448/80).
@@ -56,7 +56,7 @@ def scale(solver, comp, ic, base=1000):
 
 
 def test_a_model_without_a_vae_scales_on_the_raw_pixels(solver):
-    # hat-s-x4's real trace: 112x80, asked for 448x448. Non-square both sides.
+    # hat-s-x4's real build: 112x80, asked for 448x448. Non-square both sides.
     got = scale(solver, _comp(("height", 112), ("width", 80)),
                 InputConfig(height=448, width=448))
     assert got == pytest.approx(22.4), "(448/112) x (448/80) and nothing else"
@@ -64,7 +64,7 @@ def test_a_model_without_a_vae_scales_on_the_raw_pixels(solver):
 
 def test_a_latent_model_at_its_trace_resolution_does_not_scale(solver):
     # Sana-1600M: symbols count latents (32), request counts pixels (1024),
-    # vae_scale 32. 1024/32 == 32 == the trace, so the request IS the trace.
+    # vae_scale 32. 1024/32 == 32 == the build, so the request IS the build.
     got = scale(solver, _comp(("height", 32), ("width", 32)),
                 InputConfig(height=1024, width=1024, vae_scale=32))
     assert got == 1.0, "the VAE's compression is not a change of size"
@@ -102,7 +102,7 @@ def test_height_and_width_are_different_dimensions_and_both_count(solver):
 def test_temporal_frames_use_the_temporal_compression_not_the_spatial_one(solver):
     got = scale(solver, _comp(("num_frames", 10)),
                 InputConfig(num_frames=80, temporal_compression=4, vae_scale=32))
-    assert got == pytest.approx(2.0), "80/4 = 20 latent frames against a trace of 10"
+    assert got == pytest.approx(2.0), "80/4 = 20 latent frames against a build of 10"
 
 
 def test_a_smaller_request_never_promises_less_than_was_measured(solver):
@@ -159,7 +159,7 @@ def test_the_video_vaes_temporal_axis_is_followed(solver):
     `source=input::z::dim_2`. Absent from the map, it was skipped in silence."""
     comp = _comp(("time", 9))
     got = scale(solver, comp, InputConfig(num_frames=33, temporal_compression=4))
-    assert got == pytest.approx(1.0), "33 frames is (33-1)//4+1 = 9 latent, the trace value"
+    assert got == pytest.approx(1.0), "33 frames is (33-1)//4+1 = 9 latent, the build value"
 
 
 def test_a_temporal_axis_counts_LATENT_frames_by_the_engines_own_arithmetic(solver):
@@ -168,7 +168,7 @@ def test_a_temporal_axis_counts_LATENT_frames_by_the_engines_own_arithmetic(solv
     the first count needing a third."""
     comp = _comp(("time", 2))
     got = scale(solver, comp, InputConfig(num_frames=9, temporal_compression=4))
-    assert got == pytest.approx(1.5), "3 latent against a trace of 2"
+    assert got == pytest.approx(1.5), "3 latent against a build of 2"
     assert got != pytest.approx(9 / 4 / 2), "plain division would read 1.125"
 
 
@@ -177,7 +177,7 @@ def test_the_step_between_eight_and_nine_frames_is_visible(solver):
     comp = _comp(("time", 2))
     eight = scale(solver, comp, InputConfig(num_frames=8, temporal_compression=4))
     nine = scale(solver, comp, InputConfig(num_frames=9, temporal_compression=4))
-    assert eight == pytest.approx(1.0), "8 frames is 2 latent, the trace value"
+    assert eight == pytest.approx(1.0), "8 frames is 2 latent, the build value"
     assert nine > eight, "9 frames needs a third latent frame and the plan must say so"
 
 

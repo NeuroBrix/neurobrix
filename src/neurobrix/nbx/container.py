@@ -76,11 +76,11 @@ class ComponentData:
     config: Dict[str, Any]  # Original config.json
     graph: Optional[Dict[str, Any]] = None  # graph.json (TensorDAG) for neural components
     weight_paths: List[str] = field(default_factory=list)
-    profile: Optional[Dict[str, Any]] = None  # profile.json with trace-time values
+    profile: Optional[Dict[str, Any]] = None  # profile.json with build-time values
     attributes: Optional[Dict[str, Any]] = None  # runtime.json attributes (state_channels, etc.)
     # weights_index.json: each stored tensor's dtype and bytes, what the loaders read and land. Prism prices a
     # component's weights from it (`solver._consumed_weight_bytes`); without it the price fell back to the graph's
-    # traced dtypes — mochi-1-preview's text encoder, stored F32 and traced in fp16, priced at 5 502 MB for the
+    # built dtypes — mochi-1-preview's text encoder, stored F32 and built in fp16, priced at 5 502 MB for the
     # 9 083 MB the Triton loader lands at fp16 (2026-10-28).
     weights_index: Optional[Dict[str, Any]] = None
 
@@ -99,19 +99,19 @@ class ComponentData:
         Get dominant dtype for this component.
 
         Priority:
-        1. profile.hints.dtype (ACTUAL weight dtype from trace hints)
+        1. profile.hints.dtype (ACTUAL weight dtype from build hints)
         2. config.torch_dtype (HuggingFace original - actual weight dtype)
-        3. profile.dtype (trace-time dtype - may differ from weights if hardware converted)
+        3. profile.dtype (build-time dtype - may differ from weights if hardware converted)
         4. float32 (fallback)
 
-        CRITICAL: profile.dtype is trace-time dtype (after hardware conversion).
-        For bf16 models on V100, trace runs as fp16 but weights remain bf16.
+        CRITICAL: profile.dtype is build-time dtype (after hardware conversion).
+        For bf16 models on V100, build runs as fp16 but weights remain bf16.
         We need the ACTUAL weight dtype to choose correct conversion:
         - bf16 → fp32 (same exponent range, no overflow)
         - bf16 → fp16 would cause precision loss
         """
         # PRIORITY 1: hints.dtype from profile (ACTUAL weight dtype)
-        # This is the dtype of weights BEFORE any trace-time conversion
+        # This is the dtype of weights BEFORE any build-time conversion
         if self.profile:
             hints = self.profile.get("hints", {})
             hints_dtype = hints.get("dtype")
@@ -123,7 +123,7 @@ class ComponentData:
         if torch_dtype:
             return torch_dtype
 
-        # PRIORITY 3: profile.dtype (trace-time, may differ from weights)
+        # PRIORITY 3: profile.dtype (build-time, may differ from weights)
         if self.profile:
             profile_dtype = self.profile.get("dtype")
             if profile_dtype:
@@ -532,7 +532,7 @@ class NBXContainer:
         else:
             graph = None
 
-        # Load profile.json (trace-time values - SOURCE OF TRUTH for dtype)
+        # Load profile.json (build-time values - SOURCE OF TRUTH for dtype)
         profile_path = comp_dir / "profile.json"
         if profile_path.exists():
             with open(profile_path) as f:
@@ -692,4 +692,4 @@ class NBXContainer:
 # =============================================================================
 
 # REMOVED: create_nbx_from_onnx - ONNX support removed from system
-# NBX containers are now created directly from PyTorch models via trace
+# NBX containers are now created directly from PyTorch models via build

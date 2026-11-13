@@ -123,7 +123,7 @@ class OutputExtractor:
             semantic_keys = [k for k in output.keys() if not k.startswith("T_")]
 
             # Positional aliases (output_0, output_1, ...). Two invariants:
-            # (1) output_0 mirrors the PRIMARY output — the tracer names a
+            # (1) output_0 mirrors the PRIMARY output — the builder names a
             #     tuple return's element 0 "output" and dataclass primaries
             #     keep their field names; the gather order is PRODUCER-OP
             #     order, which for multi-output components puts secondary

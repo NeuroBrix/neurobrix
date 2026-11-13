@@ -1,6 +1,6 @@
 """K's layout comes from the graph, never from its shape.
 
-PyTorch's SDPA math decomposition hands the traced graph a K already
+PyTorch's SDPA math decomposition hands the built graph a K already
 transposed to (batch, heads, head_dim, seq). Every engine has to put it
 back, and each used to recognise the situation by comparing shapes:
 

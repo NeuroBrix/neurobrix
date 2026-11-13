@@ -1,5 +1,5 @@
 """The graph's aten.view is a VIEW wherever ATen's is one, a strided input included (`dispatch._view_strides`, ATen's
-`computeStride`): the graph was traced under ATen, where it copies nothing, and the Triton engine copied every
+`computeStride`): the graph was built under ATen, where it copies nothing, and the Triton engine copied every
 non-contiguous input — mochi-1-preview's VAE held a 3 GB copy per permute -> view the graph never priced (2026-10-28).
 ATen is the oracle here (a test, never the engine).
 

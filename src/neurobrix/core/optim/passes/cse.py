@@ -34,7 +34,7 @@ those tids hold. Three exclusions, each with its evidence:
    killed at that point in execution order. Cost is negligible (a few
    hundred such ops zoo-wide); soundness is total.
    Note `_MUTATING_SUFFIX` alone is NOT a sufficient test here: the
-   tracer strips the trailing underscore, so `aten::copy_` is recorded
+   builder strips the trailing underscore, so `aten::copy_` is recorded
    as `aten::copy` and a suffix check matches nothing. The check is a
    named set, audited against the engine's own dispatch tables.
 

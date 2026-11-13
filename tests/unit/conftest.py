@@ -4,7 +4,7 @@ The tools are scripts: run as `python tools/<tool>.py`, their own directory is f
 their neighbours by name (`import atelier`, the workshop's roots). A test loads a tool by its file
 (`importlib.util.spec_from_file_location`), which does not — so the tools' directory is put where the script's run puts
 it. (Since the workshop's roots became `tools/atelier.py`, 2026-10-22, every test that loaded such a tool failed with
-`No module named 'atelier'`: about 70 cells of the CPU suite, tools and Forge, red on base.)"""
+`No module named 'atelier'`: about 70 cells of the CPU suite, tools and the container builder, red on base.)"""
 from __future__ import annotations
 
 import sys

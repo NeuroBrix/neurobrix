@@ -1,10 +1,10 @@
-"""The static broadcast scan finds a dim that agrees with its neighbour only at the trace values.
+"""The static broadcast scan finds a dim that agrees with its neighbour only at the build values.
 
 Built from the Wan VAE encoder's defect (regression matrix, 2026-09-26): a view folds the time
-expression into the channel dim (T'*384) while the norm's expand keeps a literal 384; at the trace
+expression into the channel dim (T'*384) while the norm's expand keeps a literal 384; at the build
 T' = 1 and both are 384. The scan must name that op and say it breaks when TIME moves — not when
 the batch moves; a correctly symbolic pair must pass; two symbols sharing one name move together.
-On a scan that evaluated only the trace, or moved every symbol at once, these fail.
+On a scan that evaluated only the build, or moved every symbol at once, these fail.
 """
 import sys
 from pathlib import Path

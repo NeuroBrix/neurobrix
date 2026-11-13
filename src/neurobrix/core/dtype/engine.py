@@ -375,7 +375,7 @@ _OP_CLASSES = _default_classes()
 # `aten::_fft_r2c` and a plain `aten::mul` — all observed producing
 # complex in the cached zoo. These names stay for a graph that carries no
 # output_dtypes at all; do NOT try to complete the list, a generic `mul`
-# can produce a complex in any model ever traced. Note the two rules also
+# can produce a complex in any model ever built. Note the two rules also
 # differ deliberately: this set LEVELS every non-fp32 float to fp32, the
 # complex rule is a FLOOR that preserves float64.
 # Other
@@ -436,7 +436,7 @@ _FP32_OPS_HALF_IO: FrozenSet[str] = _OP_CLASSES["float32_half_io"]   # nbxtensor
 # Ops that promote to widest input type.
 # From AT_FORALL_PROMOTE. (PyTorch 100% match — all 11 ops)
 # What the class holds, and why (kept from the list it was):
-# grid_sampler_2d/3d: the ATen names the trace carries (the autocast
+# grid_sampler_2d/3d: the ATen names the build carries (the autocast
 # table lists the composite `grid_sampler`); input and grid must agree
 # on the widest float type — under the contract the sampled features
 # arrive fp16 and the grid fp32 (GLM-4.1V visual, 2026-09-05).
@@ -474,7 +474,7 @@ _WIDE_NAMES: FrozenSet[str] = frozenset({"float64", "complex128", "double", "cdo
 
 
 def _dtype_name_of(d) -> str:
-    """A traced dtype's bare name ("torch.float64" -> "float64")."""
+    """A built dtype's bare name ("torch.float64" -> "float64")."""
     return str(d).replace("torch.", "")
 
 
@@ -557,7 +557,7 @@ class DtypeEngine:
         # Whether the device computes and stores float64 / complex128, read from the same profile
         # (`precision.supports_fp64`, `config.device_supports_fp64`); `device` says only whether
         # this engine was placed on the host, whose fp64 is the host's. False: every float64 /
-        # complex128 the trace asks for lands in float32 / complex64, as the vendor's own code does
+        # complex128 the build asks for lands in float32 / complex64, as the vendor's own code does
         # on MPS. No profile is the LOUD side: a device without fp64 refuses the tensor.
         self.device_has_fp64 = (device_supports_fp64(device, *self.hardware)
                                 if self.hardware else True)
@@ -620,7 +620,7 @@ class DtypeEngine:
         """
         op_name = strip_aten_prefix(op_type)
 
-        # A device without fp64: an op the trace saw produce float64 / complex128 receives its dtype
+        # A device without fp64: an op the build saw produce float64 / complex128 receives its dtype
         # request narrowed (Flex.1-alpha's `arange(dtype=float64)`, 2026-10-08), under every rule below.
         if (not self.device_has_fp64 and func is not None
                 and any(_dtype_name_of(d) in _WIDE_NAMES for d in attrs.get("output_dtypes") or ())):
@@ -640,7 +640,7 @@ class DtypeEngine:
         # sits in AMP_FP32_OPS, whose leveller downcasts Wan's float64 RoPE),
         # over the AMP gate, and over the vendor fp32 pin — a pin is a
         # precision choice among REAL dtypes and cannot validly retype a
-        # traced complex128 contract to complex64.
+        # built complex128 contract to complex64.
         if traced_output_is_complex(attrs):
             return self._make_complex_output_wrapper(func)
 
@@ -708,7 +708,7 @@ class DtypeEngine:
                     return self._make_fp32_wrapper(func)
                 # The trace's own fp32 island (core/dtype/traced_island): an op the vendor
                 # computed in fp32 inside a half graph keeps fp32 on ANY hardware — bf16's
-                # range is no answer to the precision the trace kept (Sana's Gemma rotary).
+                # range is no answer to the precision the build kept (Sana's Gemma rotary).
                 if is_traced_fp32_island(attrs, _dtype_name(self.graph_dtype)):
                     return self._make_fp32_wrapper(func)
                 # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
@@ -823,7 +823,7 @@ class DtypeEngine:
         (240 float64 ops, 148 complex128 outputs in the 1.3B transformer) and
         silently retype its complex128 contract to complex64. This wrapper
         raises fp16/bf16 to fp32 and leaves fp32, fp64 and complex operands
-        exactly as the trace has them, so the op emits the width the
+        exactly as the build has them, so the op emits the width the
         container recorded.
 
         It DOES keep `_make_fp32_wrapper`'s contiguity normalisation, which
@@ -885,7 +885,7 @@ class DtypeEngine:
         garbage (observed: openaudio dual-AR depth transformer). The vendor
         protects this with an explicit ``x.float()`` before the square; we apply
         the same upcast here, data-driven, so it holds regardless of what the
-        trace captured (an fp32 trace no-op-elides the vendor's ``.float()``).
+        build captured (an fp32 build no-op-elides the vendor's ``.float()``).
 
         Only the SQUARE (``a is b``) is upcast — a generic ``x * y`` stays in
         compute_dtype. Output stays fp32; the downstream mean/rsqrt are already
@@ -1228,7 +1228,7 @@ class DtypeEngine:
 
         # fp16 squaring guard — runtime mirror of compile_op's
         # _make_mul_safe. A hand-rolled RMSNorm/LayerNorm variance
-        # mean(x*x) traces as aten::mul with both operands bound to the SAME
+        # mean(x*x) builds as aten::mul with both operands bound to the SAME
         # tensor; squaring overflows fp16 (max 65504) for |x|>256 → inf → the
         # norm collapses to ~0 and the component emits silence/garbage (openaudio
         # DAC codec sequential mode). Upcast ONLY the square (a is b) to fp32; a

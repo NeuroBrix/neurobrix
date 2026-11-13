@@ -34,7 +34,7 @@ import neurobrix.triton.i2v_conditioning as triton_i2v
 # (pkg.manifest / pkg.cache_path / variable_resolver.resolved).
 # ---------------------------------------------------------------------------
 
-# vae_encoder graph output layout: frames-first [B, F, C, lh, lw] (the traced
+# vae_encoder graph output layout: frames-first [B, F, C, lh, lw] (the built
 # Allegro encode permutes to frames-first) — both bricks must detect the
 # channel axis and arrange to channels-first [B, C, F, lh, lw].
 _LATENT_SHAPE_FF = (1, 22, 4, 6, 8)   # B=1, F(latent)=22, C=4, lh=6, lw=8

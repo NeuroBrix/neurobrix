@@ -136,7 +136,7 @@ class _Ap:
 
 
 def _t(shape):
-    return {"shape": list(shape), "dtype": "float16"}   # every graph tensor carries its traced dtype
+    return {"shape": list(shape), "dtype": "float16"}   # every graph tensor carries its built dtype
 
 
 def _op_level_graph():

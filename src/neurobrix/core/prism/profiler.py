@@ -239,7 +239,7 @@ def temporal_downscale_ratio(dag: Dict) -> Optional[tuple]:
                     or t_out_trace >= t_in_trace:
                 continue  # not a downscale along this axis
             if t_in_trace % t_out_trace != 0:
-                return None  # non-integral trace ratio — declined
+                return None  # non-integral build ratio — declined
             ratio = t_in_trace // t_out_trace
             if ratio <= 1:
                 return None
@@ -421,7 +421,7 @@ def temporal_map_unread(dag: Dict) -> str:
 
 def is_linear_downscale_graph(dag: Dict) -> bool:
     """True iff the graph is a rank-5 spatial DOWNSAMPLER (output spatial
-    trace extent < input's — a VAE encoder) whose temporal map is in the
+    build extent < input's — a VAE encoder) whose temporal map is in the
     LINEAR-DOWN class. This is the gate for pixel-space symbol binding
     (build_symbol_map) and for encoder component-tiling (Prism solver).
     Anything else — upsamplers, causal encoders, 4D graphs — is untouched.
@@ -486,7 +486,7 @@ class ActivationProfile:
     overflow_ops: List = None  # type: ignore  # Optional[List[Tuple[...]]]
     #: WHICH REQUEST THIS NUMBER IS ABOUT. "request" when a caller supplied an
     #: InputConfig; "trace" when none was given and the profile was bound to the
-    #: extents the container was actually traced at. A peak in gigabytes reads
+    #: extents the container was actually built at. A peak in gigabytes reads
     #: like a property of the model; it is a property of a request, and until
     #: 2026-09-12 a caller who passed nothing silently got a 1024x1024 batch-2
     #: image request applied to whatever graph it held -- a video component's
@@ -694,16 +694,16 @@ class ActivationProfiler:
 
         `placement_floor=True` (PLACEMENT estimates only — never the
         per-request paths): no symbol whose binding is a guess binds BELOW its
-        trace value; the request's own extents (time, height, width) bind as
+        build value; the request's own extents (time, height, width) bind as
         asked.
-        The trace is a WITNESSED extent; placement must stay safe for
-        extents >= trace. Root case (2026-08-10, D7 scoping note):
+        The build is a WITNESSED extent; placement must stay safe for
+        extents >= build. Root case (2026-08-10, D7 scoping note):
         Qwen3-Omni thinker.audio_tower's mel-frame axis is NAMED
         `seq_len`, so it bound to the global text seq config (~128)
-        instead of >= its 441-frame trace — the activation estimate
+        instead of >= its 441-frame build — the activation estimate
         collapsed and block_scatter packed a 16G card to 15.77 GiB with
         zero forward headroom. Per-request estimation legitimately binds
-        BELOW trace (Kokoro seq 14 < trace 23), hence the flag, not a
+        BELOW build (Kokoro seq 14 < build 23), hence the flag, not a
         default. The complete fix — declared per-input runtime maxima in
         the container defaults (registry-driven) — is a build-toolchain
         contract evolution, filed separately; the floor removes the
@@ -728,13 +728,13 @@ class ActivationProfiler:
         # A graph with NO vae_scale has no latent space, so its spatial symbols
         # ARE the pixel extents and bind to the request directly. They used to
         # bind to None, and a symbol mapped to None resolves nowhere: every shape
-        # fell back to its TRACE dim, and the profiler answered for the traced
+        # fell back to its BUILD dim, and the profiler answered for the built
         # request instead of the one being planned.
         #
         # Measured on `real-esrgan-x8` at 1024x1024 (the Mac found it, 2026-09-18):
         # ActivationProfiler reported 128 MB where the solver's own estimator
         # reported A=16384 MB — 128x apart, because 128 MB is the answer at the
-        # trace extent s1=112 and 16384 MB is the answer at 1024. The largest
+        # build extent s1=112 and 16384 MB is the answer at 1024. The largest
         # tensor resolves to 8192 MiB there, and 8192 MiB is 8 589 934 592 bytes,
         # which is the exact allocation in the failure this whole design opens
         # with. The graph was never at fault: all 1801 of its tensors carry a
@@ -788,9 +788,9 @@ class ActivationProfiler:
                     symbol_map[sid] = input_config.width
                     continue
                 # "time" without a runtime num_frames: fall through to the
-                # standard binding below (trace value).
+                # standard binding below (build value).
             if name == "batch":
-                # Trace value, NOT input_config.batch_size: the trace baked
+                # Build value, NOT input_config.batch_size: the build baked
                 # each component's true batch semantics (VAE decode batch=1,
                 # CFG-traced transformers batch=2). Binding the CFG batch here
                 # doubled every Sana 4Kpx VAE activation estimate and flipped
@@ -824,14 +824,14 @@ class ActivationProfiler:
                 symbol_map[sid] = input_config.seq_len or (
                     trace if isinstance(trace, int) else 128)
             elif isinstance(trace, int):
-                # Unknown named symbol: trace value (matches the trace, never
+                # Unknown named symbol: build value (matches the build, never
                 # worse than the legacy positional guess).
                 symbol_map[sid] = trace
             # The floor is for a binding that is a GUESS (a `seq_len` axis taking the global text
             # length, the 2026-08-10 case), never for an extent the request states: frames, height
             # and width are the request's own, exactly as the pixel-space branch above binds them
             # unfloored. Floored one axis at a time, Wan2.1-VACE at 832x480 — the vendor's portrait
-            # size, traced at 480x832 — priced its width at the trace's 104 latent columns where it
+            # size, built at 480x832 — priced its width at the trace's 104 latent columns where it
             # asked for 60: a 104x104 grid, the transformer 18.04 GiB instead of 10.41, and the plan
             # fell from lazy_sequential to cpu_streaming (2026-09-29).
             if (placement_floor and isinstance(trace, int)
@@ -842,7 +842,7 @@ class ActivationProfiler:
                 symbol_map[sid] = trace
         # The request's FLOW binds what no name says (`flow_bindings.FlowBindings.overrides`): the
         # CFG batch, the VACE pair, an encoder's length, a denoiser's text axis — each the extent
-        # the flow runs, never a guess, so never floored. Floored, Wan2.2-I2V's transformer (traced
+        # the flow runs, never a guess, so never floored. Floored, Wan2.2-I2V's transformer (built
         # at batch 3, a collision-free stimulus) was priced at 3 for a CFG batch of 2 (2026-09-29).
         # `flow=False` is the rules' own recursion (a rule binding another component by name alone).
         if flow and getattr(input_config, "flow", None) is not None:
@@ -855,15 +855,15 @@ class ActivationProfiler:
         return symbol_map
 
     def trace_symbol_map(self) -> Dict[str, int]:
-        """{symbol id: the extent this graph was TRACED at}.
+        """{symbol id: the extent this graph was BUILT at}.
 
         The only configuration a container is known to have witnessed. It is the
         honest default for a profile nobody parameterised, and it is the baseline
         a request-bound profile should be compared against: a request 4x the
-        trace should cost about 4x, and when it does not, the difference is the
+        build should cost about 4x, and when it does not, the difference is the
         finding.
 
-        REFUSES a graph that declares symbols without trace values rather than
+        REFUSES a graph that declares symbols without build values rather than
         returning a partial map: a symbol missing from the map falls back to a
         positional guess downstream, which is the failure this exists to remove.
         """
@@ -998,9 +998,9 @@ class ActivationProfiler:
                 at the compute dtype's 2 — and an in-place add whose reused input is
                 NARROWER than its output is a fresh allocation (the in-place path falls
                 back to a plain add: wrappers.py add_inplace_nbx, tiling_engine.py
-                `_inplace_add`), so it is not aliased. None: the traced dtype of each
+                `_inplace_add`), so it is not aliased. None: the built dtype of each
                 tensor (the per-request and detector callers). The overflow scan below
-                keeps sizing at the traced dtype either way — the op-level tiling
+                keeps sizing at the built dtype either way — the op-level tiling
                 detector (`PrismSolver._detect_op_level_tiling_pairs`) derives the same
                 set from the same scan, and the two must agree on which ops overflow.
             source_holding_uids: zero-alloc op_uids whose output is a proxy or view
@@ -1023,11 +1023,11 @@ class ActivationProfiler:
         Returns:
             ActivationProfile with peak memory info
         """
-        # NO CONFIG MEANS THE TRACE, NOT A 1024x1024 BATCH-2 IMAGE REQUEST.
+        # NO CONFIG MEANS THE BUILD, NOT A 1024x1024 BATCH-2 IMAGE REQUEST.
         # `InputConfig()`'s defaults are a request the container never received,
         # and binding them through the positional base put a video component's
         # time axis on a spatial extent with nothing in the output saying so.
-        # The extents the graph was traced at are the one configuration it is
+        # The extents the graph was built at are the one configuration it is
         # known to have witnessed, so that is what an unparameterised profile
         # reports -- and the profile says which of the two it is.
         binding = "request"
@@ -1437,7 +1437,7 @@ class ActivationProfiler:
             # this point in the schedule, which the simulation loop above
             # recorded in `live_before_op`.
             #
-            # Measured at trace extents over the 56 local containers, this moves
+            # Measured at build extents over the 56 local containers, this moves
             # ops on five components -- CogVideoX-2b and 5b-I2V's vae (one op
             # each, 13,131 MB against a 13,736 MB line, 635 MB of it already
             # resident), SANA-Video_2B_720p's vae (ten), and Sana_1600M_4Kpx's
@@ -1543,10 +1543,10 @@ class ActivationProfiler:
         shape = tensor_meta.get("shape", [])
 
         # Symbolic expression trees take precedence over the concrete shape.
-        # Graphs traced with a frugal stimulus (video VAEs at [1,16,T0,h0,w0])
-        # store the TINY trace values in `shape` and the real symbolic dims as
+        # Graphs built with a frugal stimulus (video VAEs at [1,16,T0,h0,w0])
+        # store the TINY build values in `shape` and the real symbolic dims as
         # expression trees in `symbolic_shape.dims` ({symbol,mul,add,floordiv,
-        # ...} nodes). Estimating from the concrete trace shape made every
+        # ...} nodes). Estimating from the concrete build shape made every
         # video activation look like a few MB — the 23 GiB Wan f81 VAE
         # upsample never reached overflow_ops and op-level tiling never
         # fired. Per-dim fallback to the concrete value keeps non-symbolic
@@ -1560,12 +1560,12 @@ class ActivationProfiler:
                     cv = shape[i] if i < len(shape) else 1
                     if not isinstance(cv, int):
                         cv = 1
-                    # TRUST GATE: an expression is only used if its own trace
-                    # annotation reproduces the concrete trace dim. Some image
+                    # TRUST GATE: an expression is only used if its own build
+                    # annotation reproduces the concrete build dim. Some image
                     # graphs carry mis-associated product expressions (e.g. a
-                    # Sana _unsafe_view dim whose expr trace is 8.4e14 against
+                    # Sana _unsafe_view dim whose expr build is 8.4e14 against
                     # a concrete dim of 1) — evaluating those exploded peak
-                    # estimates to absurdity. Self-consistency at trace is the
+                    # estimates to absurdity. Self-consistency at build is the
                     # discriminator: valid exprs (video frugal-trace graphs)
                     # evaluate at runtime dims; invalid or unannotated ones
                     # fall back to the concrete value (legacy behavior, R23).
@@ -1576,13 +1576,13 @@ class ActivationProfiler:
                             continue
                     elif isinstance(d, int) and not isinstance(d, bool) and d != cv:
                         # A bare integer cannot vary with any symbol, so one
-                        # that differs from the witnessed trace dim is a
+                        # that differs from the witnessed build dim is a
                         # corrupted annotation (2026-09-06: 98 component
                         # graphs of the zoo carry another tensor's extent
                         # in an output slot — Kokoro's decoder conv put its
                         # input length, 15361, in the batch slot and was
                         # sized at 19.2 GB, sending an 82M model to the host
-                        # on every 16 GB card). The trace value is the truth.
+                        # on every 16 GB card). The build value is the truth.
                         resolved.append(cv)
                         continue
                     v = None
@@ -1619,8 +1619,8 @@ class ActivationProfiler:
         """Evaluate one `symbolic_shape.dims` expression node, through the ONE evaluator every
         runtime resolver uses (core/runtime/symexpr.py), in the shape slot (a real refuses).
 
-        A symbol absent from `symbol_map` answers its recorded trace value, and a node outside
-        the vocabulary its own trace value — profiling estimation only, as before.
+        A symbol absent from `symbol_map` answers its recorded build value, and a node outside
+        the vocabulary its own build value — profiling estimation only, as before.
         """
         def symbol(sid, n):
             if sid in symbol_map:
@@ -1683,7 +1683,7 @@ class ActivationProfiler:
         tensor_meta: Dict[str, Any],
     ) -> int:
         """
-        Compute tensor size in bytes at the tensor's TRACED dtype — every graph tensor carries one (805 445 tensors of
+        Compute tensor size in bytes at the tensor's BUILT dtype — every graph tensor carries one (805 445 tensors of
         the 49 containers, none without, 2026-10-30); a meta without it is refused by name, never priced at a default
         width.
 

@@ -22,15 +22,15 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impo
 
 
 #: The plan these cells refuse. It was batch 2, then batch 8, at 2048x1024 on PixArt (the Mac's own
-#: 14 420 MB refusal, 2026-05-20, then the re-traced container). Since a component over the rung
+#: 14 420 MB refusal, 2026-05-20, then the rebuilt container). Since a component over the rung
 #: streams inside itself (2026-10-04) PixArt plans layer_streaming at 2048x1024 at ANY batch and
 #: any imposed rung down to 1 024 — its transformer, one piece, is cut in two. What still refuses is
 #: a component whose ACTIVATIONS alone fill the usable rung and that no tile serves:
 #: Wan2.1-I2V-14B-480P's `vae_encoder` at its derived request (17 738 MB of activations against
-#: 15 073 usable at the 16 384 rung; its traced time axis is frozen, so no tile maps it — a Forge
-#: re-trace, test_a_component_over_the_rung_streams_inside_itself). When that encoder is re-traced
+#: 15 073 usable at the 16 384 rung; its built time axis is frozen, so no tile maps it — a container builder
+#: rebuild, test_a_component_over_the_rung_streams_inside_itself). When that encoder is rebuilt
 #: these cells need another refusal, and say so by failing.
-#: They did (2026-10-05): the re-traced encoder is tiled and the model plans layer_streaming at
+#: They did (2026-10-05): the rebuilt encoder is tiled and the model plans layer_streaming at
 #: 16 384. The same request still refuses at an imposed 4 096: its `transformer`'s activations alone
 #: peak at 5 215 MB against 3 768 usable, one op's working set that no cut between ops serves (probe,
 #: campaigns/2026_10_05_op_tiler/refusal_probe.py). When a token split of the attention region

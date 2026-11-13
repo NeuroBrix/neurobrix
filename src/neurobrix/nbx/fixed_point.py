@@ -1,13 +1,13 @@
 """The container's graphs are at the re-propagation fixed point, or the engine refuses it.
 
-The compiled sequence carried a compensation for graphs whose trace left a cross-branch
-dimension literal: it re-keyed an expand / view / reshape literal equal to the trace value of
+The compiled sequence carried a compensation for graphs whose build left a cross-branch
+dimension literal: it re-keyed an expand / view / reshape literal equal to the build value of
 the only expression of that value in the graph. On the graphs the build toolchain's single
 write leaves at its symbolic fixed point it could only corrupt literals, and it did
 (2026-10-04): Ming-Lite-Omni-1.5's GQA heads 4 / 16 became 2176 at a 275-token prompt once
-the MoE token counts were the only expressions of trace 3 and 4, and Sana_1600M_4Kpx_BF16's
-VAE `view::31` merged its 4096 channels into an expression of trace 1024. The pass is gone;
-the defect it compensated is fixed where it is born, in the trace.
+the MoE token counts were the only expressions of build 3 and 4, and Sana_1600M_4Kpx_BF16's
+VAE `view::31` merged its 4096 channels into an expression of build 1024. The pass is gone;
+the defect it compensated is fixed where it is born, in the build.
 
 The writer records that fact on every component it leaves at the fixed point:
 `extracted_values[<component>]["symbolic_fixed_point"]` in topology.json, its value the

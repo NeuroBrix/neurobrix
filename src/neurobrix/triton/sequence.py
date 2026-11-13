@@ -361,7 +361,7 @@ class TritonSequence(SequenceSteps):
         # Engines
         self._symbol_resolver: Optional[SymbolResolver] = None
         from nbxtensor.ops.wrappers import has_native_bf16 as _has_bf16
-        # graph_dtype: the container's traced `torch_dtype` (graph.json top level; a
+        # graph_dtype: the container's built `torch_dtype` (graph.json top level; a
         # streamed segment and a const-fold sub-graph carry it too) — the AMP_FP32
         # cast-back rule reads it under bf16 compute.
         self._dtype_engine = TritonDtypeEngine(
@@ -501,7 +501,7 @@ class TritonSequence(SequenceSteps):
 
         # Phase -1: Eliminate aten::detach ops (identity at inference time).
         # Mirrors CompiledSequence._eliminate_detach_ops. Heavy impact on
-        # models where the tracer captured a detach per parameter access
+        # models where the builder captured a detach per parameter access
         # (DeepSeek: 19,428/44,634 ops, T5: ~36%).
         self._eliminate_detach_ops(tensors, ops_by_uid, exec_order)
 
@@ -559,7 +559,7 @@ class TritonSequence(SequenceSteps):
         if os.environ.get("NBX_DISABLE_ROPE_FUSION") != "1":
             self._fuse_rope_ops(tensors, ops_by_uid, exec_order)
 
-        # Phase 0: Promote trace-time seq_len scalars to symbolic references.
+        # Phase 0: Promote build-time seq_len scalars to symbolic references.
         # Shared logic in triton/promotion.py — used by both compiled and sequential.
         from .promotion import promote_seq_len_scalars
         promote_seq_len_scalars(self.dag, tensors, ops_by_uid,
@@ -2725,7 +2725,7 @@ class TritonSequence(SequenceSteps):
         """Closure that resolves a symbol at runtime via SymbolResolver."""
         def resolve(_arena):
             # A bound symbol answers, INCLUDING one bound to 0 (a cache length at its
-            # first step); an unbound one refuses by name — the trace value is a
+            # first step); an unbound one refuses by name — the build value is a
             # witnessed extent of one stimulus, never a value (2026-09-21).
             r = self._symbol_resolver
             if r is not None and r.is_bound(symbol_id):
@@ -2755,9 +2755,9 @@ class TritonSequence(SequenceSteps):
     # ========================================================================
 
     def _identify_seq_dependent_constants(self, tensors: dict):
-        """Tag constant_T_* tensors with a dim matching trace seq_len.
+        """Tag constant_T_* tensors with a dim matching build seq_len.
 
-        RoPE cos/sin are captured at trace time with shape [1, trace_seq_len, dim].
+        RoPE cos/sin are captured at build time with shape [1, trace_seq_len, dim].
         At runtime they must be narrowed to [1, runtime_seq_len, dim].
         """
         sym_ctx = self.dag.get("symbolic_context", {})
@@ -3531,7 +3531,7 @@ class TritonSequence(SequenceSteps):
                     _live = DeviceAllocator.memory_allocated(DeviceAllocator.get_device())
                     _log.debug(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB")
                 # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L1: extended
-                # periodic trace. NBX_LIVE_WATERMARK_TRACE=path/to/file.jsonl
+                # periodic build. NBX_LIVE_WATERMARK_TRACE=path/to/file.jsonl
                 # samples every NBX_LIVE_WATERMARK_EVERY ops (default 50)
                 # the FULL memory picture: nbx_live, nbx_pool_cached,
                 # driver_free, driver_total, and computes the untracked
@@ -3591,7 +3591,7 @@ class TritonSequence(SequenceSteps):
                 # A multi-output op (split / chunk / unbind) can return a
                 # 1-element tuple when a data-dependent split yields a single
                 # chunk at the runtime resolution (e.g. HunyuanVAE
-                # chunk_nearest_interpolate -> n_chunks == 1). One traced output
+                # chunk_nearest_interpolate -> n_chunks == 1). One built output
                 # slot => unwrap; single-tensor ops never return a tuple/list, so
                 # this is unambiguous. Mirrors compiled_sequence (R30).
                 if isinstance(result, (tuple, list)):
@@ -3607,7 +3607,7 @@ class TritonSequence(SequenceSteps):
             # gated by NBX_VALUE_DUMP_EVERY. Placed AFTER the arena writes:
             # in this method the defer-old-slots block runs BEFORE the write,
             # so printing there read the PREVIOUS value (or None) and the
-            # output half of the trace was useless.
+            # output half of the build was useless.
             if _vdump and op.output_slots:
                 _log.debug(f"[VALUE_TRACE path=tritonfused op_idx={op_idx} "
                            f"op_uid={op.op_uid} "
@@ -3638,7 +3638,7 @@ class TritonSequence(SequenceSteps):
                     _census.observe(op.op_uid, self._arena[_slot] if self._arena else None)
             # =============================================================
 
-            # === Targeted tid lifecycle trace (P-SANA-4KPX-RUNTIME) ===
+            # === Targeted tid lifecycle build (P-SANA-4KPX-RUNTIME) ===
             # NBX_TRACE_TIDS="tid1,tid2" prints [ALLOC] when a slot for a
             # matching tid receives a tensor, and [KILL] when that slot
             # is killed by op.kill_slots. Refcount snapshot at each event
@@ -3667,7 +3667,7 @@ class TritonSequence(SequenceSteps):
                 for s in op.kill_slots:
                     old = arena[s]
                     if old is not None:
-                        # Targeted lifecycle trace: snapshot refcount
+                        # Targeted lifecycle build: snapshot refcount
                         # BEFORE kill_slots assigns arena[s]=None. If
                         # refcount > 2 (arena + sys.getrefcount arg),
                         # the tensor has additional Python refs that
@@ -3863,7 +3863,7 @@ class TritonSequence(SequenceSteps):
                 # A multi-output op (split / chunk / unbind) can return a
                 # 1-element tuple when a data-dependent split yields a single
                 # chunk at the runtime resolution (e.g. HunyuanVAE
-                # chunk_nearest_interpolate -> n_chunks == 1). One traced output
+                # chunk_nearest_interpolate -> n_chunks == 1). One built output
                 # slot => unwrap; single-tensor ops never return a tuple/list, so
                 # this is unambiguous. Mirrors compiled_sequence (R30).
                 if isinstance(result, (tuple, list)):

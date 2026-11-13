@@ -1,9 +1,9 @@
-"""The census names a view whose inferred slot breaks the element count off the trace,
+"""The census names a view whose inferred slot breaks the element count off the build,
 and stays silent on a sound one.
 
 granite-speech-3.3-8b, 2026-09-26: [1, 31, 4096] -> [1, 31, 32, 128] with the head count
-recorded as `s0 + s1` reproduced the trace and died at 209 tokens. The cells below are that
-graph in miniature (RED on a census that only checked the trace point) and its corrected
+recorded as `s0 + s1` reproduced the build and died at 209 tokens. The cells below are that
+graph in miniature (RED on a census that only checked the build point) and its corrected
 form (literal 32), plus the LLM flatten `[s0, s1, H] -> [-1, H]` whose slot is `s0 * s1`
 and is sound, plus a corrupted-at-trace site, which is counted and never evaluated.
 

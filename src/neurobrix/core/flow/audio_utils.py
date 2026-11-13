@@ -136,7 +136,7 @@ def preprocess_audio_input(
             input_shape=input_shape,
         )
 
-    # Pad/truncate to match trace-time dimensions
+    # Pad/truncate to match build-time dimensions
     features = _fit_to_trace(features)
 
     _log.debug("%s", f"   [Audio] Features: {features.shape} ({preprocessing})"

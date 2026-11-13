@@ -11,7 +11,7 @@ are already on it:
                             schedule, which the simulation loop computes and
                             used to discard before the overflow scan began
 
-Measured at trace extents over the 56 local containers, the live-activation half
+Measured at build extents over the 56 local containers, the live-activation half
 alone moves five component/card pairs of 308: CogVideoX-2b and CogVideoX-5b-I2V's
 vae (one op each, `aten.convolution::91`, 13,131 MB of footprint against a
 13,736 MB line with 635 MB already resident), SANA-Video_2B_720p's vae (ten ops)

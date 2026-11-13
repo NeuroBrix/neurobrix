@@ -63,9 +63,9 @@ NONE = conservative_contract("test: no contract")
 
 
 def _t(shape, dtype=None, **kw):
-    """A traced tensor. A component INPUT is traced at the component's dtype (float16 here) unless the test says
-    otherwise: it enters at the compute dtype (`runtime_widths`: an input traced wider enters at its width, the rule
-    of 2026-10-18); a seam keeps its producer's traced dtype; anything else is traced float32 as these graphs were."""
+    """A built tensor. A component INPUT is built at the component's dtype (float16 here) unless the test says
+    otherwise: it enters at the compute dtype (`runtime_widths`: an input built wider enters at its width, the rule
+    of 2026-10-18); a seam keeps its producer's built dtype; anything else is built float32 as these graphs were."""
     if dtype is None:
         dtype = "float16" if kw.get("is_input") and not kw.get("seam_alias_of") else "float32"
     return {"shape": list(shape), "dtype": dtype, **kw}
@@ -80,8 +80,8 @@ def _op(uid, op_type, ins, outs, **attrs):
 
 
 def _dag(tensors, ops, inputs, outputs, graph="float32"):
-    """`graph`: the component's traced `torch_dtype` (every container states one); the
-    fixtures' tensors are traced fp32."""
+    """`graph`: the component's built `torch_dtype` (every container states one); the
+    fixtures' tensors are built fp32."""
     return {"tensors": tensors, "ops": {o["op_uid"]: o for o in ops},
             "execution_order": [o["op_uid"] for o in ops],
             "input_tensor_ids": list(inputs), "output_tensor_ids": list(outputs),
@@ -306,14 +306,14 @@ def test_the_estimate_sizes_an_fp32_activation_at_four_bytes():
     4 bytes. Block tensors are 128 elements; at add::0 live are a0 plus the inputs still
     needed (c0 freed at permute, r0 at permute::1, p1 at add::0)."""
     g = _block()
-    ap_old = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2)   # traced (fp32) sizing
+    ap_old = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2)   # built (fp32) sizing
     w = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, stores_fp64=False, contract=NONE)
     ap = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=dict(w))   # the widths alone: the copies are priced in test_a_chunk_prices_its_handed_inputs_and_its_casts
     level = {t: (2 if b in (2, 4) else b) for t, b in w.items()}      # the former levelling to C
     ap_c = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=level)
     # the peak op holds an fp32 128-element tensor beside another: priced wider than at C
     assert ap.peak_bytes > ap_c.peak_bytes
-    assert ap_c.peak_bytes * 2 == ap_old.peak_bytes          # all-fp32 trace, all-C level
+    assert ap_c.peak_bytes * 2 == ap_old.peak_bytes          # all-fp32 build, all-C level
     w_ = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, stores_fp64=False,
                         contract=PrecisionContract(True, frozenset(), frozenset({"rms::0"})))
     assert ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=dict(w_)).peak_bytes == ap_c.peak_bytes
@@ -515,7 +515,7 @@ def test_the_mirrors_answer_what_the_engines_execute():
 
 
 def _norm_tuple(graph="float32"):
-    """native_layer_norm returns (out, mean, rstd): its traced outputs are three."""
+    """native_layer_norm returns (out, mean, rstd): its built outputs are three."""
     T = {"input::x": _t([2, 8], is_input=True), "param::g": _t([8]), "param::b": _t([8]),
          "y": _t([2, 8]), "mu": _t([2, 1]), "rs": _t([2, 1])}
     return _dag(T, [_op("ln::0", "aten::native_layer_norm", ["input::x", "param::g", "param::b"],

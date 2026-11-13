@@ -22,7 +22,7 @@ What this file holds, on the CPU, with the real `GraphExecutor` and the real
 norm, a text head through `aten::mm`, logits declared as the output), in the two torch engines:
 
   * the streamed base's `get_hidden_states` is the whole executor's, value for value, at two
-    sequence lengths (the second far from the trace) — a decode step reads its own run;
+    sequence lengths (the second far from the build) — a decode step reads its own run;
   * the streamed run returns the whole run's declared outputs under the whole run's keys;
   * the triton engines' reader serves the same capture (the arena itself needs a card: the
     reader is held on the state the strategy leaves, and `tensors_of_last_run` on the state each
@@ -186,7 +186,7 @@ def test_the_streamed_base_reads_the_hidden_the_whole_executor_reads(mode):
     whole.load_weights(None, COMPONENT)
     streamed = _streamed_base(mode)
 
-    for seq_len in (T_TRACE, 3 * T_TRACE + 2):       # the trace length, and one far from it
+    for seq_len in (T_TRACE, 3 * T_TRACE + 2):       # the build length, and one far from it
         embeds = torch.randn(B, seq_len, D)
         whole_out, whole_hidden = _session_read(whole, embeds)
         streamed_out, streamed_hidden = _session_read(streamed, embeds)

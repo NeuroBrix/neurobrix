@@ -1,6 +1,6 @@
 """The output resolution is read from the container, wherever the container puts it.
 
-`_container_output_size` derives (height, width) from a traced LATENT input times
+`_container_output_size` derives (height, width) from a built LATENT input times
 the VAE scale. It is what the resolution cascade asks when a request names none,
 and what `latent_height` is derived from. Two of its own gates refused containers
 that declare everything needed, and two video models died for it on 2026-09-11 on

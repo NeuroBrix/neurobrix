@@ -406,10 +406,10 @@ def refuse_misnamed(cache_path, manifest: dict) -> None:
     """A container's directory carries its manifest's model name, or the engine refuses it.
 
     The name of a model is the name of its Hugging Face repository — never invented, never
-    hand-suffixed, never renamed — and two traces of one repository under two names are a
+    hand-suffixed, never renamed — and two builds of one repository under two names are a
     duplication whatever the graphs (the owner, 2026-09-26). The shared cache held four such
     directories (`PixArt-XL-1024` over a manifest declaring `PixArt-XL-2-1024-MS`, the Sigma
-    and Sana pairs, a `.pre-G-backup`), each a second trace nobody could tell from the first
+    and Sana pairs, a `.pre-G-backup`), each a second build nobody could tell from the first
     by name. A census says "not this time"; this door says "never": a directory whose name is
     not the name its manifest declares is refused at every entry — extraction, the directory
     short-cut, and the runtime loader — so the state cannot be reached by any path.

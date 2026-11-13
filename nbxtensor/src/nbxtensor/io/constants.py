@@ -1,6 +1,6 @@
 """A graph constant's stored bytes as the host array a tensor is built from — no tensor library opens them.
 
-A traced graph embeds its small constants (a rotary table, a window, a frequency grid) as the archive `torch.save`
+A built graph embeds its small constants (a rotary table, a window, a frequency grid) as the archive `torch.save`
 writes: a ZIP whose `archive/data/<n>` members are the raw storages. `archived_storage` reads the first storage out of
 it; `constant_array` turns stored bytes into the array the device receives, in the dtype the engine binds the
 constant in (`dtype.operands.constant_load_dtype`).

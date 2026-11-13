@@ -1,7 +1,7 @@
 """A container's directory carries its manifest's model name, or the engine refuses it.
 
 The name of a model is the name of its Hugging Face repository — never invented, never
-hand-suffixed, never renamed — and two traces of one repository under two names are a
+hand-suffixed, never renamed — and two builds of one repository under two names are a
 duplication whatever the graphs (the owner, 2026-09-26). The shared cache held four such
 directories on that day (`PixArt-XL-1024` over a manifest declaring `PixArt-XL-2-1024-MS`, the
 Sigma and Sana pairs, a `.pre-G-backup`). This door refuses the state at every entry: the

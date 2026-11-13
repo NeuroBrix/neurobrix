@@ -1,8 +1,8 @@
 """The width model (Prism's plan prices, the DERIVED census's keys) mirrors the engines' dtype policies op by op.
 Both policies keep a vendor's fp32 island inside a half graph in fp32 (`core/dtype/traced_island`, 2026-10-25): an
-AMP_FP16 op whose traced floating inputs and output are all float32 computes and stores fp32 on any hardware. The
+AMP_FP16 op whose built floating inputs and output are all float32 computes and stores fp32 on any hardware. The
 mirror must say the same, or the census derives the half key the launcher never forms — Allegro-TI2V's conditioning
-conv (`aten.convolution::0`, traced fp32) missed its fp32 depthwise key at the gate of 2026-10-25 08:25 (chain52).
+conv (`aten.convolution::0`, built fp32) missed its fp32 depthwise key at the gate of 2026-10-25 08:25 (chain52).
 
 Seen red on the tree that carried the engines' predicate but not the mirror (model-status-nvidia afe108cc):
 the conv derived at the compute dtype, its operands cast to it.
@@ -25,7 +25,7 @@ def _op(uid, op_type, ins, outs, in_dtypes, out_dtypes):
 
 
 def _dag(graph):
-    # A half component: an fp32 island conv (mask traced fp32 by the vendor) and a plain half conv beside it.
+    # A half component: an fp32 island conv (mask built fp32 by the vendor) and a plain half conv beside it.
     T = {"input::m": _t([1, 1, 1, 96], "float32"), "param::k": _t([1, 1, 1, 2], "float32"),
          "input::x": _t([1, 8, 4, 4], graph), "param::w": _t([8, 8, 3, 3], graph),
          "m1": _t([1, 1, 1, 48], "float32"), "y": _t([1, 8, 4, 4], graph)}

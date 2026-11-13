@@ -1,7 +1,7 @@
 """Seq-length scalar promotion: size entries match EXACTLY, slice ends keep +1
 (2026-09-02, Allegro-TI2V 4-mode).
 
-The runtime promotes concrete scalars equal to a seq_len symbol's trace
+The runtime promotes concrete scalars equal to a seq_len symbol's build
 value (offset 0..1) to symbolic references, in both engines. The +1 fuzz
 exists for the `seq_len + 1` pattern of causal-mask / BOS SLICING. Applied
 to the SIZE list of an expand, the head count 24 (= text_len 23 + 1) was
@@ -71,7 +71,7 @@ def test_compiled_promotion_sizes_exact_slice_ends_keep_plus_one():
 
 
 def test_both_mirrors_skip_a_seq_len_whose_trace_value_is_a_config_constant():
-    """R30: a seq_len symbol whose trace value equals a profile.json config
+    """R30: a seq_len symbol whose build value equals a profile.json config
     int is a collision on BOTH mirrors — the triton promotion (which also
     serves the PyTorch-sequential oracle) takes the same set."""
     from neurobrix.triton.promotion import promote_seq_len_scalars

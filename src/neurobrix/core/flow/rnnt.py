@@ -40,7 +40,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
     The encoder runs through CompiledSequence normally.
     The decoder (embedding + LSTM) and joint (linear + relu + linear) are
     executed with native PyTorch ops using weights extracted from the executor,
-    since their tiny graphs (11 and 20 ops) have trace-time shapes that don't
+    since their tiny graphs (11 and 20 ops) have build-time shapes that don't
     match the variable runtime shapes of greedy decoding.
     """
 
@@ -50,7 +50,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         audio_config = flow.get("audio", {})
 
         # Step 1: Audio preprocessing (stashes long-form windows —
-        # D-STT-LONGFORM-CHUNKING: one mel window per traced frame span;
+        # D-STT-LONGFORM-CHUNKING: one mel window per built frame span;
         # len==1 == the exact pre-change path)
         self._preprocess_audio(audio_config)
         _windows = getattr(self, "_stt_windows", None) or [None]
@@ -201,7 +201,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         actual_frames = features.shape[2]
         _log.debug(f"   [Audio] Features: {features.shape} (nemo_mel, {actual_frames} frames)")
 
-        # Pad to match encoder's traced frame count
+        # Pad to match encoder's built frame count
         expected_frames = 3000
         _dag_frames = None
         encoder_executor = self.ctx.executors.get("encoder")
@@ -219,9 +219,9 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         # converted with the extractor's own hop), one decode each,
         # tokens merged by emission frame (stt_longform). Whole-
         # utterance mel stats (the normalization above), last window
-        # padded like a short clip. The window length is the traced
+        # padded like a short clip. The window length is the built
         # span: D-PARAKEET-SYMBOLIC-T (DETTE.md) names the symbolic-T
-        # trace that removes that coupling. NBX_DISABLE_STT_CHUNKING=1
+        # build that removes that coupling. NBX_DISABLE_STT_CHUNKING=1
         # restores the truncating path for diagnosis.
         import os as _os_sw
         self._stt_windows = None
@@ -274,7 +274,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
         """
         RNNT greedy decoding with native PyTorch ops for decoder + joint.
 
-        The decoder and joint are tiny networks (11 and 20 ops) whose traced
+        The decoder and joint are tiny networks (11 and 20 ops) whose built
         graphs have hardcoded shapes. We extract their weights and run them
         natively to handle variable-length greedy decoding.
 

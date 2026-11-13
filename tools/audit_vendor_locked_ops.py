@@ -15,8 +15,8 @@ host; on three cards the component stays on CUDA and the graph looks fine. The
 battery, pinned to three cards, cannot see it. So a name census is the right
 instrument: it does not depend on which placement a run happens to take.
 
-The fix for anything found here is BUILD-side, in the tracer, and the artifact
-is re-traced. Runtime compensation of a build-side limit is rejected —
+The fix for anything found here is BUILD-side, in the builder, and the artifact
+is rebuilt. Runtime compensation of a build-side limit is rejected —
 mapping `cudnn_batch_norm` to `native_batch_norm` in the engine would hide a
 graph that is not portable behind an engine that pretends it is.
 
@@ -45,7 +45,7 @@ VENDOR_TOKENS = {
     "nvrtc": "NVIDIA",
     # `_thnn_fused_lstm_cell` dispatches to `_thnn_fused_lstm_cell_cuda` and
     # exists on no other backend. It was NOT in this list on 2026-09-04, which
-    # is precisely why a tracer change that replaced `cudnn_batch_norm` with
+    # is precisely why a builder change that replaced `cudnn_batch_norm` with
     # 298 of these looked like a fix: the census could not see what it
     # introduced. A census is only as wide as its token list.
     "thnn": "NVIDIA (THNN fused cell)",
@@ -159,7 +159,7 @@ def main() -> int:
                 print(f"      {comp}/graph.json   {op}  x{n}")
     print()
     print("Each of these is a BUILD-side defect (R19 pure ATen identity, R23")
-    print("hardware universality). Fix in the tracer and re-trace the artifact;")
+    print("hardware universality). Fix in the builder and rebuild the artifact;")
     print("do NOT map it to a generic op in the engine — that hides a graph that")
     print("is not portable behind an engine pretending it is.")
 

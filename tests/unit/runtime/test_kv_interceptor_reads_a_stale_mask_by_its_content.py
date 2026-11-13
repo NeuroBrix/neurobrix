@@ -5,7 +5,7 @@ shape, lengths).
 
 It used to drop ANY such mask and switch to causal attention by its shape alone — the
 same guess removed from compiled_ops.standard_attention (a padding mask frozen at the
-trace length became causal attention silently). What these tests would do if the code
+build length became causal attention silently). What these tests would do if the code
 were wrong: the refusal tests would not raise (seen on injection of the old drop).
 """
 import pytest
@@ -14,7 +14,7 @@ import torch.nn.functional as F
 
 from neurobrix.core.runtime.graph.kv_cache_wrapper import KVCacheAttentionWrapper, KVCacheConfig
 
-H, D, T = 2, 4, 5            # heads, head dim, the frozen trace extent of the mask
+H, D, T = 2, 4, 5            # heads, head dim, the frozen build extent of the mask
 
 
 def _wrapper():

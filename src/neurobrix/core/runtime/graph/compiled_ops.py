@@ -34,7 +34,7 @@ def _cast_attn_mask(mask, query):
     """Prepare the attention bias for the SDPA variants: the query's dtype,
     an aligned row stride, and NO full-size materialisation.
 
-    A traced mask reaches the attention as an EXPANDED view — a [B, 1, 1, Sk]
+    A built mask reaches the attention as an EXPANDED view — a [B, 1, 1, Sk]
     (or [B, H, 1, Sk]) tensor broadcast to [B, H, Sq, Sk] with zero strides.
     Casting that view materialises B*H*Sq*Sk elements (79 MB per PixArt
     cross-attention, twice per block per step), and PyTorch then pads the
@@ -365,7 +365,7 @@ class CompiledOpResolver:
         - output_shapes: [[0]] (FakeTensor capture error)
 
         For these cases, we MUST passthrough the input - the [0] output shape
-        is a tracer bug, not the actual expected output.
+        is a builder bug, not the actual expected output.
         """
         output_shapes = attrs.get("output_shapes", [])
         input_shapes = attrs.get("input_shapes", [])
@@ -380,7 +380,7 @@ class CompiledOpResolver:
                 if not isinstance(inp, torch.Tensor) or inp.ndim == 0:
                     return inp
                 # Multi-dim tensor but expected scalar - compute scale
-                # This handles embedding *= sqrt(hidden_size) where tracer captured
+                # This handles embedding *= sqrt(hidden_size) where builder captured
                 # the scalar but runtime produces the weight tensor instead.
                 # UNIVERSAL: derive hidden_size from tensor shape, not a lookup table.
                 if len(inp.shape) >= 2:
@@ -463,8 +463,8 @@ class CompiledOpResolver:
                 end = max(0, dim_size + end)
             # ATen slice semantics clamp START to the dim size as well: an
             # out-of-range start yields an EMPTY slice, never an error
-            # (x[:, 88:] on a 3-sized dim is legal and empty — a traced dead
-            # branch, e.g. a patch-embed image path traced past the clip
+            # (x[:, 88:] on a 3-sized dim is legal and empty — a built dead
+            # branch, e.g. a patch-embed image path built past the clip
             # length, must replay as the same empty chain the sequential
             # oracle produces; narrow() alone rejects start > size).
             start = min(start, dim_size)
@@ -627,7 +627,7 @@ class CompiledOpResolver:
         - _scaled_dot_product_flash_attention         → (output, lse, seed, offset)
         - scaled_dot_product_attention                → output
 
-        NeuroBrix executes the op as traced. DtypeEngine handles dtype.
+        NeuroBrix executes the op as built. DtypeEngine handles dtype.
         """
         raw_name = op_name.replace("aten::", "")
         base_name = raw_name.split(".")[0]
@@ -636,9 +636,9 @@ class CompiledOpResolver:
         # versions call SDPA with is_causal=True + attn_mask=None (chatterbox t3),
         # while others ship an explicit causal mask (is_causal=None, mask tensor).
         # The runtime kwargs at call time may not carry the flag, so default to the
-        # traced attribute — otherwise a causal attention silently runs bidirectional
-        # (future-token leakage). Mask-based models trace is_causal=None and keep the
-        # explicit-mask path below; non-causal encoders trace is_causal=None too.
+        # built attribute — otherwise a causal attention silently runs bidirectional
+        # (future-token leakage). Mask-based models build is_causal=None and keep the
+        # explicit-mask path below; non-causal encoders build is_causal=None too.
         _attr_is_causal = _safe_is_causal(attrs.get("is_causal", False))
 
         if base_name == "_scaled_dot_product_flash_attention_for_cpu":
@@ -726,7 +726,7 @@ class CompiledOpResolver:
                     attn_mask = attn_mask[..., :seq_q, :seq_k].contiguous()
                 elif (_mask_axis_short(attn_mask.shape[-2], seq_q)
                         or _mask_axis_short(attn_mask.shape[-1], seq_k)):
-                    # A mask whose extent froze at the trace length (a Forge
+                    # A mask whose extent froze at the build length (a container builder
                     # symbolic-coverage defect). Its CONTENT decides: an exact
                     # causal mask is the trace's spelling of `is_causal`, which
                     # extends to any length; anything else is refused by name.
@@ -751,7 +751,7 @@ class CompiledOpResolver:
         """
         Create upsample function with multi-resolution fix.
 
-        Graph contains hardcoded output_size from trace time. When scale factors
+        Graph contains hardcoded output_size from build time. When scale factors
         are available, we recompute output_size from actual input dimensions.
         """
         raw_op = F.interpolate
@@ -772,7 +772,7 @@ class CompiledOpResolver:
         _is_nearest = mode.startswith("nearest")
 
         if is_1d:
-            # The trace bakes a fixed output_size that won't track a dynamic input
+            # The build bakes a fixed output_size that won't track a dynamic input
             # length (Kokoro F0/N prosody + decoder resample on the variable
             # acoustic frame axis). Recompute the length from the LIVE input ×
             # scale, mirroring the 2D fix below. The scale's arg position differs:
@@ -819,8 +819,8 @@ class CompiledOpResolver:
     def _make_unfold_backward(self) -> Callable:
         """aten::unfold_backward(grad, input_sizes, dim, size, step) is the iSTFT
         overlap-add reconstruction (inverse of the as_strided framing): it scatters
-        the `grad` windows back into a signal of `input_sizes`. The trace bakes
-        input_sizes at the trace frame count; recompute the reconstructed length
+        the `grad` windows back into a signal of `input_sizes`. The build bakes
+        input_sizes at the build frame count; recompute the reconstructed length
         from the LIVE window count so it tracks variable audio:
             input_sizes[dim] = (n_windows - 1) * step + size.
         Mirror of the as_strided framing recompute.
@@ -839,9 +839,9 @@ class CompiledOpResolver:
         """native_group_norm with derived scalars recomputed from the input.
 
         The functional signature carries N, C, HxW as SCALAR args — the graph
-        bakes their trace values, but they are fully derived from the input
+        bakes their build values, but they are fully derived from the input
         tensor (HxW especially: for a video VAE it is the flattened T*H*W
-        product, frozen at the frugal trace size, e.g. 550 = 5*10*11 against
+        product, frozen at the frugal build size, e.g. 550 = 5*10*11 against
         a runtime 3*60*90). Mirror of the sequential dispatcher's fix (R30).
         """
         def native_group_norm(x, weight, bias, n, c, hxw, groups, eps,
@@ -856,7 +856,7 @@ class CompiledOpResolver:
 
     def _make_as_strided(self) -> Callable:
         """as_strided used as an overlap-add framing view (iSTFT in the istftnet
-        vocoder) bakes the trace frame count into size[-2] and the full signal
+        vocoder) bakes the build frame count into size[-2] and the full signal
         length into stride[0]. At a different runtime audio length the baked view
         over-reads storage. Recompute the window count and signal stride from the
         LIVE input so the framing tracks the variable frame axis. Non-framing
@@ -870,7 +870,7 @@ class CompiledOpResolver:
                 L0, H, _ = stride
                 if B and H and B > 0 and H > 0:
                     live_L = input_tensor.numel() // B
-                    if L0 != live_L:               # trace length ≠ runtime length
+                    if L0 != live_L:               # build length ≠ runtime length
                         N = (live_L - W) // H + 1
                         size = [B, N, W]
                         stride = [live_L, H, 1]
@@ -882,7 +882,7 @@ class CompiledOpResolver:
         """
         Create expand function with multi-resolution fix.
 
-        Graph contains hardcoded expand sizes from trace time. When the tensor
+        Graph contains hardcoded expand sizes from build time. When the tensor
         has non-singleton dimensions that don't match, use actual dimensions.
         """
         def expand_wrapper(input_tensor, size, *args, **kwargs):
@@ -933,10 +933,10 @@ class CompiledOpResolver:
         Create view function that falls back to reshape for non-contiguous tensors.
 
         CRITICAL FIX for KV cache: After SDPA, transpose returns non-contiguous
-        tensors. The traced graph uses aten::view, but view fails on non-contiguous
+        tensors. The built graph uses aten::view, but view fails on non-contiguous
         tensors. Using reshape instead handles both cases correctly.
 
-        MoE FIX: When symbolic seq_len changes between trace and runtime, view/reshape
+        MoE FIX: When symbolic seq_len changes between build and runtime, view/reshape
         may fail because numel differs from the product of the target shape dims.
         The fallback tries each position as -1 (not just the last) to infer the
         changing dimension. This handles MoE routing views where the dynamic dim
@@ -951,11 +951,11 @@ class CompiledOpResolver:
                     # Fallback to reshape (handles non-contiguous)
                     return tensor.reshape(shape)
                 except RuntimeError:
-                    # Numel mismatch: tensor has trace-time dims, shape has runtime dims.
+                    # Numel mismatch: tensor has build-time dims, shape has runtime dims.
                     # Try each position as -1 to find the symbolic (changed) dimension.
                     # When multiple positions work, prefer the one whose inferred dim
                     # matches the input tensor's actual dimension at that axis.
-                    # This prevents symbolic dimension collisions (e.g., head_dim/2 == trace seq_len)
+                    # This prevents symbolic dimension collisions (e.g., head_dim/2 == build seq_len)
                     # from corrupting batch or other structural dimensions.
                     if len(shape) >= 2:
                         candidates = []
@@ -988,7 +988,7 @@ class CompiledOpResolver:
     def _make_set(self) -> Callable:
         """aten::set — storage manipulation used by pack/unpack padded sequence.
 
-        The traced graph captures set(tensor, storage, ...) but the storage
+        The built graph captures set(tensor, storage, ...) but the storage
         was serialized as a string. In compiled mode, the tensor data is already
         correct from the preceding op — return self unchanged.
         """

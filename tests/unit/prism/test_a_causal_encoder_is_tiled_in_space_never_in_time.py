@@ -2,7 +2,7 @@
 clip in every tile — never in time.
 
 Prism declined every causal encoder: a temporal tile taken mid-clip would re-apply the clip-start
-semantics, and that stays true. But the Wan encoders traced as one causal pass (2026-09-26) hold
+semantics, and that stays true. But the Wan encoders built as one causal pass (2026-09-26) hold
 8.5 GiB in their first activation at 81 frames of 352x832, and the decline killed the run on a
 16 GB card. A spatial tile carrying the whole clip is exact in time — it is the vendor's own tiled
 encode for these VAEs (diffusers AutoencoderKLWan.tiled_encode).
@@ -114,7 +114,7 @@ def test_a_causal_encoder_is_sized_at_the_requests_pixels_not_its_latent():
 
 def test_an_encode_alias_without_a_block_list_takes_its_ratio_from_its_graph(tmp_path):
     """Wan's `vae_encoder` is an encode alias of the VAE: its profile carries no block list (the
-    configuration lives on the decode component). The ratio is then the graph's traced in/out
+    configuration lives on the decode component). The ratio is then the graph's built in/out
     extent; on the old solver the spec is None (declined for want of a config)."""
     comp = tmp_path / "components" / "enc"
     comp.mkdir(parents=True)

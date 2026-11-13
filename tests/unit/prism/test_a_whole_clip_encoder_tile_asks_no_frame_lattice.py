@@ -5,9 +5,9 @@ Allegro-TI2V at its confirmation request (720x1280, 88 frames, 2026-10-03) was r
 V100 classes: its `vae_encoder` (319 500 MB of activations) got no tile, and the refusal said
 "no tiling fits" beside an arithmetic that said 39 tiles fit. Two causes, in that order:
 
-* its container's time map is ((s0*s1 + 1)//2 + 1)//2 — the trace froze the batch at a literal 1
+* its container's time map is ((s0*s1 + 1)//2 + 1)//2 — the build froze the batch at a literal 1
   (`aten.view::1` sized [1, s0*s1, 128, s2, s3]) and folded the batch symbol into time. Neither
-  temporal class reads a time map in two symbols. That is the container's defect (Forge re-emits
+  temporal class reads a time map in two symbols. That is the container's defect (the container builder re-emits
   it); the engine's part is to NAME it, which the refusal did not.
 * with the batch a symbol, the map is ((t+1)//2 + 1)//2 — what a stride-2 slice `[::2]` records.
   As integers that is 1 + (t-1)//4, the causal class, which is tiled in space with the whole clip

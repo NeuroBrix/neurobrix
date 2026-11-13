@@ -1,7 +1,7 @@
 """The layer partitioner sizes activations at the REQUEST, with the profiler's own resolver.
 
-It read each tensor's `shape` — the TRACE's — so every layer_streaming segment was cut for the trace, not
-the run: SANA-Video's VAE (input [1,128,9,14,22] traced, 21x64x160 at a 1280x512 request) was declined as
+It read each tensor's `shape` — the TRACE's — so every layer_streaming segment was cut for the build, not
+the run: SANA-Video's VAE (input [1,128,9,14,22] built, 21x64x160 at a 1280x512 request) was declined as
 "fits in ONE segment" when its activations at the request peak at 78 080 MB (measured with --explain-plan
 on 16 GB, 2026-09-27). The profiler already resolved `symbolic_shape` at the request: the same bug
 written twice. Before this branch the partitioner takes no symbol map: these fail.

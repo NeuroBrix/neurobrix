@@ -79,7 +79,7 @@ class UniPCMultistepScheduler(MultistepStateMixin, DiffusionSchedulerBase):
         # final_sigmas_type: diffusers UniPC defaults to "zero" (NOT the shared
         # validator's "sigma_min", which is DPM++'s default). Read from the RAW
         # config so the UniPC default is correct standalone — Wan2.1's config may
-        # omit this key, and "zero" is what its trace expects.
+        # omit this key, and "zero" is what its build expects.
         self.final_sigmas_type = config.get("final_sigmas_type", "zero")
 
         # Flow matching support (Wan2.1 and newer flow models).

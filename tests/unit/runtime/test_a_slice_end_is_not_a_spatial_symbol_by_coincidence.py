@@ -1,13 +1,13 @@
 """A timestep embedding is not an image (2026-09-23, PixArt -MS on Apple).
 
-PixArt-XL-2-1024-MS traced at 1024 px has a latent of 128 and a sinusoidal timestep
+PixArt-XL-2-1024-MS built at 1024 px has a latent of 128 and a sinusoidal timestep
 embedding of 256 that is split in half and swapped — `cat([emb[:, 128:], emb[:, :128]])`.
-Both halves are 128, and so is the latent height, so the tracer bound the slice END of
+Both halves are 128, and so is the latent height, so the builder bound the slice END of
 the embedding to the HEIGHT symbol:
 
     aten.slice::5   (2, 256) dim 1  start 0  end {"symbol": "s4" (height), "trace": 128}
 
-At the traced size this is invisible: s4 resolves to 128 and the slice is right. At 4096 px
+At the built size this is invisible: s4 resolves to 128 and the slice is right. At 4096 px
 s4 is 512, `emb[:, :512]` clamps to the full 256, the concatenation yields 384 instead of
 256, and the first op of the transformer dies
 

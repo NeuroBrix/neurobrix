@@ -3,7 +3,7 @@ embedding carries `seq_len` in its output shape and names it nowhere, so canary-
 `embed_tokens` read as frozen and the census dropped the whole model (2026-09-21). A dimension
 that lives in an operation's output shape is carried.
 
-Shapes: the trace prime 23 for the sequence; 2048 the embedding width — chosen so the literal
+Shapes: the build prime 23 for the sequence; 2048 the embedding width — chosen so the literal
 23 appears nowhere as a weight extent and the verdict cannot lean on the parameter-extent excuse.
 """
 from __future__ import annotations

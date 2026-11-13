@@ -85,7 +85,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
             else:
                 # The diffusion / native_acoustic_decoder / native_kokoro handlers
                 # (core/flow/stages/) were reached by no flow and were removed on
-                # 2026-10-04: Kokoro's stages run their traced graphs, and VibeVoice's
+                # 2026-10-04: Kokoro's stages run their built graphs, and VibeVoice's
                 # diffusion head and acoustic decoder run in the next_token_diffusion
                 # flow. `tests/unit/runtime/test_every_declared_flow_is_reached.py`
                 # holds every execution the catalogue declares to this set.
@@ -154,7 +154,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
             input_shape=input_shape,
         )
 
-        # Pad/truncate to match trace-time dimensions for encoders
+        # Pad/truncate to match build-time dimensions for encoders
         # with non-symbolic position ops (relative PE, repeat, etc.)
         if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
             for dim_idx in range(1, len(input_shape)):  # Skip batch dim
@@ -424,7 +424,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
     # ─────────────────────────────────────────────────────────────
 
     def _try_chunked_forward(self, comp_name: str) -> bool:
-        """Run chunked forward if input seq_len exceeds graph's trace-time seq_len.
+        """Run chunked forward if input seq_len exceeds graph's build-time seq_len.
 
         Used for codec.decoder: graph expects [1, 1024, 64] but input may be [1, 1024, T_gen].
         Chunks input into 64-frame blocks, runs each, concatenates waveform output.
@@ -481,9 +481,9 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
 
         actual_seq = actual_input.shape[2]
         if actual_seq == graph_seq_len:
-            return False  # exact trace length → single pass, window-norm matches
+            return False  # exact build length → single pass, window-norm matches
         # actual_seq != graph_seq_len: the iSTFT window-norm divisor is baked at the
-        # trace frame count, so every decoder block must run at EXACTLY graph_seq_len.
+        # build frame count, so every decoder block must run at EXACTLY graph_seq_len.
         # A shorter utterance runs as one block padded up to graph_seq_len (then the
         # waveform is trimmed proportionally); a longer one as multiple blocks.
 
@@ -522,7 +522,7 @@ class AudioEngine(AudioSteps, ComponentFlowHandler):
                     gd = gd.get("trace_value", gd)
                 if isinstance(gd, int) and val2.shape[d] != gd:
                     # frame-dependent: chunk (runtime>graph) OR pad (runtime<graph)
-                    # to exactly graph_len so the decoder runs at the trace shape
+                    # to exactly graph_len so the decoder runs at the build shape
                     cdim2, glen2 = d, gd
                     break
             aux_inputs[iname2] = (val2, cdim2, glen2)

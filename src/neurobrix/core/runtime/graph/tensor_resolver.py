@@ -146,7 +146,7 @@ class TensorResolver:
             return const_tensor
 
         # 5. Load embedded constant from graph (base64-encoded)
-        # Buffers like inv_freq are embedded during trace via embed_constants_in_graph()
+        # Buffers like inv_freq are embedded during build via embed_constants_in_graph()
         if tensor_data.get("constant") and tensor_data.get("constant_data"):
             import io
             import base64
@@ -204,7 +204,7 @@ class TensorResolver:
         # An op-output INTERMEDIATE carries the dtype the execution engine
         # (DtypeEngine AMP) deliberately produced — e.g. an mm/bmm/addmm/div
         # output upcast to fp32 for fp16-overflow protection. The graph-recorded
-        # dtype is the STALE trace dtype (fp16) and must NOT override the live
+        # dtype is the STALE build dtype (fp16) and must NOT override the live
         # AMP dtype: downcasting an AMP-upcast fp32 intermediate back to fp16
         # re-introduces the very overflow the upcast prevented. Witnessed on
         # Open-Sora-v2: double_blocks.18 modulation (scale × hidden ~1.0e4 → mul
@@ -348,7 +348,7 @@ class TensorResolver:
         Get the expected dtype for an input.
 
         PRISM DTYPE IS SOURCE OF TRUTH for floating-point tensors.
-        Graph dtypes may be stale (traced under autocast with different dtype).
+        Graph dtypes may be stale (built under autocast with different dtype).
 
         Only return graph dtype for non-floating-point inputs (int64, bool, etc.)
         to handle cases like timestep where int64 -> float conversion is needed.
@@ -374,15 +374,15 @@ class TensorResolver:
                 if dtype_str:
                     graph_dtype = _parse_dtype(dtype_str)
                     if graph_dtype is not None:
-                        # A floating input traced at or below the compute dtype's width enters at the
-                        # compute dtype (Prism's); one traced WIDER enters at its traced width — the
+                        # A floating input built at or below the compute dtype's width enters at the
+                        # compute dtype (Prism's); one built WIDER enters at its built width — the
                         # executor maps float64 through the DtypeEngine's storage rule — and its first
                         # consumer casts it as that op's class dictates. Narrowing every float input
                         # rounded what the graph needs whole (a float64 timestep on a bf16 component:
                         # 777 → 776, Allegro's halo on Metal, 2026-10-18). The Triton rule is the
                         # same sentence (`triton/dtype.TritonDtypeEngine._target_dtype_for_input`).
                         if graph_dtype.is_floating_point:
-                            # Wider than the graph's OWN parameters (core/dtype/entry_width): a model traced
+                            # Wider than the graph's OWN parameters (core/dtype/entry_width): a model built
                             # float32 throughout is at its width, not wider (orpheus-3b, 2026-10-18).
                             from neurobrix.core.dtype.entry_width import enters_at_traced_width
                             if not enters_at_traced_width(graph_dtype.itemsize, self._ctx.dtype.itemsize, tensors):
@@ -436,8 +436,8 @@ class TensorResolver:
                 resolved = self._ctx.shape_resolver.resolve_scalar(arg_info)
 
                 # HEURISTIC: Detect config-derived constants that were incorrectly
-                # marked as symbolic due to coincidental value match at trace time.
-                # Example: frequency_embedding_size/2 = 128 == latent_size at trace
+                # marked as symbolic due to coincidental value match at build time.
+                # Example: frequency_embedding_size/2 = 128 == latent_size at build
                 # but the frequency dim is a model config, not dependent on resolution.
                 #
                 # Detection: If op is inside "time_embed" or "timestep" module,
@@ -451,7 +451,7 @@ class TensorResolver:
                 return resolved
 
             # A symbolic argument with no shape resolver: the graph declares symbols the
-            # executor did not arm — refuse by name, never the trace value.
+            # executor did not arm — refuse by name, never the build value.
             raise RuntimeError(
                 f"ZERO FALLBACK: symbolic argument {symbol_id!r} met with symbolic shapes "
                 f"disabled or no shape resolver; its build-time value {trace_value} is a witnessed "
@@ -472,7 +472,7 @@ class TensorResolver:
 
         elif arg_type == "list":
             # For view/reshape, check if OUTPUT tensor has symbolic_shape
-            # This handles unflatten patterns where trace-time shape differs from runtime
+            # This handles unflatten patterns where build-time shape differs from runtime
             if op_data and op_type in ("view", "reshape", "_unsafe_view", "aten::view", "aten::reshape", "aten::_unsafe_view"):
                 resolved_shape = self._resolve_unflatten_shape(op_uid, op_data)
                 if resolved_shape is not None:
@@ -514,7 +514,7 @@ class TensorResolver:
                             if isinstance(dim, int) and dim > 0:
                                 target_numel *= dim
                         if target_numel != input_numel and target_numel > 0:
-                            # Infer the axis that ACTUALLY changed between trace and
+                            # Infer the axis that ACTUALLY changed between build and
                             # runtime, not blindly the last one. Mirror of the
                             # compiled _make_view_reshape fallback (R30 parity):
                             # try each axis as -1; a position is a valid candidate
@@ -527,7 +527,7 @@ class TensorResolver:
                             # cases: (1) modulation views — input [2,9216], frozen
                             # target [1,6,1536] gave [1,6,3072] (CFG batch folded
                             # into features) instead of [2,6,1536]; (2) hidden-state
-                            # views whose traced shape duplicated the seq expression
+                            # views whose built shape duplicated the seq expression
                             # into the batch slot ([seq,seq,1536]) — last-dim gave
                             # the invalid [4680,4680,-1] instead of [2,4680,1536].
                             candidates = []  # (axis, inferred_value)
@@ -598,7 +598,7 @@ class TensorResolver:
                                         chosen = last
                                     else:
                                         # 3. Last-dim is not inferable (e.g. the
-                                        #    traced shape duplicated the seq expr
+                                        #    built shape duplicated the seq expr
                                         #    into the batch slot → [4680,4680,-1]
                                         #    invalid); take the first valid axis
                                         #    (mirrors compiled candidates[0]).
@@ -681,8 +681,8 @@ class TensorResolver:
             return torch.strided
 
         elif arg_type == "unknown":
-            # Some traces serialize standard torch enum/format singletons with
-            # type="unknown" because the trace introspection didn't classify
+            # Some builds serialize standard torch enum/format singletons with
+            # type="unknown" because the build introspection didn't classify
             # them as `memory_format` / `dtype` / `layout`. When the value is a
             # `torch.<attr>` string and `torch` exposes that attribute, resolve
             # it directly. This unblocks ops like `aten::clone(memory_format=
@@ -722,7 +722,7 @@ class TensorResolver:
         For view/reshape, use OUTPUT tensor's symbolic_shape if available.
 
         This handles unflatten: [s0*s1, H] -> [s0, s1, H] at runtime.
-        The trace-time shape [2, 2, 1152] must be resolved to [2, 120, 1152]
+        The build-time shape [2, 2, 1152] must be resolved to [2, 120, 1152]
         when s0=2 and s1=120 at runtime.
 
         Args:

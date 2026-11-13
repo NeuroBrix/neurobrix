@@ -2,7 +2,7 @@
 to "Prism tiles only where a tile is the untiled component" (decision of 2026-10-16 18:40 / 21:30).
 
 Two vendor tilings exist in the catalogue, each reproduced here as its vendor computes it, from the numbers the
-declaration carries (`components/<c>/vendor_tiling.json`, written by Forge from the registry with the vendor file and
+declaration carries (`components/<c>/vendor_tiling.json`, written by the container builder from the registry with the vendor file and
 line) — never from a model name:
 
 * `ramp_crop` (diffusers' AutoencoderKL family: CogVideoX's `tiled_decode`, DC-AE's): latent tiles of `tile` at

@@ -230,7 +230,7 @@ class TTSLLMEngine(ComponentFlowHandler):
         # ── CFG via the centralized CFGEngine (single authority) ──
         # The engine owns the FORMULA (apply_guidance) + the CASCADE (from_topology:
         # CLI > topology > defaults guidance_scale + threshold) — no inline CFG here.
-        # The t3_cfg backbone is traced batch=1 (a baked-batch reshape breaks batch=2),
+        # The t3_cfg backbone is built batch=1 (a baked-batch reshape breaks batch=2),
         # so CFG runs SEQUENTIALLY: two batch=1 forwards (cond / text-zeroed uncond) per
         # step, then engine.apply_guidance. Models with no guidance_scale -> CFG disabled
         # (cond-only path unchanged, R23-safe).
@@ -267,7 +267,7 @@ class TTSLLMEngine(ComponentFlowHandler):
             raise RuntimeError(f"ZERO FALLBACK: text_emb weight not found in {lm_name}.")
 
         # ── Build conditioning embeddings ──
-        # Runs the traced cond_enc component (spkr_enc + Perceiver resampler +
+        # Runs the built cond_enc component (spkr_enc + Perceiver resampler +
         # emotion_adv_fc → cat → [1, 34, 1024]) on the embedded default-voice
         # conditioning. No hand-rolled perceiver — the graph owns the compute.
         cond_embeds = self._build_conditioning(
@@ -610,7 +610,7 @@ class TTSLLMEngine(ComponentFlowHandler):
         speech_pos_emb_w: Optional[torch.Tensor],
         device: str, dtype: torch.dtype,
     ) -> torch.Tensor:
-        """Build conditioning by running the traced cond_enc component.
+        """Build conditioning by running the built cond_enc component.
 
         cond_enc is the data-driven T3CondEnc graph: spkr_enc(speaker_emb) +
         Perceiver(speech_emb(cond_prompt_speech_tokens)) + emotion_adv_fc →

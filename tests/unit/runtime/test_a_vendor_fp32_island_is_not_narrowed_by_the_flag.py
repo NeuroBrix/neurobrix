@@ -11,9 +11,9 @@ read fp16 in the engine where the graph says float32. The compiled engine never 
 flag (it passes safe=False and narrows per op from the record's narrow set), so the two engines
 disagreed on the same container.
 
-The rule now: an op traced float32 on a half graph is narrowed by the narrow set only, never by
+The rule now: an op built float32 on a half graph is narrowed by the narrow set only, never by
 the flag — in `amp_fp32_output_dtype` (the library's, both engines'), in the Triton wrapper (which reads the op's
-record), and in Prism's width pass. An op traced at the half dtype is unchanged.
+record), and in Prism's width pass. An op built at the half dtype is unchanged.
 
 What these tests do if the code is wrong: with the floor removed from the rule,
 test_the_rule_* and test_the_triton_wrapper_keeps_* are red (fp16 returned); with the wrapper
@@ -42,7 +42,7 @@ def test_the_rule_is_unchanged_for_an_op_traced_at_the_half_dtype():
     for traced in ("float16", None):
         assert T.amp_fp32_output_dtype("float16", "float16", True, False, traced) == "float16"
         assert T.amp_fp32_output_dtype("float16", "float16", False, False, traced) == "float32"
-    # an fp32 graph coerced to fp16 compute: every op is traced fp32; the flag rules as before
+    # an fp32 graph coerced to fp16 compute: every op is built fp32; the flag rules as before
     assert T.amp_fp32_output_dtype("float16", "float32", True, False, "float32") == "float16"
 
 
@@ -93,7 +93,7 @@ def _out(op, traced, narrow=()):
 
 
 def test_the_triton_wrapper_keeps_a_traced_fp32_op_fp32(flag):
-    # the timestep chain: div by a scalar, exp — and any AMP_FP32-class op traced fp32
+    # the timestep chain: div by a scalar, exp — and any AMP_FP32-class op built fp32
     for op in ("div", "exp", "rsqrt", "layer_norm"):
         assert _out(op, "float32") == NBXDtype.float32, op
 
@@ -101,5 +101,5 @@ def test_the_triton_wrapper_keeps_a_traced_fp32_op_fp32(flag):
 def test_the_triton_wrapper_still_narrows_what_the_vendor_ran_in_fp16(flag):
     for op in ("div", "exp", "rsqrt", "layer_norm"):
         assert _out(op, "float16") == NBXDtype.float16, op
-    # the narrow set narrows a traced fp32 op, like the compiled engine
+    # the narrow set narrows a built fp32 op, like the compiled engine
     assert _out("exp", "float32", narrow=("op::0",)) == NBXDtype.float16

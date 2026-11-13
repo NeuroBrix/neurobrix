@@ -149,8 +149,8 @@ class LayerPartitioner:
         # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
         # the same numbers Prism's placement estimate uses. Without it a tensor's `shape` is the
         # TRACE's — SANA-Video's VAE input [1,128,9,14,22] where a 1280x512 request makes
-        # 21x64x160, ~77x more — and every segment was cut for the trace, not the run (the same
-        # bug written twice: the profiler already resolved it). No map = the trace, said so by
+        # 21x64x160, ~77x more — and every segment was cut for the build, not the run (the same
+        # bug written twice: the profiler already resolved it). No map = the build, said so by
         # the caller's absence of one, as before.
         self._symbol_map = symbol_map
         self._compute_dtype_bytes = compute_dtype_bytes
@@ -1258,7 +1258,7 @@ def flow_reads_by_name(component: str, graph: Optional[Dict[str, Any]],
 def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
     """A streamed piece's SEAM input: an intermediate the previous piece produced, aliased to
     `input::<tid>` by `build_segment_graph`. It enters a piece in the dtype its producing op gave it
-    — never cast to the compute dtype or re-aligned to the graph's recorded (trace) dtype, as a
+    — never cast to the compute dtype or re-aligned to the graph's recorded (build) dtype, as a
     model input or a leaf would be: that narrowed fp32 islands at every piece's entry (PixArt T5
     pieces rel L2 0.46 % from whole, register 105). ONE rule, read by every site that casts a
     component input or re-aligns a leaf, in every engine (R30): TritonDtypeEngine, the torch
@@ -1558,7 +1558,7 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     # A symbol binds from a component INPUT (`input::attention_mask::dim_1`), and a segment's
     # inputs are the tensors crossing its seam. The first repair re-sourced each symbol to a seam
     # dim carrying the SAME symbol id, and kept the original source when none did — which then
-    # refused. It could not serve a trace that minted two ids for one extent: PixArt's T5 binds
+    # refused. It could not serve a build that minted two ids for one extent: PixArt's T5 binds
     # seq_len twice, `s1` from attention_mask and `s3` from input_ids; the hidden states carry
     # `s3`, a later piece uses `s1`, and the Mac's 2048x1024 render died after 1 821 s:
     #     UnboundSymbolError: symbol 's1' (seq_len, binds from input::attention_mask::dim_1)

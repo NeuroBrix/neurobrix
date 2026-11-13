@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Where would a symbolic-shape defect be INVISIBLE? — a census of trace values.
+"""Where would a symbolic-shape defect be INVISIBLE? — a census of build values.
 
 This does not look for defects. It looks for the places a defect could not be
 seen, which is a different and larger set.
@@ -7,35 +7,35 @@ seen, which is a different and larger set.
 WHY IT EXISTS
 -------------
 A symbolic shape rule is validated by exactly one comparison: does the expression
-it produces reproduce the extent witnessed at trace? That comparison is made at a
+it produces reproduce the extent witnessed at build? That comparison is made at a
 SINGLE point of the symbol's domain. Any error that happens to vanish at that
 point is invisible to it permanently, because a check at one point cannot separate
 two functions that agree at that point (register entry 29).
 
 The case that engraved it, 2026-09-12: `CogVideoX-5b-I2V/vae_encoder`'s causal
-temporal pad recorded `3*s` where the truth is `s + 2`. Its trace value was 1, and
+temporal pad recorded `3*s` where the truth is `s + 2`. Its build value was 1, and
 `3x1 == 1+2 == 3`. Seven resnet blocks then compounded it to `2187*s - 2184`,
 still exactly 3 at s=1, and Prism asked for 944 GB of activations for a component
 whose weights are 822 MB. Four independent structural invariants all passed — all
 evaluated at that one point.
 
-**Of 27 five-dimensional components in the local catalogue, exactly ONE was traced
+**Of 27 five-dimensional components in the local catalogue, exactly ONE was built
 with its temporal axis at 1, and it is the only one carrying the defect.** That is
 why this is a census and not an anecdote: the population of blind spots is
 enumerable, and it is small.
 
 THE COLLISION CLASSES
 ---------------------
-An axis traced at value `v` cannot distinguish these rules:
+An axis built at value `v` cannot distinguish these rules:
 
   v == 0   everything collapses. No rule is observable.
   v == 1   multiplication, addition, exponentiation and identity all agree:
            k*s == s+(k-1) == s**n == s. THE WORST VALUE, and the one a frugal
            stimulus reaches most easily (an I2V encoder conditions on ONE image,
-           so its temporal axis is genuinely 1 at trace).
+           so its temporal axis is genuinely 1 at build).
   v == 2   doubling and squaring agree (2*2 == 2**2 == 4); so do s+2 and 2*s.
   v == w   where w is a WEIGHT dimension of the same component: a dim bound to
-           the wrong quantity reproduces the trace anyway. This is the
+           the wrong quantity reproduces the build anyway. This is the
            trace-value collision the project already guards at build time; the
            census reports it because a guard that fired is not the same as an
            axis that is safe.
@@ -82,8 +82,8 @@ def declared_symbols(graph: dict) -> dict:
 def weight_extents(graph: dict) -> set:
     """Every extent appearing in a PARAMETER's shape.
 
-    A symbol whose trace value equals one of these can be bound to the wrong
-    quantity and still reproduce the trace — the collision the tracer's own
+    A symbol whose build value equals one of these can be bound to the wrong
+    quantity and still reproduce the build — the collision the tracer's own
     guard exists for.
     """
     out = set()
@@ -117,7 +117,7 @@ def census_one(path: Path, show_all: bool = False) -> tuple:
         # 2026-08-29, invisible to byte gates precisely BECAUSE batch was 1),
         # and 2 is the CFG batch, equally deliberate. Listing it beside the
         # actionable axes buries them: of 293 flagged axes it is 58, and of the
-        # 57 axes at trace 2 nearly all are this one class.
+        # 57 axes at build 2 nearly all are this one class.
         #
         # It is COUNTED and named, never silently dropped, and `--all` shows it
         # for anyone re-examining the decision itself rather than its consequences.
@@ -173,12 +173,12 @@ def main() -> int:
     print(f"Symbol-collision census — {len(graphs)} component graph(s) under {root}")
     print(f"{clean} carry no ACTIONABLE symbol at a collision value.")
     if accepted_total:
-        print(f"{accepted_total} batch axis/axes traced at 1 are excluded: that is a "
+        print(f"{accepted_total} batch axis/axes built at 1 are excluded: that is a "
               f"deliberate\nproject decision (a batch symbol is never a literal 1), "
               f"not a blind spot to act on.\nRe-examine it with --all.")
     print()
     if not findings:
-        print("No axis is traced at a value where two rules become "
+        print("No axis is built at a value where two rules become "
               "indistinguishable. Nothing here is a clean bill of health for the "
               "rules themselves — it says a defect in them would be VISIBLE.")
         return 0
@@ -187,7 +187,7 @@ def main() -> int:
         print(f"  {key}")
         for row in findings[key]:
             src = f"  <- {row['source']}" if row.get("source") else ""
-            print(f"      {row['symbol']} '{row['name']}' traced at {row['trace']}{src}")
+            print(f"      {row['symbol']} '{row['name']}' built at {row['trace']}{src}")
             for cls, why in row["flags"]:
                 print(f"          [{cls}] {why}")
     print(f"\n  components with at least one blind axis: {len(findings)} of {len(graphs)}")
@@ -196,7 +196,7 @@ def main() -> int:
     for cls, n in per_class.most_common():
         print(f"  {cls}: {n} axis/axes")
     print("\n  This is where a defect would be INVISIBLE, not where one is. An axis "
-          "listed here\n  needs its rule asserted structurally, or a re-trace at a "
+          "listed here\n  needs its rule asserted structurally, or a rebuild at a "
           "value outside the\n  collision — a test at the flagged value is green for "
           "the reason that blinds it.")
     return 0

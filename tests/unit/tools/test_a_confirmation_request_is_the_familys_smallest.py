@@ -9,7 +9,7 @@ exactly the keys a confirmation run forms.
 What each test would do if the code were wrong: a derivation that ignored the section keeps the
 family bound (`--steps 20`) and the first test fails (seen red with the section not applied); one
 that appended instead of replacing leaves two `--steps` and the second fails; the size the fake
-container's trace gives under the section is checked by test_the_census_request_comes_from_the_
+container's build gives under the section is checked by test_the_census_request_comes_from_the_
 container_s_trace.py (320x512 from 960x1088, by hand).
 """
 from __future__ import annotations

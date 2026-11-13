@@ -173,7 +173,7 @@ class SymbolicShapeResolver:
 
                     # Value-sourced symbol: "input::grid_thw::val_1" binds from
                     # the tensor's DATA at flat index 1, not from a shape dim
-                    # (dynamic-resolution grid values, promoted at trace by the
+                    # (dynamic-resolution grid values, promoted at build by the
                     # SymValueSources pass).
                     # Negative indices are part of the vocabulary
                     # (e.g. "val_-1" = last element — runtime rope-length
@@ -265,7 +265,7 @@ class SymbolicShapeResolver:
         Raises:
             ShapeResolutionError: If value violates constraints
         """
-        # Validate constraints. The tracer NESTS them:
+        # Validate constraints. The builder NESTS them:
         #   "s1": {"name": "time", "source": "...", "constraints": {"min": 1}}
         # Reading them at the top level (as this did) finds nothing, defaults
         # min to 0, and the check then rejects only a negative — so it had
@@ -353,7 +353,7 @@ class SymbolicShapeResolver:
                 return self._runtime_values[value]
 
             # A symbol the container declares and the runtime did not bind REFUSES,
-            # by name. The trace value is a witnessed extent of one stimulus, not a
+            # by name. The build value is a witnessed extent of one stimulus, not a
             # value; answering it here hid two defects in one day (2026-09-21): a plan
             # bound a VAE's spatial symbols to nothing and estimated 1.74 GiB for a
             # 35 GiB decode; an ATen sequential run evaluated `s1` at 23 on a

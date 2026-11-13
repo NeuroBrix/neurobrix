@@ -2,8 +2,8 @@
 """Follow every declared input symbol through a graph and say WHERE its chain breaks.
 
 The defect class (2026-09-16, the third of its family this week): a symbolic
-expression meets an operator the tracer does not propagate, the operator
-evaluates it at the trace value, and the RESULT is recorded instead of the
+expression meets an operator the builder does not propagate, the operator
+evaluates it at the build value, and the RESULT is recorded instead of the
 expression. The declaration stays symbolic; the body becomes literal. The
 container then announces one thing and demands another, and every gate we own
 reads the declaration.
@@ -16,20 +16,20 @@ symbolic is lost. This walks each graph and, per declared input symbol:
   * calls an op a CARRIER when its recorded arguments reference the symbol
     (`{"type": "symbol", "id": "sN"}`) or an expression naming it;
   * calls an op a BREAK when it consumes a tainted tensor, records NO symbol,
-    and records a LITERAL that (a) equals the symbol's trace value or a value
+    and records a LITERAL that (a) equals the symbol's build value or a value
     derived from it by a relation a shape op performs (v, v//2, v//4, v//8,
     v*2, v*4, v-1, v+1, v+2, v*v), (b) is at least 4, and (c) APPEARS IN THE
     OP'S OUTPUT SHAPE. The third condition is what makes this a measurement
     rather than a list: `transpose(1, 2)`, `permute`, `unsqueeze` and `select`
     record AXIS INDICES as literals, and without (c) every one of them is
-    counted the moment some symbol's trace value happens to be 2 or 4. The
+    counted the moment some symbol's build value happens to be 2 or 4. The
     first run of this census, without (c), reported 57 transposes and 31
     permutes; they are axis arguments, not lost expressions. What (c) keeps is
-    a literal the op WROTE INTO A SHAPE — the expression the tracer threw away;
+    a literal the op WROTE INTO A SHAPE — the expression the builder threw away;
   * reports the last carrier before it and the first break, with the op type.
 
 Measured, never inferred: everything printed is read from graph.json. An op
-type appearing here is a place the tracer must propagate through; the count per
+type appearing here is a place the builder must propagate through; the count per
 op type is the order of work.
 
     python tools/where_the_symbol_chain_breaks.py [--cache DIR] [--models a,b] [--json OUT]
@@ -121,14 +121,14 @@ def analyse(graph_path: Path) -> list:
                     param_extents.add(d)
     ordered = ops_in_order(g)
     facts = {uid: arg_facts(op.get("attributes")) for uid, op in ordered}
-    # A DIMENSION, not a symbol id, is what can be lost. The tracer declares one
+    # A DIMENSION, not a symbol id, is what can be lost. The builder declares one
     # symbol per INPUT that carries the dimension, so a decoder that takes both
     # `input_ids` and `position_ids` declares `seq_len` twice — and binds its
     # expressions to one of the two. Following the other finds no operation that
     # names it and reports every consumer as a break: TinyLlama's flatten records
     # `s0*s1` in full, and the first run of this census called it a lost symbol
     # twenty times over because it was following `s3`. Aliases are grouped by
-    # name AND trace value, and a carrier of any member carries the dimension.
+    # name AND build value, and a carrier of any member carries the dimension.
     aliases = {}
     for sid, meta in syms.items():
         aliases.setdefault((meta.get("name"), meta.get("trace_value")), []).append(sid)
@@ -139,7 +139,7 @@ def analyse(graph_path: Path) -> list:
         src = str(meta.get("source") or "")
         v = meta.get("trace_value")
         if not isinstance(v, int) or v <= 1:
-            continue                      # a trace value of 0 or 1 explains nothing
+            continue                      # a build value of 0 or 1 explains nothing
         dim_key = (meta.get("name"), v)
         if dim_key in seen_dims:
             continue                      # one row per DIMENSION, not per declaration
@@ -164,12 +164,12 @@ def analyse(graph_path: Path) -> list:
         # locates the BREAK — for that, the question is which consumer dropped
         # the expression — but it may not decide whether the dimension lives.
         references_anywhere = sum(1 for uid, _ in ordered if facts.get(uid, (set(), []))[0] & group)
-        # A dimension also lives in the SHAPES the tracer wrote: an embedding's output carries
+        # A dimension also lives in the SHAPES the builder wrote: an embedding's output carries
         # `seq_len` without any operation naming it as an argument (canary's `embed_tokens`
         # graph is one op, and the census called it frozen and harvested nothing, 2026-09-21).
         # An operation whose output shape carries the symbol carries the dimension. A literal
         # standing in an output shape is NOT read as a loss here: TinyLlama's RoPE table
-        # lookup (`aten.index`) emits the traced 23 and the runtime re-slices it by design
+        # lookup (`aten.index`) emits the built 23 and the runtime re-slices it by design
         # (the seq-dependent constants of the compiled sequence) — chatterbox's `copy` into a
         # buffer allocated at 314 is the same shape signature and a genuine freeze, and only a
         # run at another length tells them apart.
@@ -204,7 +204,7 @@ def analyse(graph_path: Path) -> list:
                 # expression this operator computed — it preserved a dimension
                 # that was there. `view [140,33,32] -> [2,70,33,32]` records 33
                 # because 33 is the input's own second axis, and reading it as
-                # "height+1" because height traced at 32 is an arithmetic
+                # "height+1" because height built at 32 is an arithmetic
                 # coincidence; the same shape removes mochi's `time+2` (12 is in
                 # the input) and orpheus's identity view. Conservative in one
                 # direction, and it is named: a genuine break whose literal
@@ -261,14 +261,14 @@ def main() -> int:
     print(f"declared input symbols followed : {sum(1 for r in rows if not r.get('error'))}")
     print(f"symbols whose chain BREAKS      : {sum(by_op.values())}")
     print("  (a break = an op that consumed the symbol's tensor, referenced no symbol,")
-    print("   and wrote a literal derived from its trace value INTO ITS OUTPUT SHAPE)")
+    print("   and wrote a literal derived from its build value INTO ITS OUTPUT SHAPE)")
     print(f"symbols NEVER carried by any op : {len(never)}")
     print()
     clean = [r for r in rows if (r.get("first_break") or {}).get("relation") == "v"
              and not r["first_break"].get("literal_is_a_parameter_extent")]
     amb = [r for r in rows if r.get("first_break") and
            (r["first_break"]["relation"] != "v" or r["first_break"].get("literal_is_a_parameter_extent"))]
-    print(f"  of those, the literal EQUALS the trace value and is not a weight extent: {len(clean)}")
+    print(f"  of those, the literal EQUALS the build value and is not a weight extent: {len(clean)}")
     print(f"  the rest ({len(amb)}) carry a derived relation or a literal that is also a weight")
     print("  extent — an architecture constant can coincide with an arithmetic of the symbol,")
     print("  so those rows are read one by one, never counted as a defect.")

@@ -3,7 +3,7 @@
 The rule (supervisor decision, 2026-09-28; refined the same day on the Mac's Apple gate):
 an op of the AMP_FP32 class (norms, softmax, pow/exp/rsqrt, sum ...) computes in fp32 and,
 under C = bf16, casts its OUTPUT back to bf16 when the component's GRAPH dtype — the
-container's traced `torch_dtype` — is bf16, in every mode: an fp32 result always fits bf16's
+container's built `torch_dtype` — is bf16, in every mode: an fp32 result always fits bf16's
 range, and the vendor's graph returns x.dtype, bf16 there (Sana's DC-AE RMSNorm). On a graph
 of another dtype that the profile's preferred dtype coerced to bf16 compute, x.dtype was fp32
 in the vendor's forward and the output stays fp32, as before the cast-back (Kokoro's fp32

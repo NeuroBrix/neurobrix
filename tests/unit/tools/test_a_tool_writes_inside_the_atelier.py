@@ -58,7 +58,7 @@ def test_an_interpreter_is_resolved_at_use_not_at_import(atelier):
     imports it and is refused only when a run uses it (the Mac collected 19 tool tests as errors, 2026-10-23).
     Injection (seen red): `interpreter` resolving at construction -> red."""
     import os
-    py = A.interpreter("forge")                       # this machine declares no forge python
+    py = A.interpreter("forge")                       # this machine declares no builder python
     with pytest.raises(A.AtelierUndeclared, match="forge"):
         os.fspath(py)
     assert os.fspath(A.interpreter("engine")) == "/venvs/engine/bin/python"

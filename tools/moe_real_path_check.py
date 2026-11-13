@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MoE routing — verdict on the real path, against the vendor.
 
-The alert: a MoE trace burns the trace batch's per-expert token counts into
+The alert: a MoE build burns the build batch's per-expert token counts into
 `aten::slice` bounds. If those bounds are executed, every generation routes with
 the trace's expert histogram and the text is silently wrong.
 
@@ -12,12 +12,12 @@ prompt, greedy on both sides.
 Two independent signals, so the verdict does not rest on the vendor alone:
 
   1. LENGTH SWEEP — frozen bounds would make coherence depend on the sequence
-     length, and the trace length (23) is the only one where the burned bounds
+     length, and the build length (23) is the only one where the burned bounds
      match the buffer. Prompts render to 22 / 23 / 24 tokens (one word apart)
      plus 10/12/16/43/68: a defect shows as "coherent at 23, broken elsewhere".
   2. RUNTIME ROUTING SHAPES — `NBX_MOE_DIAG=1` prints the shapes the fused op
      actually routes. Recomputed bounds give [seq_len, top_k] at the REAL
-     seq_len; trace bounds would stay pinned at the trace's 23.
+     seq_len; build bounds would stay pinned at the trace's 23.
 
 Usage:
     python3 tools/moe_real_path_check.py --model DeepSeek-Coder-V2-Lite-Instruct \

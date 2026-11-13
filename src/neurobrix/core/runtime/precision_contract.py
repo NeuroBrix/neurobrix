@@ -84,7 +84,7 @@ def _env_force() -> Optional[bool]:
 # Ops whose INPUT precision the vendor protects even in a plain-fp16 forward
 # (sinusoids of timestep x frequency, exponentials of scaled ranges): an
 # fp32-computed value feeding one of these is a vendor island that an fp32
-# trace elided, so it is never narrowed on the way in. PyTorch's autocast
+# build elided, so it is never narrowed on the way in. PyTorch's autocast
 # leaves sin/cos in the input dtype; the vendor's code writes `.float()`.
 # Not in this set: the half-IO kernels (layer_norm, group_norm, softmax —
 # fp16 in/out with fp32 inside, the vendor's own kernels) and the fp16
@@ -128,7 +128,7 @@ def narrowable_op_uids(dag: Optional[Dict[str, Any]]) -> FrozenSet[str]:
     norms — see _PRECISION_CONSUMERS) before reaching an op that casts its
     inputs anyway (matmul / conv / attention). The vendor's plain-fp16
     forward writes `.float()` in front of such chains (timestep sinusoids,
-    hand-rolled norms); an fp32 trace elides that cast, so the island is
+    hand-rolled norms); an fp32 build elides that cast, so the island is
     reconstructed from the consumers. A component output with no consumer
     in the graph is also kept fp32. Everything else — an fp32-computed
     value consumed only by pass-through ops that end in a casting op — is
@@ -179,7 +179,7 @@ def load_calibration(cache_path: Optional[str], component_name: str,
                      dag: Optional[Dict[str, Any]]) -> Optional[_cal.CalibrationRecord]:
     """The component's calibration record when one exists AND was measured
     on this very graph (signature match); None otherwise. A record measured
-    on another trace is reported and ignored — never applied."""
+    on another build is reported and ignored — never applied."""
     model_name = registry_model_name(cache_path)
     record = _cal.load_embedded_record(cache_path, component_name)   # the artifact's own (R18: profile.json)
     if record is None:

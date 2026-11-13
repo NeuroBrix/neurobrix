@@ -1,12 +1,12 @@
-"""In a half-precision graph, an op the trace computed entirely in float32 is the vendor's own fp32 island; both
+"""In a half-precision graph, an op the build computed entirely in float32 is the vendor's own fp32 island; both
 engines' dtype policies keep it fp32 on ANY hardware (core/dtype/traced_island.is_traced_fp32_island, one predicate).
 Sana_1600M_1024px_MultiLing on the M4 Pro, 2026-10-25: the compiled branch input-cast the Gemma rotary GEMM
-(`inv_freq @ position_ids`, traced fp32 in a float16 graph) to bf16 — "bf16 range = fp32 range" — and the angles of
+(`inv_freq @ position_ids`, built fp32 in a float16 graph) to bf16 — "bf16 range = fp32 range" — and the angles of
 506 positions lost ~2 rad; the image was a different composition from the Triton branch's (19.8 dB).
 
 What this test would do if the code were wrong: under bf16 compute the compiled policy picks the lower-precision
 (input-cast) wrapper for the traced-fp32 GEMM -> red (seen red before the fix, 2026-10-25). fp16 hardware keeps its
-answer (the GEMM was already fp32-protected there), and a GEMM traced at the graph's half width is still cast."""
+answer (the GEMM was already fp32-protected there), and a GEMM built at the graph's half width is still cast."""
 from __future__ import annotations
 
 import pytest

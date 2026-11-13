@@ -1,8 +1,8 @@
 """A symbol whose chain breaks on `v*2` is a QUESTION, and the census used to answer it silently.
 
 `where_the_symbol_chain_breaks.py` classifies a break by how the literal relates to the
-symbol's trace value: `v`, `v*2`, `v*4`, `v//2`, `v-1`, … Only `v` — the literal EQUAL to the
-trace value — was reported by `certified_census.frozen_dims`. Everything else vanished, and
+symbol's build value: `v`, `v*2`, `v*4`, `v//2`, `v-1`, … Only `v` — the literal EQUAL to the
+build value — was reported by `certified_census.frozen_dims`. Everything else vanished, and
 the census printed `frozen: []` and harvested the model as if it had been inspected.
 
 The tool's reason for not calling a derived relation a defect is sound and is KEPT: an
@@ -12,7 +12,7 @@ tell the two apart. What was wrong was calling it CLEAN.
 WHAT THE SILENCE COST, measured on 2026-09-22
 ---------------------------------------------
 mochi-1-preview's VAE breaks `height` and `width` at `aten._unsafe_view::1` on `v*2` — literal
-28 for a trace of 14, 44 for 22. 180 of its 353 five-dimensional activation tensors then carry
+28 for a build of 14, 44 for 22. 180 of its 353 five-dimensional activation tensors then carry
 CONCRETE spatial dims. The consequence is arithmetic, not opinion:
 
 * the profiler sizes `aten.silu::26` at `[1, 256, 84, 56, 88]` = 0.20 GiB;
@@ -43,11 +43,11 @@ import pytest
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE_DIR") or (Path.home() / ".neurobrix" / "ca" "che"))
 
 #: The cell used to pin `mochi-1-preview`, whose VAE broke `height` and `width` on `v*2`. On
-#: 2026-09-22 at 17:44 that container was RETRACED and the spatial breaks went away — good news,
+#: 2026-09-22 at 17:44 that container was REBUILT and the spatial breaks went away — good news,
 #: and it left this file asserting something no longer true of the cache. It stayed red from
 #: then until 2026-09-23 and nothing noticed, because it was red for a reason nobody read.
 #:
-#: A gate pinned to ONE container is hostage to that container's next retrace. The class is what
+#: A gate pinned to ONE container is hostage to that container's next rebuild. The class is what
 #: matters and the class is alive: 9 of 59 containers still report a derived spatial break
 #: (Flex.1-alpha v//4, Open-Sora-v2 v+2, four PixArt v//8, SANA-Video v-1, Sana-1600M v*2). So
 #: the subject is DISCOVERED, and the cell skips loudly if the whole class ever disappears —
@@ -86,7 +86,7 @@ def subject():
         if _derived(rows):
             return name, rows
     pytest.skip("no container in this cache reports a derived spatial break any more — if that "
-                "is real, every one has been retraced and this cell has done its job")
+                "is real, every one has been rebuilt and this cell has done its job")
 
 
 @pytest.fixture(scope="module")
@@ -110,8 +110,8 @@ def test_they_are_reported_as_UNADJUDICATED_not_as_a_defect(rows):
 
 
 def test_the_relation_is_ARITHMETIC_on_the_trace_value(subject):
-    """Whatever the relation, it must actually relate the literal to the trace value. A row
-    that reports `v*2` where the literal is not twice the trace is a reporting bug, and that is
+    """Whatever the relation, it must actually relate the literal to the build value. A row
+    that reports `v*2` where the literal is not twice the build is a reporting bug, and that is
     checkable on any container rather than on one model's remembered numbers."""
     import re as _re
     model, rows = subject
@@ -125,17 +125,17 @@ def test_the_relation_is_ARITHMETIC_on_the_trace_value(subject):
             assert mm, f"{model}: unrecognised relation {rel!r}"
             op, k = mm.group(1), int(mm.group(2))
             expect = {"*": v * k, "+": v + k, "-": v - k, "//": v // k}[op]
-        assert lit == expect, f"{model}: {rel} on trace {v} should give {expect}, row says {lit}"
+        assert lit == expect, f"{model}: {rel} on build {v} should give {expect}, row says {lit}"
 
 
 def test_split_frozen_keeps_the_two_classes_apart(rows):
-    """A retrace is queued by an ADJUDICATED row only — an unadjudicated one must not stop a
+    """A rebuild is queued by an ADJUDICATED row only — an unadjudicated one must not stop a
     census, or 20 of 59 containers stop at once on a question nobody has answered."""
     m = _census()
     adjudicated, unadjudicated = m.split_frozen(rows)
     assert all(r.get("adjudicated") or r.get("unreadable") for r in adjudicated)
     # every derived break of the subject lands among the unadjudicated (a count pinned to one
-    # container's breaks, `>= 2`, went red when a retrace left the subject with one, 2026-10-12)
+    # container's breaks, `>= 2`, went red when a rebuild left the subject with one, 2026-10-12)
     derived = _derived(rows)
     assert derived and all(any(r is u for u in unadjudicated) for r in derived), (derived, unadjudicated)
     assert all(not r.get("adjudicated") for r in unadjudicated)

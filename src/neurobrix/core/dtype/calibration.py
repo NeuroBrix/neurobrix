@@ -17,7 +17,7 @@ Three pieces:
     reduction per op, no host sync until ``finalize``).
   * ``CalibrationRecord`` — the per-component record: ``max_abs`` per op_uid,
     the stimulus it was measured on, the number of passes, and the graph
-    signature (execution order + op types) so a re-traced artifact never
+    signature (execution order + op types) so a rebuilt artifact never
     reads a stale record. Home: the engine store
     ``~/.neurobrix/calibration/<model>/<component>.json``. Where the record
     travels with a distributed artifact (a container field under R18, or a
@@ -131,9 +131,9 @@ def islands_from_calibration(dag: Dict[str, Any], max_abs: Dict[str, float],
 
 
 def graph_signature(dag: Dict[str, Any]) -> str:
-    """Identity of the traced graph the record was measured on: execution
+    """Identity of the built graph the record was measured on: execution
     order and op types. Values, shapes and weights do not take part — a
-    record follows the trace, not the request."""
+    record follows the build, not the request."""
     ops = dag.get("ops") or {}
     h = hashlib.sha256()
     for uid in dag.get("execution_order") or list(ops):

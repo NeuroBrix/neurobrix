@@ -116,7 +116,7 @@ def compiled_constant_dtype(traced: str, compute: str, graph: Optional[str]) -> 
     (`DtypeEngine.convert_constant`, which calls this): a floating constant whose dtype is the
     component's GRAPH dtype `graph` (or any floating one when the graph states none) is converted
     to the compute dtype; a floating constant in another dtype is the vendor's own choice (an fp32
-    `inv_freq` in a half graph) and is kept; a non-floating one is kept. `traced` is the dtype as
+    `inv_freq` in a half graph) and is kept; a non-floating one is kept. `built` is the dtype as
     the device stores it (the caller narrows float64 where the device has no fp64)."""
     if not is_floating_name(traced) or traced == compute:
         return traced

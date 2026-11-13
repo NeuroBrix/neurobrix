@@ -2,7 +2,7 @@
 TilingEngine — Universal Tiled Execution for Spatial Components.
 
 Splits large spatial inputs into overlapping tiles, executes each through
-the component's CompiledSequence at trace size, then blends results using
+the component's CompiledSequence at build size, then blends results using
 accumulate-and-divide averaging.
 
 ZERO SEMANTIC: No domain knowledge. Handles any 4D spatial tensor [B, C, H, W].
@@ -12,7 +12,7 @@ ZERO FALLBACK: Crashes if config is incomplete.
 Supports:
 - VAE decoders (Sana 4K DC-AE: window attention seam artifacts)
 - Upscalers (Swin2SR, Real-ESRGAN: trained at 64x64, must handle arbitrary)
-- Any spatial component traced at fixed resolution
+- Any spatial component built at fixed resolution
 
 Algorithm: Accumulate-and-divide (SwinIR/Swin2SR pattern)
 - Each tile contributes weight=1 to output accumulator
@@ -61,7 +61,7 @@ class TilingEngine:
     """
     Universal tiled execution engine for spatial components.
 
-    Tiles large inputs into overlapping patches at trace size,
+    Tiles large inputs into overlapping patches at build size,
     executes each tile, then blends via accumulate-and-divide.
 
     All parameters are derived from the component's graph and profile.
@@ -84,7 +84,7 @@ class TilingEngine:
         Initialize tiling engine.
 
         Args:
-            trace_size: Spatial size the graph was traced at (e.g., 128 for 128x128)
+            trace_size: Spatial size the graph was built at (e.g., 128 for 128x128)
             overlap: Overlap between tiles in input space (e.g., 16)
             scale_factor: Output/input spatial ratio (e.g., 32 for DC-AE, 4 for Swin2SR x4)
             window_alignment: Tile positions must align to this (e.g., 8 for window_size=8)
@@ -179,7 +179,7 @@ class TilingEngine:
         """
         Create TilingEngine from component's graph and profile.
 
-        DATA-DRIVEN: Reads trace size from graph input shape, scale factor
+        DATA-DRIVEN: Reads build size from graph input shape, scale factor
         and window alignment from profile config.
 
         Returns None if the component has no tiling-relevant config
@@ -206,14 +206,14 @@ class TilingEngine:
         `output_tensor_ids` and those tensors' metadata are read, so the inputs and outputs of the graph suffice
         (the executor keeps them when it reads a graph, before the graph is fused: parsing a 115 419-op graph.json
         again cost 6 s of one core, Qwen3-30B-A3B 2026-10-30)."""
-        # --- Step 1: Read trace size from graph input shape ---
+        # --- Step 1: Read build size from graph input shape ---
 
         input_ids = graph.get("input_tensor_ids", [])
         tensors = graph.get("tensors", {})
 
         # NBX SYMBOLIC SHAPES — MASTER CONTRACT
         # ────────────────────────────────────────────────────────────────
-        # The build-toolchain tracer marks dims that the runtime can rebind as symbolic
+        # The build-toolchain builder marks dims that the runtime can rebind as symbolic
         # in `tensor["symbolic_shape"]["dims"]`. CompiledSequence's symbol
         # binding pass adapts every consumer op to the actual runtime
         # shape, so a graph with symbolic spatial dims is spatial-adaptive
@@ -223,7 +223,7 @@ class TilingEngine:
         # (typical: pure tile-only models like Swin2SR upscalers, or any
         # graph that hardcodes patch grids / spatial buffers).
         #
-        # Reading only `tensor["shape"]` (the concrete trace value) and
+        # Reading only `tensor["shape"]` (the concrete build value) and
         # ignoring `tensor["symbolic_shape"]` is THE pattern that produced
         # the Sana 4Kpx triton crash — TilingEngine activated on a DC-AE
         # VAE whose H/W are symbolic, fed an NBXTensor into the torch-only
@@ -233,7 +233,7 @@ class TilingEngine:
         # See docs/architecture/symbolic-shapes-contract.md for the full
         # contract and why every site that inspects an NBX graph shape
         # must consult symbolic_shape before drawing conclusions from the
-        # concrete trace value.
+        # concrete build value.
         for input_id in input_ids:
             tensor = tensors.get(str(input_id), {})
             symbolic_dims = tensor.get("symbolic_shape", {}).get("dims", [])
@@ -333,7 +333,7 @@ class TilingEngine:
 
         Returns True when input spatial dimensions exceed tile size.
         When tile_size < trace_size (symbolic spatial graphs), this enables
-        tiling even when input matches trace size — producing overlapping
+        tiling even when input matches build size — producing overlapping
         tiles that eliminate grid artifacts via accumulate-and-divide blending.
 
         Both directions trigger on the INPUT extents: tile_size / t_tile are
@@ -653,7 +653,7 @@ class OpLevelTilingPlan:
         # `_request_shape_of`) and handed over with every plan it emits —
         # an empty list is "none at this request". None is "never decided":
         # the runtime refuses it by name (`register_into_graph_executor`)
-        # instead of re-detecting at the DAG's traced extents.
+        # instead of re-detecting at the DAG's built extents.
         self.inplace_adds: Optional[List[Tuple[str, int]]] = None
         # Each entry: dict {"fork_uid": str, "merge_uid": str,
         # "chain_uids": List[str], "tile_factor": int, "spatial_axis": int,
@@ -991,7 +991,7 @@ class OpLevelTilingEngine:
         Returns `(op_uid, op_type)` for every op whose input provably dies at
         it. NOTE WHAT IS **NOT** DECIDED HERE: how many bytes the tensor holds.
 
-        The DAG carries the extents the model was TRACED at, and a request runs
+        The DAG carries the extents the model was BUILT at, and a request runs
         at its own. `real-esrgan-x8`'s `aten.leaky_relu::278` has
         `output_shapes = [[1, 64, 896, 640]]` -- 140 MB -- while the 1024x1024
         request runs that same op at [1, 64, 8192, 8192], which is 8 GiB and the
@@ -1002,7 +1002,7 @@ class OpLevelTilingEngine:
         property of the REQUEST and is settled in the interceptor, which holds
         the real tensor, so this detector takes no byte threshold.
         the in-place adds' own threshold had the same blind
-        spot, unnoticed because Sana's trace extents were already over a
+        spot, unnoticed because Sana's build extents were already over a
         gigabyte.
         """
         dag = getattr(graph_executor, '_dag', None)
@@ -1087,7 +1087,7 @@ class OpLevelTilingEngine:
         `shape_of(tensor_id)`: the tensor's extents at the REQUEST
         (`PrismSolver._request_shape_of`, the one sizing rule): the base-size threshold,
         the spatial test and the spec's `shape` / `bytes_fp32` (which set the
-        band factor) are read from it. Without it, the DAG's traced extents.
+        band factor) are read from it. Without it, the DAG's built extents.
         """
         threshold_bytes = _tsz.residual_chain_min_base_bytes_fp32()
         dag = getattr(graph_executor, '_dag', None)
@@ -1282,7 +1282,7 @@ class OpLevelTilingEngine:
         # runtime never re-detects them: the DAG's `output_shapes` are the
         # TRACE's extents, and a re-detection there installed adds the
         # estimate never priced or dropped adds it did (Sana_1600M_4Kpx_BF16
-        # retraced at a 7x10 latent, 2026-10-12). A plan that carries no
+        # rebuilt at a 7x10 latent, 2026-10-12). A plan that carries no
         # decision is refused by name.
         if self.plan.inplace_adds is None:
             raise RuntimeError(

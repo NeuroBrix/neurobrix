@@ -3,10 +3,10 @@
 
     tools/frozen_dim_report.py <model> [component]
 
-`output_shapes` records what the shapes WERE at trace time; literals there are
+`output_shapes` records what the shapes WERE at build time; literals there are
 expected and carry no claim. The expression the runtime evaluates lives in
 `attributes.args`. D-MOCHI was filed from the first field and cost mochi a 2.7 h
-re-trace that could not have changed anything — the op it named carries `s1*3`
+rebuild that could not have changed anything — the op it named carries `s1*3`
 in its arguments, in both containers.
 
 Full rule: docs/reference/a-frozen-dimension-is-read-from-the-arguments.md

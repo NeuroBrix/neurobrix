@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
 CATALOGUE = json.loads((Path(__file__).parent / "data" / "catalogue_flows.json").read_text())["flows"]
 
 # Flows whose handlers drive their components by name and never read a stage's `execution`: the
-# values their containers declare are labels (Forge writes them), measured 2026-10-04.
+# values their containers declare are labels (the container builder writes them), measured 2026-10-04.
 LABELS_ONLY = {
     "autoregressive_generation": {"autoregressive", "forward"},
     "dual_ar": {"dual_ar", "forward"},

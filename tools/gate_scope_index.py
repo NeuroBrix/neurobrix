@@ -14,7 +14,7 @@ cached under the scope's scratch keyed by every graph's size and mtime and this 
                     values an attribute resolver is handed
     explicit_dtypes the dtype values the graph passes as an ARGUMENT (records of type "dtype")
     tensor_dtypes   the dtype of every tensor
-    torch_dtypes    every component's traced `torch_dtype`
+    torch_dtypes    every component's built `torch_dtype`
     flow            the topology's flow type
 
 Dtype names are written bare (`bool`, `float64`), the form `canonical_dtype` gives any spelling.
@@ -124,7 +124,7 @@ def cached(cache: Path, model: str, store: Path):
     d = cache / model
     f = store / f"{model}.json"
     if not d.is_dir():
-        # a container retraced away after the gate ran it: its record, indexed while it was there, is the
+        # a container rebuilt away after the gate ran it: its record, indexed while it was there, is the
         # container the cell ran (named by the caller); without one the cell cannot be scoped
         if f.is_file():
             rec = json.loads(f.read_text())

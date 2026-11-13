@@ -164,7 +164,7 @@ class TritonAttentionInterceptor:
 
         # The paged cache: append at the device length, read through the block table (state engine step 2).
         # Each sequence reads its own length, so no pad mask exists. The graph's own decode mask covers only the
-        # step's keys (the traced causal mask over the new position, [.., 1, 1] for one token): one query at the
+        # step's keys (the built causal mask over the new position, [.., 1, 1] for one token): one query at the
         # last position sees every cached position, which the paged read does. A mask over MORE keys than the step
         # brought would constrain the cache and cannot be honoured: refused by name, never dropped.
         if attn_mask is not None and int(attn_mask.shape[-1]) != int(k.shape[2]):

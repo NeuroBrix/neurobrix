@@ -416,7 +416,7 @@ def _promote_int_unary(x):
     kernel computes in the integer dtype AND NBXTensor.empty_like keeps the int
     output — e.g. rsqrt(int64 2) truncates 0.7071 to 0, which silently collapsed
     the Kokoro AdainResBlk1d residual `(h + sc) * rsqrt(2)` to all-zeros (the
-    rsqrt(2) constant was traced as an int64 scalar; torch auto-promotes it).
+    rsqrt(2) constant was built as an int64 scalar; torch auto-promotes it).
     No-op for tensors already in a floating dtype."""
     want = float_math_input(canonical_name(x.nbx_dtype)) if hasattr(x, "nbx_dtype") else None
     if want is not None and want != canonical_name(x.nbx_dtype):
@@ -778,7 +778,7 @@ def add_inplace_nbx(target, other, alpha: float = 1.0):
 
 def _as_complex_scalar(v):
     """Parse a complex literal ('1j', '(1+2j)', a Python complex) → complex, else None.
-    The tracer serializes complex constants like the imaginary unit as an
+    The builder serializes complex constants like the imaginary unit as an
     'unknown'-typed string ('1j')."""
     if isinstance(v, complex):
         return v
@@ -857,7 +857,7 @@ def mul(a, b) :
 
 def div(a, b, rounding_mode=None) :
     # aten::div carries an optional rounding_mode kwarg ("floor"/"trunc",
-    # e.g. the SD3-class pos_embed crop offset (max-h)//2 traces as
+    # e.g. the SD3-class pos_embed crop offset (max-h)//2 builds as
     # div(rounding_mode=floor) on a 0-dim int64). Routed onto the
     # existing bricks — floor_divide_wrapper's fp64 int discipline for
     # floor, the same composition with trunc for trunc.
@@ -1451,7 +1451,7 @@ def bitwise_and_wrapper(a, b) :
     if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
         b, scalar = _core._to_scalar(b), True
     if scalar:
-        # 0-dim / python-scalar operand (e.g. the traced `mask.all() & qside`
+        # 0-dim / python-scalar operand (e.g. the built `mask.all() & qside`
         # opening the T5 extended-mask chain): materialize to a full tensor of
         # a's dtype and run the tensor kernel. Cold path, exact for every
         # dtype. The former code fed the 0-dim tensor straight to the flat

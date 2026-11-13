@@ -47,7 +47,7 @@ _log = logging.getLogger(__name__)
 # (P-KERNEL-LAUNCH-HYGIENE C4) — __del__ fires per tensor, and an
 # environ.get there is pure overhead on the free path. Consequence:
 # changing the env var mid-process no longer applies; acceptable for a
-# diagnostic that is set before launch. None == trace disabled.
+# diagnostic that is set before launch. None == build disabled.
 try:
     _TRACE_DEL_BIG_ENV = os.environ.get("NBX_TRACE_DEL_BIG_MB", "0")
     _TRACE_DEL_BIG_THRESH: Optional[int] = (
@@ -1643,7 +1643,7 @@ class NBXTensor:
                 src = src.contiguous()
             if not self.is_contiguous():
                 # Destination is a STRIDED view, e.g. an in-place slice-assignment
-                # `buf[..., :k] = src` that the tracer lowers to slice + copy_.
+                # `buf[..., :k] = src` that the builder lowers to slice + copy_.
                 # A flat memcpy of self._nbytes would write the source CONTIGUOUSLY
                 # at self.data_ptr(), ignoring the view's strides — scattering the
                 # data to the wrong addresses. (Wan RoPE builds the rotated Q/K via

@@ -13,8 +13,8 @@ the 2026-08-28 swinir hypothesis look plausible and be wrong:
 
 The distinction is the whole diagnosis. A container whose window counts
 arrive as `floordiv(s_h, window)` resolves them at any input size; one
-whose counts arrive as the trace-time integers reassembles rows at the
-trace width and renders horizontal banding off-trace, and NO runtime
+whose counts arrive as the build-time integers reassembles rows at the
+build width and renders horizontal banding off-build, and NO runtime
 pass corrects it — measured, the promotion pass rewrites nothing on
 either the working or the broken Swin container.
 
@@ -108,7 +108,7 @@ def traced_symbolic(dag):
             sym[t] += blob.count(f'"{t}"')
         # A 6-D output is the Swin window-partition layout
         # (B, H/ws, ws, W/ws, ws, C). Carrying no symbolic node there
-        # means both counts were frozen at the trace size.
+        # means both counts were frozen at the build size.
         out = (n.get("output_shapes") or [[]])[0]
         if len(out) == 6 and '"floordiv"' not in blob:
             baked_windows += 1
@@ -129,7 +129,7 @@ def report(model: str) -> None:
         label = f"{model}/{g.parent.name}"
         print(f"{label:46s} ops={len(dag['ops']):6d} symbols={named}")
         print(f"{'':46s} runtime promotion rewrites : {rewrites}")
-        print(f"{'':46s} traced symbolic shape nodes: "
+        print(f"{'':46s} built symbolic shape nodes: "
               f"floordiv={sym['floordiv']} symbol={sym['symbol']}")
         verdict = ("BAKED WINDOW COUNTS" if baked else "clean")
         print(f"{'':46s} 6-D window views with NO symbolic count: "

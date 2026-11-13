@@ -473,8 +473,8 @@ class RuntimeExecutor:
         self._family_layer = dict(merged_defaults)
         merged_defaults.update(self.pkg.defaults)
         # The output size is the CONTAINER's when the build declares none: the
-        # traced latent extent of the diffusion backbone times the VAE scale
-        # — Allegro traced at [.., 90, 160] × 8 = 720×1280. A family constant
+        # built latent extent of the diffusion backbone times the VAE scale
+        # — Allegro built at [.., 90, 160] × 8 = 720×1280. A family constant
         # is the last resort only (video family: 512² rendered colour bands on
         # every arm of the calibration campaign, 2026-09-05).
         if "height" not in self.pkg.defaults or "width" not in self.pkg.defaults:
@@ -483,9 +483,9 @@ class RuntimeExecutor:
             # alternative was measured on 2026-09-12: the image processor keeps
             # the source image's own size when no --height/--width is given (its
             # own comment says so), while this cascade independently derived the
-            # resolution from the TRACED latent. Allegro-TI2V then met its own
+            # resolution from the BUILT latent. Allegro-TI2V then met its own
             # 448x448 conditioning image at a pipeline running 144x208 and died
-            # on "Expected size 18 but got size 56" — the traced latent extent
+            # on "Expected size 18 but got size 56" — the built latent extent
             # against the image's. Two decisions taken separately about one
             # quantity.
             #
@@ -493,8 +493,8 @@ class RuntimeExecutor:
             # wins (the `inputs` loop below applies after this), then the
             # container's own declared defaults (this branch does not run at
             # all when it declares them), then the conditioning image, then the
-            # traced latent, then the family constant. A request-side fact
-            # outranks a build-side one; a stimulus chosen at trace time is the
+            # built latent, then the family constant. A request-side fact
+            # outranks a build-side one; a stimulus chosen at build time is the
             # last thing that should decide what a user gets.
             derived = self._conditioning_image_size(inputs)
             if derived is None:
@@ -507,7 +507,7 @@ class RuntimeExecutor:
             default_key = key.replace("global.", "") if key.startswith("global.") else key
             merged_defaults[default_key] = value
 
-        # Resolution binning (the vendor's `use_resolution_binning`, recorded by Forge under
+        # Resolution binning (the vendor's `use_resolution_binning`, recorded by the container builder under
         # `flow.resolution_binning`): the request is classified to its trained bin HERE, after
         # every source of height/width has spoken and before the latent extent is derived from
         # them, so the whole pipeline runs at the bin. The flow restores the requested size
@@ -1370,13 +1370,13 @@ class RuntimeExecutor:
             output = self._run_vendor_tiling(comp_name, executor, comp_inputs, vendor_tiling)
 
         # TEMPORAL STREAM: the plan runs this component in exact time chunks (Prism Strategy 3.4, or the
-        # chunks its vendor's own reference runs in) through the two graphs Forge derived from its clip graph.
+        # chunks its vendor's own reference runs in) through the two graphs the container builder derived from its clip graph.
         stream = (getattr(self.plan, "component_stream", None) or {}).get(comp_name)
         if output is None and stream is not None:
             output = self._run_temporal_stream(comp_name, executor, comp_inputs, stream)
 
         # UNIVERSAL TILING: Any component with a TilingEngine gets tiled
-        # when its spatial input exceeds trace size
+        # when its spatial input exceeds build size
         tiling = self._component_tiling.get(comp_name)
         if output is None and tiling is not None:
             spatial_input = self._find_spatial_input(comp_inputs)
@@ -1865,9 +1865,9 @@ class RuntimeExecutor:
 
         # NOTE: Resolution binning removed. Models with symbolic shapes (like Sana with
         # Linear Attention) support dynamic resolution. The transformer computes pos_embed
-        # dynamically based on runtime latent dims, not trace-time sample_size.
+        # dynamically based on runtime latent dims, not build-time sample_size.
         #
-        # If a model truly requires fixed resolution, it should be enforced at trace time
+        # If a model truly requires fixed resolution, it should be enforced at build time
         # and validated here, not silently upscaled.
 
         merged_defaults["latent_height"] = latent_height
@@ -1908,15 +1908,15 @@ class RuntimeExecutor:
     def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
         """(height, width) in pixels from the container — `resolution.container_size`,
         the one authority the plan reads too (2026-09-21: the flow rendered Wan T2V at
-        480x832 from the backbone's traced latent while the plan was budgeted at the
-        VAE's trace extent; both now read the same module). Never guesses."""
+        480x832 from the backbone's built latent while the plan was budgeted at the
+        VAE's build extent; both now read the same module). Never guesses."""
         from .resolution.container_size import container_output_size
         return container_output_size(self.pkg.manifest, self.pkg.defaults,
                                      self.pkg.topology.get("components", {}) or {}, comp_configs)
 
     def _get_vae_scale_factor(self, comp_configs: Dict[str, Any]) -> Optional[int]:
         """The VAE's spatial compression — `resolution.container_size.vae_scale_factor`,
-        the container's declaration in both its spellings, then the trace."""
+        the container's declaration in both its spellings, then the build."""
         from .resolution.container_size import vae_scale_factor
         return vae_scale_factor(self.pkg.manifest, self.pkg.defaults, comp_configs)
 

@@ -1,7 +1,7 @@
 """The census must name a blind axis, and must not name a deliberate one.
 
 It answers "where would a symbolic-shape defect be INVISIBLE", which is a larger
-set than "where is one". An axis traced at a value where two rules agree cannot be
+set than "where is one". An axis built at a value where two rules agree cannot be
 cleared by the trace-point check, however many invariants pass — register 29.
 
 Run: PYTHONPATH=tools python -m pytest tests/unit/tools/test_symbol_collision_census.py
@@ -69,7 +69,7 @@ def test_all_shows_the_deliberate_class_for_re_examination():
 
 
 def test_an_axis_colliding_with_a_weight_extent_is_named():
-    """real-esrgan: height traced at 64, which is also a parameter extent."""
+    """real-esrgan: height built at 64, which is also a parameter extent."""
     m = _tool()
     import tempfile
     with tempfile.TemporaryDirectory() as d:
@@ -82,7 +82,7 @@ def test_an_axis_colliding_with_a_weight_extent_is_named():
 
 
 def test_a_safe_axis_is_not_named():
-    """23 is the project's sequence trace value precisely because it collides with
+    """23 is the project's sequence build value precisely because it collides with
     nothing — prime, and not a parameter extent here."""
     m = _tool()
     import tempfile

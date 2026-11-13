@@ -21,7 +21,7 @@ oracles and never lower optimization annotations.
 v1 scope (deposit-probe 2026-08-10, validation_outputs/
 optim_fusion_vertical/deposit_probe): unary epilogues silu / gelu on
 mm / addmm anchors. The scouted "linear+bias -> addmm" quick win
-measured ~0 on the reference rows (bias'd linears trace as aten::addmm
+measured ~0 on the reference rows (bias'd linears build as aten::addmm
 already; aten::linear is absent from the zoo graphs) — the launches
 live in the activation epilogues instead: Ming denoiser 51/step,
 Qwen3-VL vision tower 31, MiniCPM voice path 17 direct. Binary
@@ -75,7 +75,7 @@ def graph_output(tid: str, graph_outputs, tensors) -> bool:
 
 def _gelu_approximate(op: dict) -> str | None:
     """Parse aten::gelu's `approximate` attribute across the observed
-    trace encodings: plain attr key, kwargs scalar dict, args scan.
+    build encodings: plain attr key, kwargs scalar dict, args scan.
 
     FAIL-CLOSED (gardien 2026-08-10): when an `approximate` attribute
     is PRESENT but not parseable to "tanh"/"none", return None and the

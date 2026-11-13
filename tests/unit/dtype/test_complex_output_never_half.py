@@ -1,4 +1,4 @@
-"""An op whose TRACED OUTPUT is complex never receives half inputs.
+"""An op whose BUILT OUTPUT is complex never receives half inputs.
 
 Measured on 2026-09-10 (torch 2.5.1+cu121), the promotion that motivates
 this file::
@@ -10,7 +10,7 @@ this file::
 
 The trap is NOT "a half tensor meets a complex tensor" — that promotes
 correctly. It is a half tensor meeting a complex value the graph does not
-carry as an input: Kokoro's decoder traces
+carry as an input: Kokoro's decoder builds
 
     aten::mul   input_dtypes=['float32']  output_dtypes=['complex64']
 
@@ -24,7 +24,7 @@ AMP_FP32_OPS cannot be completed by adding op names: the survey of the
 cached containers (5 components, 490 complex-touching ops) shows complex
 produced by ``aten::mul``, ``aten::complex``, ``aten::stft`` and
 ``aten::_fft_r2c`` as well — and a generic ``mul`` can produce a complex in
-any model ever traced.
+any model ever built.
 
 Run: PYTHONPATH=src python -m pytest tests/unit/dtype/test_complex_output_never_half.py
 """
@@ -40,7 +40,7 @@ def _engine(compute_dtype=torch.float16) -> DtypeEngine:
 
 
 def test_mul_by_complex_scalar_keeps_complex64_under_fp16_compute():
-    """Kokoro decoder: phase * 1j. The traced output is complex64; a fp16
+    """Kokoro decoder: phase * 1j. The built output is complex64; a fp16
     left operand would silently make it complex32, which the very next op
     (aten::exp) has no kernel for."""
     eng = _engine()
@@ -50,12 +50,12 @@ def test_mul_by_complex_scalar_keeps_complex64_under_fp16_compute():
                         op_uid="mul::218")
     out = op(torch.ones(4, dtype=torch.float16), 1j)
     assert out.dtype == torch.complex64, (
-        f"traced output is complex64, engine produced {out.dtype}")
+        f"built output is complex64, engine produced {out.dtype}")
 
 
 def test_aten_complex_from_half_parts_keeps_complex64():
     """MiniCPM-o hift / chatterbox s3gen: aten::complex(real, imag) with two
-    fp32 parts traced to complex64. torch.complex(fp16, fp16) is complex32
+    fp32 parts built to complex64. torch.complex(fp16, fp16) is complex32
     and the istft that consumes it has no ComplexHalf kernel."""
     eng = _engine()
     op = eng.compile_op("aten::complex", torch.complex,
@@ -64,13 +64,13 @@ def test_aten_complex_from_half_parts_keeps_complex64():
                         op_uid="complex::7")
     out = op(torch.ones(4, dtype=torch.float16), torch.ones(4, dtype=torch.float16))
     assert out.dtype == torch.complex64, (
-        f"traced output is complex64, engine produced {out.dtype}")
+        f"built output is complex64, engine produced {out.dtype}")
 
 
 def test_complex128_output_does_not_downcast_float64_inputs():
     """The guard is a FLOOR (half -> fp32), not a leveller (everything ->
-    fp32). Wan2.1's RoPE traces view_as_complex(float64) -> complex128 on
-    80 blocks; forcing fp32 there would change the traced dtype contract."""
+    fp32). Wan2.1's RoPE builds view_as_complex(float64) -> complex128 on
+    80 blocks; forcing fp32 there would change the built dtype contract."""
     eng = _engine()
     op = eng.compile_op("aten::view_as_complex", torch.view_as_complex,
                         {"input_dtypes": ["float64"],
@@ -78,11 +78,11 @@ def test_complex128_output_does_not_downcast_float64_inputs():
                         op_uid="view_as_complex::3")
     out = op(torch.ones(4, 2, dtype=torch.float64))
     assert out.dtype == torch.complex128, (
-        f"traced output is complex128, engine produced {out.dtype}")
+        f"built output is complex128, engine produced {out.dtype}")
 
 
 def test_real_output_op_is_untouched_by_the_complex_guard():
-    """A control: the guard must not change any op whose traced output is
+    """A control: the guard must not change any op whose built output is
     real. aten::mul on two fp16 reals stays fp16."""
     eng = _engine()
     op = eng.compile_op("aten::mul", torch.mul,
@@ -121,7 +121,7 @@ def test_sequential_dispatch_keeps_float64_at_a_complex128_op():
 
 def test_vendor_fp32_pin_does_not_retype_a_complex_op():
     """A keep-in-fp32 pin is a precision choice among REAL dtypes; it may not
-    narrow a traced complex128 contract to complex64 by levelling its float64
+    narrow a built complex128 contract to complex64 by levelling its float64
     input. The complex floor wins over the pin."""
     eng = _engine()
     eng.set_precision_contract(True, fp32_op_uids={"view_as_complex::3"},
@@ -270,7 +270,7 @@ def test_both_branches_read_the_container_identically():
 
 
 def test_predicate_fires_on_the_real_containers_if_present():
-    """Integration pin: the key the engines read is the key the tracer
+    """Integration pin: the key the engines read is the key the builder
     writes. Skipped where the cache is not present."""
     import json
     import os

@@ -200,7 +200,7 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # mode (ABSOLUTE ZERO torch) rejects this.  Native mode works in
     # practice but the CLI invocation profile the harness uses doesn't
     # match what the model expects (needs speaker ref / script format).
-    # Needs a build-toolchain re-trace to integrate DDPM as a neural component.
+    # Needs a build-toolchain rebuild to integrate DDPM as a neural component.
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
@@ -244,15 +244,15 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
 # coverage gaps — the harness becomes the inventory of truth for
 # "what NeuroBrix should run" (testable + not-yet-traced), not only
 # "what is currently built". Update when new families are opened or
-# when a model gets traced and lands in `~/.neurobrix/cache/`.
+# when a model gets built and lands in `~/.neurobrix/cache/`.
 #
 # (model_name, family, reason)
 TARGET_MATRIX_NOT_TRACED: List[Tuple[str, str, str]] = [
     # LLM gemma sub-family — the only genuine gaps left in this list.
     ("gemma-4-26B-A4B-it", "llm",
-     "Gemma sub-family: snapshot present, not traced (no graphs, no .nbx)."),
+     "Gemma sub-family: snapshot present, not built (no graphs, no .nbx)."),
     ("gemma-4-E4B-it", "llm",
-     "Gemma sub-family: TRACED (graphs in .cache/graphs) but never built/installed — build + install to turn this into a real cell."),
+     "Gemma sub-family: BUILT (graphs in .cache/graphs) but never built/installed — build + install to turn this into a real cell."),
     #
     # FRESHNESS PASS 2026-08-19: the video family and the VLM family were
     # opened and closed since this list was written — Allegro,
@@ -271,7 +271,7 @@ def _read_manifest(model_dir: Path) -> Dict[str, str]:
     """Return (family, flow_type, gen_type) for a cached model.  '?' if missing.
 
     gen_type is `topology.flow.generation.type` — multimodal builds are
-    traced for exactly one generation_type (Janus image-only vs text-only),
+    built for exactly one generation_type (Janus image-only vs text-only),
     and `neurobrix run` enforces `--mode` matching that type, so the harness
     must derive the mode from the build rather than guess it.
     """

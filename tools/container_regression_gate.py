@@ -15,7 +15,7 @@ gate:
     hand five minutes into the upload: text_encoder 8.87 -> 4.66 GB with
     transformer and vae byte-identical.
 
-Both entry doors now exist (`forge build` refuses a snapshot whose index names
+Both entry doors now exist (`the container builder build` refuses a snapshot whose index names
 shards it does not hold). This is the other half, and it is a different question:
 the entry door asks whether the INPUTS are complete, this asks whether the OUTPUT
 is a regression against what is already being served.

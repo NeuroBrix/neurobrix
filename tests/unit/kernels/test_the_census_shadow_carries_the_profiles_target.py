@@ -7,7 +7,7 @@ profile (`--hardware`), and the profile names its device's compute capability: t
 the launcher's target from it, so the vendor profile — ladder, budgets, config spaces — is the
 one the certified keys will be served under.
 
-Shapes: 226 is Wan's traced conditioning length (a real key of the catalogue), whose bucket top
+Shapes: 226 is Wan's built conditioning length (a real key of the catalogue), whose bucket top
 on the Volta ladder is 240 — a value the exact form cannot produce by accident.
 """
 from __future__ import annotations

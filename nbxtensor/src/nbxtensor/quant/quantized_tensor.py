@@ -38,7 +38,7 @@ PACK = 8
 class QuantizedTensor:
     """int4-g128-asym weight triplet under one graph-facing handle.
 
-    `logical_shape` is the DENSE weight's shape as the graph traced it
+    `logical_shape` is the DENSE weight's shape as the graph built it
     ([out_features, in_features]); `transposed=True` marks the
     graph-side aten::t view ([in, out] — the packed layout's natural
     orientation)."""
@@ -67,7 +67,7 @@ class QuantizedTensor:
 
     @property
     def dtype(self):
-        return NBXDtype.float16  # the dense weight's traced dtype class
+        return NBXDtype.float16  # the dense weight's built dtype class
 
     @property
     def _dtype(self):

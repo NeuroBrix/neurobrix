@@ -1,9 +1,9 @@
 """The spatial promotion pass must not turn a CHANNEL literal into a spatial expression because the two numbers
-coincide at the traced size.
+coincide at the built size.
 
-Sana_1600M_4Kpx_BF16 is traced square: the VAE's latent is 128 x 128, and its upsampling blocks carry literal
+Sana_1600M_4Kpx_BF16 is built square: the VAE's latent is 128 x 128, and its upsampling blocks carry literal
 channel counts that are multiples of 128. c76a4620 ("the misattributed symbol also hides inside the arithmetic")
-made the pass rewrite aten.view::94's channel entry 1024 as mul(8, height): 8 x 128 = 1024 at the trace, 8 x 96 =
+made the pass rewrite aten.view::94's channel entry 1024 as mul(8, height): 8 x 128 = 1024 at the build, 8 x 96 =
 768 at a 3072 x 4096 request. The compiled engine then died in the VAE's op-tiled residual chain, "The size of
 tensor a (1536) must match the size of tensor b (2048) at non-singleton dimension 2" (aten.add::76) — measured on
 Metal 2026-09-27 and bisected to that commit; the rack found the same cell red on main after the merge.
@@ -33,4 +33,4 @@ def test_the_vae_channel_counts_stay_literal():
     assert val_b[1] == 1024, f"the fixture moved: view::94 target was {val_b}"
     assert val_a[1] == 1024, (
         f"view::94's channel entry 1024 became {json.dumps(val_a[1])}: a channel count rewritten as a spatial "
-        f"expression because 8 x 128 = 1024 at the square trace; it is 768 at a 3072 x 4096 request")
+        f"expression because 8 x 128 = 1024 at the square build; it is 768 at a 3072 x 4096 request")

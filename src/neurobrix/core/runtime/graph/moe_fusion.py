@@ -4,7 +4,7 @@ MoE Fusion Pass — DAG Rewrite for Mixture-of-Experts Models
 Detects MoE routing subgraphs (topk → sort → bincount → per-expert FFN → scatter_reduce)
 and replaces them with a single fused moe_dispatch op that executes dynamically at runtime.
 
-This eliminates hardcoded slice boundaries burned into the graph during tracing,
+This eliminates hardcoded slice boundaries burned into the graph during building,
 enabling correct routing for any input at runtime.
 
 ZERO HARDCODE: All parameters (num_experts, top_k, hidden_dim, intermediate_dim)
@@ -153,7 +153,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
                 producer_map[out_tid] = fused_uid
 
     # A DECLARED MoE (the registry says num_experts > 1) with a router left
-    # unfused would run it as traced: trace-frozen routing, or every expert for
+    # unfused would run it as built: trace-frozen routing, or every expert for
     # every token — in silence. Refused by name instead, whichever matcher (or
     # none) looked at it. A router is covered when its topk left the order (its
     # layer was fused) or a fused op names it in its gate group (a multi-gate
@@ -259,7 +259,7 @@ def _fuse_one_moe_layer(
         seed_indices_tid = topk_data["output_tensor_ids"][1]
         moe_op_uids.add(topk_uid)
 
-    # --- Trace forward from the routing tensors to find the MoE subgraph ---
+    # --- Build forward from the routing tensors to find the MoE subgraph ---
 
     # Find the hidden_states input: trace back from the index ops
     # The gate_scores come from softmax, which comes from router mm
@@ -448,9 +448,9 @@ def _fuse_one_moe_layer(
         if uid not in moe_op_uids:
             insert_idx += 1
 
-    # DATA-DEPENDENCE CLAMP. `last_moe_pos` is the tail of the traced
+    # DATA-DEPENDENCE CLAMP. `last_moe_pos` is the tail of the built
     # subgraph, which is NOT always the op that produced the MoE result: a
-    # trace can leave a DEAD routing by-product after the combine (Ming-Lite
+    # build can leave a DEAD routing by-product after the combine (Ming-Lite
     # -Omni emits `blended_topk_idx.view(batch, seq, k)` past the weighted
     # sum). The heuristic above then places the fused op AFTER the surviving
     # op that reads its output. Clamp to the true dependence window:
@@ -847,7 +847,7 @@ def _detect_gate_blends(
 
 
 # ============================================================================
-# TRACING HELPERS
+# BUILDING HELPERS
 # ============================================================================
 
 def _trace_routing_ops(
@@ -859,7 +859,7 @@ def _trace_routing_ops(
     moe_op_uids: Set[str],
 ) -> None:
     """
-    Trace routing ops after topk: view, sort, bincount, floor_divide,
+    Build routing ops after topk: view, sort, bincount, floor_divide,
     _to_copy, detach, zeros_like, etc.
 
     Phase 1: Forward BFS from topk outputs to find all MoE ops.
@@ -1055,7 +1055,7 @@ def _trace_expert_blocks(
                     continue
                 tid = arg.get("tensor_id", "")
                 # The mm input is the t output (e.g. aten.t::12::out_0)
-                # Trace back to find the param:: weight
+                # Build back to find the param:: weight
                 producer_uid = producer_map.get(tid)
                 if producer_uid is None:
                     continue
@@ -1128,8 +1128,8 @@ def _trace_expert_blocks(
     for expert_id in range(total_experts):
         if expert_id in expert_weights:
             projs = expert_weights[expert_id]
-            # Some experts may be partially traced (e.g., gate+up present but down
-            # was not activated during trace). Fill missing projections from pattern.
+            # Some experts may be partially built (e.g., gate+up present but down
+            # was not activated during build). Fill missing projections from pattern.
             gate_tid = projs.get("gate") or (
                 _expert_tid(block_prefix, expert_id, "gate") if block_prefix else "")
             up_tid = projs.get("up") or (
@@ -1149,7 +1149,7 @@ def _trace_expert_blocks(
                         "weight_name": tid[len("param::"):],
                     }
         elif block_prefix is not None:
-            # Expert absent from graph (never activated during trace)
+            # Expert absent from graph (never activated during build)
             # Construct tensor ID from pattern — weights ARE in the checkpoint
             gate_tid = _expert_tid(block_prefix, expert_id, "gate")
             up_tid = _expert_tid(block_prefix, expert_id, "up")
@@ -1302,18 +1302,18 @@ def _collect_input_tids(op_data: Dict[str, Any]) -> List[str]:
 # Some MoE blocks keep their experts as TWO stacked parameters instead of
 # E x 3 per-expert matrices: an input slab holding every expert's fused
 # gate|up projection and an output slab holding every expert's down
-# projection. Two traced forms of such a block are recognised by ONE matcher
+# projection. Two built forms of such a block are recognised by ONE matcher
 # (`_fuse_one_stacked_layer`), each element read from the graph:
 #
 #   softmax AFTER topk, sorted-index dispatch (granitemoe, 24 layers):
 #     topk(logits[T,E], k) -> softmax OVER THE TOP-K
 #     view/sort/div/index  -> a sorted-assignment gather of hidden [T*k, H]
-#     split_with_sizes     -> per-expert pieces, sizes BAKED AT TRACE TIME
+#     split_with_sizes     -> per-expert pieces, sizes BAKED AT BUILD TIME
 #     E x (select(W_in[E,2F,H], e) -> t -> mm)          stacked input_linear
 #     cat -> split -> silu -> mul                       fused gate|up halves
 #     split_with_sizes -> E x (select(W_out[E,H,F], e) -> t -> mm) -> cat
 #     mul by sorted routing weights -> zeros -> index_add[T,H]
-#   The baked sizes are trace-time ROUTING — any other prompt routes
+#   The baked sizes are build-time ROUTING — any other prompt routes
 #   differently and the graph refuses (split_with_sizes sums mismatch).
 #   granite's softmax(topk(logits)) equals softmax(logits) -> topk ->
 #   renormalize EXACTLY (exp(x_i)/sum_top exp is invariant to the
@@ -1328,7 +1328,7 @@ def _collect_input_tids(op_data: Dict[str, Any]) -> List[str]:
 #     hidden -> repeat(E, 1) -> view[E,T,H] -> bmm(W_in[E,H,2F])
 #     -> split(F, -1) -> silu(gate) * up -> bmm(W_out[E,F,H])
 #     -> view -> mul by the routing matrix -> sum over the expert axis
-#   Correct as traced — unrouted experts are multiplied by 0 — but every
+#   Correct as built — unrouted experts are multiplied by 0 — but every
 #   expert is READ and COMPUTED for every token (E/k x the routed FLOPs,
 #   9.94x the active bytes per decode token, measured 2026-10-04). Its
 #   routing is already the fused op's own (topk of the softmax scores, then
@@ -1467,7 +1467,7 @@ def _stacked_fused_op(tensors, fused_uid, *, top_k, num_experts, F, H,
                       in_axis, gate_offset, out_in_axis, norm_topk_prob,
                       extra_attrs):
     """The ONE emission of a stacked-expert custom::moe_fused op, whichever
-    traced form the matcher recognised. The per-expert entries carry the
+    built form the matcher recognised. The per-expert entries carry the
     slab's own dtype — a parameter the graph describes."""
     sdt = tensors[in_tid]["dtype"]
     syn = lambda half, e: f"{in_tid}::stacked::{half}::{e}"
@@ -1782,7 +1782,7 @@ def _same_shape(tensors: Dict[str, Any], a: str, b: str) -> bool:
 def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
                                     consumer_map, producer_map, topk_uid,
                                     declared_norm=None):
-    """Match and fuse one softmax-before-topk stacked block traced in its dense
+    """Match and fuse one softmax-before-topk stacked block built in its dense
     all-experts form (see the section header). Returns like
     `_fuse_one_moe_layer`, or a `Declined` naming the first structural
     mismatch. The fused op's routing is the graph's own — topk of the softmax
@@ -2024,7 +2024,7 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
             if esc:
                 return D(f"{ot} escapes the block to {esc[0]}")
 
-    # A registry that DECLARES the renormalisation and a trace that computes the
+    # A registry that DECLARES the renormalisation and a build that computes the
     # other one is a contradiction in the data, not "another block": refused
     # loudly, never overruled in silence, never left to run unfused unnoticed.
     if declared_norm is not None and bool(declared_norm) != renorm:
@@ -2048,7 +2048,7 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
         in_axis=0, gate_offset=gate_offset, out_in_axis=0,
         norm_topk_prob=renorm,
         # The renormalisation is what the GRAPH computes (sum + div present or
-        # not) — the traced vendor code, not the registry flag, decides it.
+        # not) — the built vendor code, not the registry flag, decides it.
         extra_attrs={"routing_from_graph": "softmax_before_topk"})
 
     # --- placement: inside the dependence window ---------------------------

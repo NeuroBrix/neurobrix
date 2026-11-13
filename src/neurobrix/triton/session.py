@@ -65,7 +65,7 @@ class TritonLMSession:
             if name in run_inputs:
                 continue
             if name == "visual_pos_masks":
-                # RANK from the declared trace shape (R30 mirror): flat
+                # RANK from the declared build shape (R30 mirror): flat
                 # [B, S] where the model indexes with the mask, expanded
                 # [B, S, H] for the masked_scatter contract.
                 if len(spec_shape) == 2:

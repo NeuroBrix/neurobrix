@@ -51,7 +51,7 @@ def test_every_cell_is_read_from_an_artefact_or_says_it_has_none(tmp_path):
     row = next(l for l in t.splitlines() if l.startswith("| `v/m1`"))
     cells = [c.strip() for c in row.strip("|").split("|")]
     # container, census, keys served (the 16g entry serves 16g only: 1/1; 32g: 0/1)
-    assert cells[2].startswith("nbx 0.1, traced 2026-10-01, NeuroTax 5.0, manifest ") and cells[3] == "derived: 1 / 1" and cells[4] == "1 / 1; 0 / 1"
+    assert cells[2].startswith("nbx 0.1, built 2026-10-01, NeuroTax 5.0, manifest ") and cells[3] == "derived: 1 / 1" and cells[4] == "1 / 1; 0 / 1"
     assert cells[5] == "not measured"
     assert cells[6].startswith("PASS 2026-10-20 (gate abcdef12, 3 s)") and cells[7] == "no certified-only cell"       # native 16g / 32g
     assert cells[8] == "no certified-only cell" and cells[9].startswith("ERROR 2026-10-20")                           # triton: one miss

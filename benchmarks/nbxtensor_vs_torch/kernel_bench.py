@@ -334,7 +334,7 @@ def release_compile_caches(dev) -> None:
 
 def _engine_dtype_facts(inst) -> dict:
     """The dtype facts the engine's dispatcher runs this op under, as the census derived its key (instances.py): the
-    component's compute dtype, the graph's traced dtype and the precision contract's role for the op. They were once
+    component's compute dtype, the graph's built dtype and the precision contract's role for the op. They were once
     guessed from the container's record of the op's output — the TRACE dtype: on Apple the conv [20, 4, 90, 160] ran
     in fp16 and the VAE convs stored fp32 where the engine runs bf16, keys no certificate holds, swept at runtime (11
     of the first 13 instances, 03/11 00:43). An instance file without them is refused, never guessed."""
@@ -533,7 +533,7 @@ def judge_row(row, inst, od: str, first, times, peak, how, errs, ref_note, compi
     `compare_tiles`, None when there is no reference)."""
     med, p10, p90 = _stats(times)
     # the narrowest of what the op reads, writes, and what the container records it writes (the precision
-    # contract rounds an output to the traced dtype: an fp32 island's result handed back in bf16)
+    # contract rounds an output to the built dtype: an fp32 island's result handed back in bf16)
     tol = _bound(inst["dtypes"] + [od] + [str(d) for d in (inst.get("output_dtypes") or [])] + computed_dtypes(inst))
     status, err, mean = "ok", None, None
     if errs is not None:

@@ -1,13 +1,13 @@
 """A GEMM whose output holds more than 2^31 elements addresses every element.
 
 `mochi-1-preview`'s VAE (`aten.mm::1`, M=1 068 480 × N=2048 at its runtime
-latent size, 33 264 at the trace) died on CUDA error 700 at every attempt
+latent size, 33 264 at the build) died on CUDA error 700 at every attempt
 since 2026-09-10 (D-MOCHI-CUDA-700-AT-MM); two `compute-sanitizer` runs of
 7 200 s and 18 000 s measured nothing; `--triton-sequential` with
 `CUDA_LAUNCH_BLOCKING=1` named the op in 19 minutes (2026-09-14 05:34). The
 kernel computed `stride_cm * offs_cm` with `offs_cm` an int32 arange: past
 row 2^31 / N the offset wraps negative and the store goes to an address the
-allocation does not own. A trace at M=33 264 can never see it — the shape is
+allocation does not own. A build at M=33 264 can never see it — the shape is
 part of the test, and this one is chosen so M*N exceeds 2^31 by a margin
 while the tensors fit a 32 GB card (C fp16 = 4.5 GB, A = 141 MB):
 M = 1 100 000, N = 2048, K = 64 → 2 252 800 000 elements; the first row

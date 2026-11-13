@@ -10,7 +10,7 @@ The cost, twice:
 
 * **2026-08-10** — Qwen3-Omni's `thinker.audio_tower` mel-frame axis, named
   `seq_len`, bound to the global text config (~128) instead of its 441-frame
-  trace. The activation estimate collapsed and `block_scatter` packed a 16 GB
+  build. The activation estimate collapsed and `block_scatter` packed a 16 GB
   card to 15.77 GiB with no forward headroom.
 * **2026-09-12** — four instruments built on it in one day, each binding `s1` to
   a latent height on containers declaring `s1: time`. Each produced a confident

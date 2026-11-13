@@ -38,7 +38,7 @@ def test_graph_without_attention_yields_no_plan():
 
 
 def _dag_with_positional_table_slice():
-    """A whisper-class decoder traced with the positions as rows [0, seq_len)
+    """A whisper-class decoder built with the positions as rows [0, seq_len)
     of a parameter table (no arange anywhere)."""
     d = _dag()
     del d["ops"]["aten.arange::0"]

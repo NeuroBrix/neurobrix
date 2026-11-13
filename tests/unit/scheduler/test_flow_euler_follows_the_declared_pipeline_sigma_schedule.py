@@ -1,5 +1,5 @@
 """FlowEuler follows the pipeline sigma schedule the container declares
-(extracted_values.scheduler.sigma_schedule, carried by Forge from the registry), in both
+(extracted_values.scheduler.sigma_schedule, carried by the container builder from the registry), in both
 engines; absent, it keeps its own linspace byte for byte.
 
 mochi-1-preview's MochiPipeline builds its sigmas with genmo's linear-quadratic schedule

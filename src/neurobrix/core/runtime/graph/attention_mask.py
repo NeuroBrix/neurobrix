@@ -1,5 +1,5 @@
 """Attention-mask rules shared by every torch-side attention site (compiled SDPA,
-the KV-cache interceptor): one reading of a mask whose extent froze at the trace
+the KV-cache interceptor): one reading of a mask whose extent froze at the build
 length, never a guess."""
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import torch as _t
 
 def require_causal_frozen_mask(mask, seq_q: int, seq_k: int, op_name: str,
                                align_lengths: bool = True) -> None:
-    """A mask SHORTER than the sequence it must cover froze at the trace length.
+    """A mask SHORTER than the sequence it must cover froze at the build length.
 
     The only reading that extends it without guessing is the causal one, and
     only when the mask's own content proves it: every leading slice is the

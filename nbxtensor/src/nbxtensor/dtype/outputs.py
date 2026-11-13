@@ -1,4 +1,4 @@
-"""The output dtype of an op (DESIGN rule 12: the mechanism in the library): read from the op's traced record, or
+"""The output dtype of an op (DESIGN rule 12: the mechanism in the library): read from the op's built record, or
 decided by the cast-back rule of an op computed in float32 inside a half forward. Pure functions of dtype names and of
 a plain dict; the one definition every engine imports (an engine holding torch dtypes, NBXDtype or strings reads the
 same answer: only the last dotted segment of a dtype's name is read).
@@ -19,7 +19,7 @@ def _name(dtype) -> str:
 
 
 def traced_output_dtype_name(record: Optional[Dict[str, Any]]) -> Optional[str]:
-    """The plain name of the op's first traced output dtype (`output_dtypes[0]` at the record's TOP level), or None
+    """The plain name of the op's first built output dtype (`output_dtypes[0]` at the record's TOP level), or None
     when the record states none."""
     if not isinstance(record, dict):
         return None
@@ -28,9 +28,9 @@ def traced_output_dtype_name(record: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def traced_output_is_complex(record: Optional[Dict[str, Any]]) -> bool:
-    """True when the op's traced record types an output complex.
+    """True when the op's built record types an output complex.
 
-    The traced OUTPUT dtype is the only signal: an op's name cannot answer (a plain `mul` by the scalar `1j` produces
+    The built OUTPUT dtype is the only signal: an op's name cannot answer (a plain `mul` by the scalar `1j` produces
     complex), nor can its inputs (that scalar is no input tensor). It matters because a half input at a
     complex-producing op yields complex32, which `exp`, `angle` and the inverse real FFT have no kernel for. Only
     `output_dtypes` at the record's TOP level is read: a nested `attributes` dict reads as "not complex"."""
@@ -43,12 +43,12 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                           narrowed: bool, traced: Optional[str] = None) -> str:
     """The OUTPUT dtype (a name) of an op computed in float32 inside under the half compute dtype `compute_dtype`.
 
-    * bfloat16 on a bfloat16 graph (`graph_dtype`, the dtype the model was traced in): bfloat16 — a float32 result
+    * bfloat16 on a bfloat16 graph (`graph_dtype`, the dtype the model was built in): bfloat16 — a float32 result
       always fits bfloat16's range, and the model's own forward returns its input's dtype there.
     * bfloat16 on a graph of another floating dtype (a float32 model computed in bfloat16): float32, the dtype the
       model's forward returned. A graph dtype that is no floating dtype is refused by name.
     * float16: float16 only under the precision contract — `safe` (narrows every such op) or `narrowed` (this op is
-      in the narrowed set); float32 otherwise. An op `traced` in float32 inside a half graph is the model's own
+      in the narrowed set); float32 otherwise. An op `built` in float32 inside a half graph is the model's own
       float32 island: only `narrowed` brings it to float16, never `safe`."""
     if compute_dtype == "bfloat16":
         if graph_dtype not in _GRAPH_FLOAT_NAMES:

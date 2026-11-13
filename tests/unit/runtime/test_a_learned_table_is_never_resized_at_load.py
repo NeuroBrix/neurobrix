@@ -2,7 +2,7 @@
 
 The compiled engine's loader used to hand every loaded weight dict to the component handler's
 `prepare_weights`, which reshaped any weight whose name holds `pos_embed` to the request's
-patch grid (bilinear, or a sincos recompute). That was a load-time compensation for traces that
+patch grid (bilinear, or a sincos recompute). That was a load-time compensation for builds that
 froze the table, in one engine only (the Triton loader never had it: R30). On a graph that reads
 the table itself — CogVideoX-5b-I2V indexes its learned 17 776-row table (226 text + 13x30x45
 video rows) with `index_select` over symbolic rows — the rescale tried to view the table as a

@@ -27,7 +27,7 @@ ladder happens to have, nor on what this rack holds in RAM at the moment it runs
 So each cell pins the machine it plans for: the host reading is injected (the Mac's own measured
 figures), the rung is imposed through the `NBX_PRISM_BUDGET_MB` door, and a precondition cell
 proves from the solver's own component estimate that the largest component really does sit
-strictly between the rung and the capacity. If a retrace ever moves a component out of that
+strictly between the rung and the capacity. If a rebuild ever moves a component out of that
 window, the precondition says so instead of the verdict cells passing or failing for the wrong
 reason.
 
@@ -258,7 +258,7 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 [embedding::0, view::27] [moe_fused::block.1, view::47] ... [moe_fused::block.26, rms_norm::81]
 
     Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
-    solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
+    solver) and `lazy_sequential` then outscores it. A rebuild of this container moves these op
     ids (register 98): re-measure against the previous cut, do not delete the cell."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")

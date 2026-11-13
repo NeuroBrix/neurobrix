@@ -22,7 +22,7 @@ more than once per step and the two passes must not be averaged into one row.
 WHY IT ALIGNS WITH OURS WITHOUT A MAPPING TABLE
 -----------------------------------------------
 Our container records `parent_module` per op — the vendor module path the op was
-traced from — and `NBX_DUMP_TIDS` already writes `(component, op_uid, op_type,
+built from — and `NBX_DUMP_TIDS` already writes `(component, op_uid, op_type,
 shape, head10, l2_norm)` per op. So our ops carry the vendor's own module names,
 and the walk aligns by name. Nothing here needs a hand-written correspondence,
 which is what makes it maintainable across models.

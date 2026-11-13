@@ -600,7 +600,7 @@ class InputSynthesizer:
                 # `shapes` carry the trace's concrete extents, and cutting a 213-token
                 # `inputs_embeds` down to the trace's 23 handed Qwen3-Omni's thinker a
                 # prompt it never composed (2026-09-21: `shape '[-1, 1, 23]' is invalid for
-                # input of size 639`). Only a LITERAL extent — a frozen dimension, a trace
+                # input of size 639`). Only a LITERAL extent — a frozen dimension, a build
                 # defect at the source — is still cut, the only way that graph runs, and the
                 # cut is said in clear.
                 if needs_slice and seq_dim_idx in self._symbolic_dims(comp_name, input_name):

@@ -2,21 +2,21 @@
 
 mochi-1-preview's rotary table (diffusers MochiRoPE, `transformer_mochi.py`, `_get_positions`)
 spans its centres over `+-height * scale / 2`, `scale = (target_area / (height * width)) ** 0.5`,
-height and width the post-patch extents. With integers only (`add sub mul floordiv mod neg`), Forge
-could record those bounds as the trace's floats alone, and the table's values froze at the trace
-grid (9.5 rad of rotary error at 160x416 from a 10x60x106 trace). Forge's extent provenance now
+height and width the post-patch extents. With integers only (`add sub mul floordiv mod neg`), the container builder
+could record those bounds as the trace's floats alone, and the table's values froze at the build
+grid (9.5 rad of rotary error at 160x416 from a 10x60x106 build). Forge's extent provenance now
 records them as expressions with `truediv` and `sqrt`; this file proves that every runtime reader
 evaluates them through the ONE evaluator (`core/runtime/symexpr.py`) and agrees:
 
 * the ATen shape resolver (`resolve_scalar`), the Triton symbol resolver (`resolve_scalar`), the
   compiled sequence's and the Triton sequence's expression arguments, the Triton-sequential
   argument and keyword paths, and the ATen-sequential argument path — seven readers, one value,
-  equal to the vendor's eager arithmetic at the trace grid and at two others, one far;
+  equal to the vendor's eager arithmetic at the build grid and at two others, one far;
 * a real in a SHAPE slot (an extent, a size-list element) refuses by name in every reader;
 * Prism's profiler declines a real dim, and the census derivation binds its tiles through the
   same function (an injection that breaks the shared evaluator breaks the derivation).
 
-The expressions below are what Forge emitted for the vendor's construction (Forge branch
+The expressions below are what the container builder emitted for the vendor's construction (the container builder branch
 the-symbolic-vocabulary-carries-true-division-and-sqrt, `tests/test_a_real_scalar_derived_from_
 symbolic_extents_is_an_expression.py`, `_MochiPositions` captured at hidden_states [2, 4, 7, 26,
 38]); s2 / s3 are the latent height / width.
@@ -77,7 +77,7 @@ CTX = {"symbols": {
     "s3": {"name": "width", "trace_value": 38, "source": "input::hidden_states::dim_4", "constraints": {"min": 1}}}}
 
 TRACE = (7, 26, 38)
-GRIDS = [TRACE, (3, 18, 30), (9, 90, 250)]          # the trace, a second grid, a far one
+GRIDS = [TRACE, (3, 18, 30), (9, 90, 250)]          # the build, a second grid, a far one
 
 
 def _env(grid):
@@ -318,7 +318,7 @@ PRODUCT = {"type": "product", "factors": ["s2", {"type": "floordiv", "left": _sy
 @pytest.mark.parametrize("reader", LIST_READERS, ids=lambda f: f.__name__)
 def test_a_product_with_an_expression_factor_is_evaluated_not_frozen(reader):
     """The Triton promotion's `product` node used to compile through each sequence's own
-    ProductArg, which froze a factor that is an expression to its trace value (19 here); it is
+    ProductArg, which froze a factor that is an expression to its build value (19 here); it is
     now one node of the shared vocabulary. Injection: the sequences' product branch restored ->
     the compiled and Triton sequence cells read 90 * 19, RED."""
     grid = GRIDS[2]

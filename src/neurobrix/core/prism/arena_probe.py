@@ -1,6 +1,6 @@
 """The Triton arena's hold over a component's walked activations, MEASURED on this device (the owner, 2026-11-02 15:01):
 the cache's smallest container, its first component run whole twice through the Triton executor on zero inputs at its
-traced extents (no flow, no prompt), the first run seating what runs once (sweeps, recordings), every free byte then
+built extents (no flow, no prompt), the first run seating what runs once (sweeps, recordings), every free byte then
 given back, the allocator's peak window around the second; hold = the window's peak - its start, divided by the walk
 Prism prices (`ComponentMemory`, the KV cache apart). `python -m neurobrix.core.prism.arena_probe <dir> <component>
 <hardware id> [scale]` runs one probe in its own process and prints `NBX-ARENA-PROBE {json}`. Triton branch: no torch."""
@@ -34,7 +34,7 @@ _SPATIAL = ("height", "width")
 def scaled_names(dag: Dict[str, Any]) -> Tuple[str, ...]:
     """The symbols a probe of this graph scales — in its inputs AND in the request Prism prices, the same ones, so the
     hold and the priced walk grow together: the spatial symbols when its inputs carry them; else its sequence when it
-    has ONE (one seq_len trace: the request names one length); else none (the probe runs at its traced extents only).
+    has ONE (one seq_len build: the request names one length); else none (the probe runs at its built extents only).
     Scaling the two last axes of every input instead grew a decoder's batch and hidden width while its priced walk
     stayed at x1: a fresh Mac home measured whisper-large-v3-turbo's decoder at 28.27 where the lab's 1.477 holds."""
     syms = [v for v in ((dag.get("symbolic_context") or {}).get("symbols") or {}).values()
@@ -55,7 +55,7 @@ def smallest_container(cache: Path) -> Tuple[Path, str]:
     by weight bytes whose inputs carry spatial symbols (the probe's request then grows the walk it prices); else, in
     the smallest container that has a component with one sequence length, its component of the most ops (a model's
     walk — a lone projection such as an lm_head holds about its output, 0.99 on a V100 where the decoder holds 1.38);
-    else the cache's smallest component, probed at its traced extents."""
+    else the cache's smallest component, probed at its built extents."""
     from neurobrix.nbx.container import NBXContainer
     pairs = []
     for d in sorted(Path(cache).iterdir()):
@@ -83,7 +83,7 @@ def smallest_container(cache: Path) -> Tuple[Path, str]:
 
 
 def _inputs(dag: Dict[str, Any], scale: int) -> Dict[str, Any]:
-    """Every graph input at its traced extent and dtype, zero (an index of any table), each dimension bound to a symbol
+    """Every graph input at its built extent and dtype, zero (an index of any table), each dimension bound to a symbol
     of `scaled_names` x `scale` — the dimensions the request Prism prices scales, and no other."""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import parse_dtype
@@ -102,7 +102,7 @@ def _inputs(dag: Dict[str, Any], scale: int) -> Dict[str, Any]:
 
 
 def measure(container_dir: str, component: str, hardware_id: str, scale: int = 1) -> Dict[str, Any]:
-    """One probe: the component's hold and its priced walk, in bytes. The request = the graph's own traced extents,
+    """One probe: the component's hold and its priced walk, in bytes. The request = the graph's own built extents,
     named by its symbols, scaled like the inputs: Prism prices the binding the run makes."""
     from neurobrix.nbx.container import NBXContainer
     from neurobrix.core.prism.loader import load_profile

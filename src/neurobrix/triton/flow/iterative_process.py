@@ -513,7 +513,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
         # txt_ids / cond into the resolver now that the packed dims are known.
         # 5D-pack ONLY (ndim==5 is set solely by the video branch above):
         # FLUX-family IMAGE models (Flex.1) also declare img_ids and take the
-        # 4D pack — their conditioning comes from their own traced path, and
+        # 4D pack — their conditioning comes from their own built path, and
         # the video synthesis would KeyError on the frameless packing_info.
         # R30 mirror of core/flow/iterative_process.py.
         if (self._flux_family and self._packing_info is not None
@@ -1273,7 +1273,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
         """
         Get timestep scale for a loop component.
 
-        The traced graph captures the model's own timestep scaling (e.g.,
+        The built graph captures the model's own timestep scaling (e.g.,
         FLUX `timestep * 1000` in forward()). The scheduler already produces
         raw sigmas (0-1 for flow matching). NO compensation needed — the
         graph handles the scaling internally.

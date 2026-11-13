@@ -15,7 +15,7 @@ Pins the corrected contract of `GraphExecutor._check_nan_inf`:
 
 This mirrors the historical NaN + positive-Inf contract: a per-op -inf
 raise false-positives on legitimately masked attention (many in-zoo
-models trace decomposed softmax with an additive -inf bias) and on
+models build decomposed softmax with an additive -inf bias) and on
 in-graph log-underflow (aten::log appears in 13 zoo graphs).
 
 Run: PYTHONPATH=src python -m pytest tests/unit/runtime/test_check_nan_inf_guard.py

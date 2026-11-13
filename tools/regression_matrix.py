@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The regression matrix: every catalogue model x every served mode, TODAY, at a size other
-than the trace size, each cell's artefact kept for an outside judgment.
+than the build size, each cell's artefact kept for an outside judgment.
 
 The owner's standing directive (2026-09-26): a model that worked before and fails now is a
 REGRESSION measured against its last dated proof, not a new bug, and the answer is global —
@@ -10,19 +10,19 @@ dated proofs are compiled beside it (`last_proofs.json`), and the two are joined
 
 One cell = one `neurobrix run` of the model's judged request (`precision_zoo_campaign.
 request_args`: the family's calibration section, its media and its bound — the one brick the
-batteries and the retrace gate use) in one mode:
+batteries and the rebuild gate use) in one mode:
 
     native            the compiled (ATen) engine, the reference arm
     triton            the Triton engine, compiled sequence
     triton-sequential the Triton engine, op by op
 
-at ONE SIZE OTHER THAN THE TRACE SIZE. The judged requests of the language, speech and upscaler
-families already differ from their trace extents (a prompt is not 23 tokens, a clip is not the
-trace clip, a 448-pixel image is not the upscaler's trace tile). An image or video request
-names no size, and the engine then renders at the container's own size — the traced one
+at ONE SIZE OTHER THAN THE BUILD SIZE. The judged requests of the language, speech and upscaler
+families already differ from their build extents (a prompt is not 23 tokens, a clip is not the
+build clip, a 448-pixel image is not the upscaler's build tile). An image or video request
+names no size, and the engine then renders at the container's own size — the built one
 (`resolution.container_size`). So those two families get an explicit size: the container's own
 height taken to three quarters on the lattice (64 pixels for an image, 32 for a video), the
-width kept — a non-square request away from the trace, the one class that catches a swapped or
+width kept — a non-square request away from the build, the one class that catches a swapped or
 frozen spatial axis.
 
 Each cell records: rc, wall time, the engine's own execute time, the artefact's path, size and
@@ -71,7 +71,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as Z  # noqa: E402  the judged request, the output kind
 from judge_artefact import image_degeneracy, text_degeneracy, video_degeneracy  # noqa: E402
-# The request a cell runs at is DERIVED from the current container's trace, in ONE place the
+# The request a cell runs at is DERIVED from the current container's build, in ONE place the
 # certification census imports too: a census and the verification it serves ask for one request.
 from trace_request import derived_request, gate_request, off_trace_size  # noqa: E402
 
@@ -171,7 +171,7 @@ def engine_sha(tree: Path) -> str:
 def container_identity(model: str) -> dict:
     """What the cell ran ON, written beside the command (the owner's rule of 2026-10-12, point 2: a broken verdict
     names which of the container, the engine or the request changed): the sha256 over the container's manifest and
-    every component's graph.json and weights_index.json (the files a retrace or a single write changes; the shards
+    every component's graph.json and weights_index.json (the files a rebuild or a single write changes; the shards
     are not re-read), with the manifest's created_at. Cheap, and enough to tell two containers apart."""
     root = CACHE / model
     h = hashlib.sha256()

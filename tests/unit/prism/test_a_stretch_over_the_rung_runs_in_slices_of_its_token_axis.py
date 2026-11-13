@@ -15,7 +15,7 @@ two torch engines, over a graph shaped like that block (a seam from the piece be
 contraction over the tokens, its product with Q, a residual):
 
   * the sliced piece returns the whole run's output within float32 summation tolerance, at the
-    trace length and at a length far from it whose last slice is shorter;
+    build length and at a length far from it whose last slice is shorter;
   * the partitioner refuses on the activations without the token split and places with it,
     recording the stretch, its slice, its passes and a peak under the budget;
   * a stretch the plan names that is not one of the plan's pieces is refused by name.
@@ -183,7 +183,7 @@ def test_the_sliced_stretch_returns_what_the_whole_one_does(mode):
     whole = _executor(mode)
     whole.load_weights(None, COMPONENT)
     strategy = _streamed(mode, _chunk(2))
-    for seq_len in (T_TRACE, 4 * T_TRACE + 1):      # the trace, and far from it, a short last slice
+    for seq_len in (T_TRACE, 4 * T_TRACE + 1):      # the build, and far from it, a short last slice
         x = torch.randn(B, seq_len, D)
         want = whole.run({"hidden_states": x})
         got = strategy.execute_component(COMPONENT, "loop", {"hidden_states": x})

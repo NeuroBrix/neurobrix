@@ -39,5 +39,5 @@ def test_present_and_missing_experts_carry_the_parsers_tokens():
         assert len(ids[role]) == 3 and all(ids[role]), ids
         assert ids[role][0] == "param::" + normalize_tensor_name(
             f"model.layers.1.mlp.experts.0.{dict(gate='gate_proj', up='up_proj', down='down_proj')[role]}.weight")
-        assert ids[role][1] == "param::" + want[role]      # expert 1 never traced: synthesized
+        assert ids[role][1] == "param::" + want[role]      # expert 1 never built: synthesized
         assert ids[role][1] in tensors

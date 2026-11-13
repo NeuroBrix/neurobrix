@@ -450,7 +450,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         # txt_ids / cond into the resolver now that the packed dims are known.
         # 5D-pack ONLY (ndim==5 is set solely by the video branch above):
         # FLUX-family IMAGE models (Flex.1) also declare img_ids and take the
-        # 4D pack — their conditioning comes from their own traced path, and
+        # 4D pack — their conditioning comes from their own built path, and
         # the video synthesis would KeyError on the frameless packing_info.
         if (self._flux_family and self._packing_info is not None
                 and self._packing_info.get('ndim') == 5):
@@ -1033,7 +1033,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         # Name-driven latent axis alignment (5D): video models do not share
         # one latent layout — Wan is [B,C,T,H,W] end-to-end while CogVideoX
         # denoises in [B,T,C,H,W] and decodes in [B,C,T,H,W]; the vendor
-        # pipeline permutes between the loop and the VAE, outside both traced
+        # pipeline permutes between the loop and the VAE, outside both built
         # components. Derive the permutation from existing contract data
         # (variables.json shape_source roles vs the consumer graph's named
         # symbol axes); identical layouts (Wan) derive None and nothing
@@ -1266,7 +1266,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         """
         Get timestep scale for a loop component.
 
-        The traced graph captures the model's own timestep scaling (e.g.,
+        The built graph captures the model's own timestep scaling (e.g.,
         FLUX `timestep * 1000` in forward()). The scheduler already produces
         raw sigmas (0-1 for flow matching). NO compensation needed — the
         graph handles the scaling internally.

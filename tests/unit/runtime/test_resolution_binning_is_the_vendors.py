@@ -3,7 +3,7 @@
 The reference is the vendor's code itself, quoted verbatim below from diffusers v0.37.0
 (src/diffusers/image_processor.py, `PixArtImageProcessor.classify_height_width_bin` and
 `resize_and_crop_tensor`), with the vendor's own 1024 table (src/diffusers/pipelines/pixart_alpha/
-pipeline_pixart_alpha.py, `ASPECT_RATIO_1024_BIN`) as Forge records it: ratio keys verbatim, in order.
+pipeline_pixart_alpha.py, `ASPECT_RATIO_1024_BIN`) as the container builder records it: ratio keys verbatim, in order.
 
 What these tests would do if the code were wrong: a tie resolved to the last bin, a crop off by one,
 align_corners flipped, a restore skipped, or the request's own size left bound, each fails an

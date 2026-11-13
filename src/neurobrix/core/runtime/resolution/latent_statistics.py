@@ -6,7 +6,7 @@ maps the denoised latent back before decoding, per channel,
     latents = latents * latents_std + latents_mean          (diffusers pipeline_wan.py:641-644,
                                                              written there as `/ (1/std) + mean`)
 
-with both vectors declared on the VAE's config — and the decode graph, traced from the
+with both vectors declared on the VAE's config — and the decode graph, built from the
 VAE alone, cannot contain that step. Neither flow applied it (2026-09-21): Wan T2V decoded
 the raw flow latent and rendered an orange field, a degenerate artefact under R29. Read
 from the container's own declaration, never a constant: a VAE whose profile carries no

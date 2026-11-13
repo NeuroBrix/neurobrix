@@ -89,7 +89,7 @@ class GraphLMSession:
         self.position_ids_rank = position_ids_rank
         # DeepStack-lineage graphs (Qwen3-VL/omni) declare visual inputs
         # (visual_pos_masks + deepstack_visual_embeds.N) that a pure-text
-        # request never populates: {input_name: declared trace shape} from
+        # request never populates: {input_name: declared build shape} from
         # the dag input spec, filled with empty stubs at run time
         # (all-False mask + zero-length embeds ⇒ the deepstack injection
         # ops are exact no-ops, matching the vendor's `is None` skip).
@@ -106,7 +106,7 @@ class GraphLMSession:
 
         Runs at every executor.run site. The batch/seq dims come from the
         actual stream tensor; the structural hidden dim from the declared
-        trace shape. No-op for graphs without visual inputs (text LLMs)
+        build shape. No-op for graphs without visual inputs (text LLMs)
         and for stages that already set them (the vlm flow)."""
         if not self.visual_stub_specs:
             return
@@ -120,7 +120,7 @@ class GraphLMSession:
             if name in run_inputs:
                 continue
             if name == "visual_pos_masks":
-                # RANK follows the declared trace shape: expanded
+                # RANK follows the declared build shape: expanded
                 # [B, S, H] (masked_scatter contract) or flat [B, S]
                 # (models that index hidden_states with the mask).
                 if len(spec_shape) == 2:
@@ -561,7 +561,7 @@ class ImageStrategy(GenerationStrategy):
 
     def get_logits(self, last_hidden: torch.Tensor, step_idx: int) -> torch.Tensor:
         if self._use_cfg and last_hidden.shape[0] >= 2:
-            # Run head separately for cond/uncond (head traced with batch=1)
+            # Run head separately for cond/uncond (head built with batch=1)
             logits_cond = self._run_head(last_hidden[0:1, ...], step_idx)
             logits_uncond = self._run_head(last_hidden[1:2, ...], step_idx)
             # CFG guidance via the unified CFGEngine (single formula authority).
@@ -806,7 +806,7 @@ class AutoregressiveHandler(FlowHandler):
         generated_tokens = generator.get_generated_tokens()
         strategy.process_output(generated_tokens, self.ctx)
 
-        # Zero Outsider (ZO-0): SNAC codec traced into the .nbx → run it as a stage
+        # Zero Outsider (ZO-0): SNAC codec built into the .nbx → run it as a stage
         # (no vendor `snac`, no HF download).
         self._run_snac_codec_decoder(generated_tokens)
 
@@ -829,7 +829,7 @@ class AutoregressiveHandler(FlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     def _run_snac_codec_decoder(self, generated_tokens) -> None:
-        """ZO-0: decode orpheus SNAC tokens through the TRACED `codec.decoder`
+        """ZO-0: decode orpheus SNAC tokens through the BUILT `codec.decoder`
         component. Redistributes the 7-tokens/frame stream into the 3 SNAC
         codebooks (pure python) and runs the codec as a proper stage via
         `_execute_component` (so symbolic shapes + the in-graph NoiseBlock randn
@@ -1042,7 +1042,7 @@ class AutoregressiveHandler(FlowHandler):
         position_ids_rank = (len(_pos_shape)
                              if isinstance(_pos_shape, (list, tuple)) else 2)
 
-        # DeepStack-lineage visual inputs (Qwen3-VL/omni): declared trace
+        # DeepStack-lineage visual inputs (Qwen3-VL/omni): declared build
         # shapes for visual_pos_masks / deepstack_visual_embeds.N so a
         # pure-text request feeds empty stubs (GraphLMSession._add_visual_
         # stubs). Empty dict for every other graph — zero blast radius.

@@ -9,7 +9,7 @@
   component the plan splits (`ExecutionPlan.cfg_split_components`) runs each branch on its own, at
   one branch's batch (`InputConfig.guidance_passes`).
 * **A diffusion encoder's length** — the prompt is tokenized to the encoder's declared length
-  (`text.processor.diffusion_max_length`): Open-Sora's T5 runs at 512 tokens, traced at 31.
+  (`text.processor.diffusion_max_length`): Open-Sora's T5 runs at 512 tokens, built at 31.
 * **The denoiser's text axis** — a pre-loop encoder's hidden state is FINALIZED before the loop
   (`text_encoder_handler.finalized_text_length`: Wan pads to 512, Sana slices to 300).
 * **A FLUX denoiser's packed inputs** — the flow packs the latent (`packed_4d_shape` /
@@ -22,7 +22,7 @@
 * **A vision-language model's vision tower** — the request's image reaches it as the build's processor
   makes it (`input_processor.prepare_image_inputs`, the function the CLI runs): `hidden_states` the patch rows,
   `grid_thw` the grid whose VALUES bind its grid symbols (the flow's contract, core/flow/vlm.py and
-  triton/flow/vlm.py). Unbound, every one of them took its trace extent under the placement floor:
+  triton/flow/vlm.py). Unbound, every one of them took its build extent under the placement floor:
   Ming-Lite-Omni-1.5's tower was priced at its trace's 17 020 patches (4 x 17 020 x 17 020 fp32 attention, 9.9 GB
   of activations) for a 448x448 image of about a thousand, and its Triton plan was refused on the Mac and on a
   16 GB card (2026-10-14).
@@ -113,8 +113,8 @@ class FlowBindings:
         `PrismSolver._estimate_kv_cache_bytes` adds to max_tokens) — every later token is a pass of one row. A 400-token
         prompt was priced at the margin's 128 rows (TinyLlama ~0.01 GiB, 652 MB held, 2026-11-08). None for any other
         component. Unbound, the
-        language model's sequence axis took its TRACE extent under the placement floor, the whole cache at once:
-        Janus-Pro-7B, traced at 704 positions (576 image tokens + 128), priced its text logits over 5 x 704 rows,
+        language model's sequence axis took its BUILD extent under the placement floor, the whole cache at once:
+        Janus-Pro-7B, built at 704 positions (576 image tokens + 128), priced its text logits over 5 x 704 rows,
         687.5 MB of a 1 375 MB activation figure, where the run held ~300 MB (the Dell's split on a V100, 2026-10-28)."""
         gen = self.flow.get("generation") or {}
         lm = gen.get("lm_component")
@@ -332,7 +332,7 @@ class FlowBindings:
     def pass_batch(self, comp: str) -> Optional[int]:
         """The batch `comp` runs in ONE PASS when the flow feeds it a stack of independent items: the stack's size,
         or fewer when the vendor's own reference runs them in separate passes and the container says so
-        (`vace_control_conditioning.items_per_pass`, written by Forge from the registry with its source — diffusers'
+        (`vace_control_conditioning.items_per_pass`, written by the container builder from the registry with its source — diffusers'
         WanVACEPipeline.prepare_video_latents encodes `inactive` and `reactive` as two calls of one item). None for a
         component the flow does not feed such a stack. A declared value that is not a positive divisor of the stack is
         refused by name: the passes would not cover the stack."""
@@ -372,7 +372,7 @@ class FlowBindings:
         vis = self.vision_inputs(comp)
         if vis:
             # every symbol the runtime binder binds from the tower's inputs, the patch-row axis included (the
-            # tracer names `hidden_states`'s dim 0 `batch`; a vision tower runs no guidance batch to keep apart)
+            # builder names `hidden_states`'s dim 0 `batch`; a vision tower runs no guidance batch to keep apart)
             out.update(bind_from_shapes(dag, vis))
         view = self.pixel_view(comp)
         if view:

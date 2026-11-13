@@ -246,7 +246,7 @@ class SpeechLeg(FlowLeg):
         # mono-step predictor's in-graph head_index gather). The flow owns
         # only the loops, the context concats and the seeded draws (WHEN).
         # Declared-MoE late fusion for the talker backbone (the same
-        # set_moe_config path the thinker uses): the traced expert unroll
+        # set_moe_config path the thinker uses): the built expert unroll
         # is superseded wholesale in all modes; routing params come from
         # the flow.speech.talker_moe contract.
         talker_moe = sp.get("talker_moe") or {}

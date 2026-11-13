@@ -2,8 +2,8 @@
 
 The image reaches the tower as the build's processor makes it (`input_processor.prepare_image_inputs`): the patch
 rows (`hidden_states`) and the grid (`grid_thw`, whose VALUES bind its grid symbols) — the flow's contract. Prism's
-flow bindings had no rule for it, so every one of the tower's symbols took its trace extent: Ming-Lite-Omni-1.5's
-tower, traced on a 5 x 46 x 74 grid (17 020 patches), was priced at 9.65 GiB of activations (four 17 020 x 17 020
+flow bindings had no rule for it, so every one of the tower's symbols took its build extent: Ming-Lite-Omni-1.5's
+tower, built on a 5 x 46 x 74 grid (17 020 patches), was priced at 9.65 GiB of activations (four 17 020 x 17 020
 fp32 attention matrices) for a 448x448 image of 1 024 patches, and its Triton plan was refused on the Mac's
 profile and on a 16 GB card (2026-10-14).
 

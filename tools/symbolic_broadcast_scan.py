@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Static scan: an elementwise op whose inputs broadcast at the trace values and NOT at others.
+"""Static scan: an elementwise op whose inputs broadcast at the build values and NOT at others.
 
 A container is symbolic when every variable dim is an expression of the request's symbols. A
-dim the tracer froze, or bound to the wrong symbol, still agrees with its neighbours at the
-trace values — that is how it passed the trace — and disagrees at any other request. The
+dim the builder froze, or bound to the wrong symbol, still agrees with its neighbours at the
+build values — that is how it passed the build — and disagrees at any other request. The
 regression matrix met one on 2026-09-26: the Wan VAE encoder's mid-block attention reshapes
-(b, c, t, h, w) -> (b*t, c, h, w); traced with one latent frame and batch 1, the view bound its
+(b, c, t, h, w) -> (b*t, c, h, w); built with one latent frame and batch 1, the view bound its
 dim 0 to the batch symbol and folded the time expression into the channel dim (T'*384), while the
-norm's expand kept a literal 384 — `aten.div::62` broadcasts 384 with 384 at the trace and 7296
+norm's expand kept a literal 384 — `aten.div::62` broadcasts 384 with 384 at the build and 7296
 with 384 at 352x832.
 
 For every op with two or more tensor inputs whose op type broadcasts, each input's
-`symbolic_shape.dims` is evaluated at the trace values and at two assignments away from them
-(each symbol at 3x and 5x its trace value, its minimum respected); right-aligned dims must be
-equal or 1. A pair that broadcasts at the trace and not away from it is reported with its op,
+`symbolic_shape.dims` is evaluated at the build values and at two assignments away from them
+(each symbol at 3x and 5x its build value, its minimum respected); right-aligned dims must be
+equal or 1. A pair that broadcasts at the build and not away from it is reported with its op,
 module and both expressions' values. Read-only over the graphs; no model is run.
 
     python tools/symbolic_broadcast_scan.py [--cache DIR] [--models A,B] [--json OUT]
@@ -83,7 +83,7 @@ def scan_graph(graph: dict):
     if not symbols:
         return [], 0
     trace = {k: int(v["trace_value"]) for k, v in symbols.items()}
-    # One request dimension moved at a time (3x its trace value), so each break names what it
+    # One request dimension moved at a time (3x its build value), so each break names what it
     # follows: a dim that breaks when the BATCH moves is not the defect of one that breaks when the
     # length does. Symbols sharing a NAME move together — two `seq_len` symbols are one request
     # length measured twice, and moving one alone asks for a request no one can make.
@@ -143,9 +143,9 @@ def main() -> int:
         for moved, fs in sorted(by.items()):
             f = fs[0]
             print(f"{model} | {comp} | breaks when {','.join(moved)} moves | {len(fs)} op(s) | first {f['op']} "
-                  f"({f['module']}): trace {f['at_trace']} -> {f['away'][moved[0]]}")
+                  f"({f['module']}): build {f['at_trace']} -> {f['away'][moved[0]]}")
     n = sum(len(c["breaks"]) for m in report.values() for c in m.values())
-    print(f"\n{n} op(s) broadcast at the trace and not away from it, in "
+    print(f"\n{n} op(s) broadcast at the build and not away from it, in "
           f"{sum(1 for m in report.values() for c in m.values() if c['breaks'])} component(s) of "
           f"{sum(1 for m in report.values() if any(c['breaks'] for c in m.values()))} container(s); "
           f"ops with an expression this scan cannot evaluate: "

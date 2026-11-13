@@ -5,7 +5,7 @@ engine branches read it here.
 
 Torch-free and numpy-free, at import and at execution.
 
-A dtype is named as the code passes it today: a name ("float16"), a torch spelling ("torch.float16", as a traced
+A dtype is named as the code passes it today: a name ("float16"), a torch spelling ("torch.float16", as a built
 graph writes some — read as text, torch is never imported), or an enum member read by its NAME (NBXDtype is an IntEnum,
 and `str()` of one is its bare number on Python 3.11+ — never parsed). A name the table does not carry is refused by
 name, never given a width.

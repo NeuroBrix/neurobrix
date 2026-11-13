@@ -125,7 +125,7 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
 
         Delegates to the numpy/NBX front-end in ``triton.audio_frontend``: it
         loads the waveform, runs the family-specific extractor (whisper/nemo/
-        conformer/raw), pads/truncates to the trace dims and binds the result
+        conformer/raw), pads/truncates to the build dims and binds the result
         as ``NBXTensor`` on the encoder device. No torch / torchaudio anywhere
         on the triton compute path.
         """
@@ -244,11 +244,11 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
 
         self._ensure_weights_loaded(comp_name)
         # Fixed-length decoders (codec / iSTFT vocoder: the window-norm divisor and
-        # the as_strided framing are baked at the trace frame count) must run at
+        # the as_strided framing are baked at the build frame count) must run at
         # EXACTLY the graph seq_len. Chunk a longer runtime input into trace-length
         # blocks — triton mirror of compiled AudioFlow._try_chunked_forward.
         # Data-driven: triggers only when the runtime 3D input seq_len differs from
-        # the graph's trace seq_len; otherwise the normal single pass runs.
+        # the graph's build seq_len; otherwise the normal single pass runs.
         if not self._try_chunked_forward(comp_name):
             self._execute_component(comp_name, "forward", None)
 
@@ -314,7 +314,7 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
             return False
         actual_seq = actual_input.shape[2]
         if actual_seq == graph_seq_len:
-            return False  # exact trace length → single pass
+            return False  # exact build length → single pass
 
         # Frame-dependent aux inputs (runtime dim != graph dim) chunk synchronously;
         # static ones pass whole.

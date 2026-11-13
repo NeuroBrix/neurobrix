@@ -6,7 +6,7 @@ through the positional base that calls `s1` a latent height. For a video
 component that binds the TIME axis to a spatial extent, and nothing in the
 returned profile said which request the number was about.
 
-Pinned here: the default now binds to the extents the container was traced at
+Pinned here: the default now binds to the extents the container was built at
 (the one configuration it is known to have witnessed) and says so.
 
 Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_profile_says_which_request_it_is_about.py
@@ -26,12 +26,12 @@ def _graph(trace_time: int, coefficient: int):
     `k = 1` is the sound rule: the extent IS the axis. A large k is the
     compounded rule, and the OFFSET is the whole point — `2187*s - 2184` equals
     3 at s = 1, exactly like the sound `s + 2` it replaced, and 26247 at s = 13.
-    A bare `2187*s` would be caught by anyone reading the trace shape; it is the
-    compensating offset that makes the rule invisible at the trace point and
+    A bare `2187*s` would be caught by anyone reading the build shape; it is the
+    compensating offset that makes the rule invisible at the build point and
     steep one step away, which is why the instrument has to be a RATIO between
     two bindings and not a look at either one.
     """
-    # Every node carries its own `trace` annotation: the resolver has a TRUST
+    # Every node carries its own `build` annotation: the resolver has a TRUST
     # GATE and uses an expression only when that annotation reproduces the
     # concrete dim at the same index. A fixture without it is silently resolved
     # from the concrete shape, so the profile does not move with the request and

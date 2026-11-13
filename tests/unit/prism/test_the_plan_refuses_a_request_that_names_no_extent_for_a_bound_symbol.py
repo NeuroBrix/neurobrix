@@ -1,7 +1,7 @@
 """The planner used to bind a spatial or temporal symbol the request left open to the
-TRACE extent and estimate on it (Wan T2V: 1.74 GiB planned for a 35 GiB decode, 2026-09-21).
+BUILD extent and estimate on it (Wan T2V: 1.74 GiB planned for a 35 GiB decode, 2026-09-21).
 Now it refuses by name. What this test would do if the code were wrong: return a map with
-the trace values in it."""
+the build values in it."""
 from __future__ import annotations
 
 import pytest

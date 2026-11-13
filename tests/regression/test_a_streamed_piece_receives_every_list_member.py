@@ -17,9 +17,9 @@ sequence also uses) and a list argument that let a missing element through (now 
 
 Each cell runs the transformer WHOLE and in the pieces the Mac's plan cuts, same inputs, and
 requires the output bit-identical, in both triton engines, at both of the Mac's rungs. The
-inputs are the traced ones (`SEQ trace`): Flex's trace names both token axes `seq_len` and a
-coordinate width of 3 `seq_len` as well, so no request can be bound by name — a Forge
-symbol-naming defect (owed-proofs), which is also why this cell runs at the trace size only.
+inputs are the built ones (`SEQ build`): Flex's build names both token axes `seq_len` and a
+coordinate width of 3 `seq_len` as well, so no request can be bound by name — a container builder
+symbol-naming defect (owed-proofs), which is also why this cell runs at the build size only.
 The binding gate (`tests/unit/prism/test_every_streamed_piece_binds_every_symbol_it_uses.py`)
 checks the aliasing itself for every piece at three sizes.
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""The request a tool runs a model at, DERIVED from the current container's trace — one place.
+"""The request a tool runs a model at, DERIVED from the current container's build — one place.
 
 Two tools must ask a model for the SAME request: the regression matrix, whose cells are the
 verification, and the certification census, whose keys are what the verification is served
-from. On 2026-09-28 they did not. Sana_1600M_1024px_MultiLing was retraced (its trace moved to
+from. On 2026-09-28 they did not. Sana_1600M_1024px_MultiLing was rebuilt (its build moved to
 960x1088); the census took its request from a static table written from the OLD container
 (768x1024) while the matrix derived 704x1088 from the new one. 72 keys were certified for a
 request the verification never makes, and the zero-miss verification met 42 uncertified keys.
-The rule (supervisor, 2026-09-28, restating the owner): after any retrace, a model's census is
-re-run on the NEW container at the request derived from the new trace — never a stale table.
+The rule (supervisor, 2026-09-28, restating the owner): after any rebuild, a model's census is
+re-run on the NEW container at the request derived from the new build — never a stale table.
 
 So the derivation lives here and both tools import it:
 
@@ -16,8 +16,8 @@ So the derivation lives here and both tools import it:
   (`resolution.container_size`, the executor's and the plan's one authority) scaled by the
   family's `confirmation.size_fraction`, then the height taken to three quarters, on the family's
   lattice (64 pixels for an image, 32 for a video): a smaller, non-square request away from the
-  trace, the one class that catches a swapped or frozen spatial axis. None for the families whose judged request is already away
-  from its trace extents (a prompt is not 23 tokens, a clip is not the trace clip).
+  build, the one class that catches a swapped or frozen spatial axis. None for the families whose judged request is already away
+  from its build extents (a prompt is not 23 tokens, a clip is not the build clip).
 * `derived_request(model, family)` — the family's judged request (`precision_zoo_campaign.
   request_args`: its calibration section, its media, its bound) with the family's `confirmation:`
   values (the owner's method, 2026-09-28: the smallest request that still judges), at that size.
@@ -58,7 +58,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as Z  # noqa: E402  the judged request (request_args), the family
 
-#: The spatial lattice an off-trace size is taken on, per family whose request names a size.
+#: The spatial lattice an off-build size is taken on, per family whose request names a size.
 LATTICE = {"image": 64, "video": 32}
 #: The request flags that carry a spatial size — what a request table must agree on.
 SIZE_FLAGS = ("--height", "--width")
@@ -155,9 +155,9 @@ def gate_request(model: str, family: Optional[str] = None) -> list:
 def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
     """(height, width) for an image or video request: the container's own size scaled by the
     family's `confirmation.size_fraction`, then the height at three quarters, both on the family's
-    lattice — a smaller, NON-SQUARE request away from the trace, the one class that catches a
-    swapped or frozen spatial axis, at the cost of a confirmation. Never the traced size itself.
-    None for the families whose judged request is already away from the trace, or when the
+    lattice — a smaller, NON-SQUARE request away from the build, the one class that catches a
+    swapped or frozen spatial axis, at the cost of a confirmation. Never the built size itself.
+    None for the families whose judged request is already away from the build, or when the
     container states no size (said in the row)."""
     if family not in LATTICE:
         return None
@@ -172,7 +172,7 @@ def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
                                  pkg.topology.get("components", {}) or {}, pkg.components)
     if size is None:
         # The container states no size: the engine then renders at the family's own default
-        # (executor: "a family constant is the last resort"), which is what it was traced at.
+        # (executor: "a family constant is the last resort"), which is what it was built at.
         from neurobrix.core.config import get_family_config
         fam_defaults = get_family_config(family).get("defaults") or {}
         if "height" not in fam_defaults or "width" not in fam_defaults:
@@ -229,8 +229,8 @@ def derived_request(model: str, family: Optional[str] = None) -> list:
     own = (values.get("height"), values.get("width"))
     if any(v is not None for v in own):
         # THE MODEL'S OWN JUDGING SIZE (registry, with its source): the vendor renders only there —
-        # mochi-1-preview at 480x848 (2026-10-13) — so it replaces the off-trace size; its frame
-        # count (or step count) is what keeps the request away from the trace. Half a size is refused.
+        # mochi-1-preview at 480x848 (2026-10-13) — so it replaces the off-build size; its frame
+        # count (or step count) is what keeps the request away from the build. Half a size is refused.
         if not all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in own):
             raise ValueError(f"{model}: the container's confirmation states height {own[0]!r} and width {own[1]!r} — "
                              "a judging size names both, as positive integers")

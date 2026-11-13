@@ -12,7 +12,7 @@ Architecture:
 
 Audio preprocessing is a BOUNDARY operation (uses torch/torchaudio).
 LSTM decoder + joint network run as native NumPy ops since their
-tiny graphs have trace-time shapes incompatible with greedy decoding.
+tiny graphs have build-time shapes incompatible with greedy decoding.
 
 No torch imports in hot path.
 """
@@ -43,7 +43,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
     The encoder runs through the triton compiled sequence normally.
     The decoder (embedding + LSTM) and joint (linear + relu + linear) are
     executed with native NumPy ops using weights extracted from the executor,
-    since their tiny graphs have trace-time shapes that don't match the
+    since their tiny graphs have build-time shapes that don't match the
     variable runtime shapes of greedy decoding.
     """
 
@@ -137,7 +137,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         actual_frames = features_np.shape[2]
         _log.debug(f"   [Audio] Features: {features_np.shape} (nemo_mel·np, {actual_frames} frames)")
 
-        # Pad/truncate to the encoder's traced frame count (numpy).
+        # Pad/truncate to the encoder's built frame count (numpy).
         expected_frames = 3000
         _dag_frames = None
         encoder_executor = self.ctx.executors.get("encoder")
@@ -152,7 +152,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         # inference — overlapping windows (overlap from the family YAML
         # in seconds, converted with the extractor's own hop), tokens
         # merged by emission frame (stt_longform). Whole-utterance mel
-        # stats, last window padded. Window length = the traced span
+        # stats, last window padded. Window length = the built span
         # (D-PARAKEET-SYMBOLIC-T). NBX_DISABLE_STT_CHUNKING=1 = old path.
         import os as _os_sw
         self._stt_windows = None
@@ -213,7 +213,7 @@ class TritonRNNTEngine(RNNTSteps, ComponentFlowHandler):
         """
         RNNT greedy decoding with NumPy ops for decoder + joint.
 
-        The decoder and joint are tiny networks whose traced graphs have
+        The decoder and joint are tiny networks whose built graphs have
         hardcoded shapes. We extract their weights and run with NumPy
         to handle variable-length greedy decoding.
         """

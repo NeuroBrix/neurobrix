@@ -263,7 +263,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
         _vv_dump_path = _os_vv.environ.get("NBX_VV_DUMP_LATENTS", "")
         _vv_dump_k = int(_os_vv.environ.get("NBX_VV_DUMP_K", "4"))
         _vv_latents: list = []
-        # Per-step audio chunks. The acoustic decoder traces at CONCRETE T=1 and we
+        # Per-step audio chunks. The acoustic decoder builds at CONCRETE T=1 and we
         # decode exactly ONE latent per step (→ a fixed 3200-sample chunk). Per-step
         # independent T=1 decode is bit-equivalent to a cumulative full decode
         # (max|diff|=0.0001) — the causal-conv decoder needs no left context here.
@@ -365,7 +365,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
                     self.ACOUSTIC_CONN, speech_latent, dtype, device
                 )                                                            # [1, 1536]
                 semantic_features = self._semantic_encode(chunk, dtype, device)  # [1, T_down, 128]
-                # The connector graph traces a 2D input [B, in_dim] (addmm). A
+                # The connector graph builds a 2D input [B, in_dim] (addmm). A
                 # 3200-sample chunk yields T_down == 1, so collapse the frame axis
                 # to feed [1, 128] (mean over T_down for robustness if >1).
                 if semantic_features.dim() == 3:
@@ -515,7 +515,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
         for t in timesteps:
             half = speech[: speech.shape[0] // 2]
             combined = torch.cat([half, half], dim=0)                        # [2, 64]
-            # Float timesteps: the diffusion head graph traced a float timestep
+            # Float timesteps: the diffusion head graph built a float timestep
             # (vendor head's sinusoid embedding follows t's dtype).
             t_batch = t.repeat(combined.shape[0]).to(device=device).float()  # [2]
             eps = self._head_forward(combined, t_batch, cond)                # [2, 64]

@@ -49,10 +49,10 @@ def decoder_self_attention_plan(dag: Dict[str, Any]) -> Optional[Dict[str, Any]]
     the graph has no attention op.
 
     keys: num_layers (self-attention ops), num_heads, head_dim (from the
-    traced q shape [B, H, S, D]), self_attn_uids, cross_attn_uids,
+    built q shape [B, H, S, D]), self_attn_uids, cross_attn_uids,
     arange_uids (the positional arange the cache offsets during decode),
     position_slice_uids (the other positional form: a slice of a parameter
-    table by [0 : token-length symbol] — whisper-class decoders traced by
+    table by [0 : token-length symbol] — whisper-class decoders built by
     older vendors; the cache offsets its window during decode),
     position_cumsum_uids (a third form: positions counted by a cumsum over
     ones shaped like the tokens, then used to index a rotary table — the

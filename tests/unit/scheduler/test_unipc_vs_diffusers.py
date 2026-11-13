@@ -12,7 +12,7 @@ imports NO diffusers — that is the R34 contract. This DEV TEST imports diffuse
 VERSION NOTE — the task premise "the UniPC algorithm is stable" is true for the
 predictor/corrector B(h) updates but FALSE for the flow-sigma SCHEDULE block,
 which changed between diffusers 0.36 and 0.38:
-  - 0.36/0.33 (the port-of-record; Wan2.1 traces under diffusers 0.33.1):
+  - 0.36/0.33 (the port-of-record; Wan2.1 builds under diffusers 0.33.1):
       alphas = linspace(1, 1/N, N+1); sigmas = 1 - alphas;
       sigmas = flip(flow_shift*sigmas/(1+(flow_shift-1)*sigmas))[:-1];
       timesteps = sigmas * num_train_timesteps
@@ -20,7 +20,7 @@ which changed between diffusers 0.36 and 0.38:
       sigmas = linspace(1, 1/N, N+1)[:-1] (no `1-alphas`, no flip);
       sigmas = flow_shift*sigmas/(1+(flow_shift-1)*sigmas); + eps[0] guard
 NeuroBrix implements the 0.36/0.33 formula DELIBERATELY (it is the port source
-and matches Wan2.1's production trace). Therefore:
+and matches Wan2.1's production build). Therefore:
   - STANDARD config: validated end-to-end against the LIVE installed diffusers
     (schedule + step math — version-stable for the standard path).
   - FLOW config: the step()/predictor/corrector/flow-branch MATH is validated
@@ -152,7 +152,7 @@ def _build_pair(diffusers_kwargs: dict):
 
 
 # 0.36/0.33-spec flow schedule reference values for N=10, flow_shift=3.0,
-# num_train_timesteps=1000 (the production schedule Wan2.1 traces under). These
+# num_train_timesteps=1000 (the production schedule Wan2.1 builds under). These
 # pin NBX's flow set_timesteps independently of the divergent 0.38 oracle.
 FLOW_REF_SIGMA0 = 0.99967  # first sigma (1 - 1/N flow value, shifted)
 FLOW_REF_SIGMA_LAST = 0.0  # final_sigmas_type="zero"

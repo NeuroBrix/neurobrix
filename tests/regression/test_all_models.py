@@ -165,9 +165,9 @@ def _build_parametrize() -> List:
 def _mode_for_gen_type(gen_type: str) -> str:
     """Map a build's `flow.generation.type` to the `--mode` value.
 
-    Multimodal builds are traced for exactly one generation_type
+    Multimodal builds are built for exactly one generation_type
     (`autoregressive_image` / `autoregressive_text`); `neurobrix run`
-    rejects a `--mode` that doesn't match the trace.  The mode token is
+    rejects a `--mode` that doesn't match the build.  The mode token is
     the last `_`-segment of the gen_type ("image" / "text").
     """
     tail = gen_type.rsplit("_", 1)[-1]

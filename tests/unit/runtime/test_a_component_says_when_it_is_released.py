@@ -3,7 +3,7 @@
 The load prints "'<component>': loading N weights"; nothing said when a component was released. The Mac's unified
 overruns (2026-10-14) peaked at a component load — Allegro's transformer, VACE's text encoder with its VAE encoder
 — and a per-second memory trace could not tell whether the previous component had left. The release line is the
-second anchor of that trace, in both engines (GraphExecutor.unload_weights is theirs).
+second anchor of that build, in both engines (GraphExecutor.unload_weights is theirs).
 
 What this test does if the code is wrong: the release cell fails when an unload prints no line naming the component
 and the weights it released (red on main); the empty cell fails when an executor holding nothing prints one.

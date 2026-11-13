@@ -3,7 +3,7 @@
 exactly equal to its own head dimension.
 
 Why this length and no other. PyTorch's SDPA math decomposition hands the
-traced graph a K in (batch, heads, head_dim, seq), and the engine has to put
+built graph a K in (batch, heads, head_dim, seq), and the engine has to put
 it back. Until 2026-09-07 five places decided whether to, by comparing
 shapes — `k.shape[-2] == q.shape[-1] and k.shape[-1] != q.shape[-1]` — a test
 that has no answer when the sequence length equals the head dimension. At

@@ -282,7 +282,7 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
 
     # Reproduce the standard pipeline's tiling integration
     # (executor.py:870-882). At Sana 4Kpx, VAE input (1,32,128,128)
-    # exceeds trace size — the TilingEngine slices spatially and
+    # exceeds build size — the TilingEngine slices spatially and
     # invokes vae_exec.run on each tile, then blends. Without this,
     # VAE allocates full 4Kpx upsample chain immediately → > 32 GB.
     vae_tiling = executor._component_tiling.get("vae")

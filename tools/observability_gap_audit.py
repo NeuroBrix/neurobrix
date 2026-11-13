@@ -47,7 +47,7 @@ A gap on a single-output op is `BLIND` and fails the gate.
 
 DECIDABLE, WITH `--planned`
 ---------------------------
-Without it the reference is `graph.json`'s TRACED `execution_order`, and runtime
+Without it the reference is `graph.json`'s BUILT `execution_order`, and runtime
 passes change what actually runs — so a gap is either a blinded site or an op a
 pass legitimately removed, and the sibling heuristic above only narrows that, it
 does not decide it. The counts printed in that mode are an UPPER BOUND and say
@@ -57,7 +57,7 @@ so.
 passes. Given that file through `--planned`, the question becomes exact:
 
     planned AND no record            -> BLIND, a site something replaced
-    in the traced order, not planned -> REMOVED BY A PASS, reported, not a fault
+    in the built order, not planned -> REMOVED BY A PASS, reported, not a fault
 """
 from __future__ import annotations
 
@@ -202,7 +202,7 @@ def main() -> int:
               + (f", {r.get('expected_skips',0)} legitimately skipped"
                  if r["verdict"] != "NOT-EXERCISED" else ""))
         if r.get("removed_by_a_pass"):
-            print(f"      pass   {r['removed_by_a_pass']} op(s) in the traced order "
+            print(f"      pass   {r['removed_by_a_pass']} op(s) in the built order "
                   f"were removed before execution — honest silence, not a blind site")
         for t, n in sorted((r.get("systematic_classes") or {}).items()):
             print(f"      class  {t}: {n} op(s), and this type records NOWHERE in "
@@ -216,7 +216,7 @@ def main() -> int:
     decidable = all(r.get("decidable") for r in rows if r["verdict"] != "NOT-EXERCISED")
     how = ("against the runtime's PLANNED op list — decidable"
            if decidable else
-           "against the container's TRACED order — an UPPER BOUND, since a pass "
+           "against the container's BUILT order — an UPPER BOUND, since a pass "
            "may have removed some of these honestly (pass --planned to decide)")
     print(f"\n{blind_total} site(s) BLIND, {how}")
     if a.out:

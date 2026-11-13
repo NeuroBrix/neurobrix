@@ -8,7 +8,7 @@ the identical reduction structure); a cuBLAS/torch reference can never
 be byte-matched (internal reduction order) and is used only as a
 TOLERANCE cross-check here.
 
-Also validates the numpy packing reference (the future Forge
+Also validates the numpy packing reference (the future the container builder
 quantizer's contract): pack -> kernel-dequant round-trips bit-exactly
 vs the numpy dequant, and RTN+min group error is within the int4
 asymmetric bound (|err| <= scale/2).
@@ -43,7 +43,7 @@ GROUP = 128
 PACK = 8
 
 
-# ── numpy packing reference (the Forge quantizer's contract) ─────────
+# ── numpy packing reference (the container builder quantizer's contract) ─────────
 
 def quantize_int4_g128(w: np.ndarray):
     """fp16 [K, N] -> (packed int32 [K//8, N], scales fp16 [K//128, N],
