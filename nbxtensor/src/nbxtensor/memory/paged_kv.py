@@ -313,8 +313,7 @@ class PagedTritonKVCache:
         if layer_idx == 0 and new_len > self.spilled + len(self.tables[0].pages) * self.page_tokens:
             self._reserve(new_len)                              # past the request's reservation: one more page
             self._fits(new_len)
-        k2 = k.reshape(self.batch, self.num_kv_heads, self.k_head_dim).contiguous()
-        v2 = v.reshape(self.batch, self.num_kv_heads, self.v_head_dim).contiguous()
+        k2, v2 = _step_rows(k), _step_rows(v)
         kp, vp, lens = self.k_pools[layer_idx], self.v_pools[layer_idx], self.lens[layer_idx]
         bt = self.block_tables[self.layer_device[layer_idx]]
         set_device(kp)
@@ -515,6 +514,13 @@ class PagedTritonKVCache:
         per_page = self.num_kv_heads * self.page_tokens * (self.k_head_dim + self.v_head_dim) \
             * self.k_pools[0].element_size()
         return granted * per_page * self.num_layers
+
+
+def _step_rows(x):
+    """A decode step's K or V `[B, H, 1, D]` as the `[B, H, D]` the append kernel reads through its batch and head
+    strides: the one position selected (a view), copied only when D itself is strided."""
+    rows = x.select(2, 0)
+    return rows if rows.stride(2) == 1 else rows.contiguous()
 
 
 def keys_seq_major(q, k, pre_transposed=None):

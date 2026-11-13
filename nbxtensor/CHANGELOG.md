@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `nbxtensor.memory.kv_host_tier.host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes)` takes a
   page's parts and sizes the page itself; it no longer takes a precomputed all-layers page size.
+- A decode token makes fewer device copies: a small-M matrix product writes each row's GEMV straight into its output
+  (`mv_wrapper(..., out=)`), and the paged KV cache hands a step's K and V to its append kernel as views. TinyLlama on
+  an Apple GPU: 968 -> 663 launches a token with the decode mask merged; the output bytes do not change.
 
 ### Fixed
 - A decode step's slab (`StepSlab`) carves again: its record of carved sizes was never set since

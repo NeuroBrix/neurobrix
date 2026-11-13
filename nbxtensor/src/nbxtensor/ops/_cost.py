@@ -88,9 +88,11 @@ class _Steps:
         self.buffers.append([name, int(nbytes), self.step, None, returned])
         return len(self.buffers) - 1
 
-    def free(self, index: int) -> None:
+    def free(self, index) -> None:
         """The buffer dies here (a transient the wrapper drops before it returns: a reassigned local, a callee's
-        return): it lives over [its step, this step]."""
+        return): it lives over [its step, this step]. None: no buffer was made (a step that allocates conditionally)."""
+        if index is None:
+            return
         self.step += 1
         self.buffers[index][3] = self.step
 
