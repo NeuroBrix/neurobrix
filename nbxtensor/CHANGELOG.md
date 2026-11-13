@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one row). Inside it every launch runs alone and is timed on the GPU at its own boundaries: the table ranks kernels;
   it is not the production speed, and its header says so. The output bytes do not change.
 
+### Changed
+- The fused SwiGLU with split gate and up tensors runs as one element-wise launch at the element-wise class's certified
+  tile (its fixed 16 x 1024 tile spilled): the same bytes.
+- On an Apple M4 Pro the command stream is committed every 16 dispatches (`backend/devices/apple/apple_m4_pro.yml`):
+  the GPU starts a step while the host is still encoding it.
+
 ## [0.1.7] - 2026-11-13
 
 ### Changed
