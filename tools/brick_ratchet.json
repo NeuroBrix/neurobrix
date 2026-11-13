@@ -36,7 +36,13 @@
    {"path": "src/neurobrix/kernels/__init__.py", "what": "nbxtensor.backend.launcher.install", "count": 1,
     "reason": "one call into nbxtensor's public launcher API at import; the engine holds no launcher state (Orchestrateur 2026-11-13 04:00, (d))"},
    {"path": "src/neurobrix/cli/commands/run.py", "what": "nbxtensor.backend.launcher.prewarm_compiler", "count": 1,
-    "reason": "one call into nbxtensor's public launcher API at run start; the engine drives no compiler (Orchestrateur 2026-11-13 04:00, (d))"}
+    "reason": "one call into nbxtensor's public launcher API at run start; the engine drives no compiler (Orchestrateur 2026-11-13 04:00, (d))"},
+   {"path": "src/neurobrix/core/runtime/graph/compiled_sequence.py", "what": "_arena.clear_intermediates(", "count": 1,
+    "reason": "the compiled (torch) engine's own TensorArena (core/runtime/graph/compiled_sequence.py:242-280) is a plain holder of torch tensors torch allocates: a slot list cleared by region, no reuse or aliasing policy, no pointer, no sizing (its size is a slot count); torch frees what no holder keeps (Orchestrateur 2026-11-13 05:08, (C))"},
+   {"path": "src/neurobrix/core/runtime/graph/compiled_sequence.py", "what": "_arena.clear_inputs(", "count": 1,
+    "reason": "the compiled (torch) engine's own TensorArena (core/runtime/graph/compiled_sequence.py:242-280) is a plain holder of torch tensors torch allocates: a slot list cleared by region, no reuse or aliasing policy, no pointer, no sizing (its size is a slot count); torch frees what no holder keeps (Orchestrateur 2026-11-13 05:08, (C))"},
+   {"path": "src/neurobrix/core/runtime/graph/compiled_sequence.py", "what": "_arena.clear_all(", "count": 1,
+    "reason": "the compiled (torch) engine's own TensorArena (core/runtime/graph/compiled_sequence.py:242-280) is a plain holder of torch tensors torch allocates: a slot list cleared by region, no reuse or aliasing policy, no pointer, no sizing (its size is a slot count); torch frees what no holder keeps (Orchestrateur 2026-11-13 05:08, (C))"}
   ]
  }
 }

@@ -4274,15 +4274,11 @@ class CompiledSequence(SequenceSteps):
                 self._protect_storage_chain(source_tid)
             return
 
-    def clear_intermediates(self) -> None:
-        """Clear intermediate tensors from arena (keep weights and inputs)."""
-        assert self._arena is not None, "compile() must be called before clear_intermediates()"
-        self._arena.clear_intermediates()
-
-    def clear_inputs(self) -> None:
-        """Clear input tensors for next inference."""
-        assert self._arena is not None, "compile() must be called before clear_inputs()"
-        self._arena.clear_inputs()
+    def drop_slots(self, weights: bool) -> None:
+        """A request's slots dropped (its inputs and intermediates), or every slot with the weights too; torch frees
+        what no other holder keeps. Nothing held before compile."""
+        if self._arena is not None:
+            self._arena.clear_all() if weights else (self._arena.clear_intermediates(), self._arena.clear_inputs())
 
     @property
     def num_ops(self) -> int:

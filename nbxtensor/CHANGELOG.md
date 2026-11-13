@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   allocated once and pinned once its host weights are written.
 - `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
   copied.
+- `nbxtensor.memory.slot_store`, `end_store_request`, `release_store`: a compiled sequence's slot memory and its
+  request and unload lifecycle, with `store_held_bytes` and `store_contents` for diagnostics.
 - `nbxtensor.inspection.label`: a tensor as a diagnostic line names it (shape, dtype, device and the object's id),
   never its address.
 - `nbxtensor.interop.copy_to_address` and `host_bytes`: a tensor's values handed to another array library, into its
