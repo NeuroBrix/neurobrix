@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start (embeddings, norms) were not counted: Qwen2.5-Coder-14B on one 16 GB V100 stopped at its second pass.
 - **Long served prompts on the PyTorch engine no longer run the card out of memory.** The check that a model's attention
   mask is the causal pattern used several gigabytes of card memory at every layer of a long prefill; it now runs once per
-  chunk in host memory. Qwen3-30B-A3B-Thinking served with `--compiled` on one 32 GB V100 failed every request.
+  chunk, reading the mask in bands no larger than the mask itself. Qwen3-30B-A3B-Thinking served with `--compiled` on one 32 GB V100 failed every request.
 
 - **Kokoro-82M speaks with its own voice on the Triton engine.** A model built in float32 and run in half precision keeps
   float32 wherever its own forward keeps it, unless the model's calibration record measured that op safe in half: the
