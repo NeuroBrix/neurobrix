@@ -11,25 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `nbxtensor.memory.kv_host_tier.host_tier_pages(budget_bytes, num_layers, k_page_bytes, v_page_bytes)` takes a
   page's parts and sizes the page itself; it no longer takes a precomputed all-layers page size.
 
-## [0.1.6] - 2026-11-13
-
 ### Fixed
 - A decode step's slab (`StepSlab`) carves again: its record of carved sizes was never set since
   `StepSlab.for_carved`, so every run that stabilized its decode allocations failed at its first carve.
-- A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
-  only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises
-  `DeviceQueryError` with its code. Choosing the device with the most free memory, and listing the devices, no
-  longer skip one that fails silently. Reading a device's free or total memory no longer answers 0, -1 or None for a
-  driver that refuses or a device the process does not see: it raises, so a broken card is never planned as an empty
-  one.
 
 ### Added
-- `nbxtensor.device`: the devices a process sees, the one it works on, the one the next kernel launch runs on, when
-  they drain and what each has free (`count`, `current`, `select`, `select_for_launch`, `synchronize`, `drain`,
-  `mem_info`, `most_free`).
-- `nbxtensor.memory` answers the allocator's figures and the pool's controls by name (`memory_allocated`,
-  `pool_cached_bytes`, `peak_device_bytes`, `empty_cache_pool`, the held-memory windows and others): an application
-  no longer calls the allocator class for them.
 - `nbxtensor.memory.weight_arenas()`: a weight set's memory, counted per device and in page-locked host memory,
   allocated once and pinned once its host weights are written.
 - `nbxtensor.io.safetensors.mapped_view`: a host tensor over a weight's bytes inside a read-only mapped file, no byte
@@ -46,6 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never its address.
 - `nbxtensor.interop.copy_to_address` and `host_bytes`: a tensor's values handed to another array library, into its
   own device buffer or as host bytes in C order.
+
+## [0.1.6] - 2026-11-13
+
+### Fixed
+- A device the runtime refuses to describe is now an error, not a smaller machine: counting the devices answers 0
+  only when the host has no GPU runtime or the runtime says it has no device; a driver that fails raises
+  `DeviceQueryError` with its code. Choosing the device with the most free memory, and listing the devices, no
+  longer skip one that fails silently. Reading a device's free or total memory no longer answers 0, -1 or None for a
+  driver that refuses or a device the process does not see: it raises, so a broken card is never planned as an empty
+  one.
+
+### Added
+- `nbxtensor.device`: the devices a process sees, the one it works on, the one the next kernel launch runs on, when
+  they drain and what each has free (`count`, `current`, `select`, `select_for_launch`, `synchronize`, `drain`,
+  `mem_info`, `most_free`).
+- `nbxtensor.memory` answers the allocator's figures and the pool's controls by name (`memory_allocated`,
+  `pool_cached_bytes`, `peak_device_bytes`, `empty_cache_pool`, the held-memory windows and others): an application
+  no longer calls the allocator class for them.
 
 ## [0.1.5] - 2026-11-12
 

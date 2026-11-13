@@ -7,17 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.14] - 2026-11-13
-
-With nbxtensor 0.1.6: served models that answered only their first request, or answered a chat with garbage, now
-answer every request; a served mixture-of-experts model starts sooner.
-
 ### Fixed
 
 - **A language model split across two cards scores every sequence of a batch correctly.** When the last layer and
   the output head sat on different cards, the hand-off copied the batch's last positions as one block of bytes; with
   more than one sequence those positions are not one block, and the head read the wrong values. The copy now goes
   through the tensor library's card-to-card transfer, which lays the values out first and waits for the source card.
+
+## [0.6.14] - 2026-11-13
+
+With nbxtensor 0.1.6: served models that answered only their first request, or answered a chat with garbage, now
+answer every request; a served mixture-of-experts model starts sooner.
+
+### Fixed
 
 - **The voice says every number and name it is given.** Kokoro-82M dropped a number written in digits ("a graphics card
   from 2017" was spoken "...from a...") and mangled brand names. Numbers, years, versions, decimals, ordinals,
