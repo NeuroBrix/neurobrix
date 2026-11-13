@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-13
+
 ### Changed
 - `nbxtensor.dtype.outputs.amp_fp32_output_dtype`: under float16 compute on a graph built wider than half (float32,
   float64), an op computed in float32 inside stores float32 unless the record narrows it; the range contract (`safe`)

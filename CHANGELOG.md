@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-11-13
+
+With nbxtensor 0.1.7: Kokoro-82M speaks with its own voice on the Triton engine, `neurobrix upscale` runs on every host as
+`neurobrix run` does, `neurobrix import` installs only the container the hub states, and large models run and serve within
+the memory their plan priced.
+
 ### Changed
 
 - **A model larger than its card runs on the Triton engine within its plan.** When a model's layers stream from host
@@ -15,21 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Long served prompts run on the PyTorch engine with the memory their plan priced.** The check that a model's attention
   mask is the causal pattern runs once per prefill chunk, reading the mask in bands no larger than the mask itself:
   Qwen3-30B-A3B-Thinking and Qwen3-Coder-30B-A3B serve every request with `--compiled` on one 32 GB V100.
-
 - **Kokoro-82M speaks with its own voice on the Triton engine.** A model built in float32 and run in half precision keeps
   float32 wherever its own forward keeps it, unless the model's calibration record measured that op safe in half: the
   voice's harmonic source (a running phase of thousands of radians) is computed whole, and the Triton engine's voice
   matches the vendor's reference render and the PyTorch engine's.
-
 - **`neurobrix import` installs only the container the hub states.** The downloaded `.nbx` is checked against the
   sha256 the hub publishes for it, whatever host served the bytes; another archive is refused by name with both
   values, kept beside the store as `<name>.nbx.unverified` and never extracted.
-
 - **`neurobrix upscale` chooses its engine as `neurobrix run` does**, on every host: the same `--compiled`,
   `--sequential`, `--triton`, `--triton-sequential` flags, the PyTorch engine where it is installed and the Triton engine
   where it is not when no flag is given, said on the launch line. On a host without a GPU, `upscale` runs an upscaler on
   the PyTorch engine as `run --input-image` does. `--mode` stays accepted as the same choice.
-
 - **A language model split across two cards scores every sequence of a batch.** When the last layer and the output head
   sit on different cards, each sequence's last position reaches the head through the tensor library's card-to-card
   transfer, laid out per sequence.
