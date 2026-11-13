@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from 2017" was spoken "...from a...") and mangled brand names. Numbers, years, versions, decimals, ordinals,
   percentages, currencies, units and known names are now written out before the voice reads them; a character it cannot
   say is refused by name.
+- **A model larger than its card runs on the Triton engine without running out of memory.** When a model's layers stream
+  from host memory, the card kept more of them than its plan allowed, because the weights loaded on the card from the
+  start (embeddings, norms) were not counted: Qwen2.5-Coder-14B on one 16 GB V100 stopped at its second pass.
+- **Long served prompts on the PyTorch engine no longer run the card out of memory.** The check that a model's attention
+  mask is the causal pattern used several gigabytes of card memory at every layer of a long prefill; it now runs once per
+  chunk in host memory. Qwen3-30B-A3B-Thinking served with `--compiled` on one 32 GB V100 failed every request.
 
 ## [0.6.13] - 2026-11-12
 
