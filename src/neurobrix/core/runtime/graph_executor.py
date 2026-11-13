@@ -522,8 +522,7 @@ class GraphExecutor:
         fusion proxy, a chain's stashed band) — one executor runs all of a group; `planned`,
         the uids the PLAN tiles — a piece runs each of them intercepted, or refuses.
         """
-        if not hasattr(self, '_op_uid_interceptors'):
-            self._op_uid_interceptors = {}
+        self.__dict__.setdefault('_op_uid_interceptors', {})
         if not hasattr(self, '_op_uid_groups'):
             self._op_uid_groups = []
             self._op_uid_planned = set()
@@ -541,9 +540,7 @@ class GraphExecutor:
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
             self._triton_seq.update_op_uid_interceptors(interceptors)
         else:
-            if not hasattr(self, '_pending_triton_uid_interceptors'):
-                self._pending_triton_uid_interceptors = {}
-            self._pending_triton_uid_interceptors.update(interceptors)
+            self.__dict__.setdefault('_pending_triton_uid_interceptors', {}).update(interceptors)
         for follow in list(self._op_uid_followers.values()):
             follow(interceptors, groups=groups, planned=planned)
 
@@ -4088,10 +4085,17 @@ class GraphExecutor:
         if hasattr(self, '_pending_triton_interceptors'):
             for op_type, func in self._pending_triton_interceptors.items():
                 self._triton_seq.register_op_interceptor(op_type, func)
-        # Apply pending per-op_uid interceptors (op-level tiling, R30 mirror)
-        if hasattr(self, '_pending_triton_uid_interceptors'):
-            for op_uid, func in self._pending_triton_uid_interceptors.items():
-                self._triton_seq.register_op_uid_interceptor(op_uid, func)
+        self._bind_triton_uid_interceptors()
+
+    def _bind_triton_uid_interceptors(self) -> None:
+        """Every per-op_uid interceptor the executor holds (op-level tiling, a decoder's KV cache) bound on the Triton
+        sequence just compiled, as the compiled sequence's rebuild does: a Triton sequence dropped and compiled again (a
+        served model's weights reloaded) kept only the PENDING ones and lost the KV interceptor registered on its first
+        build — Ming-Lite-Omni served by Triton prefilled request 2 into no cache and decoded garbage ("AADADA",
+        2026-11-13)."""
+        for op_uid, func in {**getattr(self, '_op_uid_interceptors', {}),
+                             **getattr(self, '_pending_triton_uid_interceptors', {})}.items():
+            self._triton_seq.register_op_uid_interceptor(op_uid, func)
 
     def _prepare_execution(self, inputs: Dict[str, Any]) -> ExecutionContext:
         """

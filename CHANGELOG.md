@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mode the container was not built for, by name, as `neurobrix run --mode` already did.
 - **A served multimodal model keeps answering identical requests.** After generating an image, a served Janus-Pro-7B
   loaded a second copy of its language model and failed two requests in three; a served model's weights now stay loaded.
+- **Served vision-language models answer every request, not only the first, on the Triton engine.** Ming-Lite-Omni-1.5
+  (and the same path's models) answered the first request right and every later one with a repeated token: the reload of
+  its weights between requests rebuilt the model without its attention cache, so later prompts were decoded over no
+  context.
 
 ## [0.6.13] - 2026-11-12
 
