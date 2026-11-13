@@ -142,6 +142,8 @@ def blocks_in_use(device_idx=None) -> dict                     # {address: bytes
 def device_free_bytes(device_idx=None) -> int                  # the driver's free bytes (None: current device)
 def device_total_bytes(device_idx=None) -> int                 # the device's total memory (refused: DeviceQueryError)
 def free_memory_mb(index: int) -> float                        # the driver's free memory in MB (refused: DeviceQueryError)
+def peak_memory_allocated(device_idx=None) -> int               # highest live bytes on a device since its last reset (None: summed)
+def reset_peak_memory(device_idx=None) -> None                  # restart that peak from the live bytes (None: every device)
 def peak_device_bytes() -> Optional[int]                       # the most one device held at once since the start
 def host_pinned_allocated() -> int                             # live pinned host bytes
 def empty_cache_pool() -> int                                  # the pool's parked blocks given back; bytes freed

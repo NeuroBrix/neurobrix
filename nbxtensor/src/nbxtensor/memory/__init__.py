@@ -54,6 +54,17 @@ def memory_allocated(device_idx=None) -> int:
     return _allocator().memory_allocated(device_idx)
 
 
+def peak_memory_allocated(device_idx=None) -> int:
+    """The highest live bytes the allocator handed out on `device_idx` since its last `reset_peak_memory` (None: the
+    sum over every device)."""
+    return _allocator().peak_memory_allocated(device_idx)
+
+
+def reset_peak_memory(device_idx=None) -> None:
+    """Restart `peak_memory_allocated` from the live bytes on `device_idx` (None: every device)."""
+    _allocator().reset_peak_memory(device_idx)
+
+
 def pool_cached_bytes(device_idx=None) -> int:
     """Bytes the pool keeps parked in free blocks on `device_idx` (None: every device); counted in
     `memory_allocated`."""

@@ -514,13 +514,13 @@ class Zero3Strategy(ExecutionStrategy):
         if os.environ.get("NBX_ZERO3_VRAM_LOG"):
             dev_idx = state['exec_dev_idx']
             if is_triton:
-                from nbxtensor.memory.allocator import DeviceAllocator as DA
-                peak_mb = DA.peak_memory_allocated(dev_idx) / 1e6
-                live_mb = DA.memory_allocated(dev_idx) / 1e6
+                from nbxtensor import memory as nbx_memory
+                peak_mb = nbx_memory.peak_memory_allocated(dev_idx) / 1e6
+                live_mb = nbx_memory.memory_allocated(dev_idx) / 1e6
                 logger.debug(f"[Zero3] {component_name} pass_end: "
                     f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
                     f"blocks_cached={len(state['gpu_cache'])}")
-                DA.reset_peak_memory(dev_idx)
+                nbx_memory.reset_peak_memory(dev_idx)
             else:
                 import torch
                 peak_mb = torch.cuda.max_memory_allocated(dev_idx) / 1e6
