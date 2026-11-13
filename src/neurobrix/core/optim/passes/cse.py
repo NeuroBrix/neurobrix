@@ -55,13 +55,27 @@ Further exclusions, matching const_fold's evidence:
     attribute contracts this planner does not model);
   - any op whose output is a graph output (the positional contract is
     frozen; aliasing it away is not this pass's business);
-  - ops with no tensor inputs — a nullary op (`arange`, `full`) is
-    cheap and its inputs carry no ordering evidence, so merging buys
-    nothing and complicates the barrier argument.
+  - ops with no tensor inputs, EXCEPT the deterministic creators of
+    `_CREATORS` (`ones`, `full`, `scalar_tensor`, ...). Merging a lone
+    creator buys one launch, but a creator is where a repeated chain
+    starts: a causal mask the builder recorded once per layer
+    (`ones(s, s)` -> `tril` -> `where(mask, 0, -inf)`, 22 times in
+    TinyLlama's decoder) only merges if its creators merge first. The
+    key holds the creator's whole attribute record (its symbolic shape,
+    dtype, value), so only identical creations meet. Never `empty`
+    (its contents are not a value) and never a draw.
+
+VALUE NUMBERING. An op's inputs are keyed through the aliases already
+planned (a dropped op's output names its kept twin), so a chain merges
+link by link: once the 22 `ones` are one, the 22 `tril`s read one input
+and merge, then the 22 `where`s. Aliases outlive a mutation barrier
+(they are renamings already decided); only the table of available
+expressions is cleared.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 
 PLAN_KEY = "_optim_cse"
@@ -82,6 +96,14 @@ _NONDETERMINISTIC = {
     "aten::randint", "aten::randint_like", "aten::multinomial",
     "aten::bernoulli", "aten::normal", "aten::uniform",
     "aten::exponential", "aten::randperm",
+}
+
+# Nullary ops whose output is a pure function of their attributes: the
+# only no-input ops value-numbered (see the module docstring). `empty`
+# is absent on purpose: its contents are not a value.
+_CREATORS = {
+    "aten::ones", "aten::zeros", "aten::full", "aten::scalar_tensor",
+    "aten::arange", "aten::eye", "aten::linspace",
 }
 
 # VIEW CLASS — excluded, and the exclusion is the whole point of this
@@ -170,6 +192,13 @@ def _canon(node) -> object:
     return node
 
 
+def _aliased(attributes: dict, alias: dict) -> dict:
+    """The op's attributes with every tensor reference read through `alias` (a copy: the dag is not rewritten here)."""
+    op = {"attributes": copy.deepcopy(attributes)}
+    rename_tensor_refs(op, alias)
+    return op["attributes"]
+
+
 def plan_cse(dag: dict) -> dict | None:
     """Compute the redundancy plan of `dag`, or None when nothing merges.
 
@@ -198,6 +227,7 @@ def plan_cse(dag: dict) -> dict | None:
             opaque.update(op.get("output_tensor_ids") or [])
 
     available: dict[str, str] = {}     # equivalence key -> keeping uid
+    alias: dict[str, str] = {}         # a dropped op's output -> its kept twin
     merges: list[dict] = []
     n_barriers = 0
 
@@ -220,9 +250,9 @@ def plan_cse(dag: dict) -> dict | None:
         ):
             continue
 
-        ins = list(op.get("input_tensor_ids") or [])
+        ins = [alias.get(t, t) for t in op.get("input_tensor_ids") or []]
         outs = list(op.get("output_tensor_ids") or [])
-        if not ins or not outs:
+        if not outs or (not ins and op_type not in _CREATORS):
             continue
         if any(o in graph_outputs for o in outs):
             continue
@@ -235,7 +265,7 @@ def plan_cse(dag: dict) -> dict | None:
             out_meta.append((t.get("dtype"), t.get("device")))
 
         key = json.dumps(
-            [op_type, ins, _canon(op.get("attributes", {})), out_meta],
+            [op_type, ins, _canon(_aliased(op.get("attributes", {}), alias)), out_meta],
             sort_keys=True, separators=(",", ":"),
         )
 
@@ -253,6 +283,7 @@ def plan_cse(dag: dict) -> dict | None:
             "drop": uid,
             "alias": [[o, k] for o, k in zip(outs, keep_outs)],
         })
+        alias.update(zip(outs, keep_outs))
 
     if not merges:
         return None
