@@ -516,6 +516,15 @@ def run_command(args):
         raise
 
 
+def _execute(executor, inputs, args):
+    """The request's execution; asked with --profile-kernels [JSON], inside the library's kernel-time session
+    (nbxtensor.profile.kernel_times), its table printed (and written as JSON to the path given)."""
+    if getattr(args, "profile_kernels", None) is None:
+        return executor.execute(inputs)
+    from nbxtensor import profile
+    return profile.ranked_call(lambda: executor.execute(inputs), args.profile_kernels or None)
+
+
 def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
@@ -1056,7 +1065,7 @@ def cmd_run(args):
         _drain_device()
         t_exec_start = time.time()
         run_timings.begin_request()
-        outputs = executor.execute(inputs)
+        outputs = _execute(executor, inputs, args)
         _drain_device()
         run_timings.end_request()
         t_exec_total = time.time() - t_exec_start
