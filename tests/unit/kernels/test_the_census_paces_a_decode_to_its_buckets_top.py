@@ -23,6 +23,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -55,6 +56,7 @@ def _probe() -> dict:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.cardless
 def test_the_pace_lands_the_next_position_on_its_buckets_top_and_nothing_moves_live():
     got = _probe()
     assert got["paced"] == {"64": 15, "65": 14, "255": 0, "256": 31, "1024": 127}, got

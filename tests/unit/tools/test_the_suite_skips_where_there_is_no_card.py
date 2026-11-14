@@ -7,14 +7,19 @@ allocating on a device that is not there, raising `DeviceOOMError: GPU malloc fa
 meaning "no card here" is a suite nobody runs beside a campaign, which is the only
 place the door exists for.
 
-`tests/conftest.py` converts that ONE failure into a skip. This file is what keeps the
-conversion from becoming a swallow, and it pins both directions:
+`tests/conftest.py` converts that ONE failure into a skip, through the hooks of
+`nbxtensor/tests/_no_device.py` (the library suite registers the same ones). This file is what
+keeps the conversion from becoming a swallow, and it pins both directions:
 
 * a failure whose text carries a no-device mark becomes a skip — **only** when an
   executing probe says this process can see no device;
 * every other failure stays a failure, at the same moment, in the same run;
 * on a machine that HAS a device the hook is disarmed entirely, so a real allocation
-  failure on a real card is untouched.
+  failure on a real card is untouched;
+* on a host whose GPU runtime is installed WITHOUT its driver (the door raises
+  `DeviceQueryError`, CUDA error 35, and no driver library of the backend table loads) the
+  skip names the backend and the code; where a driver library loads and the door still
+  refuses, the driver is broken and nothing is armed.
 """
 from __future__ import annotations
 
@@ -26,7 +31,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-REAL_CONFTEST = ROOT / "tests" / "conftest.py"
+NO_DEVICE = ROOT / "nbxtensor" / "tests" / "_no_device.py"
 
 _TWO_TESTS = '''
 def test_it_cannot_reach_a_card():
@@ -38,10 +43,13 @@ def test_it_is_simply_wrong():
 
 
 def _run(tmp_path: Path, visible: str | None):
-    (tmp_path / "conftest.py").write_text(REAL_CONFTEST.read_text())
+    (tmp_path / "_no_device.py").write_text(NO_DEVICE.read_text())
+    (tmp_path / "conftest.py").write_text(
+        "from _no_device import pytest_configure, pytest_make_collect_report, pytest_runtest_call, "
+        "pytest_runtest_setup\n")
     (tmp_path / "test_two.py").write_text(_TWO_TESTS)
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(ROOT / "src")
+    env["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT / "nbxtensor" / "src")))
     if visible is None:
         env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
@@ -91,3 +99,54 @@ def test_with_a_card_visible_the_hook_is_disarmed(tmp_path):
     assert "2 failed" in tail, (
         f"with a device visible BOTH failures must stand — the hook must not convert "
         f"anything on a real machine; got: {tail}")
+
+
+def _the_door(monkeypatch, *, answers=None, refuses=None, driver_libs=()):
+    """The helper's question asked against a door that answers `answers` or refuses with `refuses`, and a backend
+    table naming `driver_libs`; the session's cached answer is forgotten before and after."""
+    import importlib.util
+    from nbxtensor import device
+    from nbxtensor.backend import runtime
+    spec = importlib.util.spec_from_file_location("_no_device_under_test", NO_DEVICE)
+    nd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(nd)
+
+    def count():
+        if refuses is not None:
+            raise device.DeviceQueryError(refuses)
+        return answers
+    monkeypatch.setattr(device, "count", count)
+    monkeypatch.setattr(runtime, "gpu_backend", lambda: "cuda")
+    monkeypatch.setattr(runtime, "backend_table", lambda: {"driver_libs": list(driver_libs), "no_device_rc": 100})
+    return nd
+
+
+_REFUSED = ("cudaGetDeviceCount failed with error 35 on cuda: the runtime is there and refuses to count its devices "
+            "(a driver older than the runtime, or a broken install)")
+
+
+def test_a_runtime_without_its_driver_is_a_skip_that_names_the_backend_and_the_code(monkeypatch):
+    nd = _the_door(monkeypatch, refuses=_REFUSED, driver_libs=["libnbx-no-such-driver.so.1"])
+    assert nd.absence() == "needs a CUDA device: none answered (driver error 35)"
+    assert nd._names_the_refusal("RuntimeError: set_device(0) refused by the runtime (error 35)")
+    assert not nd._names_the_refusal("RuntimeError: cudaMalloc failed with error 350")
+    assert not nd._names_the_refusal("AssertionError: this is arithmetic, not a missing card")
+
+
+def test_a_driver_that_loads_and_refuses_is_broken_and_arms_nothing(monkeypatch):
+    import ctypes.util
+    present = ctypes.util.find_library("c") or ctypes.util.find_library("System")
+    assert present, "a library every host loads stands for an installed driver"
+    nd = _the_door(monkeypatch, refuses=_REFUSED, driver_libs=["libnbx-no-such-driver.so.1", present])
+    assert nd.absence() is None and not nd._names_the_refusal("error 35")
+
+
+def test_a_table_with_no_driver_library_cannot_tell_and_arms_nothing(monkeypatch):
+    nd = _the_door(monkeypatch, refuses=_REFUSED, driver_libs=())
+    assert nd.absence() is None
+
+
+def test_a_door_that_counts_a_card_arms_nothing_and_one_that_counts_none_says_so(monkeypatch):
+    assert _the_door(monkeypatch, answers=2).absence() is None
+    nd = _the_door(monkeypatch, answers=0)
+    assert nd.absence() == "no GPU visible to this process" and nd._names_the_refusal("malloc failed (error 100)")

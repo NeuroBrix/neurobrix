@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import pytest
 
 
 def _shadow(body: str, **env) -> subprocess.CompletedProcess:
@@ -22,6 +23,7 @@ def _shadow(body: str, **env) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, "-c", code], env=e, capture_output=True, text=True, timeout=300)
 
 
+@pytest.mark.cardless
 def test_the_driver_surface_answers_with_no_driver():
     r = _shadow("""
         shadow.install_shadow(2)
@@ -45,6 +47,7 @@ def test_the_driver_surface_answers_with_no_driver():
     assert r.returncode == 0 and "SHADOW" in r.stdout, r.stderr[-1500:]
 
 
+@pytest.mark.cardless
 def test_a_host_born_value_answers_its_value_and_an_unknown_one_its_benign_read():
     r = _shadow("""
         shadow.install_shadow()

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import pytest
 
 SCRIPT = r'''
 from neurobrix.kernels import census; census.install()
@@ -78,6 +79,7 @@ except RuntimeError as exc:
 '''
 
 
+@pytest.mark.cardless
 def test_the_halves_are_the_views_the_graph_named():
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",

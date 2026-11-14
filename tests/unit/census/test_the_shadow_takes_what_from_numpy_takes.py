@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import pytest
 
 PROBE = """
 import inspect
@@ -28,6 +29,7 @@ assert shadow == real, (shadow, real)
 """
 
 
+@pytest.mark.cardless
 def test_the_installed_shadow_has_the_real_signature():
     # the shadow refuses a process that sees a card (`census.install`): the probe runs with none in sight, as a census does
     r = subprocess.run([sys.executable, "-c", PROBE], capture_output=True, text=True, timeout=300,

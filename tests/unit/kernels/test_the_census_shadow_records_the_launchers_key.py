@@ -43,6 +43,7 @@ def _run(tmp_path, extra_env):
     return subprocess.run([sys.executable, "-c", SCRIPT], env=env, capture_output=True, text=True, timeout=600)
 
 
+@pytest.mark.cardless
 def test_the_shadow_records_the_key_the_live_launcher_forms(tmp_path):
     rec = tmp_path / "keys"
     r = _run(tmp_path, {"NBX_KEY_RECORD": str(rec)})
@@ -53,6 +54,7 @@ def test_the_shadow_records_the_key_the_live_launcher_forms(tmp_path):
     assert lines[0].startswith("nbxtensor.ops.matmul.matmul_kernel::(19, 2048, 2048,"), lines
 
 
+@pytest.mark.cardless
 def test_without_a_record_path_the_shadow_writes_nothing(tmp_path):
     rec = tmp_path / "keys"
     r = _run(tmp_path, {"NBX_KEY_RECORD": ""})

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -47,6 +48,7 @@ PROBE = textwrap.dedent("""
 """)
 
 
+@pytest.mark.cardless
 def test_one_row_keys_bucket_their_width_and_two_d_keys_stay_exact(tmp_path):
     rec = tmp_path / "keys"
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",

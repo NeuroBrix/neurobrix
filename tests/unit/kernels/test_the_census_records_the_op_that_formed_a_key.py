@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -37,6 +38,7 @@ print("OK")
 '''
 
 
+@pytest.mark.cardless
 def test_a_shadow_records_the_op_of_each_key(tmp_path):
     rec = tmp_path / "keys"
     env = dict(os.environ)

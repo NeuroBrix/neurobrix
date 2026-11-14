@@ -42,7 +42,12 @@ def declared_profile(monkeypatch):
 def needs_device():
     """Skip, said, when this host's profile holds no device — a card-less run (the CPU suite runs with
     CUDA_VISIBLE_DEVICES empty): a cell that launches on a card must skip there, not error in `cuInit` or a malloc.
-    Request it FIRST, before any fixture that touches the device."""
+    Request it FIRST, before any fixture that touches the device. The library's device door is asked before the
+    profile (`nbxtensor/tests/_no_device.py`, registered by `tests/conftest.py`): a host whose runtime has no driver
+    skips by that name; a driver that is there and refuses is not a skip."""
+    reason = sys.modules["_no_device"].absence()
+    if reason is not None:
+        pytest.skip(reason)
     from neurobrix.core.prism.autodetect import load_default_profile
     if not getattr(load_default_profile(), "devices", None):
         pytest.skip("no device in this host's profile (a card-less run)")

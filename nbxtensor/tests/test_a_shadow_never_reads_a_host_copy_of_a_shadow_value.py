@@ -7,6 +7,7 @@ What this test would do if the code were wrong: the copy reads the shadow addres
 import os
 import subprocess
 import sys
+import pytest
 
 SCRIPT = r"""
 from nbxtensor.memory import shadow
@@ -22,6 +23,7 @@ print("ok")
 """
 
 
+@pytest.mark.cardless
 def test_a_host_copy_of_a_shadow_value_is_answered_unread():
     env = dict(os.environ, NBX_CENSUS="1", CUDA_VISIBLE_DEVICES="")    # NBX_CENSUS: the Metal backend's door
     r = subprocess.run([sys.executable, "-c", SCRIPT], env=env, capture_output=True, text=True, timeout=300)

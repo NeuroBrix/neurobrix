@@ -18,6 +18,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -42,6 +43,7 @@ def _probe() -> dict:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
+@pytest.mark.cardless
 def test_the_shadow_resolves_the_profile_its_hardware_names_and_buckets_on_its_ladder():
     got = _probe()
     assert got["profile"] and "volta" in str(got["profile"]).lower(), got

@@ -12,7 +12,7 @@ from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism.cpu_config import CPUConfig
 
 
-def test_both_engines_are_measured_here():
+def test_both_engines_are_measured_here(needs_device):     # the Triton engine's base is a kernel launched on a card
     base = A._measure_runtime_base_mb()
     assert set(base) == {"compiled", "triton"} and all(isinstance(v, int) and v > 0 for v in base.values())
 
