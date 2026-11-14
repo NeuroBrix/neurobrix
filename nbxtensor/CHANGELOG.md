@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `nbxtensor.memory.peak_memory_allocated(device)`, `reset_peak_memory(device)` and `pool_stats()`: the allocator's
+  peak, its restart and the pool's counters through the public API.
+- `nbxtensor.device.target_name()` (`<backend>-<arch>`, as measured and certified settings are keyed),
+  `declare_target(maker, capability)` and `install_shadow(devices)` (a card-less process that forms every launch key a
+  run would, refused with `DevicesVisible` while a device is in sight); `TargetNotDeclarable` names a target that
+  cannot be formed from a capability number.
 - `nbxtensor.profile.kernel_times()`: where a real run's GPU time goes on Metal, kernel by kernel (and the copies as
   one row). Inside it every launch runs alone and is timed on the GPU at its own boundaries: the table ranks kernels;
   it is not the production speed, and its header says so. The output bytes do not change.
