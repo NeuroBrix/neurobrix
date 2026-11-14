@@ -8,7 +8,7 @@ byte-level BPE tokenizer used by Voxtral-Mini-3B-2507. This module reproduces
 ``Tekkenizer.encode`` / ``decode`` bit for bit using only the Python standard
 library.
 
-Imports: ``json``, ``base64``, ``re``, ``unicodedata``, ``typing`` — NOT
+Imports: ``json``, ``base64``, ``re``, ``typing`` — NOT
 ``mistral_common``.
 
 ``tekken.json`` structure
@@ -45,7 +45,7 @@ stdlib regex note
 The Tekken pattern uses Unicode property classes (``\p{Lu}``, ``\p{Ll}``,
 ``\p{Lm}``, ``\p{Lo}``, ``\p{M}``, ``\p{L}``, ``\p{N}``) which stdlib ``re`` does
 not understand. We translate every ``\p{X}`` into an explicit character-class
-body by enumerating codepoints with ``unicodedata.category()`` at import time,
+body from ``unicodedata.category()`` (the tokenizer.json reader's translator),
 and substitute a fixed Unicode-White_Space set for ``\s`` / ``\S``. The
 translation is validated to produce chunk-identical splits to the ``regex``
 module across an 8000-string Unicode fuzz battery.
@@ -55,38 +55,10 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import base64
 import json
 import re
-import unicodedata
 
 # the regex and merge machinery tiktoken's reader already carries, read from it (one copy: the engine-slim scan, 2026-10-30)
-from neurobrix.core.module.tokenizer.tiktoken_bpe import (  # noqa: F401 — used below
-    PyTiktoken, _byte_pair_merge, _category_table, _class_body, _ranges_for_predicate, _ranges_for_set, _sanitize_surrogates,
-    _translate_pattern)
-
-
-# ---------------------------------------------------------------------------
-# Unicode property-class translation (stdlib `re` has no \p{...} support).
-# ---------------------------------------------------------------------------
-
-_PROP_PREDICATES = {
-    "L": lambda c: c[0] == "L",
-    "N": lambda c: c[0] == "N",
-    "M": lambda c: c[0] == "M",
-    "Lu": lambda c: c == "Lu",
-    "Ll": lambda c: c == "Ll",
-    "Lt": lambda c: c == "Lt",
-    "Lm": lambda c: c == "Lm",
-    "Lo": lambda c: c == "Lo",
-}
-
-# Unicode White_Space property codepoints. stdlib `re`'s \s additionally matches
-# 0x1C-0x1F which are NOT Unicode White_Space; the `regex` module (used by
-# tiktoken under mistral_common) follows White_Space. We substitute this exact
-# set for \s / \S to match the reference.
-_WHITE_SPACE = {
-    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680,
-    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
-    0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
-}
+from neurobrix.core.module.tokenizer.json_bpe import translate_regex
+from neurobrix.core.module.tokenizer.tiktoken_bpe import PyTiktoken, _byte_pair_merge, _sanitize_surrogates
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +95,7 @@ class PyTekken:
         self._decoder: Dict[int, bytes] = {v: k for k, v in mergeable_ranks.items()}
         self._num_special = num_special_tokens
         self._vocab_size = vocab_size
-        self._pat = re.compile(_translate_pattern(pat_str))
+        self._pat = re.compile(translate_regex(pat_str, onig=False))
 
         # special id -> string, and string -> id
         self._special_id_to_str: Dict[int, str] = {}

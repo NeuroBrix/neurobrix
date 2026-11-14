@@ -8,7 +8,7 @@ tokenizer used by s1-mini (and other fish-speech / Qwen2-derived
 models). This module reproduces its ``encode`` / ``decode`` behaviour bit for
 bit using only the Python standard library.
 
-Imports: ``base64``, ``re``, ``unicodedata``, ``json``, ``typing`` — NOT
+Imports: ``base64``, ``re``, ``json``, ``typing`` — NOT
 ``tiktoken``.
 
 Format of a ``*.tiktoken`` file (one merge per line)::
@@ -41,7 +41,8 @@ stdlib regex note
 The pattern uses Unicode property classes (``\p{L}``, ``\p{N}``, …) which the
 stdlib ``re`` module does not understand (it raises ``bad escape \p``). We
 translate every ``\p{X}`` into an explicit character-class body by enumerating
-codepoints with ``unicodedata.category()`` at import time, and we substitute a
+codepoints with ``unicodedata.category()`` (the tokenizer.json reader's
+translator, read as the ``regex`` module reads it), and we substitute a
 fixed Unicode-White_Space set for ``\s`` / ``\S`` (stdlib ``re``'s ``\s``
 differs from the ``regex`` module's on a handful of control codepoints). The
 translation is validated to produce chunk-identical splits to the ``regex``
@@ -49,174 +50,10 @@ module across an 8000-string Unicode fuzz battery.
 """
 
 from typing import Dict, List, Optional, Sequence, Tuple
-from neurobrix.core.module.tokenizer.json_bpe import CACHE_MAX_WORD_BYTES, CACHE_MAX_WORDS
+from neurobrix.core.module.tokenizer.json_bpe import CACHE_MAX_WORD_BYTES, CACHE_MAX_WORDS, translate_regex
 import base64
 import json
 import re
-import unicodedata
-
-
-# ---------------------------------------------------------------------------
-# Unicode property-class translation (stdlib `re` has no \p{...} support).
-# ---------------------------------------------------------------------------
-
-# `regex`/PCRE Unicode general-category property -> predicate on the two-letter
-# unicodedata.category() code. We support the property names that appear in the
-# tiktoken-family pre-tokenizer patterns.
-_PROP_PREDICATES = {
-    "L": lambda c: c[0] == "L",
-    "N": lambda c: c[0] == "N",
-    "M": lambda c: c[0] == "M",
-    "Lu": lambda c: c == "Lu",
-    "Ll": lambda c: c == "Ll",
-    "Lt": lambda c: c == "Lt",
-    "Lm": lambda c: c == "Lm",
-    "Lo": lambda c: c == "Lo",
-}
-
-# Unicode White_Space property codepoints. stdlib `re`'s \s additionally matches
-# 0x1C-0x1F (file/group/record/unit separators) which are NOT Unicode
-# White_Space; the `regex` module (used by tiktoken) follows White_Space. To
-# match tiktoken exactly we substitute this explicit set for \s / \S.
-_WHITE_SPACE = {
-    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680,
-    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
-    0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
-}
-
-
-def _category_table() -> List[str]:
-    """Enumerate the unicodedata general category for every codepoint once."""
-    return [unicodedata.category(chr(cp)) for cp in range(0x110000)]
-
-
-_CATS = _category_table()
-
-
-def _ranges_for_predicate(pred) -> List[Tuple[int, int]]:
-    """Contiguous (start, end) codepoint ranges where pred(category) is True."""
-    out: List[Tuple[int, int]] = []
-    start: Optional[int] = None
-    prev = -1
-    for cp in range(0x110000):
-        if pred(_CATS[cp]):
-            if start is None:
-                start = cp
-            prev = cp
-        elif start is not None:
-            out.append((start, prev))
-            start = None
-    if start is not None:
-        out.append((start, prev))
-    return out
-
-
-def _ranges_for_set(codepoints) -> List[Tuple[int, int]]:
-    """Contiguous (start, end) ranges covering an explicit codepoint set."""
-    out: List[Tuple[int, int]] = []
-    start: Optional[int] = None
-    prev = -1
-    for cp in sorted(codepoints):
-        if start is None:
-            start = prev = cp
-        elif cp == prev + 1:
-            prev = cp
-        else:
-            out.append((start, prev))
-            start = prev = cp
-    if start is not None:
-        out.append((start, prev))
-    return out
-
-
-def _class_body(ranges: Sequence[Tuple[int, int]]) -> str:
-    """Render ranges as a character-class body (no surrounding []) for `re`.
-
-    Codepoints are emitted as \\Uxxxxxxxx escapes so they remain valid inside a
-    character class regardless of the codepoint (avoids needing to escape ``-``,
-    ``]``, ``^``, ``\\`` literals).
-    """
-    parts: List[str] = []
-    for a, b in ranges:
-        pa = "\\U%08x" % a
-        if a == b:
-            parts.append(pa)
-        else:
-            parts.append(pa + "-" + "\\U%08x" % b)
-    return "".join(parts)
-
-
-# Precompute the character-class bodies once at import.
-_PROP_BODY = {name: _class_body(_ranges_for_predicate(pred))
-              for name, pred in _PROP_PREDICATES.items()}
-_WS_BODY = _class_body(_ranges_for_set(_WHITE_SPACE))
-
-
-def _translate_pattern(pat: str) -> str:
-    """Translate a `regex`-style pat_str into an equivalent stdlib-`re` pattern.
-
-    Replaces ``\\p{X}`` / ``\\P{X}`` (both standalone and inside ``[...]``) with
-    explicit character-class bodies, and ``\\s`` / ``\\S`` with the Unicode
-    White_Space set / its negation. All other constructs (``(?i:...)``,
-    ``(?!\\S)``, alternation, quantifiers) are valid stdlib `re` already.
-    """
-    out: List[str] = []
-    i = 0
-    n = len(pat)
-    while i < n:
-        c = pat[i]
-        if c == "[":
-            # Parse a character class; inline \p/\P/\s bodies (no nesting in re).
-            j = i + 1
-            body = ""
-            if j < n and pat[j] == "^":
-                body += "^"
-                j += 1
-            if j < n and pat[j] == "]":  # literal ] as first class member
-                body += "]"
-                j += 1
-            while j < n and pat[j] != "]":
-                if pat[j] == "\\" and j + 1 < n:
-                    two = pat[j:j + 2]
-                    if two in ("\\p", "\\P"):
-                        k = pat.index("}", j + 3)
-                        body += _PROP_BODY[pat[j + 3:k]]
-                        j = k + 1
-                        continue
-                    if two == "\\s":
-                        body += _WS_BODY
-                        j += 2
-                        continue
-                    body += two
-                    j += 2
-                    continue
-                body += pat[j]
-                j += 1
-            out.append("[" + body + "]")
-            i = j + 1
-            continue
-        if c == "\\" and i + 1 < n:
-            two = pat[i:i + 2]
-            if two in ("\\p", "\\P"):
-                k = pat.index("}", i + 3)
-                name = pat[i + 3:k]
-                out.append(("[^" if two == "\\P" else "[") + _PROP_BODY[name] + "]")
-                i = k + 1
-                continue
-            if two == "\\s":
-                out.append("[" + _WS_BODY + "]")
-                i += 2
-                continue
-            if two == "\\S":
-                out.append("[^" + _WS_BODY + "]")
-                i += 2
-                continue
-            out.append(two)
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
 
 
 # Source-true Qwen2 pre-tokenizer pattern (cl100k with single \p{N}). See the
@@ -341,7 +178,7 @@ class PyTiktoken:
         self._special_decoder: Dict[int, str] = {
             v: k for k, v in self._special_tokens.items()
         }
-        self._pat = re.compile(_translate_pattern(pat_str))
+        self._pat = re.compile(translate_regex(pat_str, onig=False))
 
         # Regex matching any special-token string (longest-first to avoid a
         # prefix special masking a longer one).

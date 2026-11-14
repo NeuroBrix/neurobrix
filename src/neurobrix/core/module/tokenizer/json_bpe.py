@@ -26,10 +26,12 @@ Faithfully implemented components (data-driven, read from the JSON):
   ``lstrip``/``rstrip``/``normalized`` flags; ``special`` flag drives
   ``skip_special_tokens`` in decode.
 
-The ``\\p{L}`` / ``\\p{N}`` semantics required by the GPT-2/Qwen ``Split``
-pre-tokenizer are derived from ``unicodedata.category()`` (letters = categories
-beginning with ``'L'``, numbers = ``'N'``) and compiled into stdlib ``re``
-character classes -- the third-party ``regex`` module is never imported.
+Every regex of the file (``Split``, ``Replace``) is read with the meaning the
+vendor's engine gives it and rewritten into stdlib ``re`` (``translate_regex``):
+``\\p{..}`` general categories become ``unicodedata``-derived classes, ``\\s``
+follows Unicode White_Space, possessive quantifiers and atomic groups never
+backtrack, ``^``/``$`` anchor lines -- the third-party ``regex`` module is never
+imported.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ import heapq
 import json
 import re
 import unicodedata
+from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 
@@ -66,100 +69,193 @@ _BYTE_DECODER = {v: k for k, v in _BYTE_ENCODER.items()}
 
 
 # ---------------------------------------------------------------------------
-# \p{L} / \p{N} -> stdlib re character-class fragments (lazy, built once)
+# Vendor regex -> stdlib re. The vendor engines (Oniguruma behind tokenizer.json,
+# the `regex` module behind tiktoken / Tekken) take syntax stdlib `re` refuses
+# (\p{..} classes, possessive quantifiers, atomic groups) or reads differently
+# (\s, line anchors). Each construct is rewritten into stdlib `re` with the
+# vendor's meaning; a construct the standard library cannot express (a script
+# or binary property) is a named error, never a silent approximation.
 # ---------------------------------------------------------------------------
-_UNICODE_CLASS_CACHE: Dict[str, str] = {}
+# Unicode general categories by every name the vendors accept (PropertyValueAliases).
+_GC_NAMES = {
+    "letter": "L", "casedletter": "LC", "uppercaseletter": "Lu", "lowercaseletter": "Ll",
+    "titlecaseletter": "Lt", "modifierletter": "Lm", "otherletter": "Lo",
+    "mark": "M", "combiningmark": "M", "nonspacingmark": "Mn", "spacingmark": "Mc", "enclosingmark": "Me",
+    "number": "N", "decimalnumber": "Nd", "letternumber": "Nl", "othernumber": "No",
+    "punctuation": "P", "connectorpunctuation": "Pc", "dashpunctuation": "Pd", "openpunctuation": "Ps",
+    "closepunctuation": "Pe", "initialpunctuation": "Pi", "finalpunctuation": "Pf", "otherpunctuation": "Po",
+    "symbol": "S", "mathsymbol": "Sm", "currencysymbol": "Sc", "modifiersymbol": "Sk", "othersymbol": "So",
+    "separator": "Z", "spaceseparator": "Zs", "lineseparator": "Zl", "paragraphseparator": "Zp",
+    "other": "C", "control": "Cc", "format": "Cf", "surrogate": "Cs", "privateuse": "Co", "unassigned": "Cn",
+}
+_GC_NAMES.update({code.lower(): code for code in set(_GC_NAMES.values())})
+# Unicode White_Space: the vendors' \s (stdlib `re` also counts U+001C..U+001F).
+_WHITE_SPACE = frozenset((0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2028, 0x2029,
+                          0x202F, 0x205F, 0x3000, *range(0x2000, 0x200B)))
+_CLASS_BODIES: Dict[Tuple[str, bool], str] = {}
 
 
-def _category_ranges(first_letter: str) -> str:
-    """Return an ``re`` character-class body covering all code points whose
-    Unicode general category starts with ``first_letter`` (e.g. ``'L'`` for
-    letters, ``'N'`` for numbers). Result is a string of ``\\Uxxxxxxxx`` ranges
-    suitable for inlining inside ``[...]``.
-    """
-    if first_letter in _UNICODE_CLASS_CACHE:
-        return _UNICODE_CLASS_CACHE[first_letter]
-    cat = unicodedata.category
-    pieces: List[str] = []
-    start = None
-    prev = None
-    for cp in range(0x110000):
-        if 0xD800 <= cp <= 0xDFFF:  # surrogates: never members
-            is_member = False
+def _class_body(name: str, negated: bool) -> str:
+    """The ``[...]`` body (``\\Uxxxxxxxx`` ranges) of a general category, or of
+    White_Space for ``name == "s"``; ``negated`` gives its complement."""
+    key = (name, negated)
+    if key not in _CLASS_BODIES:
+        if name == "s":
+            member = lambda cp: cp in _WHITE_SPACE  # noqa: E731
         else:
-            is_member = cat(chr(cp))[0] == first_letter
-        if is_member and start is None:
-            start = cp
-        elif not is_member and start is not None:
-            pieces.append((start, prev))
-            start = None
-        prev = cp
-    if start is not None:
-        pieces.append((start, 0x10FFFF))
-    body = "".join(
-        (re.escape(chr(a)) if a == b else f"{re.escape(chr(a))}-{re.escape(chr(b))}")
-        for a, b in pieces
-    )
-    _UNICODE_CLASS_CACHE[first_letter] = body
-    return body
+            code = _GC_NAMES.get(name.lower().replace("_", "").replace(" ", "").replace("-", ""))
+            if code is None:
+                raise ValueError(
+                    f"tokenizer pattern uses the Unicode property \\p{{{name}}}: only general categories "
+                    f"(L, Lu, M, Mn, N, P, S, Z, C ... and their long names) can be built from the standard "
+                    f"library; a script or binary property needs its code point table added to the regex translator")
+            cats = {"LC": ("Lu", "Ll", "Lt")}.get(code, (code,))
+            member = lambda cp: unicodedata.category(chr(cp)).startswith(cats)  # noqa: E731
+        parts, start = [], None
+        for cp in range(0x110001):
+            inside = cp <= 0x10FFFF and member(cp) != negated
+            if inside and start is None:
+                start = cp
+            elif not inside and start is not None:
+                parts.append("\\U%08x" % start if start == cp - 1 else "\\U%08x-\\U%08x" % (start, cp - 1))
+                start = None
+        _CLASS_BODIES[key] = "".join(parts)
+    return _CLASS_BODIES[key]
 
 
-def _translate_pp_regex(pattern: str) -> str:
-    r"""Translate a HuggingFace/onig ``Split`` regex into an equivalent stdlib
-    ``re`` pattern.
+_INTERVAL = re.compile(r"\{\d*,?\d*\}")
 
-    The only constructs that differ from ``re`` in the patterns NeuroBrix ships
-    are the Unicode property escapes ``\p{L}`` / ``\p{N}`` (and their negations
-    inside classes). We expand them to explicit ``unicodedata``-derived ranges.
-    Everything else (``(?i:...)`` groups, ``\r`` ``\n`` ``\s`` ``\S``,
-    quantifiers, anchors, alternation) is valid stdlib ``re`` syntax.
+
+class _RegexTranslator:
+    r"""Rewrites one vendor regex into a stdlib ``re`` pattern with the same matches.
+
+    ``onig=True`` reads it as Oniguruma (tokenizer.json): ``^``/``$`` are line
+    anchors, ``\z``/``\Z`` its string ends, and ``{m,n}+`` repeats the interval.
+    ``onig=False`` reads it as the ``regex`` module (tiktoken, Tekken): ``^``/``$``
+    keep their stdlib meaning and ``{m,n}+`` is possessive. Both: ``\p{X}``/
+    ``\P{X}``/``\p{^X}`` become explicit code point classes, ``\s``/``\S`` follow
+    Unicode White_Space, and possessive quantifiers and atomic groups ``(?>...)``
+    become an atomic look-ahead capture re-read by a back-reference,
+    ``(?=(?P<a>X))(?P=a)``, which never backtracks.
     """
-    out: List[str] = []
-    i = 0
-    L = _category_ranges("L")
-    N = _category_ranges("N")
-    n = len(pattern)
-    in_class = False  # are we currently inside a [...] character class?
-    while i < n:
-        c = pattern[i]
-        if c == "\\" and i + 1 < n:
-            nxt = pattern[i + 1]
-            if nxt == "p" and i + 2 < n and pattern[i + 2] == "{":
-                end = pattern.index("}", i + 3)
-                prop = pattern[i + 3:end]
-                body = L if prop == "L" else (N if prop == "N" else None)
-                if body is not None:
-                    # Inside a class: emit the raw range body. As a bare atom:
-                    # wrap in [...] so the quantifier/anchor binds to the class.
-                    out.append(body if in_class else "[" + body + "]")
-                else:  # other properties: leave raw (none used by our models)
-                    out.append(pattern[i:end + 1])
-                i = end + 1
-                continue
-            # keep the escape verbatim (\r \n \s \S \d \w ...)
-            out.append(pattern[i:i + 2])
-            i += 2
-            continue
-        if c == "[" and not in_class:
-            in_class = True
-        elif c == "]" and in_class:
-            in_class = False
-        # Possessive quantifiers (`?+`, `*+`, `++`, `{m,n}+`) are onig/PCRE
-        # syntax that stdlib `re` rejects ("multiple repeat"). They differ
-        # from the greedy form only in BACKTRACKING (never giving matched
-        # text back), which cannot change the match set of these split
-        # patterns: each possessive atom here is followed by a
-        # disjoint-alphabet atom or end-of-alternative, so no backtracking
-        # into it can succeed anyway. Drop the trailing `+` — the greedy
-        # quantifier is match-equivalent for this pattern class (first hit:
-        # the Ming/bailing BPE pre-tokenizer's `[^…]?+` and `[^…]++`).
-        if (not in_class and c == "+" and out
-                and out[-1] in ("?", "*", "+", "}")):
-            i += 1
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
+
+    def __init__(self, pattern: str, onig: bool):
+        self.pattern, self.onig = pattern, onig
+        self.out: List[str] = []              # one entry per atom; a quantifier joins its atom
+        self.groups: List[Tuple[int, bool]] = []
+        self.quantifier = ""                  # the quantifier that ended out[-1]: "?", "*", "+", "{", "lazy"
+        self.atomic_ids = 0
+
+    def translate(self) -> str:
+        i = 0
+        while i < len(self.pattern):
+            i = self._step(i)
+        return "".join(self.out)
+
+    def _step(self, i: int) -> int:
+        c = self.pattern[i]
+        if c in "?*+{" and self.quantifier:
+            return self._quantified_again(i, c)
+        if c in "?*+" and self.out:
+            return self._quantify(i, c, i + 1)
+        interval = _INTERVAL.match(self.pattern, i) if c == "{" and self.out else None
+        if interval:
+            return self._quantify(i, "{", interval.end())
+        self.quantifier = ""
+        if c == "\\" and i + 1 < len(self.pattern):
+            atom, i = self._escape(i, in_class=False)
+            self.out.append(atom)
+            return i
+        if c == "[":
+            return self._char_class(i)
+        if c == "(":
+            return self._open_group(i)
+        if c == ")" and self.groups:
+            start, is_atomic = self.groups.pop()
+            group = "".join(self.out[start:]) + ")"
+            del self.out[start:]
+            self.out.append(self._atomic(group) if is_atomic else group)
+            return i + 1
+        if self.onig and c in "^$":
+            c = "(?<![^\\n])" if c == "^" else "(?![^\\n])"
+        self.out.append(c)
+        return i + 1
+
+    def _quantify(self, i: int, kind: str, end: int) -> int:
+        self.out[-1] += self.pattern[i:end]
+        self.quantifier = kind
+        return end
+
+    def _quantified_again(self, i: int, c: str) -> int:
+        """A quantifier right after a quantifier: lazy, possessive, or a repeat of the quantified atom."""
+        if c == "?" and self.quantifier != "lazy":     # lazy keeps its stdlib meaning
+            return self._quantify(i, "lazy", i + 1)
+        interval, self.quantifier = self.quantifier == "{", ""
+        if c == "+" and not (self.onig and interval):
+            self.out[-1] = self._atomic(self.out[-1])  # possessive
+            return i + 1
+        self.out[-1] = "(?:" + self.out[-1] + ")"      # re-read c as the quantifier of the group
+        return i
+
+    def _atomic(self, body: str) -> str:
+        self.atomic_ids += 1
+        return f"(?=(?P<_atomic{self.atomic_ids}>{body}))(?P=_atomic{self.atomic_ids})"
+
+    def _open_group(self, i: int) -> int:
+        """``(``, ``(?>`` (atomic) or a ``(?...`` opener (non-capturing, flags, look-around, named) kept verbatim."""
+        p = self.pattern
+        is_atomic = p.startswith("(?>", i)
+        opener = re.match(r"\((?:\?(?:>|P?<[A-Za-z_]\w*>|<[=!]|[=!:]|[a-zA-Z-]*:))?", p[i:]).group(0)
+        self.groups.append((len(self.out), is_atomic))
+        self.out.append("(?:" if is_atomic else opener)
+        return i + len(opener)
+
+    def _char_class(self, i: int) -> int:
+        p = self.pattern
+        j = i + 1 + (p[i + 1:i + 2] == "^")
+        j += p[j:j + 1] == "]"                          # a ] first is a member
+        body = [p[i:j]]
+        while p[j] != "]":
+            atom, j = self._escape(j, in_class=True) if p[j] == "\\" else (p[j], j + 1)
+            body.append(atom)
+        self.out.append("".join(body) + "]")
+        return j + 1
+
+    def _escape(self, j: int, in_class: bool) -> Tuple[str, int]:
+        p = self.pattern
+        two, end = p[j:j + 2], j + 2
+        if two in ("\\p", "\\P"):
+            end = p.index("}", j + 3) + 1
+            name = p[j + 3:end - 1]
+            negated = (two == "\\P") != name.startswith("^")
+            name = name.lstrip("^")
+        elif two in ("\\s", "\\S"):
+            name, negated = "s", two == "\\S"
+        elif self.onig and not in_class and two in ("\\z", "\\Z"):
+            return ("\\Z" if two == "\\z" else "(?=\\n?\\Z)"), end
+        else:
+            return two, end
+        if in_class:
+            return _class_body(name, negated), end
+        return ("[^" if negated else "[") + _class_body(name, False) + "]", end
+
+
+def translate_regex(pattern: str, onig: bool = True) -> str:
+    """A vendor regex rewritten into stdlib ``re`` with the vendor's matches (see :class:`_RegexTranslator`)."""
+    return _RegexTranslator(pattern, onig).translate()
+
+
+@lru_cache(maxsize=None)
+def compile_regex(pattern: str, onig: bool = True) -> "re.Pattern":
+    """Compile a vendor regex through :func:`translate_regex`; a construct the
+    translation does not express is a named error that quotes the pattern."""
+    try:
+        return re.compile(translate_regex(pattern, onig))
+    except (re.error, IndexError) as exc:
+        raise ValueError(
+            f"tokenizer pattern {pattern!r} uses a construct the stdlib regex translation does not express "
+            f"({exc}); add it to the regex translator of the tokenizer module") from exc
+
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +321,7 @@ class _Normalizer:
         if "String" in pat:
             return text.replace(pat["String"], content)
         if "Regex" in pat:
-            return re.sub(pat["Regex"], content, text)
+            return compile_regex(pat["Regex"]).sub(content, text)
         return text
 
 
@@ -241,7 +337,6 @@ class _PreTokenizer:
 
     def __init__(self, spec: Optional[dict]):
         self.spec = spec
-        self._compiled: Dict[int, "re.Pattern"] = {}
 
     def __call__(self, text: str) -> List[str]:
         pieces = [text]
@@ -281,12 +376,7 @@ class _PreTokenizer:
     def _split_compiled(self, spec: dict) -> Tuple[Optional["re.Pattern"], Optional[str]]:
         pat = spec.get("pattern", {})
         if "Regex" in pat:
-            key = id(spec)
-            rx = self._compiled.get(key)
-            if rx is None:
-                rx = re.compile(_translate_pp_regex(pat["Regex"]))
-                self._compiled[key] = rx
-            return rx, None
+            return compile_regex(pat["Regex"]), None
         if "String" in pat:
             return None, pat["String"]
         return None, None
@@ -492,24 +582,10 @@ class _PreTokenizer:
 
 
 # GPT-2 ByteLevel regex (Rust ByteLevel uses this exact pattern with onig).
-# \p{L}/\p{N} expanded to unicodedata ranges; the rest is stdlib re.
-_GPT2_BYTELEVEL_RX = re.compile(
-    _translate_pp_regex(
-        r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
-    )
-)
+_GPT2_BYTELEVEL_RX = compile_regex(r"'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+")
 
-# Rust Whitespace pre-tokenizer: \w+|[^\w\s]+  (Unicode-aware \w).
-# \w = \p{L} | \p{N} | _ ; build with unicodedata-derived classes.
-_WHITESPACE_RX = re.compile(
-    "(?:["
-    + _category_ranges("L")
-    + _category_ranges("N")
-    + "_]+|[^"
-    + _category_ranges("L")
-    + _category_ranges("N")
-    + r"_\s]+)"
-)
+# Rust Whitespace pre-tokenizer: \w+|[^\w\s]+  (Unicode-aware \w), \w read as \p{L} | \p{N} | _.
+_WHITESPACE_RX = compile_regex(r"[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]+")
 
 # Rust BertPreTokenizer: split on whitespace then isolate punctuation.
 _BERT_RX = re.compile(r"\w+|[^\w\s]")
@@ -681,7 +757,7 @@ class _Decoder:
             if "String" in pat:
                 return [tok.replace(pat["String"], content) for tok in tokens]
             if "Regex" in pat:
-                return [re.sub(pat["Regex"], content, tok) for tok in tokens]
+                return [compile_regex(pat["Regex"]).sub(content, tok) for tok in tokens]
             return tokens
         if t == "ByteFallback":
             return self._byte_fallback_decode(tokens)
