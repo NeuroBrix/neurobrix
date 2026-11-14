@@ -1451,6 +1451,17 @@ class DeviceAllocator:
         return i.memcpy(DeviceAllocator.memcpy_direct, dst, src, nbytes, kind)
 
     @staticmethod
+    def upload(dst: int, src: int, nbytes: int):
+        """Host bytes at `src` to the device pointer `dst`, the host never waiting for the device's queue
+        (`memory.staging`: the bytes are read before the call returns, the copy is stream-ordered like `memcpy`'s).
+        Through the interceptor in force as an H2D `memcpy`, so a replay recording or a copy count sees it."""
+        from nbxtensor.memory.staging import STAGING
+        i = DeviceAllocator._interceptor
+        if i is None:
+            return STAGING.upload(dst, src, nbytes)
+        return i.memcpy(lambda d, s, n, _k: STAGING.upload(d, s, n), dst, src, nbytes, 1)
+
+    @staticmethod
     def memcpy_direct(dst: int, src: int, nbytes: int, kind: int = 3):
         """Copy memory. kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D.
 

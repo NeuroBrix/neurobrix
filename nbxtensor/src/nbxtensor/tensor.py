@@ -883,8 +883,8 @@ class NBXTensor:
             DeviceAllocator.set_device(int(named.group(1)) if named else device)
         dev_idx = DeviceAllocator.get_device()
         ptr = DeviceAllocator.malloc_cuda(nbytes)
-        # H2D copy
-        DeviceAllocator.memcpy(ptr, arr_c.ctypes.data, nbytes, kind=1)
+        # H2D: the host does not wait for the card's queue (memory.staging); arr_c is read before this returns
+        DeviceAllocator.upload(ptr, arr_c.ctypes.data, nbytes)
         return NBXTensor(ptr, shape, contiguous_strides(shape), nbx_dt, 'cuda',
                          owns_data=True, device_idx=dev_idx)
 

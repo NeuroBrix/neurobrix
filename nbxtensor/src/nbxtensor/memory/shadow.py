@@ -125,7 +125,7 @@ def _shadow_allocator(DA, n_dev: int) -> None:
     them as it does in a real run), and the whole driver surface: syncs, streams, events, peer access, host-pinned
     memory, device queries. A path not listed here fails LOUDLY (no device) — never silently."""
     DA.malloc_direct = staticmethod(malloc)
-    for name in ("free_direct", "memset_direct", "memcpy_direct", "memcpy_async", "sync_direct",
+    for name in ("free_direct", "memset_direct", "memcpy_direct", "memcpy_async", "upload", "sync_direct",
                  "ensure_triton_device", "device_synchronize", "stream_synchronize", "event_synchronize",
                  "record_event", "stream_wait_event", "destroy_stream", "destroy_event",
                  "reset_peak_memory", "print_alloc_stats", "_maybe_init_pool", "free_host_pinned"):

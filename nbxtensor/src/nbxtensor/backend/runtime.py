@@ -93,6 +93,10 @@ _GPU_BACKENDS = {
         "event_record": "cudaEventRecord",
         "stream_wait_event": "cudaStreamWaitEvent",
         "memcpy_async": "cudaMemcpyAsync",
+        # Non-blocking questions (cudaErrorNotReady = still running): the staged upload reads whether stream 0 has
+        # work queued and whether a copy from its page-locked ring has run (memory.staging).
+        "stream_query": "cudaStreamQuery",
+        "event_query": "cudaEventQuery",
         # Event timing — the ONLY way to measure a device-side interval
         # without a host round-trip. `event_elapsed` is undefined across
         # devices, so both events of a pair must be recorded on streams of
@@ -140,6 +144,8 @@ _GPU_BACKENDS = {
         "event_record": "hipEventRecord",
         "stream_wait_event": "hipStreamWaitEvent",
         "memcpy_async": "hipMemcpyAsync",
+        "stream_query": "hipStreamQuery",
+        "event_query": "hipEventQuery",
         "event_sync": "hipEventSynchronize",
         "event_elapsed": "hipEventElapsedTime",
         # ROCm exposes peer access under the same semantics; xGMI plays the
