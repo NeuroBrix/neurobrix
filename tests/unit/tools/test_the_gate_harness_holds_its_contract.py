@@ -32,7 +32,9 @@ from types import SimpleNamespace as NS
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-import regression_matrix as R  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import regression_matrix as R  # noqa: E402
 
 KERNEL = "kernels.ops.mm._mm_kernel"
 REFUSED_MISS = (f"CERTIFIED-ONLY: no certified setting for _mm_kernel fp16 (M=64 N=128 K=256 fp16,fp16,fp16) "

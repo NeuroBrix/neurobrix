@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO / "src"))
 import census_inputs as CI                     # noqa: E402
 
 
-def test_a_file_of_the_engine_home_is_recorded_relative_and_read_back(monkeypatch, tmp_path):
+def test_a_file_of_the_engine_home_is_recorded_relative_and_read_back(monkeypatch, tmp_path, workshop_roles):
     home = tmp_path / "engine_home"
     (home / "calibration" / "M").mkdir(parents=True)
     f = home / "calibration" / "M" / "transformer.json"
@@ -26,6 +26,7 @@ def test_a_file_of_the_engine_home_is_recorded_relative_and_read_back(monkeypatc
     from neurobrix.core import paths
     monkeypatch.setattr(paths, "neurobrix_home", lambda: home)
     monkeypatch.setattr(paths, "cache_dir", lambda: home / "cache")
+    workshop_roles("communication")    # the fourth root a record knows (`comm:`), no file of this cell's: pinned here
     assert CI._rel(f) == "home:calibration/M/transformer.json"
     assert CI._abs("home:calibration/M/transformer.json") == f
 

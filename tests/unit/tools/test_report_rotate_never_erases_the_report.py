@@ -15,7 +15,7 @@ def _rotate(tmp_path, text, max_lines):
     return p, r.read_text(), (o.read_text() if o.exists() else "")
 
 
-def test_a_report_without_dated_lines_is_kept_whole(tmp_path):
+def test_a_report_without_dated_lines_is_kept_whole(workshop_configuration, tmp_path):
     p, report, moved = _rotate(tmp_path, "# title\n- VEILLEUR x\n- RECIPES y\n", 1)
     assert p.returncode == 0 and report == "# title\n- VEILLEUR x\n- RECIPES y\n" and moved == ""
 
@@ -25,7 +25,7 @@ def test_an_empty_report_is_refused(tmp_path):
     assert p.returncode == 1 and "refused" in p.stderr and report == ""
 
 
-def test_the_oldest_entry_moves_whole_with_its_continuation(tmp_path):
+def test_the_oldest_entry_moves_whole_with_its_continuation(workshop_configuration, tmp_path):
     p, report, moved = _rotate(tmp_path, "# t\n- 01:00 a\n  a2\n- 01:01 b\n  b2\n", 3)
     assert p.returncode == 0
     assert report == "# t\n- 01:01 b\n  b2\n" and moved == "- 01:00 a\n  a2\n"

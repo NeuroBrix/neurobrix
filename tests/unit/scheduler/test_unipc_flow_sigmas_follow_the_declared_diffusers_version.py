@@ -91,4 +91,7 @@ def test_every_unipc_flow_container_declares_a_readable_version():
         if cfg.get("_class_name") == "UniPCMultistepScheduler" and cfg.get("use_flow_sigmas"):
             _torch_sched(cfg.get("_diffusers_version"))      # raises if unreadable
             seen += 1
+    if not seen:
+        from tests.unit.workshop_configuration import off_the_workshop
+        off_the_workshop(f"a UniPC flow-sigma container (scheduler_config.json use_flow_sigmas) in the catalogue {root}")
     assert seen >= 1

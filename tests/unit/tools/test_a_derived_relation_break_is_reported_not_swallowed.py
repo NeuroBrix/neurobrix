@@ -39,6 +39,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE_DIR") or (Path.home() / ".neurobrix" / "ca" "che"))
 
@@ -62,7 +63,8 @@ def _census():
     assert spec and spec.loader
     m = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = m
-    spec.loader.exec_module(m)
+    with the_workshop_configuration():
+        spec.loader.exec_module(m)
     return m
 
 

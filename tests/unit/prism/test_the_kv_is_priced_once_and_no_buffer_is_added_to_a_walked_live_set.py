@@ -18,10 +18,12 @@ import pytest
 from neurobrix.nbx import NBXContainer
 from neurobrix.core.prism.solver import PrismSolver
 from tests.unit.prism._pinned_machine import pin_host, pin_dedicated_card, profile, V100_16GB, container_root
-from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import no_door
+from tests.unit.prism._pinned_machine import no_door
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-import container_request as TR  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import container_request as TR  # noqa: E402
 
 MODEL = "Janus-Pro-7B"
 MB = 1024 * 1024

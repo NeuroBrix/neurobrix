@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from tests.regression.test_a_container_with_an_rng_op_runs_twice_and_matches import _run_once, _TUNING_NOTICE  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    from tests.regression.test_a_container_with_an_rng_op_runs_twice_and_matches import _run_once, _TUNING_NOTICE  # noqa: E402
 
 
 class _Runner:

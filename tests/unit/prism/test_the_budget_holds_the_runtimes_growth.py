@@ -5,7 +5,7 @@ note says so. Lot gate 2026-10-28 on V100-16GB: Wan2.2-I2V-A14B and Sana 4K trit
 for a 306-312 MB context and their pieces, cut to the card less the context alone, ran out of memory. No card."""
 from neurobrix.core.prism import PrismSolver
 from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, pin_host, profile
-from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import no_door
+from tests.unit.prism._pinned_machine import no_door
 
 
 def _budget(monkeypatch, growth):

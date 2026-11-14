@@ -20,7 +20,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-import certify_the_catalogue as C
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import certify_the_catalogue as C
 
 
 @pytest.fixture(autouse=True)

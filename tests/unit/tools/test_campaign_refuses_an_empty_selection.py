@@ -12,13 +12,15 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 
 def _tool():
     p = Path(__file__).resolve().parents[3] / "tools" / "precision_zoo_campaign.py"
     spec = importlib.util.spec_from_file_location("pzc", p)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    with the_workshop_configuration():
+        spec.loader.exec_module(mod)
     return mod
 
 

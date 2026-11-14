@@ -19,7 +19,9 @@ import pytest
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 sys.path.insert(0, str(TOOLS))
 
-import precision_zoo_campaign as Z  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import precision_zoo_campaign as Z  # noqa: E402
 import regression_matrix as R  # noqa: E402
 
 

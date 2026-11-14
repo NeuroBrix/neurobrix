@@ -20,12 +20,12 @@ def _collect(env_extra: dict) -> subprocess.CompletedProcess:
                           cwd=str(REPO), env=env, capture_output=True, text=True, timeout=600)
 
 
-def test_without_neurobrix_python_the_harness_refuses_at_entry():
+def test_without_neurobrix_python_the_harness_refuses_at_entry(workshop_configuration):
     r = _collect({"VIRTUAL_ENV": sys.prefix})   # the very guess it used to take
     assert r.returncode != 0
     assert "NEUROBRIX_PYTHON is not set" in r.stdout + r.stderr, (r.stdout + r.stderr)[-1500:]
 
 
-def test_with_neurobrix_python_named_the_harness_collects():
+def test_with_neurobrix_python_named_the_harness_collects(workshop_configuration):
     r = _collect({"NEUROBRIX_PYTHON": sys.executable})
     assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]

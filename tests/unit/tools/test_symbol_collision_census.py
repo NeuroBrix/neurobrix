@@ -93,9 +93,10 @@ def test_a_safe_axis_is_not_named():
     assert rows == []
 
 
-def test_a_census_over_zero_graphs_refuses(tmp_path, monkeypatch, capsys):
+def test_a_census_over_zero_graphs_refuses(tmp_path, monkeypatch, capsys, workshop_roles):
     """An instrument that examined nothing must not read as one that found nothing."""
     m = _tool()
+    workshop_roles("cache")        # the flag's default, read even when `--root` names the catalogue: pinned here
     monkeypatch.setattr(sys, "argv", ["census", "--root", str(tmp_path)])
     assert m.main() == 1
     assert "not a clean census" in capsys.readouterr().err

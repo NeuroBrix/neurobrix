@@ -19,7 +19,9 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 sys.path.insert(0, str(TOOLS))
-import container_request as TR  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import container_request as TR  # noqa: E402
 
 
 def test_the_confirmation_values_replace_the_family_bound(monkeypatch):

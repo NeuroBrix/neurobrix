@@ -6,7 +6,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-import autotune_census_merge as M  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import autotune_census_merge as M  # noqa: E402
 
 
 def test_the_gates_own_sweeps_join_the_census(tmp_path, monkeypatch):

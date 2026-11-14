@@ -25,6 +25,13 @@ PROFILE = "default-ff6008b7"
 REL = "src/neurobrix/kernels/census_table.py"
 
 
+@pytest.fixture
+def a_communication_root(workshop_roles):
+    """The record tags a file under the workshop's communication directory `comm:` (`census_inputs._rel`); these
+    cells record the repository's own code, so that role is pinned to the test's own directory."""
+    workshop_roles("communication")
+
+
 def _measured_record(tmp_path):
     from neurobrix.kernels import census_table as T
     CI.install()
@@ -43,7 +50,7 @@ def _tree(tmp_path):
     return root
 
 
-def test_an_executed_unit_moves_and_an_unexecuted_one_does_not(tmp_path):
+def test_an_executed_unit_moves_and_an_unexecuted_one_does_not(tmp_path, a_communication_root):
     rec = _measured_record(tmp_path)
     assert f"repo:{REL}::dtypes_of" in rec["units"], sorted(rec["units"])
     assert f"repo:{REL}::key_line" not in rec["units"]          # never called: not an input
@@ -64,7 +71,7 @@ def test_an_executed_unit_moves_and_an_unexecuted_one_does_not(tmp_path):
 LIB_REL = "nbxtensor/src/nbxtensor/shape/__init__.py"
 
 
-def test_the_librarys_executed_code_is_an_input_and_moves(tmp_path):
+def test_the_librarys_executed_code_is_an_input_and_moves(tmp_path, a_communication_root):
     """The key path runs in the tensor library since 2026-10-28; its executed code is recorded like the engine's, and
     an edit to it moves the model (it did not: the record's roots were src/ and tools/ only, and the table went stale
     for TinyLlama and whisper while nothing said so)."""

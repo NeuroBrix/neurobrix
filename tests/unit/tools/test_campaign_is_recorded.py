@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 
@@ -32,7 +33,8 @@ def _tool():
         "precision_zoo_campaign", TOOLS / "precision_zoo_campaign.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
+    with the_workshop_configuration():
+        spec.loader.exec_module(mod)
     return mod
 
 

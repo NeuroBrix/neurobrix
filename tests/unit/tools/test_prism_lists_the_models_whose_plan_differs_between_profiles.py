@@ -18,7 +18,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
-import plan_listing as PL  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import plan_listing as PL  # noqa: E402
 import regression_matrix as RM  # noqa: E402
 
 

@@ -65,7 +65,7 @@ def _run(out: Path, campaigns: Path):
     return (out / "CATALOGUE.md").read_text()
 
 
-def test_a_variant_does_not_inherit_the_base_models_measurement(tmp_path):
+def test_a_variant_does_not_inherit_the_base_models_measurement(workshop_configuration, tmp_path):
     camps = tmp_path / "camps"
     _campaign(camps, "good", "Qwen3-Coder-30B-A3B-Instruct", keys=8, gain=1.54)
     doc = _run(tmp_path / "out", camps)
@@ -79,7 +79,7 @@ def test_a_variant_does_not_inherit_the_base_models_measurement(tmp_path):
     assert "1 of 2 models have been measured" in doc
 
 
-def test_a_campaign_its_author_voided_is_not_read(tmp_path):
+def test_a_campaign_its_author_voided_is_not_read(workshop_configuration, tmp_path):
     camps = tmp_path / "camps"
     _campaign(camps, "void_one", "Qwen3-Coder-30B-A3B-Instruct", keys=99, gain=9.99,
               invalid="INVALIDATED.md")
@@ -92,7 +92,7 @@ def test_a_campaign_its_author_voided_is_not_read(tmp_path):
     assert "0 of 2 models have been measured" in doc
 
 
-def test_the_valid_record_wins_when_both_exist(tmp_path):
+def test_the_valid_record_wins_when_both_exist(workshop_configuration, tmp_path):
     """The control: exclusion must not also throw away the good record."""
     camps = tmp_path / "camps"
     _campaign(camps, "void_one", "Qwen3-Coder-30B-A3B-Instruct", keys=99, gain=9.99,
@@ -102,7 +102,7 @@ def test_the_valid_record_wins_when_both_exist(tmp_path):
     assert "x1.54" in doc and "x9.99" not in doc
 
 
-def test_a_count_field_wins_over_a_capped_sample(tmp_path):
+def test_a_count_field_wins_over_a_capped_sample(workshop_configuration, tmp_path):
     """`choices` carries SAMPLES capped at twenty beside full `*_count` fields.
 
     Reading `len(near_tie)` reported 20 near-ties where the run had found 139 —
@@ -146,7 +146,7 @@ def test_a_count_field_wins_over_a_capped_sample(tmp_path):
 # The record of 2026-09-11 carries the container's name of that day; a record written after the
 # rename of 2026-09-28 carries today's. Both belong to the same hub row.
 @pytest.mark.parametrize("recorded", ["Wan2.1-VACE-1.3B-diffusers", "Wan2.1-VACE-1.3B"])
-def test_a_cell_that_ran_and_crashed_is_not_the_same_as_one_nobody_tried(tmp_path, recorded):
+def test_a_cell_that_ran_and_crashed_is_not_the_same_as_one_nobody_tried(workshop_configuration, tmp_path, recorded):
     """Collapsing both into "not measured" erases the attempt AND the defect.
 
     Two Wan video cells ran on 2026-09-11 and crashed — one on a broadcast that

@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.kernels import census_table as T
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 
 def _row(model, key, container="aaaa", mode="triton", rung=16384):
@@ -71,7 +72,8 @@ def test_consolidation_reads_a_logs_dir_and_skips_foreign_json(tmp_path, monkeyp
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-    import census_table as CT
+    with the_workshop_configuration():
+        import census_table as CT
     src = tmp_path / "logs_x"
     src.mkdir()
     (src / "perf_keys.json").write_text(json.dumps(["not", "a", "census"]))
@@ -118,7 +120,7 @@ def _old_row(model, key, op, rung):
     return r
 
 
-def test_an_old_schema_table_is_refused_by_name_and_migrated_once(tmp_path):
+def test_an_old_schema_table_is_refused_by_name_and_migrated_once(workshop_configuration, tmp_path):
     import json
     import subprocess
     import sys

@@ -18,7 +18,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
-import certified_census as CC  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import certified_census as CC  # noqa: E402
 
 PROBE = {"height": 480, "width": 832, "source": ["https://huggingface.co/x/README.md (L1): 480P"]}
 REQUEST = ["--prompt", "a boat", "--height", "240", "--width", "416", "--num-frames", "33"]

@@ -38,7 +38,7 @@ def test_the_workers_cores_come_from_the_given_profile_never_from_detection(monk
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc/self/maps")
-def test_sizing_the_workers_maps_no_cuda_driver():
+def test_sizing_the_workers_maps_no_cuda_driver(workshop_configuration):
     code = ("import sys; sys.path.insert(0, 'tools'); import derived_census as DC\n"
             f"DC._workers_memory_holds(4, 1 << 20, {PROFILE!r})\n"
             "print(any('libcuda.so' in l for l in open('/proc/self/maps')))\n")

@@ -39,7 +39,8 @@ def _args(tmp_path, **over):
                                                       if v is not None and not isinstance(v, list)), []))
 
 
-def test_the_any_card_instance_records_a_cell_under_the_gates_class(tmp_path):
+def test_the_any_card_instance_records_a_cell_under_the_gates_class(tmp_path, workshop_roles):
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     gate_sched.configure(_args(tmp_path, out_class="32g"))
     cmd = gate_sched.gate_cmd(0, "16g", "Janus-Pro-7B native,triton 7200")
     assert gate_sched.OUT("16g") == "32g"
@@ -49,7 +50,8 @@ def test_the_any_card_instance_records_a_cell_under_the_gates_class(tmp_path):
     assert "--gpu" in cmd and cmd[cmd.index("--gpu") + 1] == "0", "the row names the card it ran on"
 
 
-def test_a_plain_instance_records_under_the_cards_class(tmp_path):
+def test_a_plain_instance_records_under_the_cards_class(tmp_path, workshop_roles):
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     gate_sched.configure(_args(tmp_path))
     cmd = gate_sched.gate_cmd(2, "32g", "Janus-Pro-7B native,triton 7200")
     assert gate_sched.OUT("16g") == "16g"
@@ -171,9 +173,10 @@ def test_the_carry_count_reads_the_record(tmp_path):
     assert gate_run.carried(tmp_path) == 2 and gate_run.carried(tmp_path / "none") == 0
 
 
-def test_the_planning_workers_are_bound_to_the_instance(tmp_path, monkeypatch):
+def test_the_planning_workers_are_bound_to_the_instance(tmp_path, monkeypatch, workshop_roles):
     """The workers that price a cell are spawned processes: each must be configured with the instance's arguments
     (the any-card instance died at its first unplanned need, its workers' harness reader left None)."""
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     seen = {}
 
     class Pool:
@@ -227,9 +230,10 @@ def test_the_gate_tool_and_the_tally_read_the_scope_tools_layout(tmp_path):
     assert gate_run.rows_root(tmp_path) / "matrix_32g" == tmp_path / lay["rows"].format(cls="32g")
 
 
-def test_a_carry_record_is_checked_by_the_harness_before_any_card(tmp_path):
+def test_a_carry_record_is_checked_by_the_harness_before_any_card(tmp_path, workshop_roles):
     """An entry whose source row is not the measurement it names is refused by the gate, before scheduling (the
     harness refused each carried line only once placed: two lost rounds, 2026-10-15 01:09)."""
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     src = tmp_path / "src_gate" / "gate" / "matrix_32g"
     src.mkdir(parents=True)
     (src / "rows_card2.jsonl").write_text(json.dumps({"model": "Allegro", "mode": "native", "rc": 0, "wall_s": 1784,

@@ -12,6 +12,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 TOOL = Path(__file__).resolve().parents[3] / "tools" / "where_the_symbol_chain_breaks.py"
 
@@ -21,7 +22,8 @@ def _tool():
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
+    with the_workshop_configuration():
+        spec.loader.exec_module(mod)
     return mod
 
 

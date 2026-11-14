@@ -7,6 +7,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 import public_vocabulary as pv  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 
 def test_the_banned_words_are_found_whatever_their_form():
@@ -59,7 +60,8 @@ def test_a_generated_page_cannot_bring_the_words_back():
     records that carry their writer's words: what the tool prints goes through its own `public_wording`. What this
     test does if the filter is gone: the artefact's words reach the page and the check below finds them."""
     import io
-    import catalogue_state_report as report
+    with the_workshop_configuration():
+        import catalogue_state_report as report
     T, V = pv.TOOL, pv.VERB
     artefact = (f"four symbol-chain breaks unadjudicated ({T.title()}); RE-{V.upper()}D on the fifth attempt, then "
                 f"re{V}d; the {V}r binds this axis; {V}d at 64x64, a second {V} costs 15 s; {V[:-1]}ing "

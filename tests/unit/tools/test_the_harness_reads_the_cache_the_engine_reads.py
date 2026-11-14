@@ -28,11 +28,11 @@ def _harness(cache: Path, code: str) -> str:
     return r.stdout.strip().splitlines()[-1]
 
 
-def test_the_harness_cache_is_the_engines_door(tmp_path):
+def test_the_harness_cache_is_the_engines_door(workshop_configuration, tmp_path):
     assert _harness(tmp_path, "print(R.CACHE)") == str(tmp_path)
 
 
-def test_a_container_under_the_configured_cache_is_a_cell_of_the_matrix(tmp_path):
+def test_a_container_under_the_configured_cache_is_a_cell_of_the_matrix(workshop_configuration, tmp_path):
     (tmp_path / "a-model").mkdir()
     (tmp_path / "a-model" / "manifest.json").write_text(json.dumps({"name": "a-model"}))
     cells = _harness(tmp_path, "print(sorted(m for m, _ in R.full_matrix()))")

@@ -29,7 +29,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-import check_measurement_environment as guard  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import check_measurement_environment as guard  # noqa: E402
 
 
 # Captured verbatim from `mount` on this machine, 2026-09-11.

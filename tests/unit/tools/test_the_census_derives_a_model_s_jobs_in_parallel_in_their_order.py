@@ -29,7 +29,8 @@ def _fake_derive_keys(model, hw, mode, rung, req):
     return ([(f"op{rung}", "kern", f"({mode}, {rung})")], {"strategy": f"plan r{rung}"}, None, {f"NOTE {mode}": rung})
 
 
-def test_the_parallel_results_are_the_serial_results_in_the_jobs_order(monkeypatch):
+def test_the_parallel_results_are_the_serial_results_in_the_jobs_order(monkeypatch, workshop_roles):
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     monkeypatch.setattr(DC, "derive_keys", _fake_derive_keys)
     monkeypatch.setattr(DC, "_machine_cores", lambda hw: 4)
     jobs = [(mode, 0, ["--prompt", "x"], rung) for mode in ("triton", "triton_sequential") for rung in range(1, 8)]
@@ -95,13 +96,14 @@ def test_the_cores_are_the_profiles_not_the_machines_threads(monkeypatch):
         DC._workers_memory_holds(100, 1 << 20, "hw")
 
 
-def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkeypatch, tmp_path):
+def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkeypatch, tmp_path, workshop_roles):
     """A census beside a gate sized its workers on the free memory a just-admitted Qwen3-30B cell had reserved but
     not yet taken, and the kernel killed the cell (2026-10-23 00:10:30). The workers are what the free memory holds
     LESS the other holders' reservations in the shared ledger (a gate's `hold_c<card>` "<pid> <bytes>"; a certifier's
     hold naming no bytes reserves none), and the census writes its own `hold_host_<pid>` while they run, removed on
     exit; another census's hold is not subtracted (its workers are in the free memory read). Red if the ledger is not
     read (8 workers, not 2), if another census is subtracted too (1, not 2), or if the hold is not written or removed."""
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     import os
     import types
     from nbxtensor.backend import host_memory as HM
@@ -137,11 +139,12 @@ def test_a_hold_whose_process_is_gone_reserves_nothing(tmp_path):
     assert DC._held_by_others(tmp_path) == 12 << 30
 
 
-def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path):
+def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path, workshop_roles):
     """A gate cell's reservation is already partly inside the free memory read: the census's room is the free memory
     bounded by what the reservations leave of the TOTAL, not the free memory minus the reservations. Counting both made
     a census beside a gate derive Qwen3-30B one job at a time into its 3 h timeout (2026-10-23). 251 GB machine, a
     132 GiB cell running (100 GB free): 119 GiB of room, not none. Red if the reservation is subtracted from the free."""
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     import os
     import types
     from nbxtensor.backend import host_memory as HM
@@ -155,11 +158,12 @@ def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path):
     assert DC._workers_memory_holds(60, 2 << 30, "hw") == 34                        # (0.8 x 251 - 132) GiB / 2 GiB
 
 
-def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path):
+def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path, workshop_roles):
     """A census that took the whole of total - reservations left an admitted 133 GiB gate cell no margin: the kernel
     killed it (2026-10-23 20:46). The room stays within the scheduler's own host share (0.8): 256 GiB machine, a 133
     GiB cell, 200 GiB free (rung 192): room = min(192, 204.8 - 133) = 71.8 GiB -> 35 workers of 2 GiB, not 61. Red
     if the share is not kept."""
+    workshop_roles("campaigns")        # the campaign tool's default output directory, read at its import: pinned here
     import os
     import types
     from nbxtensor.backend import host_memory as HM

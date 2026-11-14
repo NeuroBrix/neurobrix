@@ -19,6 +19,7 @@ from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung, pin_host,
                                               profile)
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 
 #: The plan these cells refuse. It was batch 2, then batch 8, at 2048x1024 on PixArt (the Mac's own
@@ -43,7 +44,8 @@ def _refused_request():
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-    import container_request as TR
+    with the_workshop_configuration():
+        import container_request as TR
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
     c = NBXContainer.load(str(container_root(REFUSED_MODEL)))

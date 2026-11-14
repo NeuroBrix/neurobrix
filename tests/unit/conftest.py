@@ -46,3 +46,24 @@ def needs_device():
     from neurobrix.core.prism.autodetect import load_default_profile
     if not getattr(load_default_profile(), "devices", None):
         pytest.skip("no device in this host's profile (a card-less run)")
+
+
+@pytest.fixture
+def workshop_configuration():
+    """Skip, said, on a machine without the workshop configuration (`tools/atelier.py`): for a test that runs a tool
+    as a child process, whose import reads that configuration. The reason names the file and how to provide it."""
+    from tests.unit.workshop_configuration import missing
+    why = missing()
+    if why:
+        pytest.skip(why)
+
+
+@pytest.fixture
+def workshop_roles(monkeypatch, tmp_path):
+    """`workshop_roles("campaigns", ...)`: those workshop roles pinned to the test's own directory (their
+    `NBX_ATELIER_<ROLE>` overrides), for a test that reaches a tool only for what the role is a default of. Every tool
+    imported meanwhile is forgotten at the end of the test."""
+    from tests.unit.workshop_configuration import forget_the_tools_imported, pinned_roles
+    before = set(sys.modules)
+    yield pinned_roles(monkeypatch, tmp_path)
+    forget_the_tools_imported(before)

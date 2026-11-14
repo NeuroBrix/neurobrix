@@ -29,6 +29,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 TOOL = Path(__file__).resolve().parents[3] / "tools" / "precision_zoo_campaign.py"
 REPO = Path(__file__).resolve().parents[3]
@@ -38,7 +39,8 @@ def _tool():
     spec = importlib.util.spec_from_file_location("precision_zoo_campaign", TOOL)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
+    with the_workshop_configuration():
+        spec.loader.exec_module(mod)
     return mod
 
 
@@ -104,7 +106,8 @@ def test_a_tree_gate_names_a_frozen_worktree_per_arm_and_is_admitted(tmp_path):
     refuses correct usage is that the next person adds `--src` beside `--trees`
     to get past it — which is the shape of every bypass this rule prevents.
     """
-    from precision_zoo_campaign import frozen_trees_refusal
+    with the_workshop_configuration():
+        from precision_zoo_campaign import frozen_trees_refusal
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -120,7 +123,8 @@ def test_a_tree_gate_names_a_frozen_worktree_per_arm_and_is_admitted(tmp_path):
 
 def test_a_tree_gate_pointing_into_the_live_repo_is_refused_by_arm(tmp_path):
     """Seen failing: the refusal must name WHICH arm, or it cannot be acted on."""
-    from precision_zoo_campaign import frozen_trees_refusal
+    with the_workshop_configuration():
+        from precision_zoo_campaign import frozen_trees_refusal
 
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)
@@ -134,6 +138,7 @@ def test_a_tree_gate_pointing_into_the_live_repo_is_refused_by_arm(tmp_path):
 
 
 def test_a_tree_arm_without_a_label_is_refused(tmp_path):
-    from precision_zoo_campaign import frozen_trees_refusal
+    with the_workshop_configuration():
+        from precision_zoo_campaign import frozen_trees_refusal
     assert "cannot be named in the verdict" in (
         frozen_trees_refusal("/some/path", tmp_path) or "")

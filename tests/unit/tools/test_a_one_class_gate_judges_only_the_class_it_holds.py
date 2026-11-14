@@ -25,7 +25,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
-import gate_scope as G  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import gate_scope as G  # noqa: E402
 import regression_matrix as RM  # noqa: E402
 
 MODELS = ("ModelA", "ModelB")

@@ -12,6 +12,7 @@ sys.path.insert(0, str(BENCH))
 
 import instances as I  # noqa: E402
 import summary as S  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 K = pytest.importorskip("kernel_bench")
 
@@ -185,7 +186,8 @@ def test_an_instance_computes_at_the_plan_s_dtype_never_the_stored_one(monkeypat
     asked = []
     monkeypatch.setattr(DC, "plan_record", lambda model, request, mode, hardware, rung: asked.append(
         (model, mode, hardware, rung)) or {"components": [{"name": c, "dtype": "float16"} for c in comps]})
-    bound, _skipped = I._component_bindings("TinyLlama-1.1B-Chat-v1.0", "scenario-v100")
+    with the_workshop_configuration():
+        bound, _skipped = I._component_bindings("TinyLlama-1.1B-Chat-v1.0", "scenario-v100")
     assert asked == [("TinyLlama-1.1B-Chat-v1.0", "triton", "scenario-v100", None)]
     assert bound and {d for _c, _g, _s, d in bound} == {"float16"}
 
@@ -307,7 +309,8 @@ def test_an_op_the_plan_cuts_at_op_level_is_named_never_instanced_whole(monkeypa
     monkeypatch.setattr(DC, "plan_tiling", lambda plan, comp: (real_tiling({}, comp)[0], {mms[0]: 2})
                         if comp == "model" else real_tiling({}, comp))
     I.bind_profile("v100-16g")                     # a committed profile: the derivation reads the device's facts
-    found, skipped = I.instances_of("TinyLlama-1.1B-Chat-v1.0", set(mms), False, "v100-16g")
+    with the_workshop_configuration():
+        found, skipped = I.instances_of("TinyLlama-1.1B-Chat-v1.0", set(mms), False, "v100-16g")
     sites = {s for i in found.values() for s in i["sites"]}
     assert f"TinyLlama-1.1B-Chat-v1.0/model/{mms[1]}" in sites
     assert f"TinyLlama-1.1B-Chat-v1.0/model/{mms[0]}" not in sites

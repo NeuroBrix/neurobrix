@@ -33,6 +33,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 
 import derived_census as D  # noqa: E402
+from tests.unit.workshop_configuration import off_the_workshop, the_workshop_configuration  # noqa: E402
 
 
 #: A committed profile, bound as the census entry binds `--hardware` (any profile with a device serves:
@@ -64,10 +65,12 @@ def _request_sites(model, cache_len=None):
     """The census's own request for `model`, parsed by the CLI's parser, through `extent_sites`
     at a plan naming every component in fp16 (the dtypes only feed the chain's outputs)."""
     import json
-    from container_request import derived_request
+    with the_workshop_configuration():
+        from container_request import derived_request
     from neurobrix.cli import create_parser
     root = D.CACHE / model
     if not (root / "topology.json").exists():
+        off_the_workshop(f"{model}'s container in the catalogue {D.CACHE} (`neurobrix import`)")
         pytest.fail(f"{model} is not in the catalogue {D.CACHE}: the census cannot be checked")
     topo = json.loads((root / "topology.json").read_text())
     defaults = json.loads((root / "runtime" / "defaults.json").read_text())
@@ -111,6 +114,8 @@ def test_a_vlm_request_runs_its_contracts_components_only():
     import json
     for model, want in (("Ming-Lite-Omni-1.5", {"vision", "linear_proj", "model.model"}),
                         ("MiniCPM-o-4_5", {"vpm", "resampler", "llm.model"})):
+        if not (D.CACHE / model / "topology.json").exists():
+            off_the_workshop(f"{model}'s container in the catalogue {D.CACHE} (`neurobrix import`)")
         topo = json.loads((D.CACHE / model / "topology.json").read_text())
         assert D.vlm_runs(model, topo) == want
 

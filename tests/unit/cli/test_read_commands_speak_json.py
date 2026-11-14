@@ -22,6 +22,7 @@ import pytest
 
 from neurobrix.cli import main
 from neurobrix.cli.json_out import SCHEMAS
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 CACHE = Path(os.path.expanduser("~/.neurobrix/cache"))
 
@@ -87,7 +88,8 @@ def test_doctor_speaks_one_record_and_keeps_its_diagnosis_on_stderr():
 def test_inspect_and_coverage_speak_records():
     model = sorted(p.parent.name for p in CACHE.glob("*/manifest.json"))[0]
     from one_name import cli_name                    # the entry's one name (tools/one_name.py)
-    rec, _, _ = _record(["inspect", cli_name(model), "--json"], "inspect")
+    with the_workshop_configuration():
+        rec, _, _ = _record(["inspect", cli_name(model), "--json"], "inspect")
     assert rec["path"] and isinstance(rec["components"], list)
     rec, _, _ = _record(["coverage", "--json"], "coverage")
     assert rec["mode"] == "index" and rec["distinct_ops"] > 0
@@ -124,7 +126,8 @@ def test_every_schema_is_versioned_and_named():
 @pytest.mark.skipif(not (CACHE / "TinyLlama-1.1B-Chat-v1.0" / "manifest.json").exists(), reason="TinyLlama not installed")
 def test_explain_plan_speaks_one_record():
     from one_name import cli_name                    # the model's one name (tools/one_name.py)
-    rec, _, _ = _record(["run", "--model", cli_name("TinyLlama-1.1B-Chat-v1.0"), "--prompt", "Hello", "--max-tokens", "4",
-                         "--explain-plan", "--json"], "explain-plan")
+    with the_workshop_configuration():
+        rec, _, _ = _record(["run", "--model", cli_name("TinyLlama-1.1B-Chat-v1.0"), "--prompt", "Hello", "--max-tokens", "4",
+                             "--explain-plan", "--json"], "explain-plan")
     assert rec["strategy"] and isinstance(rec["components"], list) and rec["components"]
     assert {"name", "devices", "dtype"} <= set(rec["components"][0])

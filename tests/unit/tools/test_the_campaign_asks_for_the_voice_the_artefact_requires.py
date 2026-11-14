@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import artefact_voice as AV  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 
 def _artefact(root, name, voices, declared=None):
@@ -35,7 +36,8 @@ def test_an_artefact_that_declares_its_voice_gets_nothing(tmp_path):
 
 
 def test_the_campaign_request_for_tts_carries_the_speaker(tmp_path, monkeypatch):
-    import precision_zoo_campaign as Z
+    with the_workshop_configuration():
+        import precision_zoo_campaign as Z
     _artefact(tmp_path, "k", ["af_heart"])
     monkeypatch.setattr(Z, "CACHE", tmp_path)
     monkeypatch.setattr(Z, "family_stimulus", lambda fam: ["--prompt", "x"])

@@ -38,7 +38,7 @@ def _run(*args):
                           capture_output=True, text=True, env={"PYTHONPATH": str(REPO / "src"), "PATH": ""})
 
 
-def test_it_retires_the_absent_model_and_records_its_rows_first(tmp_path):
+def test_it_retires_the_absent_model_and_records_its_rows_first(workshop_configuration, tmp_path):
     cache, table = _setup(tmp_path)
     r = _run(table, "--cache", cache, "--record", tmp_path / "rec", "--apply")
     assert r.returncode == 0, r.stderr
@@ -48,7 +48,7 @@ def test_it_retires_the_absent_model_and_records_its_rows_first(tmp_path):
     assert [json.loads(l)["model"] for l in rec[0].read_text().splitlines()] == ["gone"]
 
 
-def test_a_dry_run_names_it_and_writes_nothing(tmp_path):
+def test_a_dry_run_names_it_and_writes_nothing(workshop_configuration, tmp_path):
     cache, table = _setup(tmp_path)
     before = table.read_bytes()
     r = _run(table, "--cache", cache, "--record", tmp_path / "rec")
@@ -57,7 +57,7 @@ def test_a_dry_run_names_it_and_writes_nothing(tmp_path):
     assert not (tmp_path / "rec").exists()
 
 
-def test_an_empty_cache_is_refused_by_name(tmp_path):
+def test_an_empty_cache_is_refused_by_name(workshop_configuration, tmp_path):
     cache, table = _setup(tmp_path, in_cache=())
     before = table.read_bytes()
     r = _run(table, "--cache", cache, "--record", tmp_path / "rec", "--apply")
@@ -65,7 +65,7 @@ def test_an_empty_cache_is_refused_by_name(tmp_path):
     assert table.read_bytes() == before
 
 
-def test_a_cache_holding_none_of_the_table_s_models_is_refused(tmp_path):
+def test_a_cache_holding_none_of_the_table_s_models_is_refused(workshop_configuration, tmp_path):
     cache, table = _setup(tmp_path, in_cache=("unrelated",))
     before = table.read_bytes()
     r = _run(table, "--cache", cache, "--record", tmp_path / "rec", "--apply")

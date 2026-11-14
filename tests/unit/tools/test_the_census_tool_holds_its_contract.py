@@ -25,7 +25,9 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
-import certified_census as CC  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import certified_census as CC  # noqa: E402
 from neurobrix.kernels import census_table as T  # noqa: E402
 
 PROFILE = "c4140-4xv100-16GB-nvlink"          # a committed profile: its memory class names the table

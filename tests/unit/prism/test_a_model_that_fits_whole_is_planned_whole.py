@@ -59,7 +59,9 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
 sys.path.insert(0, str(TOOLS))
-import container_request as TR  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import container_request as TR  # noqa: E402
 
 MB = 1024 * 1024
 TRITON_MODES = ["triton", "triton_sequential"]

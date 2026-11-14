@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 MODEL = "TinyLlama-1.1B-Chat-v1.0"
@@ -38,7 +39,8 @@ _UNPLANNED = object()
 
 def _derive(monkeypatch, chunk=_UNPLANNED):
     sys.path.insert(0, str(REPO / "tools"))
-    import certified_census as CC
+    with the_workshop_configuration():
+        import certified_census as CC
     import derived_census as D
     if not (D.CACHE / MODEL / "manifest.json").exists():
         pytest.skip(f"{MODEL} is not in the engine cache")

@@ -39,7 +39,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 
-import precision_zoo_campaign as zoo  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import precision_zoo_campaign as zoo  # noqa: E402
 
 
 def _cache(tmp_path, model, topology):

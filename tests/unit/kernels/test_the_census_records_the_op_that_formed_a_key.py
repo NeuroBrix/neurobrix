@@ -52,7 +52,9 @@ def test_a_shadow_records_the_op_of_each_key(tmp_path):
 
 def test_table_rows_carry_the_op_and_keep_the_op_less_key():
     sys.path.insert(0, str(REPO / "tools"))
-    import certified_census as CC
+    from tests.unit.workshop_configuration import the_workshop_configuration
+    with the_workshop_configuration():
+        import certified_census as CC
     k1 = "nbxtensor.ops.matmul.matmul_kernel::(19, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
     k2 = "nbxtensor.ops.matmul.matmul_kernel::(23, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
     rows = CC.table_rows("M", "sha", "triton", 16384, [k1, k2],

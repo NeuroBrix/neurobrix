@@ -45,7 +45,7 @@ CHILD = textwrap.dedent('''
 ''')
 
 
-def test_an_entry_is_served_on_its_class_only_with_no_card_visible():
+def test_an_entry_is_served_on_its_class_only_with_no_card_visible(workshop_configuration):
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "PYTHONPATH": str(REPO / "src"), "PYTHONNOUSERSITE": "1"}
     r = subprocess.run([sys.executable, "-c", CHILD], cwd=REPO, env=env, capture_output=True, text=True, timeout=900)
     assert r.returncode == 0, r.stderr[-3000:]

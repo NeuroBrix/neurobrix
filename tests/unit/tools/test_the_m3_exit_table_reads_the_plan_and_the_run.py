@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 
 import m3_exit_table as X  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 # the lines as the engine wrote them (PixArt-Sigma-XL-2-1024-MS, nbxtensor 2a0fc723, 2026-10-29)
 PLAN = """\
@@ -97,4 +98,5 @@ def test_a_table_outside_the_workshop_is_refused(tmp_path):
     f = tmp_path / "rows_card0.jsonl"
     f.write_text(json.dumps({"model": "M", "mode": "triton", "command": "/py -m neurobrix run --model M"}) + "\n")
     with pytest.raises(atelier.OutsideTheAtelier):
-        X.main(["--rows", str(tmp_path), "--tree", str(REPO), "--out", "/var/tmp/exit_table.tsv"])
+        with the_workshop_configuration():
+            X.main(["--rows", str(tmp_path), "--tree", str(REPO), "--out", "/var/tmp/exit_table.tsv"])

@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-from precision_zoo_campaign import refuse_reused_replay  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    from precision_zoo_campaign import refuse_reused_replay  # noqa: E402
 
 
 def test_a_fresh_or_empty_directory_passes(tmp_path):

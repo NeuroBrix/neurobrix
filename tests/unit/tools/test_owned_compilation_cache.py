@@ -22,12 +22,14 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-from check_measurement_environment import (                      # noqa: E402
-    _CACHE_VARS,
-    enforce_owned_cache,
-    owned_cache_env,
-    owned_cache_problems,
-)
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    from check_measurement_environment import (                      # noqa: E402
+        _CACHE_VARS,
+        enforce_owned_cache,
+        owned_cache_env,
+        owned_cache_problems,
+    )
 
 
 def test_an_unset_cache_is_a_problem():

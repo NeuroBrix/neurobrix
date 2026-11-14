@@ -41,7 +41,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tools"))
-import gate_scope as G               # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import gate_scope as G               # noqa: E402
 import gate_scope_code as C          # noqa: E402
 
 MQ24 = Path("~/nbx/campaigns/2026_10_10_mq24")

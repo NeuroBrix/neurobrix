@@ -17,7 +17,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "src"))
-import gate_scope as GS  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import gate_scope as GS  # noqa: E402
 from neurobrix.core.prism.solver import plan_record  # noqa: E402
 
 

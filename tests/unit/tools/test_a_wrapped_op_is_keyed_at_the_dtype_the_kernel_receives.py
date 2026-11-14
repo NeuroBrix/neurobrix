@@ -14,7 +14,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import derived_census as D  # noqa: E402
-import certified_census as CC  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import certified_census as CC  # noqa: E402
 
 MODEL, HW = "canary-qwen-2.5b", "default-9f169c79"
 

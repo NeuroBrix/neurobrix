@@ -22,7 +22,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
-import regression_matrix as R  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import regression_matrix as R  # noqa: E402
 
 GB = 1 << 30
 NEEDS = {"A": 9 * GB, "B": 3 * GB, "C": 1 * GB}

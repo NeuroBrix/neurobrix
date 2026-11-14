@@ -33,7 +33,9 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
-import certified_census as CC  # noqa: E402
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    import certified_census as CC  # noqa: E402
 
 MODEL = "FakeImage-960x1088"
 # computed by hand from the fake's build: the image family's confirmation.size_fraction 0.5 -> 480x544,

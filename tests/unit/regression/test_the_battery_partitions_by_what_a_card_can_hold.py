@@ -12,7 +12,9 @@ from pathlib import Path
 _spec = importlib.util.spec_from_file_location(
     "two_phase", Path(__file__).resolve().parents[3] / "tests" / "regression" / "two_phase.py")
 two_phase = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(two_phase)
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
+with the_workshop_configuration():
+    _spec.loader.exec_module(two_phase)
 
 GB = 1024 ** 3
 

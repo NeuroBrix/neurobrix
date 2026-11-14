@@ -34,6 +34,7 @@ import numpy as np
 import pytest
 
 from neurobrix.kernels import census
+from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -51,7 +52,8 @@ def _tool():
                                                   ROOT / "tools" / "certified_census.py")
     m = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = m
-    spec.loader.exec_module(m)
+    with the_workshop_configuration():
+        spec.loader.exec_module(m)
     return m
 
 
