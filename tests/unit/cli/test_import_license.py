@@ -292,7 +292,7 @@ def test_other_structured_error_relayed_with_status(monkeypatch, capsys, engine_
     assert "429" in out
 
 
-def test_non_json_error_body_falls_back_to_raw_print(monkeypatch, capsys, engine_log):
+def test_a_5xx_with_a_body_that_is_not_json_says_the_hub_did_not_answer(monkeypatch, capsys, engine_log):
     reg._record_license_acceptance(ORG, NAME, LICENSE_ID)
     _install_registry_api(monkeypatch, lambda: _FakeResponse(
         status_code=500, json_error=True,
@@ -303,7 +303,7 @@ def test_non_json_error_body_falls_back_to_raw_print(monkeypatch, capsys, engine
     assert exc.value.code == 1
 
     out = capsys.readouterr().out + engine_log()     # the result on stdout, the notice and errors logged
-    assert "Failed to get download URL:" in out
+    assert "did not answer" in out
 
 
 # ── CLI parser wiring ─────────────────────────────────────────────────

@@ -137,7 +137,7 @@ def test_an_invalid_category_reports_the_registry_reason(monkeypatch, engine_log
     assert "cannot connect" not in out.lower(), "must not blame the network"
 
 
-def test_a_real_transport_failure_still_says_cannot_connect(monkeypatch, engine_log):
+def test_a_real_transport_failure_still_says_the_hub_did_not_answer(monkeypatch, engine_log):
     """The opposite error must not be swallowed by the new branch."""
     from neurobrix.cli.commands import registry as reg
 
@@ -164,7 +164,7 @@ def test_a_real_transport_failure_still_says_cannot_connect(monkeypatch, engine_
 
     out = engine_log()
     assert excinfo.value.code == 1
-    assert "cannot connect to the registry" in out
+    assert "did not answer" in out
 
 
 @pytest.mark.network

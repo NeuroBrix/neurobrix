@@ -95,6 +95,38 @@ def partial_path(dest):
     return dest.with_name(dest.name + ".part")
 
 
+class HubUnanswered(RuntimeError):
+    """The hub did not answer: no connection, no reply in time, a 5xx, or a body that is not JSON.
+    `lines` say which hub (as configured), why, and what the person can do; another registry is only
+    named as a command the person may run, never switched to."""
+
+    def __init__(self, registry, why):
+        self.lines = (f"ERROR: The hub at {registry} did not answer ({why}).",
+                      "   Retry in a moment, and check your network connection.",
+                      "   Another registry can be named with: --registry <url>")
+        super().__init__(self.lines[0])
+
+
+def hub_json(registry, url, **kw):
+    """GET `url` on the hub and return its JSON body. A hub that does not answer raises HubUnanswered;
+    a 4xx stays the HTTPError the caller reads."""
+    import requests
+    try:
+        resp = requests.get(url, **kw)
+    except (requests.ConnectionError, requests.Timeout):
+        raise HubUnanswered(registry, "no connection or no reply in time") from None
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code >= 500:
+            raise HubUnanswered(registry, f"HTTP {e.response.status_code}") from None
+        raise
+    try:
+        return resp.json()
+    except ValueError:
+        raise HubUnanswered(registry, "the reply is not JSON") from None
+
+
 def _json_object(resp):
     """A response's JSON body when it is an object, else None (no response, not JSON, or another JSON value)."""
     try:
@@ -327,10 +359,8 @@ def _import_body(args):
     # 1. Get model metadata
     log.debug("[1/4] Fetching model info...")
     try:
-        resp = requests.get(f"{registry}/api/models/{org}/{name}", timeout=10)
-        resp.raise_for_status()
-        model_info = resp.json()
-    except requests.ConnectionError:
+        model_info = hub_json(registry, f"{registry}/api/models/{org}/{name}", timeout=10)
+    except HubUnanswered as e:
         if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
             # Installed before 0.6.3, and the registry that gives its name cannot be asked: nothing is recorded
             # (the name is the hub's, never guessed from what was typed); the model stays usable as it was.
@@ -339,8 +369,7 @@ def _import_body(args):
             _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=True)
             _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path))
             sys.exit(0)
-        _die(args, f"ERROR: Cannot connect to registry at {registry}",
-             "Check your network connection or use --registry to specify a different URL.")
+        _die(args, *e.lines)
     except requests.HTTPError as e:
         status = e.response.status_code if e.response is not None else 0
         if status == 404:
@@ -484,9 +513,10 @@ def _import_body(args):
             headers = {"X-NeuroBrix-Client": f"neurobrix-cli/{_nbx_version}"}
             if license_id:
                 headers["X-License-Accepted"] = "true"
-            resp = requests.get(f"{registry}/api/models/{org}/{name}/download", headers=headers, timeout=10)
-            resp.raise_for_status()
-            download_info = resp.json()
+            download_info = hub_json(registry, f"{registry}/api/models/{org}/{name}/download",
+                                     headers=headers, timeout=10)
+        except HubUnanswered as e:
+            _die(args, *e.lines)
         except requests.HTTPError as e:
             status = e.response.status_code if e.response is not None else 0
             if (server_error := _json_object(e.response)) is not None:
@@ -997,12 +1027,13 @@ def _cmd_hub(args):
 
     # Fetch model list (no auth required)
     try:
-        resp = requests.get(url, timeout=10, headers={
+        data = hub_json(registry, url, timeout=10, headers={
             "Accept": "application/json",
             "User-Agent": f"neurobrix-cli/{__version__}",
         })
-        resp.raise_for_status()
-        data = resp.json()
+    except HubUnanswered as e:
+        log.error("\n".join(e.lines))
+        sys.exit(1)
     except requests.HTTPError as e:
         # HTTPError subclasses URLError, so it used to land in the branch
         # below and every rejected request was reported as a connectivity
@@ -1020,10 +1051,6 @@ def _cmd_hub(args):
             log.error(f"Error: {detail.get('error', e)}" + (f" (valid categories: {', '.join(valid)})" if valid else ""))
             sys.exit(2)
         log.error(f"Error: the registry returned HTTP {code} for {url}: {e}")
-        sys.exit(1)
-    except requests.RequestException as e:
-        log.error(f"Error: cannot connect to the registry at {registry} ({e}); check the network, or name "
-                  f"another registry with --registry")
         sys.exit(1)
     except Exception as e:
         log.error(f"Error: {e}")
