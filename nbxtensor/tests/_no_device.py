@@ -12,7 +12,9 @@ The question is the library's own device door, `nbxtensor.device.count()`, execu
 
 - it answers N > 0: a host with cards. Nothing is armed; every failure stays a failure.
 - it answers 0 (no GPU runtime, or the runtime's own "no device" code, error 100 under `CUDA_VISIBLE_DEVICES=`): no
-  device visible to this process.
+  device visible to this process. With no GPU runtime at all (a CPU install without the runtime wheel) the backend
+  table cannot be read either (`NoGpuRuntime`): the skip says so ("needs a GPU device: no GPU runtime on this host")
+  and the runtime's own phrase ("No GPU runtime found") is the mark. Nothing here raises in `pytest_configure`.
 - it raises `DeviceQueryError`: the runtime is there and refuses. Then the driver libraries the backend table names
   (`backend_table()["driver_libs"]`) are loaded: if NONE loads, there is no driver on this host, and the skip names
   the backend and the runtime's code ("needs a CUDA device: none answered (driver error 35)"). If one loads, a driver
@@ -64,7 +66,11 @@ def _state() -> tuple:
                 (re.compile(rf"\berror {rc}\b"),))
     if n > 0:
         return None, ()
-    no_device = runtime.backend_table().get("no_device_rc")
+    try:
+        no_device = runtime.backend_table().get("no_device_rc")
+    except runtime.NoGpuRuntime as exc:
+        # no runtime at all (a CPU install with no runtime wheel): the same class as "no driver", named for what it is
+        return f"needs a GPU device: no GPU runtime on this host ({str(exc).splitlines()[0]})", ()
     marks = (re.compile(rf"\berror {no_device}\b"),) if no_device is not None else ()
     return "no GPU visible to this process", marks
 

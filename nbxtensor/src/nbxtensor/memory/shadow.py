@@ -104,20 +104,45 @@ def _host_of(t):
 def install_shadow(devices: int = 1) -> None:
     """Turn this process into a shadow of `devices` devices: no device memory, no launch, no value. Idempotent.
 
-    Refused (`DevicesVisible`) while the driver sees a device. Install before the kernels are defined: an autotuned
-    kernel defined earlier keeps its benchmark (its launch observer reaches `shadow_launch` only through the wrapper the
-    library puts on a kernel at its definition)."""
+    Refused (`DevicesVisible`) while the driver sees a device. A runtime installed without its driver (it refuses to
+    count, and no driver library of the backend table loads) sees none: the shadow installs. A driver library that
+    loads while the runtime refuses is a broken driver: its `DeviceQueryError` stands. Install before the kernels are
+    defined: an autotuned kernel defined earlier keeps its benchmark (its launch observer reaches `shadow_launch` only
+    through the wrapper the library puts on a kernel at its definition)."""
     if _INSTALLED[0]:
         return
-    from nbxtensor.memory.allocator import DeviceAllocator as DA
+    from nbxtensor.memory.allocator import DeviceAllocator as DA, DeviceQueryError
     from nbxtensor.backend import launcher as _launcher
-    visible = DA.device_count()
+    try:
+        visible = DA.device_count()
+    except DeviceQueryError:
+        if _a_driver_loads():
+            raise                       # a driver is installed and refuses: a broken driver, never "no device"
+        visible = 0                     # the runtime is there without its driver (CUDA error 35): no device in sight
     if visible > 0:
         raise DevicesVisible(f"{visible} device(s) visible")
     _INSTALLED[0] = True
     _shadow_allocator(DA, int(devices))
     _launcher.launch = lambda kernel, grid, *a, **k: None       # every launch is skipped
     _shadow_values()
+
+
+def _a_driver_loads() -> bool:
+    """Whether a driver library the backend table names (`driver_libs`) loads on this host. A runtime that refuses to
+    count its devices with no driver library on the host has no device to show: the shadow's own case. A table that
+    names no driver library cannot tell a missing driver from a refusing one, and answers True (the refusal stands)."""
+    import ctypes
+    from nbxtensor.backend import runtime as _rt
+    libs = _rt.backend_table().get("driver_libs") or []
+    if not libs:
+        return True
+    for name in libs:
+        try:
+            ctypes.CDLL(name)
+        except OSError:
+            continue
+        return True
+    return False
 
 
 def _shadow_allocator(DA, n_dev: int) -> None:

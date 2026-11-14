@@ -150,3 +150,51 @@ def test_a_door_that_counts_a_card_arms_nothing_and_one_that_counts_none_says_so
     assert _the_door(monkeypatch, answers=2).absence() is None
     nd = _the_door(monkeypatch, answers=0)
     assert nd.absence() == "no GPU visible to this process" and nd._names_the_refusal("malloc failed (error 100)")
+
+
+def _no_runtime_at_all(monkeypatch):
+    from nbxtensor.backend import runtime
+
+    def no_table():
+        raise runtime.NoGpuRuntime("No GPU runtime found (tried CUDA, ROCm/HIP, Level Zero and Metal).")
+    nd = _the_door(monkeypatch, answers=0)
+    monkeypatch.setattr(runtime, "backend_table", no_table)
+    monkeypatch.setattr(runtime, "gpu_backend", no_table)
+    return nd
+
+
+@pytest.mark.cardless     # its subject is the refusal: never converted into the skip it tests
+def test_a_host_with_no_gpu_runtime_at_all_is_a_skip_that_says_so(monkeypatch):
+    nd = _no_runtime_at_all(monkeypatch)
+    assert nd.absence() == ("needs a GPU device: no GPU runtime on this host (No GPU runtime found (tried CUDA, "
+                            "ROCm/HIP, Level Zero and Metal).)")
+    assert nd._names_the_refusal("NoGpuRuntime: No GPU runtime found (tried CUDA, ROCm/HIP, Level Zero and Metal).")
+    assert not nd._names_the_refusal("AssertionError: this is arithmetic, not a missing card")
+
+
+_NO_RUNTIME_CONFTEST = '''
+from nbxtensor import device
+from nbxtensor.backend import runtime
+
+def _no_runtime():
+    raise runtime.NoGpuRuntime("No GPU runtime found (tried CUDA, ROCm/HIP, Level Zero and Metal).")
+
+device.count = lambda: 0                    # what the door answers on a host with no runtime wheel
+runtime.backend_table = _no_runtime
+runtime.gpu_backend = _no_runtime
+from _no_device import pytest_configure, pytest_make_collect_report, pytest_runtest_call, pytest_runtest_setup
+'''
+
+
+@pytest.mark.cardless     # its subject is the refusal: never converted into the skip it tests
+def test_a_session_on_a_host_with_no_gpu_runtime_collects_and_runs(tmp_path):
+    (tmp_path / "_no_device.py").write_text(NO_DEVICE.read_text())
+    (tmp_path / "conftest.py").write_text(_NO_RUNTIME_CONFTEST)
+    (tmp_path / "test_two.py").write_text(_TWO_TESTS)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT / "nbxtensor" / "src")))
+    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rs", str(tmp_path)],
+                       capture_output=True, text=True, env=env, timeout=300, cwd=str(tmp_path))
+    tail = (r.stdout + r.stderr)[-1500:]
+    assert "INTERNALERROR" not in tail, f"the hook raised in the session's configure: {tail}"
+    assert "1 failed, 1 skipped" in tail and "no GPU runtime on this host" in tail, tail
