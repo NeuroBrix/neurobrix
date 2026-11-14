@@ -1860,7 +1860,9 @@ class DeviceAllocator:
 
         False does not mean a copy will fail — it means the driver will
         stage it through host memory, at host-link speed rather than
-        interconnect speed.
+        interconnect speed. A runtime that refuses the question is refused by
+        name, never read as "no peer": the one door every caller asks through
+        (the transfer path's grant, an expandable range's access list).
         """
         if src_dev == dst_dev:
             return True
@@ -1872,8 +1874,11 @@ class DeviceAllocator:
         ret = getattr(rt, fn_name)(
             ctypes.byref(out), ctypes.c_int(src_dev), ctypes.c_int(dst_dev))
         if ret != 0:
-            DeviceAllocator.clear_last_error()
-        return ret == 0 and bool(out.value)
+            DeviceAllocator.clear_last_error()   # a refusal must not poison the next call
+            raise RuntimeError(
+                f"ZERO FALLBACK: the runtime refused {fn_name} for device "
+                f"{src_dev} -> {dst_dev} (error {ret})")
+        return bool(out.value)
 
     # Pairs already granted, so the hot transfer path pays the query once.
     _peer_enabled: set = set()

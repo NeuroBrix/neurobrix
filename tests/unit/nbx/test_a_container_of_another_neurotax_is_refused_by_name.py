@@ -35,7 +35,7 @@ def test_another_version_is_refused_by_name(tmp_path, manifest):
     with pytest.raises(RuntimeError, match="NEUROTAX VERSION") as e:
         NBXRuntimeLoader().load(str(_container(tmp_path, {"model_name": "m", **manifest})))
     assert repr(manifest.get("neurotax_version")) in str(e.value)
-    assert NEUROTAX_VERSION in str(e.value) and "neurotax_rename" in str(e.value)
+    assert NEUROTAX_VERSION in str(e.value) and "FIX: rename its keys in place with the container builder" in str(e.value)
 
 
 def test_the_engines_version_passes_the_door(tmp_path):

@@ -57,33 +57,35 @@ class Vmm:
 
     def _reachable_from(self):
         """The access grant of every chunk this device maps: the device itself, then every other device of the process
-        that can reach it as a peer (`cuDeviceCanAccessPeer`). A VMM mapping is readable ONLY from the devices its
-        grant names — enabling peer access between two contexts does nothing for it — so a chunk granted to its owner
-        alone could not be copied card to card: `cudaMemcpy` answered "invalid value" for any tensor of the expandable
-        range (a dense model split over two cards died at its first hand-off of more than a pool block, 2026-11-11;
-        NVIDIA's statement of the rule: forums.developer.nvidia.com/t/148875). A driver call that fails is refused by
-        name (`_driver`): a grant narrowed to the owner because the question could not be asked is the same card-to-card
-        failure, later and unnamed."""
-        count, owner = ctypes.c_int(0), ctypes.c_int()
+        that can reach it as a peer (asked through the allocator's one door, `DeviceAllocator.can_access_peer`). A VMM
+        mapping is readable ONLY from the devices its grant names — enabling peer access between two contexts does
+        nothing for it — so a chunk granted to its owner alone could not be copied card to card: `cudaMemcpy` answered
+        "invalid value" for any tensor of the expandable range (a dense model split over two cards died at its first
+        hand-off of more than a pool block, 2026-11-11; NVIDIA's statement of the rule: forums.developer.nvidia.com/t/
+        148875). A question that fails is refused by name: a grant narrowed to the owner because the question could not
+        be asked is the same card-to-card failure, later and unnamed."""
+        count = ctypes.c_int(0)
         self._driver("cuDeviceGetCount", self.lib.cuDeviceGetCount(ctypes.byref(count)))
-        self._driver("cuDeviceGet", self.lib.cuDeviceGet(ctypes.byref(owner), self.device), self.device)
-        peers = [other for other in range(count.value) if other != self.device and self._is_peer(other, owner)]
+        peers = [other for other in range(count.value) if other != self.device and self._is_peer(other)]
         return (_Access * (1 + len(peers)))(*(_Access(_Loc(_LOC_DEVICE, d), _PROT_RW) for d in (self.device, *peers)))
 
-    def _is_peer(self, other: int, owner) -> bool:
-        """Whether device `other` can reach this device's memory as a peer — the driver's answer, never a guess."""
-        dev, can = ctypes.c_int(), ctypes.c_int(0)
-        self._driver("cuDeviceGet", self.lib.cuDeviceGet(ctypes.byref(dev), other), other)
-        self._driver("cuDeviceCanAccessPeer", self.lib.cuDeviceCanAccessPeer(ctypes.byref(can), dev, owner), other)
-        return can.value == 1
+    def _is_peer(self, other: int) -> bool:
+        """Whether device `other` can reach this device's memory as a peer — the runtime's answer, never a guess."""
+        from nbxtensor.memory.allocator import DeviceAllocator
+        try:
+            return DeviceAllocator.can_access_peer(other, self.device)
+        except RuntimeError as refused:
+            raise RuntimeError(f"{refused}{self._while}") from refused
 
-    def _driver(self, call: str, rc: int, about=None) -> None:
+    @property
+    def _while(self) -> str:
+        return (f" while device {self.device}'s expandable range asked which devices reach it as peers; a chunk "
+                f"granted to its owner alone cannot be copied card to card")
+
+    def _driver(self, call: str, rc: int) -> None:
         """Refuse, by name, a driver call the access grant is built from when it fails."""
         if rc != 0:
-            raise RuntimeError(
-                f"ZERO FALLBACK: the driver refused {call}" + ("" if about is None else f" for device {about}")
-                + f" (status {rc}) while device {self.device}'s expandable range asked which devices reach it as "
-                  f"peers; a chunk granted to its owner alone cannot be copied card to card")
+            raise RuntimeError(f"ZERO FALLBACK: the driver refused {call} (status {rc}){self._while}")
 
     @staticmethod
     def load(libs) -> Optional[object]:
