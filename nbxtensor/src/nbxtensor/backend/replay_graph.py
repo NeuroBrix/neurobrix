@@ -124,11 +124,14 @@ class CapturedPlan:
         # A plan on ONE card carries the SETDEV that names it (`frozen_plan.SETDEV`, emitted when the device changes,
         # so a single-card plan has one): the graph is captured on that card and the record makes no node. Until
         # 2026-11-14 it fell into the memset branch ("expected 3, got 1") and every single-card capture was refused
-        # to the direct replay. A plan that crosses cards or syncs one is `SegmentedPlan`'s, refused here by name.
-        devs = {rec[0] for tag, rec in records if tag == "d"}
+        # to the direct replay. A device SYNC the recording made on that same card (`frozen_plan.SYNC`) makes no node
+        # either: one stream orders every node after the one before, no host work runs between them, and `launch`
+        # synchronises the context before and after the graph. A plan whose records name another card (a SETDEV or a
+        # SYNC: a peer copy waiting on its source card) is `SegmentedPlan`'s, refused here by name.
+        devs = {rec[0] for tag, rec in records if tag in ("d", "y")}
         if dev_idx is not None:
             devs.add(dev_idx)
-        foreign = sorted({tag for tag, _ in records} - {"k", "m", "h", "s", "d"})
+        foreign = sorted({tag for tag, _ in records} - {"k", "m", "h", "s", "d", "y"})
         if foreign or len(devs) > 1:
             raise GraphReplayError(f"one graph holds one card's kernels, copies and memsets: this plan has "
                                    f"{'actions ' + str(foreign) if foreign else ''}"
@@ -136,7 +139,7 @@ class CapturedPlan:
                                    f"{'cards ' + str(sorted(devs)) if len(devs) > 1 else ''} (SegmentedPlan's)")
         if devs:
             dev_idx = next(iter(devs))
-        records = [r for r in records if r[0] != "d"]
+        records = [r for r in records if r[0] not in ("d", "y")]
         api = _CudaGraphAPI.get()
         self.api = api
         self.staging: List[int] = []
