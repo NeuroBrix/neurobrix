@@ -7,8 +7,9 @@ direct C-launcher replay (Phase 4a); every CUresult is checked and any
 failure refuses LOUDLY back to direct replay for that bucket
 (llama.cpp guard discipline — their CC<8 disable is a policy under a
 re-capture-per-token cost model, not a hardware gate; sourced research
-in optimization_engine_scoping.md §4b). Kill-switch: unset
-NBX_REPLAY_GRAPH (the graph path is opt-in).
+in optimization_engine_scoping.md §4b). The default wherever the
+backend offers CUDA graphs (`capable`), since 2026-11-14 (measured
+A/B in frozen_plan); elsewhere the direct replay runs.
 
 Capture legality:
 - kernels are re-issued through the SAME compiled C launcher but on
@@ -55,6 +56,13 @@ _CU_STREAM_CAPTURE_MODE_RELAXED = 2
 
 class GraphReplayError(RuntimeError):
     pass
+
+
+def capable() -> bool:
+    """The backend offers CUDA graphs (the driver's cuGraph API this module binds): CUDA today. HIP, Metal and Level
+    Zero replay directly."""
+    from nbxtensor.backend import runtime as _rt
+    return _rt.gpu_backend() == "cuda"
 
 
 def _ck(rc: int, what: str) -> None:
