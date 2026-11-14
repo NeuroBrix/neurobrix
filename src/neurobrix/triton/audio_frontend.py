@@ -18,6 +18,7 @@ flows call preprocess_audio_input_np here (numpy → NBXTensor). Both now share 
 same DSP core (mel_dsp.py).
 """
 import json
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple  # noqa: F401
 
@@ -145,14 +146,18 @@ def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> 
     core/audio_frontend.preprocess_phonemizer_input (which uses torch)."""
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
     from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+    from neurobrix.core.module.audio.front_end import for_container
     # R30 mirror of the compiled path (core/audio_frontend.py): ONE text-to-ids function, whose
     # language gate refuses a voice the embedded lexicon does not speak — measured NOT to
     # fire here once when it lived only in the compiled path (vitrine 2026-09-16, 17:47).
+    # A container that declares a text front end has its tagger run here, by this engine.
+    front_end = for_container(engine.ctx.nbx_path_str, klang)
+    _set_device_for(engine.ctx)
     phonemes, ids = phoneme_ids(prompt, engine.ctx.nbx_path_str, phoneme_vocab, klang,
                                 request_voice(engine.ctx.variable_resolver.resolved,
-                                              engine.ctx.pkg.defaults))
+                                              engine.ctx.pkg.defaults),
+                                partial(engine.text_tagger_scores, front_end) if front_end is not None else None)
     actual_len = len(ids)
-    _set_device_for(engine.ctx)
     input_ids = NBXTensor.from_numpy(np.array([ids], dtype=np.int64))
     engine.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
     engine.ctx.variable_resolver.resolved["input_ids"] = input_ids

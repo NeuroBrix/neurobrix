@@ -361,7 +361,7 @@ def request_voice(resolved: Dict, defaults: Dict) -> Optional[str]:
 
 
 def phoneme_ids(prompt: str, nbx_path_str: str, phoneme_vocab: Dict,
-                phoneme_lang: str, voice: Optional[str]):
+                phoneme_lang: str, voice: Optional[str], tag_scores=None):
     """(IPA string, phoneme ids) for a prompt — the ONE text-to-ids path of a phonemizer model.
 
     Both engines' preprocessing (core/audio_frontend.py, triton/audio_frontend.py) call
@@ -370,10 +370,38 @@ def phoneme_ids(prompt: str, nbx_path_str: str, phoneme_vocab: Dict,
     the census's length is the run's length. Refuses a voice whose language the embedded
     lexicon does not speak (`refusal_for_language`). Ids are framed by the pad id 0 on each
     side; a character outside the vocabulary is not a phoneme the model knows and is dropped,
-    as the vendor's own mapping does."""
+    as the vendor's own mapping does.
+
+    A container whose topology declares a text front end (`core/module/audio/front_end`: a
+    component of role `text_front_end`) is read by it — the vendor's tokenizer, tagger and
+    lexicon pass — and `tag_scores(rows) -> [n, labels] scores` is the engine running that
+    component; without it the text is refused by name, never read by the lexicon runner."""
     refusal = refusal_for_language(voice, phoneme_lang)
     if refusal:
         raise RuntimeError(refusal)
-    phonemes = g2p_phonemes(prompt, nbx_path_str,
-                            _ESPEAK_LANG.get(phoneme_lang, "en-us"), phoneme_lang)
+    from neurobrix.core.module.audio.front_end import for_container
+    front_end = for_container(nbx_path_str, phoneme_lang)
+    if front_end is not None:
+        if tag_scores is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: this container reads its text with the tagged front end, whose tags come from its "
+                f"component '{front_end.component}' run by the engine; no run of it was given here")
+        phonemes, _ = front_end.phonemes(prompt, voice or phoneme_lang, tag_scores)
+    else:
+        phonemes = g2p_phonemes(prompt, nbx_path_str,
+                                _ESPEAK_LANG.get(phoneme_lang, "en-us"), phoneme_lang)
     return phonemes, [0] + [phoneme_vocab[ch] for ch in phonemes if ch in phoneme_vocab] + [0]
+
+
+def planned_phoneme_count(prompt: str, nbx_path_str: str, phoneme_vocab: Dict,
+                          phoneme_lang: str, voice: Optional[str]) -> Optional[int]:
+    """The id count a plan binds a phonemizer container's text components to: `len(phoneme_ids)`.
+
+    None for a container read by a tagged text front end: its phonemes need its tagger's
+    tags, a network the engine runs only once Prism has placed it (measured without the
+    tags: 273 of 290 texts at another length, 21 ids short on average) — its text
+    components plan at their build extent and run at the text's length."""
+    from neurobrix.core.module.audio.front_end import declares_front_end
+    if declares_front_end(nbx_path_str):
+        return None
+    return len(phoneme_ids(prompt, nbx_path_str, phoneme_vocab, phoneme_lang, voice)[1])

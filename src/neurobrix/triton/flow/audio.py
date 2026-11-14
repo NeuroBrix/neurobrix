@@ -205,6 +205,22 @@ class TritonAudioEngine(AudioSteps, ComponentFlowHandler):
     # Stage execution
     # -----------------------------------------------------------------
 
+    def text_tagger_scores(self, front_end, rows) -> np.ndarray:
+        """The container's text front end component (`core/module/audio/front_end`) run by this engine on its input
+        rows, on the plan's device; its scores read back to the host, its variables and (unless persistent) its weights
+        released — zero torch. The R30 mirror of the compiled flow's."""
+        resolved = self.ctx.variable_resolver.resolved
+        comp = front_end.component
+        resolved[f"{comp}.{front_end.input_name}"] = NBXTensor.from_numpy(np.asarray(rows, dtype=np.int64))
+        self._execute_component(comp, "forward", None)
+        scores = resolved[f"{comp}.output_0"].numpy()
+        for key in [k for k in resolved if k.startswith(f"{comp}.")]:     # its input and outputs
+            del resolved[key]
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(comp)
+            release_flow_memory(self.ctx.primary_device)
+        return scores
+
     def _execute_forward_stage(self, stage: Dict) -> None:
         """Execute a single forward-pass stage."""
         comp_name = stage["component"]

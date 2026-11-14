@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Kokoro-82M reads English the way its makers' own front end does.** A Kokoro container built with its text front
+  end splits the text into words as that front end does, tags each word's part of speech with the front end's own
+  network (run by the engine on the request's device, PyTorch and Triton alike), and reads every word with its makers'
+  pronunciation dictionaries and rules: "read" as a past tense, "a" and "the" before a vowel, numbers, years, currencies
+  and abbreviations. A word that neither the dictionaries nor the container's word list holds is not spoken, as with the
+  makers' front end when espeak-ng is not installed. Containers built earlier keep their earlier reading.
 - **Text generation does less work per token.** A causal mask recorded once per layer is computed once per step,
   identical constants are shared, the SwiGLU activation runs as one launch, and on Apple GPUs the command stream is
   committed in batches so the GPU starts while the host prepares the rest of the step. The answers are unchanged.

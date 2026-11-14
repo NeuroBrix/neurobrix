@@ -367,13 +367,11 @@ def request_input_config(args, manifest: dict, family, cache_path):
     _vocab = cached_defaults.get("phoneme_vocab")
     _prompt = getattr(args, 'prompt', None)
     if _vocab and _prompt is not None and "tokenizer" not in (manifest.get("modules") or {}):
-        from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+        from neurobrix.core.module.audio.g2p import planned_phoneme_count, request_voice
         _tpl = cached_defaults.get("tts_prompt_template")
         _text = _tpl.format(text=_prompt) if _tpl and "{text}" in _tpl else _prompt
-        seq_len = len(phoneme_ids(_text, str(cache_path), _vocab,
-                                  cached_defaults.get("phoneme_lang", "a"),
-                                  request_voice({"speaker": getattr(args, 'speaker', None)},
-                                                cached_defaults))[1])
+        seq_len = planned_phoneme_count(_text, str(cache_path), _vocab, cached_defaults.get("phoneme_lang", "a"),
+                                        request_voice({"speaker": getattr(args, 'speaker', None)}, cached_defaults))
     # The prompt's token count where the flow tokenizes it and prefills it alone: an autoregressive TEXT request (no
     # input image or audio, whose own tokens the flow adds beside the prompt's). The decoder's sequence symbol is bound
     # to it — without it the symbol took the build's extent and a 400-token prompt was priced as the build's few tokens

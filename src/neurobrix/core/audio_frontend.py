@@ -10,6 +10,7 @@ here.
 """
 
 import torch
+from functools import partial
 from typing import Dict
 
 from neurobrix.core.flow.audio_utils import requested_voice, shipped_voices   # both frontends read the voice alike
@@ -31,13 +32,17 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     # runtime (R34); the embedded lexicon retains espeak's license.
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
     from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+    from neurobrix.core.module.audio.front_end import for_container
     # The voice and the lexicon must speak the same language — `phoneme_ids` refuses before
     # a single phoneme when the requested voice speaks a language the embedded lexicon does
     # not: the model would otherwise say other words, fluently (2026-09-16, `ff_siwis` on
     # the American lexicon). One text-to-ids function for both engines and the census.
+    # A container that declares a text front end has its tagger run here, by this engine.
+    front_end = for_container(engine.ctx.nbx_path_str, klang)
     phonemes, ids = phoneme_ids(prompt, engine.ctx.nbx_path_str, phoneme_vocab, klang,
                                 request_voice(engine.ctx.variable_resolver.resolved,
-                                              engine.ctx.pkg.defaults))
+                                              engine.ctx.pkg.defaults),
+                                partial(engine.text_tagger_scores, front_end) if front_end is not None else None)
 
     # Step 3: Feed the ACTUAL phoneme sequence — no padding to the build seq_len.
     # The bert/text_encoder/predictor/decoder graphs carry a symbolic seq_len that
