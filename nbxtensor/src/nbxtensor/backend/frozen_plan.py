@@ -359,9 +359,10 @@ class FrozenPlan:
         self.extra_scan: Tuple[int, ...] = tuple(s for s in extra_scan if s >= self.scan_limit)
         # the slabs of the OTHER cards the plan allocated on (held experts' cards): pinned for the plan's life
         self.other_slabs: Dict[int, "SlabAllocator"] = {}
-        # Phase 4b: lazily captured CUDA graph of the action list
-        # (opt-in NBX_REPLAY_GRAPH=1, A/B-gated adoption). A capture
-        # failure disables the graph for this bucket only — direct
+        # Phase 4b: lazily captured CUDA graph of the action list, wherever the backend offers CUDA graphs
+        # (`replay_graph.capable`). Adopted 2026-11-14 on its measured A/B (V100, served decode, bytes identical):
+        # TinyLlama 75.8 -> 147.6 tok/s, Qwen2.5-Coder-7B 40.0 -> 44.9 — the direct replay issues ~725 launches and
+        # ~190 copies a token from the host. A capture failure disables the graph for this bucket only: the direct
         # replay stays the correct path.
         self.graph = None
         self.graph_disabled = False
@@ -384,8 +385,8 @@ class FrozenPlan:
         # (`replay_graph.SegmentedPlan`), the engine's choice: its direct replay is ~1 850 Python-driven launches a
         # token (Qwen3-30B-A3B on 4 V100, 2026-10-28: ~60 ms of a 184 ms token for a few ms of kernels).
         _segmented = self.crosses_cards() or self.scan_slots is not None     # a segment of a step: graphs too
-        if ((os.environ.get("NBX_REPLAY_GRAPH") == "1" or _segmented)
-                and not self.graph_disabled):
+        from nbxtensor.backend.replay_graph import capable as _graph_capable
+        if _graph_capable() and not self.graph_disabled:
             self._replay_graph(_segmented)
         else:
             self._direct_actions()
