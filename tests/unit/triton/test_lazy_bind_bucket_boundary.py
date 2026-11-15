@@ -121,7 +121,6 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
         "NBX_LOG": "debug",
         "NBX_TRITON_REPLAY": "1",
         "NBX_REPLAY_KV_DECODE": "1",
-        "NBX_REPLAY_GRAPH": "1",
         "NBX_FORCE_RAND_SEED": "1234",
         "NBX_LAZY_BIND_DIAG": "1",
     })

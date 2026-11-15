@@ -72,7 +72,6 @@ from rig_devices import visible_card          # noqa: E402  (path set just above
 BASE_ENV = {
     "NBX_TRITON_REPLAY": "1",
     "NBX_REPLAY_KV_DECODE": "1",
-    "NBX_REPLAY_GRAPH": "1",
     "NBX_FORCE_RAND_SEED": "1234",
 }
 
