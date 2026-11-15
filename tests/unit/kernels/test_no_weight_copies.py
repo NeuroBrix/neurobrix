@@ -313,7 +313,14 @@ def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy(q_dt, tab
 
 def test_decode_attention_reads_a_wider_q_in_the_cache_dtype_without_a_copy(monkeypatch):
     """The KV cache asks for Q in its dtype: on the vector decode route the kernel rounds the
-    fp32 Q on load; the bytes are those of casting Q to fp16 first, with no copy launched."""
+    fp32 Q on load; the bytes are those of casting Q to fp16 first, with no copy launched.
+    The same bytes AT THE SAME LAUNCH CONFIG: an fp32 Q and an fp16 Q are two autotune keys, and on a cache that holds
+    neither each was swept on its own and could seat another config — another summation order, one ulp apart (V100
+    16 GB, 2026-11-15: 8 warps against 4, one element of 512). The vector decode kernel is held to one candidate, as the
+    fp16-widening cell holds the GEMV."""
+    from nbxtensor.ops.decode_attn_vec import decode_attn_vec_split_kernel
+    monkeypatch.setattr(decode_attn_vec_split_kernel, "configs", decode_attn_vec_split_kernel.configs[:1])
+    monkeypatch.setattr(decode_attn_vec_split_kernel, "cache", {})
     monkeypatch.setenv("NBX_DECODE_VEC", "1")
     rng = np.random.default_rng(7)
     B, H, H_kv, T_k, D = 1, 8, 2, 40, 64
