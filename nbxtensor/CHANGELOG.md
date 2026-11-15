@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - A peer question the GPU runtime fails is refused by name (`DeviceAllocator.can_access_peer`), never read as "no
   peer"; the expandable memory range asks that one door which cards may reach its memory.
+- `install_shadow(devices)` installs on a host whose GPU runtime is there without its driver (it sees no device);
+  a driver that loads and refuses still raises its `DeviceQueryError`.
 
 ## [0.1.7] - 2026-11-13
 
