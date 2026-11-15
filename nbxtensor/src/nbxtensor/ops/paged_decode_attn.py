@@ -96,6 +96,7 @@ def paged_decode_attn_split_kernel(
     mpart_ptr,       # [B*H_q, SPLIT] fp32 running max per split
     lpart_ptr,       # [B*H_q, SPLIT] fp32 sum-of-exp per split
     n_seqs,          # B: the split's length is read from the device's lengths, never passed (see below)
+    appended,        # positions this step appended that seq_lens does not count yet (its advance trails the step)
     page_tokens,     # positions per page, a multiple of BLOCK_N
     SPLITS,          # the grid's splits (`paged_decode_splits`): the autotune key's length class (unused in the body)
     sm_scale,
@@ -125,7 +126,7 @@ def paged_decode_attn_split_kernel(
     mask_dv = offs_d < D_V
     q = _round_q(tl.load(q_ptr + pid_q * stride_qh + offs_d, mask=mask_d, other=0.0), Q_TO, Q_SATURATE)
 
-    T_b = tl.load(seq_lens_ptr + b).to(tl.int32)
+    T_b = tl.load(seq_lens_ptr + b).to(tl.int32) + appended
     # Positions per split, read from the DEVICE lengths: the longest sequence over the grid's splits, in whole tiles
     # — the host's figure from the same lengths, so the same value at every step. Passed as a scalar it was frozen into
     # a replayed decode's launch: the split count only moves every PAGED_DECODE_SPLIT_POSITIONS positions, the length
@@ -133,6 +134,7 @@ def paged_decode_attn_split_kernel(
     longest = tl.load(seq_lens_ptr).to(tl.int32)
     for i in range(1, n_seqs):
         longest = tl.maximum(longest, tl.load(seq_lens_ptr + i).to(tl.int32))
+    longest += appended
     longest = tl.maximum(longest, 1)
     n_split = tl.num_programs(1)
     seg_len = tl.cdiv(tl.cdiv(longest, n_split), SPLIT_ALIGN) * SPLIT_ALIGN
@@ -238,6 +240,7 @@ def paged_kv_gather_kernel(
 
 @triton.jit
 def paged_lens_advance_kernel(lens_ptr, n):
-    """lens[b] += n for every sequence: one program per sequence, after the step's append (stream order)."""
+    """lens[i] += n, one program per entry: a decode step's every layer at once on a card (the layers' lengths are rows
+    of one block), launched after the step's last read of them (stream order)."""
     b = tl.program_id(0).to(tl.int64)
     tl.store(lens_ptr + b, tl.load(lens_ptr + b) + n)

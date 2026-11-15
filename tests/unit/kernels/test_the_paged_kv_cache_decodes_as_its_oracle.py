@@ -9,6 +9,9 @@ What each test would do if the code were wrong:
      a cache that does not grow writes into a page it does not hold — red (the oracle differs, or the refusal fires);
   3. the cache holds only the pages granted: its bytes are pages x page bytes, far under max_len's;
   4. clear() returns every page and zeroes the lengths: a second request starting at position 0 equals its oracle.
+  5. the step's lengths advance ONCE a decode step on a card (one launch after its last layer, never one a layer): a
+     layer advanced early (its attention then counts the position twice) or late is red against the oracle, a launch a
+     layer is red by count, and every layer's device length must equal the host's after each step.
 """
 from __future__ import annotations
 
@@ -168,3 +171,24 @@ def test_a_decoder_spread_over_two_cards_decodes_each_layer_on_its_own(prompt, s
                                      / np.abs(_oracle(q[:, :, 0], ks[li], vs[li], scale)).max()))
     assert worst < BOUND, f"relative error {worst:.2e} against float64"
     assert cache.layer_device == [0, 1]
+
+
+def test_a_decode_step_advances_every_layer_s_length_once(monkeypatch):
+    from nbxtensor.ops import paged_decode_attn as P
+    launches = []
+    real = P.paged_lens_advance_kernel
+
+    class _Counted:
+        def __getitem__(self, grid):
+            launches.append(grid)
+            return real[grid]
+    monkeypatch.setattr(P, "paged_lens_advance_kernel", _Counted())
+    cache = PagedTritonKVCache(num_layers=3, num_kv_heads=2, k_head_dim=64, v_head_dim=64, max_cache_len=1024,
+                               dtype=NBXDtype.float16, page_tokens=64, async_release=False, decode_budget=8)
+    worst = _request(cache, np.random.default_rng(2), 2, 4, 2, 64, 30, 4, 3)
+    assert worst < BOUND, f"relative error {worst:.2e} against float64"
+    assert launches == [(3 * 2,)] * 4                      # one launch a step, over 3 layers x 2 sequences
+    for i in range(3):
+        b = (ctypes.c_int32 * 2)()
+        DeviceAllocator.memcpy(ctypes.addressof(b), cache.lens[i].data_ptr(), 8, kind=2)
+        assert list(b) == [30 + 4, 30 + 4], (i, list(b))

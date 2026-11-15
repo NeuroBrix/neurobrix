@@ -68,7 +68,9 @@ class PagedTritonKVCache:
         self.tables: List[PageTable] = []
         self.k_pools: List[Optional[NBXTensor]] = [None] * self.num_layers
         self.v_pools: List[Optional[NBXTensor]] = [None] * self.num_layers
-        self.lens: List[Optional[NBXTensor]] = [None] * self.num_layers   # device int32 [B] per layer
+        # lens: device int32 [B] per layer, a row of its card's [num_layers, B] block (_lens_blocks), advanced once a
+        # decode step by the card's last layer (_last_on_card)
+        self.lens, self._lens_blocks, self._last_on_card = [None] * self.num_layers, {}, {}
         self.length = 0                                                     # host authority: positions held
         self._published_pages = -1
         self.capacity = 0                                                   # positions per sequence the pools hold
@@ -126,7 +128,13 @@ class PagedTritonKVCache:
         DeviceAllocator.set_device(dev)
         self.layer_device[layer_idx] = dev
         self.k_pools[layer_idx], self.v_pools[layer_idx] = self._new_pools(self.pool.num_pages, dev)
-        self.lens[layer_idx] = NBXTensor.from_numpy(np.full((self.batch,), self.length, dtype=np.int32))
+        fresh = dev not in self._lens_blocks
+        if fresh:
+            self._lens_blocks[dev] = NBXTensor.from_numpy(np.full((self.num_layers, self.batch), self.length, np.int32))
+        self.lens[layer_idx] = self._lens_blocks[dev].select(0, layer_idx)
+        if not fresh:
+            self._write_in_place(self.lens[layer_idx], np.full((self.batch,), self.length, dtype=np.int32))
+        self._last_on_card[dev] = max(layer_idx, self._last_on_card.get(dev, -1))
         if dev not in self.block_tables:
             self.block_tables[dev] = NBXTensor.from_numpy(self._table_host)
 
@@ -140,6 +148,7 @@ class PagedTritonKVCache:
         self.k_pools = [None] * self.num_layers
         self.v_pools = [None] * self.num_layers
         self.lens = [None] * self.num_layers
+        self._lens_blocks, self._last_on_card = {}, {}
         self.layer_device = [None] * self.num_layers
         self.block_tables, self._table_host = {}, None
         self._published_pages = -1
@@ -300,8 +309,11 @@ class PagedTritonKVCache:
             self.length = start + t
 
     def decode(self, layer_idx: int, q, k, v, scale: float, q_round=None):
-        """One decode step of one layer: append its new K / V `[B, H_kv, 1, D]` at the device length, advance it, and
-        attend `q [B, H, 1, D]` over the sequence's pages. Returns `[B, H, 1, D_v]`."""
+        """One decode step of one layer: append its new K / V `[B, H_kv, 1, D]` at the device length and attend
+        `q [B, H, 1, D]` over the sequence's pages, the appended position counted (`appended=1`: the length is read
+        before the step). The card's last layer then advances every layer's length on that card in ONE launch (the
+        Dell's reread of the fused-layer design, 2026-11-13: no kernel of the step writes a length another reads).
+        Returns `[B, H, 1, D_v]`."""
         import triton
         from nbxtensor.ops import wrappers as W
         from nbxtensor.ops import attention_wrappers as _nbx_attention_wrappers  # the family the moved names live in (M2 split)
@@ -325,10 +337,12 @@ class PagedTritonKVCache:
             bt.stride(0),
             BLOCK_D=max(triton.next_power_of_2(max(self.k_head_dim, self.v_head_dim)), 16),
             D_K=self.k_head_dim, D_V=self.v_head_dim, num_warps=1)
-        paged_lens_advance_kernel[(self.batch,)](lens, 1)
         host = self._host_partial(layer_idx, q, scale, q_round) if self.spilled else None
         out = _nbx_attention_wrappers.paged_decode_attention(q, kp, vp, bt, lens, scale, new_len - self.spilled,
-                                                             q_round=q_round, host_partial=host)
+                                                             q_round=q_round, host_partial=host, appended=1)
+        card = self.layer_device[layer_idx]
+        if layer_idx == self._last_on_card[card]:
+            paged_lens_advance_kernel[(self.num_layers * self.batch,)](self._lens_blocks[card], 1)
         if layer_idx == self.num_layers - 1:
             self.length = new_len
         return out
