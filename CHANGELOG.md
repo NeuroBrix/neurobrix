@@ -81,8 +81,8 @@ the memory their plan priced.
 
 ## [0.6.14] - 2026-11-13
 
-With nbxtensor 0.1.6: served multimodal and vision-language models hold a whole conversation on the Triton engine, a
-served mixture-of-experts model is ready about 30 % sooner, and the voice reads numbers and names as written.
+With nbxtensor 0.1.6: served multimodal and vision-language models hold a whole conversation on the Triton engine, and the
+voice reads numbers and names as written.
 
 ### Changed
 
