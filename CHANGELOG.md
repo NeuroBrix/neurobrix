@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The video models that decode their frames in a stream (Wan2.1, Mochi) run under the Triton engine on a GPU**,
+  where they crashed when the first stored frame state was released.
 - **A model whose `tokenizer.json` splits text with Unicode categories, possessive quantifiers or line anchors
   tokenizes as its vendor does.** Its patterns are read with the meaning the vendor's tokenizer gives them (`\p{L}`
   and `\p{Letter}`, `\P{..}`, possessive and atomic groups, `\s` as Unicode white space, `^` and `$` per line); a
