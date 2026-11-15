@@ -3610,6 +3610,7 @@ def reset_runtime_for_tests() -> None   # Drop the cached runtime — and everyt
 class CapturedPlan   # One bucket's action list as an instantiated CUDA graph.
 class GraphReplayError   # 
 class SegmentedPlan   # A multi-card plan's action list as one CUDA graph per stretch of actions on one card (S3, 2026-10-28).
+def capable() -> bool   # The backend offers CUDA graphs (the driver's cuGraph API this module binds): CUDA today. HIP, Metal and Level
 ```
 
 ### `nbxtensor.backend.runtime`
