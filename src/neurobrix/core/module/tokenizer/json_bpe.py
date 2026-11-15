@@ -246,11 +246,11 @@ def translate_regex(pattern: str, onig: bool = True) -> str:
 
 
 @lru_cache(maxsize=None)
-def compile_regex(pattern: str, onig: bool = True) -> "re.Pattern":
+def compile_regex(pattern: str) -> "re.Pattern":
     """Compile a vendor regex through :func:`translate_regex`; a construct the
     translation does not express is a named error that quotes the pattern."""
     try:
-        return re.compile(translate_regex(pattern, onig))
+        return re.compile(translate_regex(pattern))
     except (re.error, IndexError) as exc:
         raise ValueError(
             f"tokenizer pattern {pattern!r} uses a construct the stdlib regex translation does not express "
