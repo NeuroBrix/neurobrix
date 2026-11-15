@@ -198,6 +198,9 @@ EXPERT_BLOCK_KERNELS = ("topk", "div (renormalisation)", "sum (renormalisation)"
 OFFSET_ARANGE_KERNELS = ("arange", "add (cache length)")
 
 
+ACTIVATION_DTYPES = ("float32", "float16", "bfloat16")
+
+
 def bare(op_type: str) -> str:
     """`aten::multiply` -> `mul`: the op's canonical bare name, as the engine's dispatch resolves it."""
     from neurobrix.kernels.classification import canonical_aten
@@ -230,8 +233,10 @@ class DecodeGraph:
     """The engine's op list of one component, as a dataflow over slots: who writes a slot, who reads it."""
 
     def __init__(self, sequence, dag, self_attention: Iterable[str] = (), offset_aranges: Iterable[str] = (),
-                 offset_slices: Iterable[str] = (), offset_counts: Iterable[str] = (), keys_expanded: bool = False):
+                 offset_slices: Iterable[str] = (), offset_counts: Iterable[str] = (), keys_expanded: bool = False,
+                 activation_dtype: Optional[str] = None):
         self.dag = dag
+        self.activation_dtype = activation_dtype
         self.tensors = dag.get("tensors") or {}
         self.dtype_name = str(dag.get("torch_dtype") or "").replace("torch.", "")
         self.keys_expanded = bool(keys_expanded)
@@ -255,6 +260,7 @@ class DecodeGraph:
                 self.readers[slot].append(i)
             for slot in op.outputs:
                 self.writer[slot] = i
+        self.run_dtypes: Optional[Dict[int, str]] = self._run_dtypes() if activation_dtype else None
         self.returned = {sequence._tid_to_slot[t] for t in sequence._output_ids if t in sequence._tid_to_slot}
         self.self_attention = frozenset(self_attention)
         self._offset = {**{u: "arange" for u in offset_aranges}, **{u: "slice" for u in offset_slices},
@@ -268,6 +274,57 @@ class DecodeGraph:
     # -- reading a slot's recorded facts ------------------------------------------------------------------------
     def dtype(self, slot: int) -> Optional[str]:
         return (self.tensors.get(self.slot_tid.get(slot, "")) or {}).get("dtype")
+
+    def run_dtype(self, slot: int) -> Optional[str]:
+        """The dtype the value at `slot` holds at run time: the activation dtype's propagation when the census was
+        given one, else the graph's recorded dtype."""
+        if self.run_dtypes is None:
+            return self.dtype(slot)
+        return self.run_dtypes.get(slot, self.dtype(slot))
+
+    def _run_dtypes(self) -> Dict[int, str]:
+        """Each slot's dtype at run time under the activation dtype, by the engine's precision rules
+        (`nbxtensor.dtype.policy` op classes, `amp_fp32_output_dtype`): a half dtype recorded is held in the
+        activation dtype; under a half activation dtype an op of the float32 class, and the matrix products that
+        need float32 (mm, bmm, addmm, div), write float32, an op of the lower-precision class writes the activation
+        dtype, a cast its target (a half target in the activation dtype);
+        any other op the widest of its floating inputs (type promotion)."""
+        from nbxtensor.dtype.outputs import amp_fp32_output_dtype
+        from nbxtensor.dtype.policy import default_classes
+        classes = default_classes()
+        compute, graph = self.activation_dtype, self.dtype_name
+        halves = ("float16", "bfloat16")
+        width = {"float64": 8, "float32": 4, "float16": 2, "bfloat16": 2}
+        half = compute in halves
+
+        def held(name):
+            return compute if name in halves else name
+        out: Dict[int, str] = {}
+        for slot, tid in self.slot_tid.items():
+            recorded = (self.tensors.get(tid) or {}).get("dtype")
+            if recorded in width and (self.is_weight(slot) or slot not in self.writer):
+                out[slot] = compute if recorded != "float64" else recorded
+            elif recorded:
+                out[slot] = held(recorded)
+        for op in self.ops:
+            for slot in op.outputs:
+                recorded = self.dtype(slot)
+                if recorded not in width:
+                    continue
+                floats = [out[s] for s in op.inputs if out.get(s) in width]
+                first = floats[0] if floats else held(recorded)
+                if op.name in CASTS:
+                    out[slot] = held(recorded)
+                elif half and op.name in classes["float32"]:
+                    out[slot] = amp_fp32_output_dtype(compute, graph, False, False)
+                elif half and op.name in ("mm", "bmm", "addmm", "div") and compute == "float16":
+                    out[slot] = "float32"
+                elif half and op.name in classes["lower"]:
+                    out[slot] = compute
+                else:
+                    # the widest floating input (type promotion), the first one's when there is no other
+                    out[slot] = max(floats, key=width.get) if floats else first
+        return out
 
     def is_weight(self, slot: int) -> bool:
         meta = self.tensors.get(self.slot_tid.get(slot, "")) or {}
@@ -397,14 +454,15 @@ class DecodeGraph:
         if name in CASTS:
             source = op.inputs[0] if op.inputs else None
             target = self.dtype(op.outputs[0]) if op.outputs else None
-            if source is not None and self.dtype(source) == target:
+            if source is not None and self.run_dtype(source) == self.run_dtype(op.outputs[0]):
                 return "host", ()
-            if source is not None and target == self.dtype_name and self._reads_cached_attention(source):
+            if (source is not None and self.run_dtypes is None and target == self.dtype_name
+                    and self._reads_cached_attention(source)):
                 # the paged attention writes its output in the cache's dtype, the graph's: nothing left to cast
                 return "host", ()
             if source is not None and self._from_layout_view(source):
-                return "copy", (f"strided_copy (cast {self.dtype(source)} to {target})",)
-            return "copy", (f"copy ({self.dtype(source)} to {target})",)
+                return "copy", (f"strided_copy (cast {self.run_dtype(source)} to {self.run_dtype(op.outputs[0])})",)
+            return "copy", (f"copy ({self.run_dtype(source)} to {self.run_dtype(op.outputs[0])})",)
         if name in CLONES:
             if op.inputs and self._from_layout_view(op.inputs[0]):
                 return "copy", ("strided_copy",)
@@ -725,13 +783,13 @@ def unfused_chains(graph: DecodeGraph, in_a_group: set) -> Dict[str, int]:
 
 
 def decode_graph_of(container: Container, component: str, family: str, lm_config: Optional[Dict[str, Any]],
-                    decoder: Optional[Dict[str, Any]]) -> DecodeGraph:
+                    decoder: Optional[Dict[str, Any]], activation_dtype: Optional[str] = None) -> DecodeGraph:
     """The launch graph of a component: a cached decoder's (`decoder`: its entry of `decoders_of`), or a plain
     component's such as the head (`decoder` None)."""
     dag = container.json(f"components/{component}/graph.json")
     sequence, dag = engine_sequence(dag, family, lm_config)
     if decoder is None:
-        return DecodeGraph(sequence, dag)
+        return DecodeGraph(sequence, dag, activation_dtype=activation_dtype)
     from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
     plan = decoder_self_attention_plan(dag)
     if plan is None:
@@ -741,7 +799,8 @@ def decode_graph_of(container: Container, component: str, family: str, lm_config
     if kv_heads is None:
         raise Refused(f"{container.path}: the key/value state of `{component}` declares no `kv_heads`")
     return DecodeGraph(sequence, dag, plan["self_attn_uids"], plan["arange_uids"], plan["position_slice_uids"],
-                       plan["position_cumsum_uids"], keys_expanded=int(plan["kv_heads_at_op"]) > int(kv_heads))
+                       plan["position_cumsum_uids"], keys_expanded=int(plan["kv_heads_at_op"]) > int(kv_heads),
+                       activation_dtype=activation_dtype)
 
 
 def lm_config_for(container: Container, component: str) -> Dict[str, Any]:
@@ -752,7 +811,7 @@ def lm_config_for(container: Container, component: str) -> Dict[str, Any]:
     return lm_config_of(defaults, container.json("topology.json"), component)
 
 
-def census_of(path: Path) -> Dict[str, Any]:
+def census_of(path: Path, activation_dtype: Optional[str] = None) -> Dict[str, Any]:
     """The census of one container: one entry per cached decoder, its head's launches added to the token."""
     container = Container(path)
     family = container.json("manifest.json").get("family")
@@ -761,14 +820,15 @@ def census_of(path: Path) -> Dict[str, Any]:
     out = {"container": container.name, "path": str(path), "family": family, "decoders": []}
     for decoder in decoders_of(container):
         component = decoder["component"]
-        graph = decode_graph_of(container, component, family, lm_config_for(container, component), decoder)
+        graph = decode_graph_of(container, component, family, lm_config_for(container, component), decoder,
+                                 activation_dtype)
         row = census_of_graph(graph)
         row["component"], row["layers_declared"] = component, decoder["layers_declared"]
         row["expert_blocks"] = sum(1 for op in graph.ops if op.type == "custom::moe_fused")
         row["one_row_products"] = sum(1 for op in graph.ops if op.name in ("mm", "addmm"))
         row["head"], row["head_launches"], row["head_one_row_products"] = decoder["head"], 0, 0
         if decoder["head"]:
-            head = decode_graph_of(container, decoder["head"], family, None, None)
+            head = decode_graph_of(container, decoder["head"], family, None, None, activation_dtype)
             row["head_launches"] = sum(op.launches for op in head.ops)
             row["head_one_row_products"] = sum(1 for op in head.ops if op.name in ("mm", "addmm"))
         out["decoders"].append(row)
@@ -874,6 +934,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--json", type=Path, help="write the whole census here")
     parser.add_argument("--markdown", type=Path, help="write the table here (every reading)")
     parser.add_argument("--list", action="store_true", help="print each decoder's launch list")
+    parser.add_argument("--activation-dtype", choices=ACTIVATION_DTYPES,
+                        help="the dtype the run's hardware profile resolves for activations: casts whose value "
+                             "already holds the target dtype at run time launch nothing (default: the graph's "
+                             "recorded dtypes decide)")
     parser.add_argument("--profile", type=Path, help="a measured kernel table (run --profile-kernels JSON)")
     parser.add_argument("--tokens", type=int, help="the decoded tokens of the measured run")
     args = parser.parse_args(argv)
@@ -889,10 +953,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 family = container.json("manifest.json").get("family")
                 for decoder in decoders_of(container):
                     graph = decode_graph_of(container, decoder["component"], family,
-                                            lm_config_for(container, decoder["component"]), decoder)
+                                            lm_config_for(container, decoder["component"]), decoder,
+                                            args.activation_dtype)
                     print(f"## {container.name} / {decoder['component']} ({args.reading})")
                     print(launch_list(graph, fuse_all(graph, args.reading)))
-            entry = census_of(path)
+            entry = census_of(path, args.activation_dtype)
         except Refused as why:
             refused = True
             print(f"refused: {why}", file=sys.stderr)

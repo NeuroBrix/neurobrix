@@ -192,3 +192,16 @@ def test_the_table_has_one_row_per_decoder_and_names_a_refusal(tmp_path, capsys)
     rows = json.loads(out_json.read_text())
     assert [("decoders" in r, "refused" in r) for r in rows] == [(True, False), (False, True)]
     assert census.main([str(bad)]) == 2
+
+
+def test_a_cast_whose_value_already_holds_its_target_at_run_time_launches_nothing_under_an_activation_dtype(tmp_path):
+    path = _container(tmp_path / "small.nbx")
+    recorded = census.census_of(path)["decoders"][0]
+    half = census.census_of(path, "float16")["decoders"][0]
+    wide = census.census_of(path, "float32")["decoders"][0]
+    assert recorded["by_kernel"]["copy (bfloat16 to float32)"] == 2       # the recorded dtypes: both casts launch
+    # float16 run: the first layer's input is held in float16 (its cast launches), the second layer's input is
+    # the sum of a float32 product and it (float32 already: the cast finds its target)
+    assert half["launches"] == 29 and half["by_kernel"] == {
+        **{k: v for k, v in recorded["by_kernel"].items() if not k.startswith("copy (")}, "copy (float16 to float32)": 1}
+    assert wide["launches"] == 28 and not any(k.startswith("copy (") for k in wide["by_kernel"])
