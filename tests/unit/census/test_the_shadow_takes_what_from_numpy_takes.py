@@ -30,6 +30,7 @@ assert shadow == real, (shadow, real)
 
 
 @pytest.mark.cardless
+@pytest.mark.needs_gpu_runtime
 def test_the_installed_shadow_has_the_real_signature():
     # the shadow refuses a process that sees a card (`census.install`): the probe runs with none in sight, as a census does
     r = subprocess.run([sys.executable, "-c", PROBE], capture_output=True, text=True, timeout=300,

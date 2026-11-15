@@ -44,6 +44,7 @@ def _run(tmp_path, extra_env):
 
 
 @pytest.mark.cardless
+@pytest.mark.needs_gpu_runtime
 def test_the_shadow_records_the_key_the_live_launcher_forms(tmp_path):
     rec = tmp_path / "keys"
     r = _run(tmp_path, {"NBX_KEY_RECORD": str(rec)})
@@ -55,6 +56,7 @@ def test_the_shadow_records_the_key_the_live_launcher_forms(tmp_path):
 
 
 @pytest.mark.cardless
+@pytest.mark.needs_gpu_runtime
 def test_without_a_record_path_the_shadow_writes_nothing(tmp_path):
     rec = tmp_path / "keys"
     r = _run(tmp_path, {"NBX_KEY_RECORD": ""})

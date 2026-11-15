@@ -39,6 +39,7 @@ print("OK")
 
 
 @pytest.mark.cardless
+@pytest.mark.needs_gpu_runtime
 def test_a_shadow_records_the_op_of_each_key(tmp_path):
     rec = tmp_path / "keys"
     env = dict(os.environ)
