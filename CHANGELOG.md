@@ -95,8 +95,6 @@ served mixture-of-experts model is ready about 30 % sooner, and the voice reads 
   and any request after them, from the language model loaded at start.
 - **Served vision-language models hold a conversation on the Triton engine.** Ming-Lite-Omni-1.5 and the models on the
   same path keep their attention cache across requests, so every turn is answered over its full context.
-- **A served mixture-of-experts model is ready about 30 % sooner on the PyTorch engine.** Qwen3-Coder-30B-A3B on one
-  32 GB V100 is ready in 545 s instead of 769 s: the model graph is prepared once per start.
 
 ## [0.6.13] - 2026-11-12
 
