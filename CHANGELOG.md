@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-11-15
+
+With nbxtensor 0.1.8: a language model served on one NVIDIA card replays its decode as CUDA graphs by default, the
+video models that decode their frames in a stream run under the Triton engine again, and `neurobrix run
+--profile-kernels` shows where the GPU time goes on Apple GPUs.
+
 ### Added
 
 - **`neurobrix run --profile-kernels` shows where the GPU time goes on Apple GPUs.** The run prints its kernels

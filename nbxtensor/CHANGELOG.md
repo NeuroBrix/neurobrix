@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-15
+
 ### Added
 - `nbxtensor.memory.peak_memory_allocated(device)`, `reset_peak_memory(device)` and `pool_stats()`: the allocator's
   peak, its restart and the pool's counters through the public API.
