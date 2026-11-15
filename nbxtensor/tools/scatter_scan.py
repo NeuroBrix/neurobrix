@@ -67,6 +67,9 @@ NOT_SEMANTIC = {
     ("triton/weight_loader.py", "_load_shard_into_arenas"): "the engine's loading policy over one shard (which weight on "
         "which device or the host, at which dtype, widened or not; DESIGN.md section 3: the engine keeps its loading "
         "policy); every read, conversion and placement is nbxtensor.io.safetensors",
+    ("core/module/temporal_stream_runner.py", "nbytes"): "a parked stream state answering the library's deferred-free "
+        "batch (nbxtensor.memory.deferred_frees.DeferredFrees.add reads t.nbytes()) with the device bytes it holds: "
+        "none, it waits in host memory; no size is computed",
 }
 
 # Names that are tensor semantics wherever they are defined.
