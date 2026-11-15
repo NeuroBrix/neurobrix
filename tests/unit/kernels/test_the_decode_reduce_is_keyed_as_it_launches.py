@@ -89,11 +89,15 @@ def test_the_paged_decode_reduce_is_its_key(monkeypatch, Tk, q_name):
 
 
 @pytest.mark.parametrize("splits,dv,out", [(1, 64, "fp16"), (17, 128, "bf16"), (64, 80, "fp32")])
-def test_the_certifier_certifies_the_reduce_key(splits, dv, out):
+def test_the_certifier_certifies_the_reduce_key(splits, dv, out, monkeypatch):
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops.flash_decode import flash_decode_reduce_kernel as K
+    from neurobrix.kernels import autotune_certify as AC
     from neurobrix.kernels.autotune_certify import _bind_hardware_profile, certify_key
     _bind_hardware_profile()
+    # the keying is under test, not the clock: the stability witness is a stand-in (a constant never drifts),
+    # as the other certification tests hold the regime still
+    monkeypatch.setattr(AC, "_witness_time_ms", lambda proto: 1.0)
     f16, bf16, f32 = _dtypes()
     _q, key = LK.decode_reduce_launch(splits, dv, {"fp16": f16, "bf16": bf16, "fp32": f32}[out])
     entry = certify_key(LK.DECODE_REDUCE, K, key, 1e-2, np.random.default_rng(1),

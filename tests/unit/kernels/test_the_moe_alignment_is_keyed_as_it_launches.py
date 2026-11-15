@@ -89,12 +89,16 @@ def test_a_cards_share_is_keyed_by_the_layers_pairs(monkeypatch):
 
 @pytest.mark.parametrize("stage", [0, 1, 2])
 @pytest.mark.parametrize("tokens,top_k,experts", [(20, 6, 64), (300, 8, 128)])
-def test_the_certifier_certifies_every_stage(stage, tokens, top_k, experts):
+def test_the_certifier_certifies_every_stage(stage, tokens, top_k, experts, monkeypatch):
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.ops import moe_align as MA
+    from neurobrix.kernels import autotune_certify as AC
     from neurobrix.kernels.autotune_certify import _bind_hardware_profile, certify_key
     _bind_hardware_profile()
+    # the keying is under test, not the clock: the stability witness is a stand-in (a constant never drifts),
+    # as the other certification tests hold the regime still
+    monkeypatch.setattr(AC, "_witness_time_ms", lambda proto: 1.0)
     qual = LK.MOE_ALIGN[stage]
     key = next(k for q, k in LK.moe_align_launches(tokens, top_k, experts, NBXDtype.float16) if q == qual)
     entry = certify_key(qual, getattr(MA, qual.rsplit(".", 1)[1]), key, 1e-6, np.random.default_rng(2),
