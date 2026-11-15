@@ -85,6 +85,10 @@ class ParkedTensor:
     #: frees count `_nbytes`) frees nothing on the card for it
     _nbytes = 0
 
+    def nbytes(self) -> int:
+        """What a deferred-free batch reads (`DeferredFrees.add`): no device bytes."""
+        return self._nbytes
+
     def __init__(self, t: Any):
         if _is_nbx(t):
             self._host = t.to_cpu(pinned=t._device == "cuda")
