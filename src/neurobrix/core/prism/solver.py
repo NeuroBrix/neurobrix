@@ -1203,12 +1203,13 @@ class PrismSolver:
         return int(self._effective_capacity_mb(dev) * 1024 * 1024)
 
     def _kv_growth_reserve_bytes(self, cards, bounded: set) -> int:
-        """The allocator's reserve (`_margin_mb`) the decode cache may not GROW into on `cards`, the floor apart
+        """The allocator's reserve (`_margin_mb`) the decode cache may not take on `cards`, its floor included
         (`price.kv_cache_size`): summed over the cards whose capacity is the raw rung — the compiled engine on a card no
         residency is granted on after the cache. 0 where `_kv_capacity_bytes` already holds the band back: the usable
         part (`bounded`), and on the Triton engine the whole-usable part (its runtime growth measured, `_rung_part_mb`).
         Run or served, the cache that took the band left the first prefill no room: a 7B decoder held lazy on a 16 GB
-        card, plan + cache = the 15 845 MB budget, out of memory on a 260 MiB matmul (2026-11-15)."""
+        card, plan + cache = the 15 845 MB budget, out of memory on a 260 MiB matmul; its floor granted inside the band,
+        out of memory from 4 358 positions (2026-11-15)."""
         raw = [] if engine_of(getattr(self, "_mode", "compiled")) == "triton" else [d for d in cards if d.device_string not in bounded]
         return sum(int(self._margin_mb(self._effective_capacity_mb(d)) * 1024 * 1024) for d in raw)
 
@@ -3056,8 +3057,8 @@ class PrismSolver:
                     # ... and on the Triton engine a card whose components are held WHOLE keeps the drain's floor
                     # (`_kv_capacity_bytes`): never a cache granted on the hot loop's queue (2026-11-12)
                     total_capacity = min(total_capacity, sum(self._kv_capacity_bytes(d, _bounded) for d in _cards))
-                    # ... and the cache GROWS past its floor only above the allocator's reserve where the capacity is the raw
-                    # rung (`_kv_growth_reserve_bytes`); the floor is still granted from the whole room (`kv_cache_size`)
+                    # ... and the cache, its floor included, only above the allocator's reserve where the capacity is the raw
+                    # rung (`_kv_growth_reserve_bytes`): a floor inside it refuses this strategy (`kv_cache_size`)
                     _kv_only, kv_growth_reserve = _cards, self._kv_growth_reserve_bytes(_cards, _bounded)
 
                 if strat_name == "zero3":

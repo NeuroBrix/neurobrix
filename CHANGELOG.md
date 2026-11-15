@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
   tokenizer checked (19 of the catalogue) gives the same ids as before.
 - **A 7B language model run on a 16 GB card with the PyTorch engine no longer runs out of memory on its first
-  request.** Its decode cache takes the positions the request asks for; it grows past them, and a served session's
-  window with it, only into the memory above the reserve the engine keeps for the allocator.
+  request.** Its decode cache, the positions the request asks for included, and a served session's window with it,
+  take only the memory above the reserve the engine keeps for the allocator; a request whose cache does not fit there
+  is planned another way before anything is loaded, or refused by a sentence naming the positions and the room.
 
 ## [0.6.16] - 2026-11-15
 
