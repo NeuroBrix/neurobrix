@@ -134,6 +134,10 @@ class InferenceEngine:
         hw_profile = load_profile(self.hardware_id)
 
         cache_path = self._container._cache_path
+        # the declared sub-components, once, at load: a daemon that cannot get one never becomes ready, and a request
+        # never fetches, hashes or imports one
+        from neurobrix.processors import open_declared
+        open_declared(manifest, cache_path, [c.name for c in neural_components])
         defaults_path = cache_path / "runtime" / "defaults.json"
         cached_defaults = {}
         if defaults_path.exists():
@@ -186,13 +190,8 @@ class InferenceEngine:
         # 3c. Apply CPU optimizations from hardware profile
         if hw_profile.cpu:
             from neurobrix.core.prism.cpu_config import apply_cpu_config
-            apply_cpu_config(
-                cpu=hw_profile.cpu,
-                strategy=self._plan.strategy,
-                device_count=hw_profile.device_count,
-                preferred_dtype=hw_profile.preferred_dtype,
-                mode=self.mode,
-            )
+            apply_cpu_config(cpu=hw_profile.cpu, strategy=self._plan.strategy, device_count=hw_profile.device_count,
+                             preferred_dtype=hw_profile.preferred_dtype, mode=self.mode)
 
         # 4. Determine warm serving compatibility
         # loading_mode is set by Prism solver based on strategy type:

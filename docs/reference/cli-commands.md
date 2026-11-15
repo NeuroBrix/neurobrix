@@ -18,6 +18,7 @@ offers and no page names is a command nobody will use.
 | `info` | Display system information |
 | `inspect` | Inspect a .nbx file or an installed model |
 | `import` | Download model from NeuroBrix registry |
+| `processor` | A model's sub-components: fetch them ahead, carry them to an offline machine, list them |
 | `list` | List installed models |
 | `remove` | Remove a model (cache, store, or both) |
 | `clean` | Wipe all downloaded models (store and/or cache) |

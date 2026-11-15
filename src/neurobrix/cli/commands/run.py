@@ -626,11 +626,7 @@ def cmd_run(args):
         log.error(f"Error: 'family' missing in manifest for '{args.model}'.")
         sys.exit(1)
 
-    from neurobrix.core.runtime.output_dispatch import (
-        validate_required_inputs,
-        resolve_mode,
-        get_family_config,
-    )
+    from neurobrix.core.runtime.output_dispatch import validate_required_inputs, resolve_mode, get_family_config
     try:
         validate_required_inputs(family, args)
         mode = resolve_mode(family, args)
@@ -674,6 +670,10 @@ def cmd_run(args):
 
     neural_components = container.get_neural_components()
     log.debug(f"   Components: {[c.name for c in neural_components]}")
+    # The sub-components the container declares (neurobrix/processors), present and verified before anything is
+    # planned: fetched once at a first run, said in two lines; nothing at all for a container that declares none
+    from neurobrix.processors import open_declared
+    open_declared(manifest, cache_path, [c.name for c in neural_components])
 
     # 2. Prism Allocation
     log.debug("[2/4] Solving hardware allocation...")

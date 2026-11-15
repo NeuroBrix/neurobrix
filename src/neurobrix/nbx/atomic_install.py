@@ -291,3 +291,29 @@ def installing(cache_path, *, label: str = "install",
         if aside is not None:
             shutil.rmtree(aside, ignore_errors=True)
         shutil.rmtree(lock, ignore_errors=True)
+
+
+@contextmanager
+def held_in_turn(lock, *, label: str, poll_seconds: float) -> Iterator[None]:
+    """Hold `lock` (a directory created exclusively, its owner inside) for the block; while a live process holds it,
+    wait, polling every `poll_seconds`; a lock this host left behind with its process gone is taken over.
+
+    The waiting form of the install lock: two first runs of one model ask for the same file, and the second has
+    nothing to say to the person but to wait for the first."""
+    lock = Path(lock)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    while True:
+        try:
+            os.mkdir(lock)
+            break
+        except FileExistsError:
+            if _is_our_dead_lock(_read_owner(lock)):
+                shutil.rmtree(lock, ignore_errors=True)
+            else:
+                time.sleep(poll_seconds)
+    try:
+        (lock / "owner.json").write_text(json.dumps({"host": socket.gethostname(), "pid": os.getpid(),
+                                                     "started": time.time(), "label": label}))
+        yield
+    finally:
+        shutil.rmtree(lock, ignore_errors=True)

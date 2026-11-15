@@ -9,6 +9,7 @@ Commands: run, info, inspect, validate, import, list, remove, clean, hub
 # 2026-10-26: this block set OMP_NUM_THREADS / MKL_NUM_THREADS from the machine's core count at import.
 import sys
 import argparse
+import importlib
 from pathlib import Path
 
 from neurobrix import __version__
@@ -114,13 +115,33 @@ def _add_verbose(p, top: bool = False) -> None:
                    help='-v: the engine\'s developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both)')
 
 
+def _add_processor_parser(subparsers) -> None:
+    """`neurobrix processor fetch|install|list`: a model's declared sub-components (neurobrix/processors)."""
+    from neurobrix.processors.messages import COMMAND as PROCESSOR_COMMAND
+    processor_parser = subparsers.add_parser(
+        PROCESSOR_COMMAND,
+        help="A model's sub-components: fetch them ahead, carry them to an offline machine, list them",
+        description="A model's declared sub-components (a text front end, for one) are downloaded once, at its "
+                    "first run, and verified by the checksum its container states. These commands do it ahead.")
+    processor_sub = processor_parser.add_subparsers(dest='action')
+    processor_parser.set_defaults(processor_parser=processor_parser)
+    p_fetch = processor_sub.add_parser('fetch', help="download every sub-component a model declares")
+    p_fetch.add_argument('model', help='an installed model, as `neurobrix list` names it')
+    p_fetch.add_argument('--to', default=None, metavar='FOLDER',
+                         help='write the files to this folder (to carry them to an offline machine) instead of the cache')
+    p_install = processor_sub.add_parser('install', help='put a sub-component file into the cache')
+    p_install.add_argument('file', help='the file `neurobrix processor fetch --to` wrote')
+    p_install.add_argument('--for', dest='for_model', default=None, metavar='MODEL',
+                           help='check it at once against this installed model')
+    processor_sub.add_parser('list', help='the sub-components in the cache')
+
+
 def create_parser(show_dev: bool = False):
     """Create the main argument parser with subcommands. `show_dev`: the developer commands are listed in the help."""
     from neurobrix.cli.utils import REGISTRY_URL, IMPORT_EXAMPLES     # not at import: it resolves the paths
 
     parser = argparse.ArgumentParser(
-        prog='neurobrix',
-        description='NeuroBrix - Universal Deep Learning Inference Engine',
+        prog='neurobrix', description='NeuroBrix - Universal Deep Learning Inference Engine',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -318,6 +339,8 @@ For more information: https://neurobrix.org"""
     import_parser.add_argument('--json', action='store_true',
                                help='One NDJSON event per phase on stdout (info, license, download with byte '
                                     'counts, downloaded, extracting, installed, done | error); human lines on stderr')
+
+    _add_processor_parser(subparsers)
 
     # ========================================
     # LIST command
@@ -572,6 +595,23 @@ def _utf8_streams(*streams) -> None:
 LOGGERS = ("neurobrix", "nbxtensor")
 
 
+#: the commands whose door is called and whose return is not read: command -> (module of cli/commands, function)
+CALLED = {
+    'import': ('registry', 'cmd_import'),
+    'list': ('registry', 'cmd_list'),
+    'remove': ('registry', 'cmd_remove'),
+    'clean': ('registry', 'cmd_clean'),
+    'hub': ('registry', 'cmd_hub'),
+    'info': ('info', 'cmd_info'),
+    'inspect': ('info', 'cmd_inspect'),
+    'serve': ('serve', 'cmd_serve'),
+    'chat': ('chat', 'cmd_chat'),
+    'stop': ('serve', 'cmd_stop'),
+    'validate': ('validate', 'cmd_validate'),
+    'upscale': ('upscale', 'cmd_upscale'),
+}
+
+
 def main():
     """Main entry point."""
     _utf8_streams(sys.stdout, sys.stderr)
@@ -602,6 +642,7 @@ def main():
         _census.install(hardware=getattr(args, "hardware", None))
 
     from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError
+    from neurobrix.processors.messages import COMMAND as PROCESSOR_COMMAND
     try:
         if args.command == 'autotune':
             from neurobrix.cli.commands.autotune import cmd_autotune
@@ -623,46 +664,16 @@ def main():
             _rc = cmd_run(args)     # under --explain-plan --json the record is its only stdout line (the rest logs)
             if _rc:
                 sys.exit(int(_rc))
-        elif args.command == 'import':
-            from neurobrix.cli.commands.registry import cmd_import
-            cmd_import(args)
-        elif args.command == 'list':
-            from neurobrix.cli.commands.registry import cmd_list
-            cmd_list(args)
-        elif args.command == 'remove':
-            from neurobrix.cli.commands.registry import cmd_remove
-            cmd_remove(args)
-        elif args.command == 'clean':
-            from neurobrix.cli.commands.registry import cmd_clean
-            cmd_clean(args)
-        elif args.command == 'hub':
-            from neurobrix.cli.commands.registry import cmd_hub
-            cmd_hub(args)
+        elif args.command in CALLED:
+            _module, _function = CALLED[args.command]
+            getattr(importlib.import_module(f"neurobrix.cli.commands.{_module}"), _function)(args)
+        elif args.command == PROCESSOR_COMMAND:
+            from neurobrix.cli.commands.processor import cmd_processor
+            sys.exit(cmd_processor(args))
         elif args.command == 'coverage':
             from neurobrix.cli.commands.coverage import cmd_coverage
             return cmd_coverage(args)
 
-        elif args.command == 'info':
-            from neurobrix.cli.commands.info import cmd_info
-            cmd_info(args)
-        elif args.command == 'inspect':
-            from neurobrix.cli.commands.info import cmd_inspect
-            cmd_inspect(args)
-        elif args.command == 'serve':
-            from neurobrix.cli.commands.serve import cmd_serve
-            cmd_serve(args)
-        elif args.command == 'chat':
-            from neurobrix.cli.commands.chat import cmd_chat
-            cmd_chat(args)
-        elif args.command == 'stop':
-            from neurobrix.cli.commands.serve import cmd_stop
-            cmd_stop(args)
-        elif args.command == 'validate':
-            from neurobrix.cli.commands.validate import cmd_validate
-            cmd_validate(args)
-        elif args.command == 'upscale':
-            from neurobrix.cli.commands.upscale import cmd_upscale
-            cmd_upscale(args)
         elif args.command == 'doctor':
             from neurobrix.cli.commands.doctor import cmd_doctor
             sys.exit(cmd_doctor(args))

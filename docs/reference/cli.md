@@ -14,6 +14,7 @@ A default of `—` means the value comes from elsewhere: the model's container, 
 | [`info`](#info) | Display system information |
 | [`inspect`](#inspect) | Inspect a .nbx file or an installed model |
 | [`import`](#import) | Download model from NeuroBrix registry |
+| [`processor`](#processor) | A model's sub-components: fetch them ahead, carry them to an offline machine, list them |
 | [`list`](#list) | List installed models |
 | [`remove`](#remove) | Remove a model (cache, store, or both) |
 | [`clean`](#clean) | Wipe all downloaded models (store and/or cache) |
@@ -160,6 +161,54 @@ Examples:
   neurobrix import hexgrad/Kokoro-82M
 
 Run `neurobrix hub` to list every model the registry serves.
+```
+
+## processor
+
+A model's sub-components: fetch them ahead, carry them to an offline machine, list them.
+
+A model's declared sub-components (a text front end, for one) are downloaded once, at its first run, and verified by the checksum its container states. These commands do it ahead.
+
+```
+neurobrix processor [options] {fetch,install,list}
+```
+
+| argument | default | description |
+|---|---|---|
+| `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
+
+### processor fetch
+
+download every sub-component a model declares.
+
+```
+neurobrix processor fetch [options] model
+```
+
+| argument | default | description |
+|---|---|---|
+| `model` | required | an installed model, as `neurobrix list` names it |
+| `--to` `FOLDER` | — | write the files to this folder (to carry them to an offline machine) instead of the cache |
+
+### processor install
+
+put a sub-component file into the cache.
+
+```
+neurobrix processor install [options] file
+```
+
+| argument | default | description |
+|---|---|---|
+| `file` | required | the file `neurobrix processor fetch --to` wrote |
+| `--for` `MODEL` | — | check it at once against this installed model |
+
+### processor list
+
+the sub-components in the cache.
+
+```
+neurobrix processor list
 ```
 
 ## list
