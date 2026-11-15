@@ -136,18 +136,7 @@ class CapturedPlan:
         # either: one stream orders every node after the one before, no host work runs between them, and `launch`
         # synchronises the context before and after the graph. A plan whose records name another card (a SETDEV or a
         # SYNC: a peer copy waiting on its source card) is `SegmentedPlan`'s, refused here by name.
-        devs = {rec[0] for tag, rec in records if tag in ("d", "y")}
-        if dev_idx is not None:
-            devs.add(dev_idx)
-        foreign = sorted({tag for tag, _ in records} - {"k", "m", "h", "s", "d", "y"})
-        if foreign or len(devs) > 1:
-            raise GraphReplayError(f"one graph holds one card's kernels, copies and memsets: this plan has "
-                                   f"{'actions ' + str(foreign) if foreign else ''}"
-                                   f"{' and ' if foreign and len(devs) > 1 else ''}"
-                                   f"{'cards ' + str(sorted(devs)) if len(devs) > 1 else ''} (SegmentedPlan's)")
-        if devs:
-            dev_idx = next(iter(devs))
-        records = [r for r in records if r[0] not in ("d", "y")]
+        records, dev_idx = self._one_card(records, dev_idx)
         api = _CudaGraphAPI.get()
         self.api = api
         self.staging: List[int] = []
@@ -162,20 +151,7 @@ class CapturedPlan:
         self.stream = stream
         n_launch = 0
         capturing = False
-        # Pre-pass OUTSIDE capture: stage every recorded H2D snapshot
-        # into a dedicated device buffer (sync malloc/memcpy are not
-        # capture-legal; the snapshots are plan constants, so one
-        # upload serves every launch).
-        staged = {}
-        for i, (tag, rec) in enumerate(records):
-            if tag == "h":
-                dst, snap = rec
-                stage = DeviceAllocator.malloc_cuda(len(snap), dev_idx)
-                buf = (ctypes.c_char * len(snap)).from_buffer_copy(snap)
-                DeviceAllocator.memcpy(stage, ctypes.addressof(buf),
-                                       len(snap), 1)
-                staged[i] = stage
-                self.staging.append(int(stage))
+        staged = self._stage_snapshots(records, dev_idx)
         try:
             _ck(api.begin(stream, _CU_STREAM_CAPTURE_MODE_RELAXED),
                 "cuStreamBeginCapture_v2")
@@ -235,6 +211,39 @@ class CapturedPlan:
             self.destroy()
             raise
         self.launches = n_launch
+
+    @staticmethod
+    def _one_card(records, dev_idx):
+        """The plan's one card and its records without the SETDEV / SYNC that name it; a plan with another action or
+        a second card is refused by name (`SegmentedPlan`'s)."""
+        devs = {rec[0] for tag, rec in records if tag in ("d", "y")}
+        if dev_idx is not None:
+            devs.add(dev_idx)
+        foreign = sorted({tag for tag, _ in records} - {"k", "m", "h", "s", "d", "y"})
+        if foreign or len(devs) > 1:
+            raise GraphReplayError(f"one graph holds one card's kernels, copies and memsets: this plan has "
+                                   f"{'actions ' + str(foreign) if foreign else ''}"
+                                   f"{' and ' if foreign and len(devs) > 1 else ''}"
+                                   f"{'cards ' + str(sorted(devs)) if len(devs) > 1 else ''} (SegmentedPlan's)")
+        if devs:
+            dev_idx = next(iter(devs))
+        return [r for r in records if r[0] not in ("d", "y")], dev_idx
+
+    def _stage_snapshots(self, records, dev_idx):
+        """Pre-pass OUTSIDE capture: every recorded H2D snapshot staged into a dedicated device buffer (sync
+        malloc/memcpy are not capture-legal; the snapshots are plan constants, so one upload serves every launch).
+        Returns {record index: device buffer}; the buffers are kept in `self.staging` for `destroy`."""
+        staged = {}
+        for i, (tag, rec) in enumerate(records):
+            if tag == "h":
+                dst, snap = rec
+                stage = DeviceAllocator.malloc_cuda(len(snap), dev_idx)
+                buf = (ctypes.c_char * len(snap)).from_buffer_copy(snap)
+                DeviceAllocator.memcpy(stage, ctypes.addressof(buf),
+                                       len(snap), 1)
+                staged[i] = stage
+                self.staging.append(int(stage))
+        return staged
 
     def launch(self) -> None:
         # DEVICE-wide sync BEFORE the graph: the per-step input copies
