@@ -361,8 +361,7 @@ class FrozenPlan:
         self.other_slabs: Dict[int, "SlabAllocator"] = {}
         # Phase 4b: lazily captured CUDA graph of the action list, wherever the backend offers CUDA graphs
         # (`replay_graph.capable`). Adopted 2026-11-14 on its measured A/B (V100, served decode, bytes identical):
-        # TinyLlama 75.8 -> 147.6 tok/s, Qwen2.5-Coder-7B 40.0 -> 44.9 — the direct replay issues ~725 launches and
-        # ~190 copies a token from the host. A capture failure disables the graph for this bucket only: the direct
+        # the direct replay issues ~725 launches and ~190 copies a token from the host. A capture failure disables the graph for this bucket only: the direct
         # replay stays the correct path.
         self.graph = None
         self.graph_disabled = False
