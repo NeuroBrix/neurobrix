@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokenizers of chatterbox and Open-Sora now split a text holding one of these four characters as the vendor's
   tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
   tokenizer checked (19 of the catalogue) gives the same ids as before.
+- **A prompt sent a second time to a served language model no longer waits about ten seconds on NVIDIA V100 cards.**
+  When a conversation's prompt is already held by the server, only its last token is computed again; the kernel
+  settings for that step were not in the certified tables for head size 128, so the server measured them during the
+  request. They are certified now for both V100 memory sizes, at every prompt length up to 32 768 tokens.
 
 ## [0.6.16] - 2026-11-15
 
