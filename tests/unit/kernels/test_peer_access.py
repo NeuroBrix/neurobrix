@@ -59,8 +59,12 @@ def test_peer_access_is_not_queried_by_hand_anywhere_else():
     import pathlib
     import neurobrix
     own = pathlib.Path(nbx_tensor.__file__).resolve()
-    import nbxtensor.memory.allocator as _a, nbxtensor.backend.runtime as _r
+    import nbxtensor.memory.allocator as _a, nbxtensor.backend.runtime as _r, nbxtensor.memory.vmm as _v
     seam_alloc, seam_runtime = pathlib.Path(_a.__file__).resolve(), pathlib.Path(_r.__file__).resolve()
+    # The expandable range's access grant (memory/vmm.py, 2026-11-11) asks the DRIVER which devices can reach a chunk,
+    # once when the device's range is created, never on a transfer path, and refuses a failed answer by name (a grant
+    # is not the runtime's memoised permission): it may ask, never enable.
+    seam_vmm = pathlib.Path(_v.__file__).resolve()
     roots = (pathlib.Path(neurobrix.__file__).resolve().parent, own.parent)   # the engine and its library (M1)
     offenders = []
     for path in (p for r in roots for p in r.rglob("*.py")):
@@ -68,6 +72,8 @@ def test_peer_access_is_not_queried_by_hand_anywhere_else():
         if path.resolve() in (own, seam_alloc, seam_runtime):   # the modules tensor.py was cut into (M2)
             continue
         text = path.read_text()
+        if path.resolve() == seam_vmm:
+            text = text.replace("cuDeviceCanAccessPeer", "")
         if "EnablePeerAccess" in text or "CanAccessPeer" in text:
             offenders.append(str(path.relative_to(root)))
     assert not offenders, (
