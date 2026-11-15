@@ -14,6 +14,8 @@ package, `espeak_ng_equality_<version>.tar.zst`, with its own LICENSE (GPL-3.0-o
   pinned archive). The archive is refused by name when absent or when its size or sha256 differs from the pin; the
   unpacked files are checked against the MANIFEST. Every unequal line is listed with both readings; exit 0 only at
   all lines equal. `--reference DIR` reads an unpacked folder (held-out set, test corpus).
+- Read the corpus with our reader (the candidate folder of the grade): `read_corpus.py --data DIR --corpus DIR
+  --out DIR`, where `--data` holds the pinned vendor data files under their original relative paths.
 - Rebuild the corpus: `build_corpus.py --sources DIR --out DIR` (seeded; inputs: the vendor's word-list data file at
   its pinned revision, a system word list, a public-domain prose archive, the recorded unknown-word texts).
 - Rebuild the reference: in a venv with `espeakng-loader==0.2.4` and `phonemizer-fork==3.3.2` installed (print the
