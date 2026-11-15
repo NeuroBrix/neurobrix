@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Since 0.6.16, two tokenizers give their vendor's ids for the separator characters U+001C..U+001F.** The
+  tokenizers of chatterbox and Open-Sora now split a text holding one of these four characters as the vendor's
+  tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
+  tokenizer checked (19 of the catalogue) gives the same ids as before.
+
 ## [0.6.16] - 2026-11-15
 
 With nbxtensor 0.1.8: a language model served on one NVIDIA card replays its decode as CUDA graphs by default, the
