@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the GPU starts a step while the host is still encoding it.
 
 ### Fixed
+- `served_certification` answers what a launch is served: a key certified under its generator's alias (the one hop
+  a launch's lookup takes) is found by a planner too, so a plan no longer counts a served key as missing.
 - A peer question the GPU runtime fails is refused by name (`DeviceAllocator.can_access_peer`), never read as "no
   peer"; the expandable memory range asks that one door which cards may reach its memory.
 - `install_shadow(devices)` installs on a host whose GPU runtime is there without its driver (it sees no device);
