@@ -69,6 +69,7 @@ def test_the_first_launch_probe_measures_on_the_trace(monkeypatch):
     from neurobrix.core.prism import facts_probe as P
     from nbxtensor.memory import vmm as V
     monkeypatch.setattr(V.Vmm, "load", staticmethod(lambda libs: object()))
+    monkeypatch.setattr(V.Vmm, "_reachable_from", lambda self: None)   # the peer grant needs a driver: not asked here
     monkeypatch.setattr(V.Vmm, "supported", lambda self: True)
     monkeypatch.setattr(V.Vmm, "granularity", lambda self: (0, 2 * MB))
     seen = []

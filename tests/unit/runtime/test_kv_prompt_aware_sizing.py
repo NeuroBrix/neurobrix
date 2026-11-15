@@ -191,6 +191,7 @@ def test_replacement_retires_the_old_generation_replay_plans() -> None:
             return ("kv_decode_paged", 1, 1, self.cache._uid, self.cache.generation)
         def replay_advance(self): pass
         def replay_restore(self): pass
+        def replay_host_mark(self): return 0
         def intercept(self, *a, **k): pass
 
     class _Seq:  # the fields signature() reads

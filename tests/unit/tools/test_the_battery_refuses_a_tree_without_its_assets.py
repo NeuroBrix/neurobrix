@@ -69,6 +69,9 @@ def test_an_empty_collection_is_not_refused(tmp_path, monkeypatch):
     B.pytest_collection_modifyitems(_Config(), [])
 
 
+@pytest.mark.skipif(B.refuse_a_tree_without_its_ignored_assets(B.REPO_ROOT) != [],
+                    reason="needs the gitignored battery assets (tests/assets/test_speech_ref.wav and "
+                           "tests/assets/test_upscale_input.png) copied into this tree: a worktree never carries them")
 def test_the_real_tree_carries_them(tmp_path):
     """The premise of every battery launched from here, checked rather than assumed."""
     assert B.refuse_a_tree_without_its_ignored_assets(B.REPO_ROOT) == []

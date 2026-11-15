@@ -39,10 +39,20 @@ def _op_file(name):
 INT32_FORM = re.compile(r"^\s*\w+ = \(?pid\w* \* (BLOCK_SIZE|BLOCK) \+ tl\.arange\(0, (BLOCK_SIZE|BLOCK)\)\)?(\.to\(tl\.int64\))?\s*(#.*)?$", re.M)
 
 
+def _pid_is_widened(text, at, name):
+    """The program id this offset multiplies was widened where it was bound (`pid = tl.program_id(0).to(tl.int64)`):
+    its product is int64 whichever way the offset line is written."""
+    bound = re.findall(rf"^\s*{re.escape(name)} = tl\.program_id\(\d\)(\.to\(tl\.int64\))?\s*$", text[:at], re.M)
+    return bool(bound) and bound[-1] != ""
+
+
 def test_no_flat_offset_is_computed_in_int32():
     hits = []
     for f in _ops_files():
-        for m in INT32_FORM.finditer(f.read_text(encoding="utf-8")):
+        text = f.read_text(encoding="utf-8")
+        for m in INT32_FORM.finditer(text):
+            if _pid_is_widened(text, m.start(), re.search(r"pid\w*", m.group(0)).group(0)):
+                continue
             hits.append(f"{f.name}: {m.group(0).strip()}")
     assert not hits, ("flat offsets whose product is computed in int32 — it wraps past 2^31 elements; write "
                       "`pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)` (widen the program id):\n  " + "\n  ".join(hits))

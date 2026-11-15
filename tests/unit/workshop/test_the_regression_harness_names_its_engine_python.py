@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 
 
@@ -26,6 +28,9 @@ def test_without_neurobrix_python_the_harness_refuses_at_entry(workshop_configur
     assert "NEUROBRIX_PYTHON is not set" in r.stdout + r.stderr, (r.stdout + r.stderr)[-1500:]
 
 
+@pytest.mark.skipif(not all((REPO / a).exists() for a in ("tests/assets/test_speech_ref.wav", "tests/assets/test_upscale_input.png")),
+                    reason="needs the gitignored battery assets (tests/assets/test_speech_ref.wav and "
+                           "tests/assets/test_upscale_input.png) copied into this tree: the battery refuses to collect without them")
 def test_with_neurobrix_python_named_the_harness_collects(workshop_configuration):
     r = _collect({"NEUROBRIX_PYTHON": sys.executable})
     assert r.returncode == 0, (r.stdout + r.stderr)[-1500:]
