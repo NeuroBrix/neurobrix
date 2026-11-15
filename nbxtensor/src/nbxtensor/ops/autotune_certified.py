@@ -1328,6 +1328,14 @@ def computed_key(tuner, key: tuple, kwargs: Optional[Dict[str, Any]] = None) -> 
     return tuple(head + tags) if changed else None
 
 
+def lookup_keys(kernel_qual: str, tuner, key: tuple, kwargs: Optional[Dict[str, Any]] = None) -> List[tuple]:
+    """The keys the directory is read at, in order, when it holds nothing for the launch's own: the operand widened on
+    load (`computed_key`), then the kernel's certified default of each (`launch_keys.square_default_key`)."""
+    from nbxtensor.ops.launch_keys import square_default_key
+    twin = computed_key(tuner, key, kwargs)
+    return [k for k in [twin] + [square_default_key(kernel_qual, k) for k in (key, twin) if k] if k]
+
+
 def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = None,
           memory_gb: Optional[int] = None) -> bool:
     """Put the certified config in the tuner's cache for `key` — no sweep, no
@@ -1350,6 +1358,19 @@ def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = Non
                                      maxnreg=cfg.get("maxnreg"))
     _SERVED["certified"] += 1
     return True
+
+
+def _seeded_entry(qual: str, tuner, key: tuple) -> Tuple[Optional[Dict[str, Any]], Optional[tuple]]:
+    """The directory's entry for a seeded key, any class, and the key it was read at (None: the key's own): its own
+    key, then a widened operand's or the kernel's certified default (`lookup_keys`). (None, None) when none serves."""
+    try:
+        for twin in [None] + lookup_keys(qual, tuner, key):
+            entry = lookup(qual, tuner, twin or key, any_class=True)
+            if entry is not None:
+                return entry, twin
+    except Exception:
+        pass
+    return None, None
 
 
 def override_seeded(tuners=None) -> int:
@@ -1380,14 +1401,7 @@ def override_seeded(tuners=None) -> int:
         for key in list(cache.keys()):
             if not isinstance(key, tuple):
                 continue
-            twin = None
-            try:
-                entry = lookup(qual, tuner, key, any_class=True)
-                if entry is None:
-                    twin = computed_key(tuner, key)       # a widened-on-load operand, by the profile's rule
-                    entry = lookup(qual, tuner, twin, any_class=True) if twin else None
-            except Exception:
-                entry = None
+            entry, twin = _seeded_entry(qual, tuner, key)
             if entry is None:
                 continue
             local = cache.pop(key, None)

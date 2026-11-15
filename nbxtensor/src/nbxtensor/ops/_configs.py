@@ -188,11 +188,11 @@ def _announce_first_sweep(tuned):
                 # the Prism profile — an entry serves only the memory class it
                 # covered (register 56)
                 mcls = _cert.executing_memory_gb(args)
-                applied = _cert.apply(qual, tuned, key, memory_gb=mcls)
-                if not applied:
-                    # an operand widened on load is keyed by the dtype it is computed in
-                    twin = _cert.computed_key(tuned, key, kwargs)
-                    applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin, memory_gb=mcls)
+                # its own key; then an operand widened on load keyed by its computed dtype, or the kernel's
+                # certified default (a q < Tk flash: the square key) — never a sweep for a served shape
+                applied = _cert.apply(qual, tuned, key, memory_gb=mcls) or any(
+                    _cert.apply(qual, tuned, key, lookup_key=k, memory_gb=mcls)
+                    for k in _cert.lookup_keys(qual, tuned, key, kwargs))
             except Exception as exc:            # the directory is an optimisation, never a failure source —
                 if _confirm:                    # except in a confirmation run, where it is the only source
                     raise _cert.KeyNotCertified(f"CERTIFIED-ONLY: the certified lookup failed for {qual} "

@@ -496,6 +496,18 @@ def flash_launches(Tq: int, Tk: int, D: int, q: NBXDtype, k: NBXDtype, v: NBXDty
                      tag(q), tag(k), tag(v), tag(bias if bias is not None else q), tag(q), tag(F32), tag(F32)))]
 
 
+def square_default_key(kernel: str, key: tuple) -> Optional[tuple]:
+    """The certified default of a flash key whose query rows are fewer than its keys (a continuing turn's prefill: the
+    new rows attend to the cached history): the square key of the same key length, (Tk, Tk, the rest unchanged), read
+    when the directory holds no entry for the key itself. Decided 2026-11-15 11:45 (task 203): the served chat on
+    apple_m4_pro swept these keys at run time and two fresh installs of one release gave different bytes; the square
+    key is certified for every key length the census meets, so the choice is the same on every install. None: no
+    default (another kernel, or q >= Tk)."""
+    if kernel not in (FLASH, UNIT_FLASH) or len(key) < 2 or not int(key[0]) < int(key[1]):
+        return None
+    return (bucket_of("M", int(key[1])),) + tuple(key[1:])
+
+
 def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
                     min_chunk_rows: int, max_chunks: int) -> int:
     """Query rows per chunk that keep each chunk's fp32 scores within `bound`, aligned to the
