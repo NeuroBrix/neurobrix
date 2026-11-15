@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A GPU that no hardware profile describes is refused by name at once.** When the device also reports no
   architecture, the engine now names the device it could not place, instead of failing later on a profile called
   "None".
+- **A hub that does not answer is said by name.** `neurobrix import` and `neurobrix hub` print the hub's address, why
+  it did not answer (no connection, an HTTP error, a reply that is not JSON) and what to do, then exit 1: no traceback,
+  and no download tried from another source.
 
 ## [0.6.15] - 2026-11-13
 
