@@ -1,5 +1,5 @@
 # core/module/tokenizer/tekken_bpe.py
-"""
+r"""
 PyTekken — pure-Python, stdlib-only replacement for ``mistral_common`` Tekken.
 
 Zero Outsider workstream (R34): the NeuroBrix runtime engine must not import any

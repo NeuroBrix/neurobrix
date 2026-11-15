@@ -1,5 +1,5 @@
 # core/module/tokenizer/tiktoken_bpe.py
-"""
+r"""
 PyTiktoken — pure-Python, stdlib-only replacement for the ``tiktoken`` library.
 
 Zero Outsider workstream (R34): the NeuroBrix runtime engine must not import any
