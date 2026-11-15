@@ -116,6 +116,9 @@ neurobrix = "neurobrix.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neurobrix"]
+# A processor's source sub-package (its reader, its tests, its equality report) never ships: the engine fetches the
+# processor's artifact on demand (tools/build_processor.py builds it). Only the generic files of processors/ ship.
+exclude = ["/src/neurobrix/processors/*/"]
 
 [tool.hatch.build.targets.sdist]
 # Whitelist approach: only include source tree + minimum metadata.
@@ -142,6 +145,7 @@ exclude = [
     "**/*.flac",
     "**/*.mp4",
     "**/*.log",
+    "/src/neurobrix/processors/*/",
 ]
 
 [tool.hatch.metadata.hooks.fancy-pypi-readme]

@@ -17,3 +17,24 @@ Anything tensor is nbxtensor's.
 
 The commands: `neurobrix processor fetch <model> [--to <folder>]`, `neurobrix processor install <file> [--for
 <model>]`, `neurobrix processor list`.
+
+## The artifact
+
+A processor's SOURCE is a sub-package here, `processors/<name>/` (its `processor.json`, its `LICENSE`, its code
+folder, its tests, its `EQUALITY.md`). It never ships in the engine's wheel or sdist (one exclusion line per target in
+`pyproject.toml`, held by `tests/unit/packaging/test_no_processor_sub_package_ships_in_the_wheel_or_the_sdist.py`):
+the engine fetches its artifact on demand.
+
+`python tools/build_processor.py <name> --out <folder>` builds ONE artifact, `<name>-<version>.nbxp`: a deterministic
+zip (members sorted, stored, one fixed time and mode: the same sources give the same sha256 on any host) of two
+separated trees, each with its licence file and its licence stated in `processor.json`:
+
+| member | what |
+|---|---|
+| `processor.json` | the source's, plus `members`: the sha256 of every other member |
+| `code/` | our code (the `code.source` folder, Python source of the standard library only) and `LICENSE` |
+| `data/` | the pinned files (`data.files`: path, url, revision, sha256, size), unchanged; `data.licence_file` among them |
+| `EQUALITY.md` | the equality report |
+
+The build refuses, by file, line and name, an import beyond the standard library (or a dynamic import, or a file
+that is not Python source) in the code tree, and a pinned file whose size or sha256 is not its pin.

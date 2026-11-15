@@ -122,3 +122,35 @@ def dead_url() -> str:
     port = s.getsockname()[1]
     s.close()
     return f"http://127.0.0.1:{port}"
+
+
+#: the toy processor's source sub-package, as tools/build_processor.py reads it (its data is served by a Host)
+SOURCE_DATA = {"letters.tsv": "\n".join(f"{c}\t{c.upper()}" for c in "abcdefghijklmnopqrstuvwxyz").encode(),
+               "COPYING": b"The toy data's licence text.\n"}
+
+
+def write_source(root: Path, data_url: str, reader: str = READER, padding: int = 0) -> Path:
+    """The toy processor's source sub-package under `root` (its name the folder's), its data pinned at `data_url`
+    (a Host's `/processors/` folder); `padding` bytes of pinned data make a download long enough to watch."""
+    data = source_data(padding)
+    sub = root / NAME
+    (sub / "reader").mkdir(parents=True, exist_ok=True)
+    (sub / "reader" / "__init__.py").write_text("")
+    (sub / "reader" / "reader.py").write_text(reader)
+    (sub / "LICENSE").write_text("Apache-2.0, the toy reader's licence text.\n")
+    (sub / "EQUALITY.md").write_text("The toy reader against its table: 26 / 26 letters equal.\n")
+    pins = [{"path": path, "url": f"{data_url}/processors/{path}", "revision": "toy-1",
+             "sha256": hashlib.sha256(body).hexdigest(), "size": len(body)} for path, body in sorted(data.items())]
+    rec = {"name": NAME, "version": VERSION, "kind": "text_front_end", "interface": 1, "entry": "reader:FrontEnd",
+           "variants": ["en-us", "en-gb"], "code": {"source": "reader", "licence": "Apache-2.0"},
+           "data": {"licence": "LicenseRef-toy", "licence_file": "COPYING", "files": pins}}
+    (sub / "processor.json").write_text(json.dumps(rec, indent=2))
+    return sub
+
+
+def source_data(padding: int = 0) -> dict:
+    """The files a Host serves for the toy source's pins."""
+    data = dict(SOURCE_DATA)
+    if padding:
+        data["padding.bin"] = bytes(i % 251 for i in range(padding))
+    return data
