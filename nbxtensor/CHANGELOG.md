@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is not the production speed, and its header says so. The output bytes do not change.
 
 ### Changed
+- The replay runs as CUDA graphs wherever the backend offers them, on one card too: a plan recorded on one card (the
+  record naming its card, a device sync on that card) is captured as one graph; a plan that crosses cards is refused by
+  name before any capture, and a refused capture keeps the direct replay for its bucket. The opt-in switch
+  (`NBX_REPLAY_GRAPH`) is gone. Served decode on a V100: TinyLlama 75.8 -> 147.6 tokens/s, Qwen2.5-Coder-7B
+  40.0 -> 44.9, output bytes identical.
 - The fused SwiGLU with split gate and up tensors runs as one element-wise launch at the element-wise class's certified
   tile (its fixed 16 x 1024 tile spilled): the same bytes.
 - On an Apple M4 Pro the command stream is committed every 16 dispatches (`backend/devices/apple/apple_m4_pro.yml`):

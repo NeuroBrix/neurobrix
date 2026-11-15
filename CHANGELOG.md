@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A language model on one NVIDIA card decodes faster when served.** Its decode now replays as CUDA graphs by
+  default (on a V100: TinyLlama-1.1B 75.8 -> 147.6 tokens per second, Qwen2.5-Coder-7B 40.0 -> 44.9); the answer is
+  byte-identical.
+
 - **A served conversation on Apple Silicon plans its prompt in chunks priced on the chip's own tables.** The serving
   session reads its chunk record and certified times under the chip's vendor profile, and a Mac's single memory pool
   is planned as the one cache it is, as on other hardware.
