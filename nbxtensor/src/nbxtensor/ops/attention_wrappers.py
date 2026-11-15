@@ -713,7 +713,7 @@ def paged_kv_gather(pool, block_table, positions, heads, dtype):
 
 
 def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, q_round=None,
-                           host_partial=None):
+                           host_partial=None, appended=0):
     """Decode attention (one query position) read through the page table — the vector split-KV kernel of
     ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
 
@@ -764,7 +764,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     paged_decode_attn_split_kernel[(bhq, split)](
         q2, k_pool, v_pool, block_table, seq_lens,
         opart, mpart, lpart,
-        batch, page_tokens, split, float(softmax_scale), nheads,
+        batch, int(appended), page_tokens, split, float(softmax_scale), nheads,
         q2.stride(0),
         k_pool.stride(0), k_pool.stride(1), k_pool.stride(2),
         v_pool.stride(0), v_pool.stride(1), v_pool.stride(2),
