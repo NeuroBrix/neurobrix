@@ -205,3 +205,31 @@ def test_a_cast_whose_value_already_holds_its_target_at_run_time_launches_nothin
     assert half["launches"] == 29 and half["by_kernel"] == {
         **{k: v for k, v in recorded["by_kernel"].items() if not k.startswith("copy (")}, "copy (float16 to float32)": 1}
     assert wide["launches"] == 28 and not any(k.startswith("copy (") for k in wide["by_kernel"])
+
+
+_TIMES = {"rms_norm_forward_kernel": {"launches": 2.0, "ms": 0.5}, "triton_copy_kernel": {"launches": 2.0, "ms": 9.0},
+          "add_forward_kernel": {"launches": 2.0, "ms": 0.2}, "gemv_vec_kernel": {"launches": 8.0, "ms": 4.0}}
+
+
+def test_a_kernel_times_file_ranks_each_chain_by_the_measured_ms_of_its_members(tmp_path, capsys):
+    path = _container(tmp_path / "small.nbx")
+    ranked = census.ranked_chains(path, _TIMES, "wide")
+    norm = next(r for r in ranked if r["chain"] == "_to_copy > rms_norm")
+    # one group per layer, two layers: a cast and a norm become one launch, and each member launch costs its
+    # measured kernel's mean time (the norm 0.25 ms, the cast's copy 4.5 ms: 2 x (0.25 + 4.5) = 9.5)
+    assert norm["count"] == 2 and norm["launches_saved"] == 2 and abs(norm["ms"] - 9.5) < 1e-9
+    assert ranked == sorted(ranked, key=lambda r: (-r["ms"], -r["launches_saved"], r["chain"]))
+    kernel_times = tmp_path / "times.json"
+    kernel_times.write_text(json.dumps(_TIMES))
+    assert census.main([str(path), "--kernel-times", str(kernel_times)]) == 0
+    assert "chains by measured ms a token" in capsys.readouterr().out
+
+
+def test_a_profiled_runs_step_table_reads_as_kernel_times(tmp_path):
+    log = tmp_path / "run.log"
+    log.write_text("[step] CSE: ONE DECODE STEP = x\n"
+                   "[step]   kernel                                           launches/token   ms/token   mean us\n"
+                   "[step]   gemv_vec_kernel                                          155.00     4.8732      31.4\n"
+                   "[step]   copy host to device                                        2.00    19.7086    9854.3\n")
+    assert census.read_kernel_times(log) == {"gemv_vec_kernel": {"launches": 155.0, "ms": 4.8732},
+                                             "copy host to device": {"launches": 2.0, "ms": 19.7086}}

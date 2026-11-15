@@ -48,6 +48,7 @@ definitions leave three points open:
 
     python tools/fusion_census.py CONTAINER [CONTAINER ...] [--json OUT.json] [--markdown OUT.md]
     python tools/fusion_census.py CONTAINER --list              # the launch list of the decode graph, op by op
+    python tools/fusion_census.py CONTAINER --kernel-times TIMES.json   # + its repeated chains ranked by measured ms
     python tools/fusion_census.py CONTAINER --profile TABLE.json --tokens N   # against a measured kernel table
 
 A CONTAINER is a `.nbx` file or an unpacked container folder. Exit status: 0 counted, 2 refused (named).
@@ -760,9 +761,8 @@ def census_of_graph(graph: DecodeGraph) -> Dict[str, Any]:
     return out
 
 
-def unfused_chains(graph: DecodeGraph, in_a_group: set) -> Dict[str, int]:
-    """The op patterns no family took: maximal single-reader chains of the launching ops left outside every group
-    (a matrix product may sit in such a chain: it is the next family to consider, not a member of these four)."""
+def unfused_chain_ops(graph: DecodeGraph, in_a_group: set) -> List[List[Op]]:
+    """The maximal single-reader chains (two ops or more) of the launching ops left outside every group."""
     left = {op.index for op in graph.launching() if op.index not in in_a_group}
     nxt: Dict[int, int] = {}
     for i in left:
@@ -770,7 +770,7 @@ def unfused_chains(graph: DecodeGraph, in_a_group: set) -> Dict[str, int]:
         if clean and len(readers) == 1 and readers[0] in left:
             nxt[i] = readers[0]
     heads = left - set(nxt.values())
-    patterns: collections.Counter = collections.Counter()
+    chains: List[List[Op]] = []
     fan_in = collections.Counter(nxt.values())
     for head in heads:
         chain, i = [head], head
@@ -778,7 +778,15 @@ def unfused_chains(graph: DecodeGraph, in_a_group: set) -> Dict[str, int]:
             i = nxt[i]
             chain.append(i)
         if len(chain) >= 2:
-            patterns[" > ".join(graph.ops[j].name for j in chain)] += 1
+            chains.append([graph.ops[j] for j in chain])
+    return chains
+
+
+def unfused_chains(graph: DecodeGraph, in_a_group: set) -> Dict[str, int]:
+    """The op patterns no family took: maximal single-reader chains of the launching ops left outside every group
+    (a matrix product may sit in such a chain: it is the next family to consider, not a member of these four)."""
+    patterns: collections.Counter = collections.Counter(
+        " > ".join(op.name for op in chain) for chain in unfused_chain_ops(graph, in_a_group))
     return dict(patterns.most_common())
 
 
@@ -889,6 +897,13 @@ MEASURED_AS = (
 )
 
 
+def measured_name(label: str, names: Sequence[str]) -> Optional[str]:
+    """The measured kernel a counted launch's label shows up as, among `names` (None: no measured row)."""
+    stem = next((m for c, m in MEASURED_AS if label == c or (c.endswith("(") and label.startswith(c))
+                 or label.startswith(c + " (")), None)
+    return next((x for x in names if stem and stem in x), None)
+
+
 def against_profile(entry: Dict[str, Any], profile: Dict[str, Any], tokens: int) -> str:
     """The census beside a measured kernel table (`run --profile-kernels JSON`), kernel by kernel. Measured = the
     table's launches over `tokens`; the run's prefill is in the table, so a kernel launched once a pass measures
@@ -904,9 +919,7 @@ def against_profile(entry: Dict[str, Any], profile: Dict[str, Any], tokens: int)
     unplaced: collections.Counter = collections.Counter()
     names = [k["name"] for k in profile["kernels"]]
     for label, n in counted.items():
-        stem = next((m for c, m in MEASURED_AS if label == c or (c.endswith("(") and label.startswith(c))
-                     or label.startswith(c + " (")), None)
-        name = next((x for x in names if stem and stem in x), None)
+        name = measured_name(label, names)
         if name is None:
             unplaced[label] += n
         else:
@@ -927,6 +940,83 @@ def against_profile(entry: Dict[str, Any], profile: Dict[str, Any], tokens: int)
     return "\n".join(lines) + "\n"
 
 
+def read_kernel_times(path: Path) -> Dict[str, Dict[str, float]]:
+    """Measured kernel times of ONE decoded token: kernel name -> {"launches", "ms"}. The file is that small json,
+    or the step table a profiled run prints (`[step]   <kernel>   <launches/token>   <ms/token>   <mean us>`)."""
+    text = path.read_text()
+    if text.lstrip().startswith("{"):
+        times = json.loads(text)
+        for name, row in times.items():
+            if not isinstance(row, dict) or "launches" not in row or "ms" not in row:
+                raise Refused(f"{path}: kernel `{name}` must be {{\"launches\": ..., \"ms\": ...}} per token")
+        return times
+    times = {}
+    for line in text.splitlines():
+        cells = line.split("]", 1)[1].split() if line.startswith("[step]") and "]" in line else []
+        if len(cells) >= 4:
+            try:
+                launches, ms, _ = (float(c) for c in cells[-3:])
+            except ValueError:
+                continue
+            times[" ".join(cells[:-3])] = {"launches": launches, "ms": ms}
+    if not times:
+        raise Refused(f"{path}: no kernel table in it: give a json of kernel name -> {{launches, ms}} per token, "
+                      f"or a profiled run's `[step]` table")
+    return times
+
+
+def ranked_chains(path: Path, times: Dict[str, Dict[str, float]], reading: str,
+                  activation_dtype: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Each repeated chain the census lists (the families' groups, then the chains no family takes), with the
+    launches a token would save if it were ONE kernel and the measured ms a token of its members today (each
+    member launch at its measured kernel's mean time; a member with no measured row costs 0 and is named),
+    sorted by ms. The fused chain's own cost is not estimated."""
+    container = Container(path)
+    family = container.json("manifest.json").get("family")
+    names = list(times)
+    found: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def add(kind: str, chain: Sequence[Op], saved: int) -> None:
+        pattern = " > ".join(op.name for op in chain)
+        row = found.setdefault((kind, pattern), {"family": kind, "chain": pattern, "count": 0, "saved_each": saved,
+                                                 "members": collections.Counter()})
+        row["count"] += 1
+        for op in chain:
+            row["members"].update(op.kernels)
+
+    for decoder in decoders_of(container):
+        graph = decode_graph_of(container, decoder["component"], family, lm_config_for(container, decoder["component"]),
+                                decoder, activation_dtype)
+        fused = fuse_all(graph, reading)
+        for g in fused:
+            add(g.family, g.members, g.before - g.after)
+        for chain in unfused_chain_ops(graph, {op.index for g in fused for op in g.members}):
+            add("-", chain, sum(op.launches for op in chain) - 1)
+    out = []
+    for row in found.values():
+        ms, unplaced = 0.0, []
+        for label, n in row["members"].items():
+            name = measured_name(label, names)
+            if name is None or not times[name]["launches"]:
+                unplaced.append(label)
+                continue
+            ms += n * times[name]["ms"] / times[name]["launches"]
+        out.append({"family": row["family"], "chain": row["chain"], "count": row["count"],
+                    "launches_saved": row["saved_each"] * row["count"], "ms": ms, "unplaced": sorted(unplaced)})
+    out.sort(key=lambda r: (-r["ms"], -r["launches_saved"], r["chain"]))
+    return out
+
+
+def ranking_table(rows: Sequence[Dict[str, Any]], total_ms: float, top: int) -> str:
+    lines = ["| rank | family | chain | repeats | launches saved a token | measured ms a token | share |",
+             "|---|---|---|---|---|---|---|"]
+    for n, r in enumerate(rows[:top], 1):
+        note = f" (no measured row: {', '.join(r['unplaced'])})" if r["unplaced"] else ""
+        lines.append(f"| {n} | {r['family']} | {r['chain']}{note} | {r['count']} | {r['launches_saved']} | "
+                     f"{r['ms']:.4f} | {100 * r['ms'] / total_ms:.1f} % |")
+    return "\n".join(lines)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("containers", nargs="+", type=Path)
@@ -940,6 +1030,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "recorded dtypes decide)")
     parser.add_argument("--profile", type=Path, help="a measured kernel table (run --profile-kernels JSON)")
     parser.add_argument("--tokens", type=int, help="the decoded tokens of the measured run")
+    parser.add_argument("--kernel-times", type=Path,
+                        help="the measured kernel times of one decoded token (json: kernel name -> launches, ms; "
+                             "or a profiled run's step table): ranks each repeated chain by the measured ms of "
+                             "its members")
+    parser.add_argument("--top", type=int, default=15, help="the chains --kernel-times lists (default 15)")
     args = parser.parse_args(argv)
     if args.profile and not args.tokens:
         parser.error("--profile needs --tokens: the decoded tokens of the measured run")
@@ -967,6 +1062,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.profile:
             print(against_profile(entry, json.loads(args.profile.read_text()), args.tokens))
     print(table(rows, args.reading))
+    if args.kernel_times:
+        try:
+            times = read_kernel_times(args.kernel_times)
+            total = sum(t["ms"] for t in times.values())
+            for path in args.containers:
+                print(f"\n### {Container(path).name}: chains by measured ms a token "
+                      f"(the profile's {total:.3f} ms a token is the share's 100 %)\n")
+                print(ranking_table(ranked_chains(path, times, args.reading, args.activation_dtype), total, args.top))
+        except Refused as why:
+            print(f"refused: {why}", file=sys.stderr)
+            return 2
     if args.json:
         args.json.write_text(json.dumps(rows, indent=1))
     if args.markdown:
