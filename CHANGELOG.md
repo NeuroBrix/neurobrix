@@ -21,8 +21,8 @@ video models that decode their frames in a stream run under the Triton engine ag
 
 ### Changed
 
-- **A language model served on one NVIDIA card replays its decode as CUDA graphs by default.** The answer is
-  byte-identical, and no setting is needed to turn it on any more.
+- **A language model served on one NVIDIA card replays its decode as CUDA graphs by default.** On a container
+  certified for NVIDIA cards the answer is byte-identical, and no setting is needed to turn it on any more.
 
 - **A served conversation on Apple Silicon plans its prompt in chunks priced on the chip's own tables.** The serving
   session reads its chunk record and certified times under the chip's vendor profile, and a Mac's single memory pool
