@@ -73,24 +73,31 @@ def kv_estimate_tokens(entry: Mapping[str, Any], max_tokens: int, prompt_margin:
 
 
 def kv_cache_size(entry: Mapping[str, Any], token_bytes: int, max_tokens: int, prompt_margin: int, serve: bool,
-                  remaining_bytes: int, floor_max_tokens: Optional[int] = None) -> Dict[str, int]:
+                  remaining_bytes: int, floor_max_tokens: Optional[int] = None,
+                  growth_reserve_bytes: int = 0) -> Dict[str, int]:
     """{max_cache_len, initial_cache_len, memory_bytes}: as many positions as the remaining bytes afford, bounded by the
     request (run: max_tokens + margin) or the declared window (serve), never beyond the window. Refused by name below
-    the minimum."""
+    the minimum.
+
+    The FLOOR is granted from the whole room; the GROWTH above it only from the room above `growth_reserve_bytes`, the
+    allocator's reserve where the caller's capacity does not already hold it back. Grown into the reserve, the cache of
+    Qwen2.5-Coder-7B-Instruct (compiled, lazy_sequential, V100-16GB) took 8 724 positions (477 MiB) for a 5-token
+    request, plan and cache filled the 15 845 MB budget, and its first prefill matmul (260 MiB) ran out of memory
+    (2026-11-15). Granted from the whole room, the floor keeps a plan that fits with its reserve (Janus-Pro-7B, lazy on
+    the same card)."""
+    if int(growth_reserve_bytes) < 0:
+        raise ValueError(f"kv_cache_size: growth_reserve_bytes {growth_reserve_bytes}")
     window = int(entry.get("window") or 0)
-    if serve:
-        if not window:
-            raise StateUndeclared("ZERO FALLBACK: serving plans the decoder's whole window, and its KV state declares none")
-        upper = window
-    else:
-        upper = (int(max_tokens) + int(prompt_margin)) if max_tokens else window
-    if window:
-        upper = min(upper, window)
+    if serve and not window:
+        raise StateUndeclared("ZERO FALLBACK: serving plans the decoder's whole window, and its KV state declares none")
+    upper = window if (serve or not max_tokens) else int(max_tokens) + int(prompt_margin)
+    upper = min(upper, window) if window else upper
     affordable = int(remaining_bytes) // int(token_bytes) if token_bytes > 0 else 0
-    length = min(affordable, upper)
+    grown = max(int(remaining_bytes) - int(growth_reserve_bytes), 0) // int(token_bytes) if token_bytes > 0 else 0
     # the floor is the request's when it names fewer tokens than the package (a run's --max-tokens)
     floor = min(kv_min_tokens(floor_max_tokens if floor_max_tokens else max_tokens, prompt_margin, serve), upper)
-    if length < floor:
+    length = min(max(grown, floor), upper)
+    if affordable < floor:
         raise RuntimeError(
             f"ZERO FALLBACK: KV cache budget too small: {remaining_bytes / 1e6:.0f} MB remain, "
             f"{floor * token_bytes / 1e6:.0f} MB are needed for {floor} positions.")

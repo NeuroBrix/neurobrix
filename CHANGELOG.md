@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokenizers of chatterbox and Open-Sora now split a text holding one of these four characters as the vendor's
   tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
   tokenizer checked (19 of the catalogue) gives the same ids as before.
+- **A 7B language model run on a 16 GB card with the PyTorch engine no longer runs out of memory on its first
+  request.** Its decode cache takes the positions the request asks for; it grows past them, and a served session's
+  window with it, only into the memory above the reserve the engine keeps for the allocator.
 
 ## [0.6.16] - 2026-11-15
 
