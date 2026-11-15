@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session reads its chunk record and certified times under the chip's vendor profile, and a Mac's single memory pool
   is planned as the one cache it is, as on other hardware.
 
+### Fixed
+
+- **A model whose `tokenizer.json` splits text with Unicode categories, possessive quantifiers or line anchors
+  tokenizes as its vendor does.** Its patterns are read with the meaning the vendor's tokenizer gives them (`\p{L}`
+  and `\p{Letter}`, `\P{..}`, possessive and atomic groups, `\s` as Unicode white space, `^` and `$` per line); a
+  property the engine cannot read is refused by name, never split another way.
+- **A chat template that marks the assistant's turns with `{% generation %}` renders as its vendor renders it**, where
+  it stopped at that tag before.
+
 ## [0.6.15] - 2026-11-13
 
 With nbxtensor 0.1.7: Kokoro-82M speaks with its own voice on the Triton engine, `neurobrix upscale` runs on every host as

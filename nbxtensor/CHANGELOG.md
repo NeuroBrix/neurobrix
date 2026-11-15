@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On an Apple M4 Pro the command stream is committed every 16 dispatches (`backend/devices/apple/apple_m4_pro.yml`):
   the GPU starts a step while the host is still encoding it.
 
+### Fixed
+- A peer question the GPU runtime fails is refused by name (`DeviceAllocator.can_access_peer`), never read as "no
+  peer"; the expandable memory range asks that one door which cards may reach its memory.
+
 ## [0.1.7] - 2026-11-13
 
 ### Changed
