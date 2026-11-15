@@ -152,6 +152,10 @@ def file_for(vendor: str, profile: str, kernel_qual: str, dtype: str, root: Opti
 # ---------------------------------------------------------------------------
 # the key and its dtype
 # ---------------------------------------------------------------------------
+class UnreadableKey(RuntimeError):
+    """A key carrying a string that is no dtype this library knows: the directory cannot be read at it."""
+
+
 def key_dtypes(key: tuple) -> List[str]:
     """The dtype names the launcher appended to the key, in argument order.
 
@@ -166,7 +170,7 @@ def key_dtypes(key: tuple) -> List[str]:
         if not isinstance(k, str):
             continue
         if str(k).lower() not in _DTYPES:
-            raise RuntimeError(
+            raise UnreadableKey(
                 f"certify: key element {k!r} is a string this engine does not recognise as a "
                 f"dtype, and every string a key carries is one.\n"
                 f"  Known: {', '.join(_DTYPES)}.\n"
@@ -1362,15 +1366,23 @@ def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = Non
 
 def _seeded_entry(qual: str, tuner, key: tuple) -> Tuple[Optional[Dict[str, Any]], Optional[tuple]]:
     """The directory's entry for a seeded key, any class, and the key it was read at (None: the key's own): its own
-    key, then a widened operand's or the kernel's certified default (`lookup_keys`). (None, None) when none serves."""
+    key, then a widened operand's or the kernel's certified default (`lookup_keys`). (None, None) when none serves,
+    and — said once per key — when the directory cannot be read at the key (`UnreadableKey`: a replay cache written
+    with a dtype name this library does not know): its local setting stays. Any other error is raised."""
     try:
         for twin in [None] + lookup_keys(qual, tuner, key):
             entry = lookup(qual, tuner, twin or key, any_class=True)
             if entry is not None:
                 return entry, twin
-    except Exception:
-        pass
+    except UnreadableKey as exc:
+        if (qual, key) not in _UNREADABLE_SEEDS:
+            _UNREADABLE_SEEDS.add((qual, key))
+            _log.warning("%s", f"[autotune] the certified directory is not read for the seeded key {key} of "
+                               f"{kernel_short(qual)}: its local setting stays ({str(exc).splitlines()[0]})")
     return None, None
+
+
+_UNREADABLE_SEEDS: set = set()   # (kernel, key) the seed said it could not read the directory at
 
 
 def override_seeded(tuners=None) -> int:

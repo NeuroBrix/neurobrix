@@ -7,7 +7,10 @@ What this test does if the code is wrong:
 1. the default of (20, 128, 64, ...) is not (128, 128, 64, ...), or a q >= Tk key or another kernel gets one (red);
 2. a launch whose directory holds only the square key is not served it, or a certified q < Tk entry of its own loses
    to the default (red: the 300 shipped q < Tk entries would change bytes);
-3. a replay cache's earlier sweep of the key is kept on a warm machine instead of the square key's config (red).
+3. a replay cache's earlier sweep of the key is kept on a warm machine instead of the square key's config (red);
+4. a seeded key the directory cannot read (a string that is no dtype: `UnreadableKey`) stops the seed, or loses its
+   local setting (red); any OTHER error of the seeded lookup is swallowed and the key silently keeps its sweep (red:
+   seen red 2026-11-15, the `except Exception: pass` this replaced returned 0 and said nothing).
 No card: the directory and the tuner are stand-ins."""
 import pytest
 
@@ -64,3 +67,30 @@ def test_a_warm_machine_s_earlier_sweep_gives_way_to_the_square_key(directory, m
     t.cache[TURN] = triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2)   # an earlier sweep
     assert C.override_seeded([(L.FLASH, t)]) == 1
     assert t.cache[TURN].kwargs == {"BLOCK_M": 32, "BLOCK_N": 32}
+
+
+def test_a_seeded_key_the_directory_cannot_read_keeps_its_local_setting(monkeypatch, caplog):
+    import triton
+    monkeypatch.setattr(C, "enabled", lambda: True)
+    monkeypatch.setattr(C, "active_profile", lambda: ("a-vendor", "a-profile"))
+    monkeypatch.setattr(C, "executing_memory_gb", lambda *a: 18)
+    t, stale = _Tuner(), (20, 128, 64, "not-a-dtype")
+    t.cache[stale] = local = triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2)
+    with pytest.raises(C.UnreadableKey):
+        C.lookup(L.FLASH, t, stale, any_class=True)                             # the named refusal the seed reads past
+    with caplog.at_level("WARNING"):
+        assert C.override_seeded([(L.FLASH, t)]) == 0
+    assert t.cache[stale] is local
+    assert "not-a-dtype" in caplog.text and "local setting stays" in caplog.text    # said, never silent
+
+
+def test_any_other_error_of_the_seeded_lookup_surfaces(directory, monkeypatch):
+    import triton
+
+    def broken(qual, tuner, key, kwargs=None):
+        raise ValueError("a defect in the lookup keys")
+    monkeypatch.setattr(C, "lookup_keys", broken)
+    t = _Tuner()
+    t.cache[TURN] = triton.Config({"BLOCK_M": 64, "BLOCK_N": 64}, num_warps=8, num_stages=2)
+    with pytest.raises(ValueError, match="a defect in the lookup keys"):
+        C.override_seeded([(L.FLASH, t)])

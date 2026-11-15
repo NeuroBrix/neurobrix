@@ -500,9 +500,12 @@ def square_default_key(kernel: str, key: tuple) -> Optional[tuple]:
     """The certified default of a flash key whose query rows are fewer than its keys (a continuing turn's prefill: the
     new rows attend to the cached history): the square key of the same key length, (Tk, Tk, the rest unchanged), read
     when the directory holds no entry for the key itself. Decided 2026-11-15 11:45 (task 203): the served chat on
-    apple_m4_pro swept these keys at run time and two fresh installs of one release gave different bytes; the square
-    key is certified for every key length the census meets, so the choice is the same on every install. None: no
-    default (another kernel, or q >= Tk)."""
+    apple_m4_pro swept these keys at run time and two fresh installs of one release gave different bytes. The default
+    serves ONLY where the directory certifies the square key for the executing card: there the choice is the same on
+    every install. Where it does not (a key length whose square nothing certified, on any profile), nothing is
+    served by this default: the launch sweeps at run time and says so, and a confirmation run refuses it by name.
+    Which squares a profile holds is a fact of its certified table, not of this function. None: no default (another
+    kernel, or q >= Tk)."""
     if kernel not in (FLASH, UNIT_FLASH) or len(key) < 2 or not int(key[0]) < int(key[1]):
         return None
     return (bucket_of("M", int(key[1])),) + tuple(key[1:])
