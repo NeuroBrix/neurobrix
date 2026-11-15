@@ -46,6 +46,7 @@ def events(monkeypatch):
     return e
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a card: the loader enters torch.cuda.device on the target card")
 def test_no_more_uploads_are_outstanding_than_configured(events, tmp_path):
     n = 7                                   # more tensors than any depth worth configuring
     save_file({f"w{i}": torch.ones(4, 4) for i in range(n)}, str(tmp_path / "s.safetensors"))

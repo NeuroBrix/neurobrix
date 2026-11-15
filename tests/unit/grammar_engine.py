@@ -11,4 +11,4 @@ def load():
     try:
         return importlib.import_module("nbxgrammar")
     except ImportError as e:
-        pytest.skip(f"nbxgrammar is not installed here (pip install nbxgrammar; no wheel exists for some platforms): {e}")
+        pytest.skip(f"nbxgrammar is not installed here (pip install nbxgrammar; no wheel exists for some platforms): {e}", allow_module_level=True)

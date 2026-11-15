@@ -5,6 +5,7 @@ certified per key. What this test would do if the key were wrong: no key where t
 where it does not -> red."""
 import pytest
 
+
 from tests.unit.prism._pinned_machine import V100_16GB, profile
 
 
@@ -17,6 +18,7 @@ def volta(monkeypatch):
     yield
 
 
+@pytest.mark.needs_gpu_runtime
 def test_a_half_attention_on_the_unit_forms_its_key(volta):
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.dtype.nbx_dtype import NBXDtype as D
@@ -26,6 +28,7 @@ def test_a_half_attention_on_the_unit_forms_its_key(volta):
                    "fp16", "fp16", "fp16", "fp16", "fp16", "fp32")
 
 
+@pytest.mark.needs_gpu_runtime
 def test_an_attention_the_unit_does_not_take_forms_none(volta):
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.dtype.nbx_dtype import NBXDtype as D

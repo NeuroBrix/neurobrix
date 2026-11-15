@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.needs_gpu_runtime
+
 from nbxtensor.ops import autotune_certified as C
 import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 

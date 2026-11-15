@@ -3,6 +3,8 @@ programming guide). Measured 2026-10-26: one warp over a 16 384-wide fp16 softma
 compiled for over 30 minutes and stalled the certification. What this test would do if the code were wrong: the
 1-warp candidate survives the prune for the 16 384 row — RED."""
 import pytest
+
+pytestmark = pytest.mark.needs_gpu_runtime
 from neurobrix.core.prism.loader import load_profile
 from nbxtensor.ops import wrappers as W
 from nbxtensor.ops import softmax as S

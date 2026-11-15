@@ -5,6 +5,8 @@ Why: the wrappers widened integer operands to float64 unconditionally; on Metal 
 computed (`backend_has_fp64`, 2026-09-28). Seen red on Metal (wrong quotients) before the capability-driven widening."""
 import numpy as np
 import pytest
+
+pytestmark = pytest.mark.needs_gpu_runtime
 from nbxtensor.ops import wrappers as W
 from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers  # the family the moved names live in (M2 split)
 from nbxtensor.tensor import NBXTensor

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 
+
 from tests.unit.prism._pinned_machine import V100_16GB, profile
 
 
@@ -29,6 +30,7 @@ def volta(monkeypatch):
     yield CF.active_vendor_profile()
 
 
+@pytest.mark.needs_gpu_runtime
 def test_the_fma_key_exists_where_the_unit_can_take_the_gemm(volta):
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.dtype.nbx_dtype import NBXDtype as D
@@ -39,6 +41,7 @@ def test_the_fma_key_exists_where_the_unit_can_take_the_gemm(volta):
     assert LK.bmm_launches(128, 256, 256, D.float16, D.float16, native_bf16=False) == []
 
 
+@pytest.mark.needs_gpu_runtime
 def test_every_row_of_a_unit_keyed_bucket_forms_its_key(volta):
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.dtype.nbx_dtype import NBXDtype as D

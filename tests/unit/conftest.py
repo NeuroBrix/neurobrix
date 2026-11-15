@@ -38,6 +38,24 @@ def declared_profile(monkeypatch):
     return profile
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "needs_gpu_runtime: skipped, said, where no GPU runtime loads on the machine")
+
+
+def pytest_runtest_setup(item):
+    """A test marked `needs_gpu_runtime` skips, said, on a machine where no GPU runtime loads (CUDA, ROCm/HIP, Level
+    Zero, Metal): a test that declares a hardware profile to the library or asks its backend runs the library's runtime
+    probe, which refuses by name there (`NoGpuRuntime`). A card-less VM is not a failure of the product; the Dell or
+    the Mac runs these. A hook, not a fixture: it runs before any fixture that already touches the runtime."""
+    if item.get_closest_marker("needs_gpu_runtime") is None:
+        return
+    from nbxtensor.backend import runtime
+    try:
+        runtime.gpu_backend()
+    except runtime.NoGpuRuntime as why:
+        pytest.skip(f"needs a GPU runtime on this machine: {why}")
+
+
 @pytest.fixture
 def needs_device():
     """Skip, said, when this host's profile holds no device — a card-less run (the CPU suite runs with

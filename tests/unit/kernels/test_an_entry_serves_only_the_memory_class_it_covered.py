@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+
 from nbxtensor.ops import autotune_certified as C
 
 from ._rig import running_backend
@@ -213,12 +214,14 @@ def two_class_rig(tmp_path, monkeypatch):
     W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16 = before
 
 
+@pytest.mark.needs_gpu_runtime
 def test_on_a_two_class_rig_the_card_is_unknown_at_seed_time(two_class_rig):
     assert C.executing_memory_gb() is None, "two classes visible, no tensor: unknown"
     assert C.executing_memory_gb([_tensor_on(0)]) == 16
     assert C.executing_memory_gb([_tensor_on(1)]) == 32
 
 
+@pytest.mark.needs_gpu_runtime
 def test_an_evicted_seed_is_served_certified_on_the_proven_card(two_class_rig):
     """Seed time: the replay cache seeded KEY; the directory certifies it for 16 GB;
     the card is unknown → evicted, not applied. Launch on the 16 GB card → the
@@ -237,6 +240,7 @@ def test_an_evicted_seed_is_served_certified_on_the_proven_card(two_class_rig):
     assert C.served() == {"certified": 1, "swept": 0, "local": 0}
 
 
+@pytest.mark.needs_gpu_runtime
 def test_an_evicted_seed_is_put_back_on_the_card_the_proof_does_not_cover(two_class_rig):
     """Launch on the 32 GB card: the 16 GB proof does not cover it, the machine's
     own earlier sweep (the seed) is put back — not a sweep again, not served

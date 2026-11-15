@@ -14,10 +14,17 @@ import nbxtensor.ops.wrappers as _wrappers
 from nbxtensor.memory.allocator import DeviceAllocator as DA
 from nbxtensor.memory.vmm import Vmm
 
+def _has_vmm_driver():
+    try:
+        return bool(_rt.backend_table().get("driver_libs"))
+    except _rt.NoGpuRuntime:               # no GPU runtime on this machine: no VMM driver either
+        return False
+
+
 pytestmark = [pytest.mark.usefixtures("needs_device"),
               # the expandable range speaks the CUDA driver's VMM calls only (`memory.vmm`): a backend whose table names no
               # driver library (Metal, HIP) keeps its driver segments — said, not an error in a None library
-              pytest.mark.skipif(not _rt.backend_table().get("driver_libs"),
+              pytest.mark.skipif(not _has_vmm_driver(),
                                  reason="this backend declares no VMM driver library (the expandable range is CUDA's)")]
 MB = 1 << 20
 

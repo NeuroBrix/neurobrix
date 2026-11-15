@@ -27,6 +27,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+
 import nbxtensor.backend.capabilities as _nbx_capabilities  # the module the moved names live in (M2 cut of tensor.py)
 
 REPO = Path(__file__).resolve().parents[3]
@@ -82,6 +83,7 @@ def _request_sites(model, cache_len=None):
                                 args.input_image)
 
 
+@pytest.mark.needs_gpu_runtime
 @pytest.mark.parametrize("model,contract,vis_rows,n_modal,L0,lm,embeds", [
     ("Ming-Lite-Omni-1.5", "masked", [1024, 1176], 256, 275, "model.model", "image_embeds"),
     ("MiniCPM-o-4_5", "staged", None, 64, 82, "llm.model", "vision_hidden_states"),

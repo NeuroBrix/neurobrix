@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.needs_gpu_runtime
+
 from tests.unit.prism._pinned_machine import V100_16GB, profile
 
 

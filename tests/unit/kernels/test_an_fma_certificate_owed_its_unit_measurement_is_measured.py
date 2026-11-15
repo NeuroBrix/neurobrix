@@ -16,6 +16,8 @@ import types
 
 import pytest
 
+pytestmark = pytest.mark.needs_gpu_runtime
+
 from neurobrix.kernels import autotune_certify as AC
 from tests.unit.prism._pinned_machine import V100_16GB, profile
 

@@ -259,7 +259,7 @@ def test_a_home_that_does_not_exist_is_one_line_with_its_remedy(tmp_path, argv):
 
 # ── (6) doctor lists the GPUs this process sees ──────────────────────────────────────────────────────────────────
 
-def test_doctor_lists_only_the_gpus_this_process_sees(tmp_path, monkeypatch):
+def test_doctor_lists_only_the_gpus_this_process_sees(needs_device, tmp_path, monkeypatch):
     from nbxtensor.backend import install_help as H
     for i, bus in enumerate(("0000:1a:00.0", "0000:1b:00.0", "0000:3d:00.0", "0000:3e:00.0")):
         d = tmp_path / bus

@@ -33,7 +33,10 @@ E, TOP_K, H, F, LAYERS, N_SLOTS, CALLS = 16, 2, 128, 128, 3, 4, 48
 
 def _metal():
     import nbxtensor.backend.runtime as rt
-    return rt.gpu_backend() == "metal"
+    try:
+        return rt.gpu_backend() == "metal"
+    except rt.NoGpuRuntime:                # no GPU runtime: not Metal; the skip reason names what the test needs
+        return False
 
 
 def _host_experts(tmp_path, layer, rng):
