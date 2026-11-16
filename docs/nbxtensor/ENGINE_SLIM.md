@@ -526,6 +526,35 @@ rose by exactly these lines, measured: 80 938 (main bf3993c39) to 81 047, +109.
 | core/module/audio/text_normalize.py | +99 | how numbers, years, versions, money, units, symbols and brand words are said; what is unspeakable |
 | core/module/audio/g2p.py | +10 | the text written out before the lexicon reads it; an unspeakable character refused by name; the lexicon public |
 
+## The processors place (2026-11-16): what it adds, no tensor code
+
+A model's declared non-neural sub-components (a text front end, for one) live in ONE place, `neurobrix/processors/`
+(the owner, 2026-11-15): the container's declaration read and refused by name, the artifact fetched once from the
+declared hosts, verified by the sha256 the container states, loaded from those bytes, carried offline by
+`neurobrix processor fetch|install|list`; and the first processor's own sub-package, `espeak_ng/` (its reader of the
+pinned data files and its equality grade against the vendor stack), whose source is built into the processor's
+artifact and never ships in the wheel or the sdist. All of it is text and files read before any tensor exists:
+engine policy, nothing for nbxtensor (the boundary ratchet's counts are main's). Before the header moved, the lot's
+slimming findings were answered: one dead method and seven parameters no call passed deleted (`create_module`;
+`open_declared`'s and `open_all`'s `labels` and `get`, `grade`'s `variants`, `load_pin`'s `path`,
+`read_phoneme_source`'s `master`), the rest kept below with their reasons. The header rose by exactly these lines,
+measured: 80 822 (main 61c884945) to 82 284, +1 462.
+
+| file | lines | the policy it holds |
+|---|---|---|
+| processors/declaration.py | +98 | the one reader of the container's `processors` key; every shape it refuses, by name |
+| processors/store.py | +156 | the cache, the declared hosts in order, the sha256 check, the lock of two first runs, the import from verified bytes, the offline install |
+| processors/interface.py | +53 | the call interface by kind, what the engine lends a processor, the variant a request may ask |
+| processors/messages.py | +27 | every sentence a person reads about a processor, and its one refusal type |
+| processors/__init__.py | +12 | the engine's one call, which imports nothing more for a container that declares none |
+| cli/commands/processor.py | +47 | `neurobrix processor fetch`, `install`, `list` |
+| cli/__init__.py | +4 | the `processor` command's parser, written once as its own function (the parser call is folded) |
+| nbx/atomic_install.py | +19 | the waiting form of the install lock (`held_in_turn`): the second first run waits, a dead lock of this host is taken over |
+| cli/commands/run.py | -2 | the run door calls `open_declared` (its import folded) |
+| serving/engine.py | -3 | the daemon's load calls `open_declared` (a call folded) |
+| processors/espeak_ng/reader/ (5 files) | +665 | the processor's reader: the voice, word list and phoneme files read from the pinned data; a word of the list written with its stress (`data_files` +272, `phonemes` +225, `words` +143, `english` +21, `__init__` +4) |
+| processors/espeak_ng/equality/ (5 files) | +386 | the processor's equality grade: the corpus built and frozen, the vendor reference built and pinned, our reader's candidate, the grade (`build_corpus` +173, `grade` +119, `build_reference` +55, `read_corpus` +34, `archive_pin` +5) |
+
 ## Kept in the engine
 
 | kind | path | symbol | why it stays |
@@ -691,6 +720,13 @@ rose by exactly these lines, measured: 80 938 (main bf3993c39) to 81 047, +109.
 | dead | src/neurobrix/nbx/neurotax.py | NeuroTaxParser.normalize_parent_module | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | dead | src/neurobrix/serving/engine.py | InferenceEngine.is_loaded | used by the build toolchain, which reads the engine's package from its own repository (outside this scan's roots) |
 | fact | src/neurobrix/core/runtime/graph/kv_cache_wrapper.py | _chunk_mask | the compiled engine's prefill-chunk mask as a torch tensor in the cache's dtype; nbxtensor's `paged_kv.chunk_mask` builds the same 0/-inf values as an NBXTensor, and nbxtensor never holds torch (R33) (lot A, 2026-11-08) |
+| wrapper | src/neurobrix/processors/declaration.py | DeclarationRefused | a named refusal: its type says the container's processor declaration was refused, to the reader and to a caller that catches it (2026-11-16) |
+| wrapper | src/neurobrix/processors/messages.py | ProcessorRefused | a named refusal: the one type of every sentence a person reads about a processor, raised by `messages.refusal` and caught by name (2026-11-16) |
+| wrapper | src/neurobrix/processors/espeak_ng/reader/data_files.py | DataFileError | a named refusal: a pinned data file that is absent or malformed, raised by the reader and its word reading (2026-11-16) |
+| wrapper | src/neurobrix/processors/espeak_ng/reader/phonemes.py | Unreadable | a named refusal: what this lot does not read, caught by name by the equality's candidate reading (`read_corpus.py`), which writes a null reading and its reason (2026-11-16) |
+| wrapper | src/neurobrix/processors/espeak_ng/reader/data_files.py | _unescape | its own rule, not a hand-on: a backslash escapes the next character of a phoneme name in the vendor's phoneme files (2026-11-16) |
+| wrapper | src/neurobrix/processors/store.py | find_spec(path) | the import system's MetaPathFinder protocol: `importlib` calls `find_spec(name, path, target)` positionally on every finder of `sys.meta_path` (2026-11-16) |
+| wrapper | src/neurobrix/processors/store.py | find_spec(target) | the same protocol method: its third positional parameter, given by `importlib` (2026-11-16) |
 
 A served cache and the drain queue never share a byte (2026-11-12): Prism, policy, so in the engine. On the Triton engine
 the served decode cache of a card holding its components whole is granted beside the drain's floor (`_kv_capacity_bytes`),
