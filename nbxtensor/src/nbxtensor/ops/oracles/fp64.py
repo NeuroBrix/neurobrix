@@ -26,7 +26,8 @@ from nbxtensor.dtype.convert import bf16_bits_to_f32
 __all__ = ["ORACLE_MAX_MACS", "ROW_F64_ARRAYS", "values", "f64", "row_windows", "conv_windows", "gemv_rows",
            "Exact", "WindowedOracle", "RowWindowedOracle", "HostWindows", "oracle_rows", "conv_out_hw", "conv2d_oracle",
            "matmul_oracle", "moe_oracle", "attention_oracle", "softmax_oracle", "gemv_oracle", "rownorm_oracle",
-           "row_reduce_oracle", "groupnorm_oracle", "conv_oracle", "host_values", "materialise", "deviation_against",
+           "row_reduce_oracle", "groupnorm_oracle", "conv_oracle", "head_windows", "HeadWindowedOracle",
+           "delta_rule_oracle", "host_values", "materialise", "deviation_against",
            "oracle_deviation"]
 
 #: The cost under which a reference is computed whole: multiply-adds for a product or a convolution, bytes of float64
@@ -347,6 +348,93 @@ def conv_oracle(x, wt, stride, padding, dilation, groups) -> Callable[[], Any]:
     return lambda: WindowedOracle([(w, conv2d_oracle(x, wt, stride, padding, dilation, groups, window=w))
                                    for w in wins], oh, ow, n)
 
+
+def head_windows(batch: int, heads: int, per_head: int) -> Optional[List[Tuple[int, int, int]]]:
+    """None when a reference over `batch` rows of `heads` independent heads, `per_head` multiply-adds each, fits
+    `ORACLE_MAX_MACS`; else its (batch row, h0, h1) windows — the first heads of the first row, the middle heads of the
+    middle row, the last heads of the last row — each of at most cap/3 multiply-adds (at least one head: a recurrence's
+    head is never cut, its whole length is kept)."""
+    if batch * heads * per_head <= ORACLE_MAX_MACS:
+        return None
+    n = max(1, min(heads, int(ORACLE_MAX_MACS / 3 // max(1, per_head))))
+    mid = (heads - n) // 2
+    return _distinct([(0, 0, n), ((batch - 1) // 2, mid, mid + n), (batch - 1, heads - n, heads)])
+
+
+class HeadWindowedOracle:
+    """The float64 reference on (batch row, head range) windows of an output whose heads are axis `head_axis` (a
+    recurrence's rows depend on every earlier row, so it is windowed over its independent heads and batch rows, never
+    over rows); measured on those windows only."""
+
+    def __init__(self, blocks, head_axis: int, batch: int, heads: int):
+        self.blocks = blocks                              # [((b, h0, h1), float64 array [1, ..., h1-h0, ...])]
+        self.head_axis = head_axis
+        self.describe = (f"on {len(blocks)} head window(s) of the output (" +
+                         "; ".join(f"batch {b} heads {h0}-{h1}" for (b, h0, h1), _ in blocks) +
+                         f") of {batch} x {heads} heads")
+
+    def _cut(self, b, h0, h1):
+        idx = [slice(None)] * (self.head_axis + 1)
+        idx[0], idx[self.head_axis] = slice(b, b + 1), slice(h0, h1)
+        return tuple(idx)
+
+    def slices(self, out):
+        for (b, h0, h1), ref in self.blocks:
+            yield out[self._cut(b, h0, h1)], ref
+
+    def device_slices(self, t):
+        """The same windows, cut on the tensor where it lives."""
+        for (b, h0, h1), ref in self.blocks:
+            yield materialise(t[self._cut(b, h0, h1)]), ref
+
+
+def _unit_rows(x: np.ndarray, eps: float) -> np.ndarray:
+    return x / np.sqrt((x * x).sum(axis=-1, keepdims=True) + eps)
+
+
+def _delta_rule_window(q, k, v, g, beta, state, b, h0, h1, qk_l2norm, eps, scale):
+    """The recurrence for batch row `b`, value heads h0..h1, over the whole length, in float64 (arrays already float64,
+    q and k un-expanded): (out [1, L, h, dv], state [1, h, dk, dv])."""
+    kh = np.arange(h0, h1) // (v.shape[2] // q.shape[2])
+    qw, kw = q[b][:, kh], k[b][:, kh]                     # [L, h, dk]: each value head's key head
+    if qk_l2norm:
+        qw, kw = _unit_rows(qw, eps), _unit_rows(kw, eps)
+    qw = qw * scale
+    vw, gw, bw = v[b][:, h0:h1], g[b][:, h0:h1], beta[b][:, h0:h1]
+    s = (np.zeros((h1 - h0, q.shape[3], v.shape[3])) if state is None else state[b, h0:h1].copy())
+    out = np.empty(vw.shape)
+    for t in range(q.shape[1]):
+        s *= np.exp(gw[t])[:, None, None]                                         # the decay
+        u = (vw[t] - np.einsum("hkv,hk->hv", s, kw[t])) * bw[t][:, None]          # the correction
+        s += np.einsum("hk,hv->hkv", kw[t], u)                                    # the rank-one write
+        out[t] = np.einsum("hkv,hk->hv", s, qw[t])                                # the read, after the write
+    return out[None], s[None]
+
+
+def delta_rule_oracle(q, k, v, g, beta, state=None, *, qk_l2norm: bool, eps: float, scale: float
+                      ) -> Callable[[], Tuple[Any, Any]]:
+    """The reference of the gated delta rule (`ops.gated_delta_rule`) over q, k [B, L, Hk, dk], v [B, L, Hv, dv], g,
+    beta [B, L, Hv] from `state` [B, Hv, dk, dv] (None: zeros): (out [B, L, Hv, dv], state [B, Hv, dk, dv]) in float64,
+    each whole under the cap, a `HeadWindowedOracle` above it (a head costs L x dk x dv x 3 multiply-adds)."""
+    B, L, Hk, dk = q.shape
+    Hv, dv = v.shape[2], v.shape[3]
+    if Hk == 0 or Hv % Hk:
+        raise ValueError(f"delta_rule_oracle: {Hv} value heads are not a whole multiple of {Hk} key heads")
+    q, k, v, g, beta = (f64(x) for x in (q, k, v, g, beta))
+    state = None if state is None else f64(state)
+
+    def window(b, h0, h1):
+        return _delta_rule_window(q, k, v, g, beta, state, b, h0, h1, qk_l2norm, eps, scale)
+
+    def build():
+        wins = head_windows(B, Hv, L * dk * dv * 3)
+        if wins is None:
+            parts = [window(b, 0, Hv) for b in range(B)]
+            return np.concatenate([o for o, _ in parts]), np.concatenate([s for _, s in parts])
+        parts = [(w, window(*w)) for w in wins]
+        return (HeadWindowedOracle([(w, o) for w, (o, _) in parts], 2, B, Hv),
+                HeadWindowedOracle([(w, s) for w, (_, s) in parts], 1, B, Hv))
+    return build
 
 def host_values(t) -> np.ndarray:
     """A kernel's output as NUMBERS, whatever dtype it carries: `NBXTensor.numpy()` hands bf16 back as 2-byte void

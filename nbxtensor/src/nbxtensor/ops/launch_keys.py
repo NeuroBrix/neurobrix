@@ -46,6 +46,7 @@ MOE_PART_REDUCE = "nbxtensor.ops.moe_decode_vec.moe_part_reduce_kernel"
 DECODE_VEC = "nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"
 PAGED_DECODE = "nbxtensor.ops.paged_decode_attn.paged_decode_attn_split_kernel"
 DECODE_REDUCE = "nbxtensor.ops.flash_decode.flash_decode_reduce_kernel"
+GATED_DELTA_RULE = "nbxtensor.ops.gated_delta_rule.gated_delta_rule_scan_kernel"
 MOE_ALIGN = tuple(f"nbxtensor.ops.moe_align.moe_align_stage{i}_kernel" for i in (1, 2, 3))
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
@@ -390,6 +391,14 @@ def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional
         layer_in = first_fwd
     return list(dict.fromkeys(out))
 
+
+def gated_delta_rule_launches(dk: int, dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, g: NBXDtype,
+                              beta: NBXDtype) -> List[Launch]:
+    """`gated_delta_rule_wrapper`: ONE launch of the serial scan at any length and batch (the length is the kernel's
+    loop, never its key) — dk and dv, then the dtype tags of q, k, v, g, beta, the state in (float32; the state out
+    stands in for it when the op starts from zeros), the output (v's dtype) and the state out (float32)."""
+    return [(GATED_DELTA_RULE, (int(dk), int(dv), tag(q), tag(k), tag(v), tag(g), tag(beta), tag(F32), tag(v),
+                                tag(F32)))]
 
 def dft_r2c_launches(M: int, N: int, onesided: bool, native_bf16: bool) -> List[Launch]:
     """`fft_r2c_wrapper` on a length that is not a power of two: `_dft_r2c`, the frames flattened

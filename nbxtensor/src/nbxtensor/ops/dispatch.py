@@ -777,6 +777,16 @@ def _build_creation_ops():
 # BUILD COMPLETE OP MAP
 # ============================================================================
 
+def _build_recurrent_ops():
+    """The ops that carry a state along a sequence (each self-manages its dtypes)."""
+    from nbxtensor.ops import elementwise_wrappers as _nbx_elementwise_wrappers
+    from nbxtensor.ops import gated_delta_rule as _nbx_gated_delta_rule
+
+    return {
+        "lstm": _nbx_elementwise_wrappers.lstm_wrapper,                 # triton-pure assembly
+        "gated_delta_rule": _nbx_gated_delta_rule.gated_delta_rule_wrapper,   # the serial scan
+    }
+
 def _build_op_map() -> Dict[str, Callable]:
     """Build the COMPLETE aten_op → function mapping.
 
@@ -814,8 +824,6 @@ def _build_op_map() -> Dict[str, Callable]:
         "mish": _nbx_elementwise_wrappers.mish,
         "selu": _nbx_elementwise_wrappers.selu_wrapper,
 
-        # --- Recurrent (triton-pure assembly; self-manages dtype) ---
-        "lstm": _nbx_elementwise_wrappers.lstm_wrapper,
 
         # --- Unary element-wise ---
         "neg": _nbx_elementwise_wrappers.neg,
@@ -1189,8 +1197,9 @@ def _build_op_map() -> Dict[str, Callable]:
         "_pack_padded_sequence": lambda inp, lengths, bf=False: inp,
     }
 
-    # Add creation ops
+    # Add creation and recurrent ops
     ops.update(_build_creation_ops())
+    ops.update(_build_recurrent_ops())
 
     return ops
 
