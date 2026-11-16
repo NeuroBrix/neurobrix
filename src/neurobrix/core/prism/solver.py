@@ -9670,7 +9670,7 @@ class PrismSolver:
 
     def _container_fits_float16(self, container: "NBXContainer") -> bool:
         """
-        Scan bf16 weight files to verify all values fit in fp16 range (±65504).
+        Scan bf16 weight files to verify all values fit in fp16 range.
         Returns True if bf16→fp16 is safe, False if fp32 fallback needed.
 
         Results are cached in two layers:
@@ -9713,33 +9713,21 @@ class PrismSolver:
                 self._bf16_fp16_safe_cache = result
                 return result
 
-        # Full scan: each bfloat16 weight's largest magnitude read by nbxtensor from the shard's stored bytes (no tensor
-        # library opens the file), held to float16's finite maximum from the one dtype table.
-        from nbxtensor.dtype.itemsize import finite_max
-        from nbxtensor.io.safetensors import bf16_abs_maxima
-        from neurobrix.nbx.weight_presence import read_safetensors_header
+        # The question is the library's: do all the floating weights fit float16's range? Prism decides placement with the answer.
+        from nbxtensor.io.safetensors import fp16_range_scan
 
-        FP16_MAX = finite_max("float16")
-        total_params = 0
+        shards = [shard for comp_dir in sorted(components_dir.iterdir())
+                  for shard in sorted((comp_dir / "weights").glob("*.safetensors"))]
+        scan = fp16_range_scan(shards)
+        if not scan.fits:
+            with open(safety_cache_file, 'w') as cf:
+                json.dump({"bf16_fp16_safe": False, "reason": f"{scan.key}: abs_max={scan.abs_max}"}, cf)
+            self._bf16_fp16_safe_cache = False
+            return False
 
-        for comp_dir in components_dir.iterdir():
-            weights_path = comp_dir / "weights"
-            if not weights_path.exists():
-                continue
-            for shard in sorted(weights_path.glob("*.safetensors")):
-                for key, n, abs_max in bf16_abs_maxima(shard, *read_safetensors_header(str(shard))):
-                    total_params += n
-                    if abs_max > FP16_MAX:
-                        # Cache negative result to disk
-                        with open(safety_cache_file, 'w') as cf:
-                            json.dump({"bf16_fp16_safe": False, "reason": f"{key}: abs_max={abs_max}"}, cf)
-                        self._bf16_fp16_safe_cache = False
-                        return False
-
-        result = total_params > 0
-        # Cache positive result to disk
+        result = scan.scanned > 0
         with open(safety_cache_file, 'w') as cf:
-            json.dump({"bf16_fp16_safe": result, "bf16_params": total_params}, cf)
+            json.dump({"bf16_fp16_safe": result, "bf16_params": scan.scanned}, cf)
         self._bf16_fp16_safe_cache = result
         return result
 
