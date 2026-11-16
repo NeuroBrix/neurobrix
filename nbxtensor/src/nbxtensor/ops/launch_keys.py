@@ -47,6 +47,7 @@ DECODE_VEC = "nbxtensor.ops.decode_attn_vec.decode_attn_vec_split_kernel"
 PAGED_DECODE = "nbxtensor.ops.paged_decode_attn.paged_decode_attn_split_kernel"
 DECODE_REDUCE = "nbxtensor.ops.flash_decode.flash_decode_reduce_kernel"
 GATED_DELTA_RULE = "nbxtensor.ops.gated_delta_rule.gated_delta_rule_scan_kernel"
+MOE_ROUTE = "nbxtensor.ops.moe_route.moe_route_kernel"
 MOE_ALIGN = tuple(f"nbxtensor.ops.moe_align.moe_align_stage{i}_kernel" for i in (1, 2, 3))
 
 F32, BF16, F16 = NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16
@@ -399,6 +400,15 @@ def gated_delta_rule_launches(dk: int, dv: int, q: NBXDtype, k: NBXDtype, v: NBX
     stands in for it when the op starts from zeros), the output (v's dtype) and the state out (float32)."""
     return [(GATED_DELTA_RULE, (int(dk), int(dv), tag(q), tag(k), tag(v), tag(g), tag(beta), tag(F32), tag(v),
                                 tag(F32)))]
+
+def moe_route_launches(E: int, H: int, top_k: int, hidden: NBXDtype, router_weight: NBXDtype) -> List[Launch]:
+    """`moe_route`: ONE launch per call, one program per token row — E, H and top_k (n_group is never in the key: the
+    grouped and the ungrouped routing of one geometry share one configuration), then the dtype tags of
+    the hidden row, the router weight, the choice bias (float32; the weights out stand in for it when the op has no
+    bias), the indices out (int64) and the weights out (float32)."""
+    return [(MOE_ROUTE, (int(E), int(H), int(top_k), tag(hidden), tag(router_weight), tag(F32),
+                         tag(NBXDtype.int64), tag(F32)))]
+
 
 def dft_r2c_launches(M: int, N: int, onesided: bool, native_bf16: bool) -> List[Launch]:
     """`fft_r2c_wrapper` on a length that is not a power of two: `_dft_r2c`, the frames flattened
