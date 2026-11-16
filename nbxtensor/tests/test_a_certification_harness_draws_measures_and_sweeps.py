@@ -32,11 +32,26 @@ def test_a_padded_row_key_is_drawn_at_its_shortest_row_where_its_top_does_not_fi
     assert H.Room().row_shape(1 << 30, 1024, "fp32", "fp32", "softmax") == (1 << 30, 1024)   # unbounded
 
 
-def test_an_elementwise_class_is_drawn_at_its_floor_and_an_operand_set_over_the_share_is_refused():
+def _volta_profile(monkeypatch):
+    """Binds the Volta device file as the profile in force: the elements ladder is a row of that file, so the test
+    names it instead of reading whichever card the host has. Returns the file's `autotune.buckets.elements` rows."""
+    import pathlib
+    import yaml
+    from nbxtensor.ops import _configs
+    import nbxtensor
+    path = pathlib.Path(nbxtensor.__file__).parent / "backend" / "devices" / "nvidia" / "volta.yml"
+    profile = yaml.safe_load(path.read_text())
+    monkeypatch.setattr(_configs, "active_vendor_profile", lambda: profile)
+    return profile["autotune"]["buckets"]["elements"]
+
+
+def test_an_elementwise_class_is_drawn_at_its_floor_and_an_operand_set_over_the_share_is_refused(monkeypatch):
     from nbxtensor.ops.autotune_bucket import class_floor
+    rows = _volta_profile(monkeypatch)
     room = H.Room(card=1 << 30, usable=1 << 29)                       # 512 MiB: 64 Mi elements in and out
     assert room.ew_count(1 << 24, "fp32", "ew") == 1 << 24
-    top = 68719476736                                                     # the open class's label
+    top = rows[-1]["step"]                  # the open row of volta.yml's elements ladder (68719476736): the class's label
+    assert rows[-1]["up_to"] is None
     assert room.ew_count(top, "fp32", "ew") == class_floor("elements", top) < 1 << 26
     with pytest.raises(H.KeyTooLargeForClass):
         H.Room(card=1 << 20, usable=1 << 19).ew_count(top, "fp32", "ew")   # not even its floor
