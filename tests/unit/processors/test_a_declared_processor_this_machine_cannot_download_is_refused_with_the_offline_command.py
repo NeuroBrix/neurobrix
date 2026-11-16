@@ -1,6 +1,6 @@
 """A model that declares a processor, on a machine that reaches neither declared host and has nothing in its cache,
 is refused in ONE sentence that names the sub-component and the two offline commands; nothing is written, no URL
-and no trace is shown.
+and no stack of calls is shown.
 
 Red without the change: there is no `neurobrix processor` command (argparse exits 2)."""
 from tests.unit.processors import toy
