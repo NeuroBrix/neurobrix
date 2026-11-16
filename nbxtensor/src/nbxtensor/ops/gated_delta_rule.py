@@ -17,10 +17,12 @@ ONE kernel, the serial scan: one program per (batch row, value head, dv tile). A
 column (u and o are read column by column), so the dk x BV float32 tile stays on chip across the length loop; the whole
 128 x 128 state (64 KB) fits neither a V100 program nor Apple's 32 KB threadgroup memory. BV and the warps are the
 certified configuration of the key (dk, dv and the operands' dtypes), never tuned at run time. The token step IS the
-scan at one token; this release runs it at L = 1 (`gated_delta_rule_wrapper` refuses a longer sequence by name).
+scan at one token: one kernel serves a prompt and a token. The length L is symbolic: it is the kernel's loop bound, never
+its key, its grid or a chunk; the state goes in and comes back float32, so a prompt in two calls, or a prompt then one
+token at a time, is the same recurrence as one call.
 
 Its float64 reference is `nbxtensor.ops.oracles.fp64.delta_rule_oracle`; its launch is `launch_keys.
-gated_delta_rule_launches`.
+gated_delta_rule_launches`; its cost is `nbxtensor.ops._cost.gated_delta_rule`.
 """
 from __future__ import annotations
 
@@ -37,8 +39,8 @@ from nbxtensor.tensor import NBXTensor
 GATED_DELTA_RULE_INPUT_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32)
 #: The compute dtypes this release runs the recurrence in.
 GATED_DELTA_RULE_COMPUTE_DTYPES = (NBXDtype.float32,)
-#: The sequence lengths this release runs: the token step (the scan over a symbolic length is the next lot).
-GATED_DELTA_RULE_LENGTHS = (1,)
+#: The shortest sequence the op runs: one token (a call with no token has nothing to read or write).
+GATED_DELTA_RULE_MIN_LENGTH = 1
 
 # The dv tile and warps, candidates the certification measures per key; one stage (the loop streams q, k, v once).
 _GATED_DELTA_RULE_CONFIGS = [triton.Config({'BV': bv}, num_warps=w, num_stages=1)
@@ -127,15 +129,17 @@ def gated_delta_rule_shapes(q, k, v, g, beta, state=None) -> tuple:
     if Hk == 0 or Hv % Hk:
         raise ValueError(f"gated_delta_rule: {Hv} value heads are not a whole multiple of {Hk} key heads; each key "
                          f"head serves Hv / Hk consecutive value heads")
-    if L not in GATED_DELTA_RULE_LENGTHS:
-        raise ValueError(f"gated_delta_rule: a sequence of length {L}: this release runs the delta rule at the "
-                         f"lengths {GATED_DELTA_RULE_LENGTHS} only (the token step); a longer scan is not proven yet")
+    if L < GATED_DELTA_RULE_MIN_LENGTH:
+        raise ValueError(f"gated_delta_rule: a sequence of length {L}: the delta rule runs over at least "
+                         f"{GATED_DELTA_RULE_MIN_LENGTH} token; a call with no token has no output to write")
     return B, L, Hk, Hv, dk, dv
 
 
 def gated_delta_rule_dtypes(q, k, v, g, beta, state, compute_dtype) -> NBXDtype:
-    """The compute dtype, after each operand's dtype is checked against the contract (q, k, v, beta at a model dtype;
-    g and the state float32); a dtype the op does not take is refused by name."""
+    """The compute dtype, after each operand's DTYPE (an `NBXDtype`; `state` None when the op starts from zeros) is
+    checked against the contract (q, k, v, beta at a model dtype; g and the state float32); a dtype the op does not
+    take is refused by name. One check for the wrapper and its cost (`_cost.gated_delta_rule`): the declaration and the
+    execution refuse the same operands."""
     try:
         cd = parse_dtype(compute_dtype)
     except KeyError:
@@ -143,13 +147,13 @@ def gated_delta_rule_dtypes(q, k, v, g, beta, state, compute_dtype) -> NBXDtype:
     if cd not in GATED_DELTA_RULE_COMPUTE_DTYPES:
         raise ValueError(f"gated_delta_rule: compute_dtype {cd.name} is refused: this release computes the recurrence "
                          f"in {[d.name for d in GATED_DELTA_RULE_COMPUTE_DTYPES]} only")
-    for name, t in (("q", q), ("k", k), ("v", v), ("beta", beta)):
-        if t.nbx_dtype not in GATED_DELTA_RULE_INPUT_DTYPES:
-            raise ValueError(f"gated_delta_rule: {name} is {t.nbx_dtype.name}; it must be one of "
+    for name, dt in (("q", q), ("k", k), ("v", v), ("beta", beta)):
+        if dt not in GATED_DELTA_RULE_INPUT_DTYPES:
+            raise ValueError(f"gated_delta_rule: {name} is {dt.name}; it must be one of "
                              f"{[d.name for d in GATED_DELTA_RULE_INPUT_DTYPES]}")
-    for name, t in (("g", g), ("state", state)):
-        if t is not None and t.nbx_dtype != NBXDtype.float32:
-            raise ValueError(f"gated_delta_rule: {name} is {t.nbx_dtype.name}; it must be float32 (the op's contract: "
+    for name, dt in (("g", g), ("state", state)):
+        if dt is not None and dt != NBXDtype.float32:
+            raise ValueError(f"gated_delta_rule: {name} is {dt.name}; it must be float32 (the op's contract: "
                              f"the decay and the state are float32, the state never narrowed)")
     return cd
 
@@ -160,11 +164,12 @@ def gated_delta_rule_wrapper(q, k, v, g, beta, state=None, *, qk_l2norm: bool, e
     float32 (None: zeros) -> (o [B, L, Hv, dv] at v's dtype, state_out [B, Hv, dk, dv] float32, a new tensor).
 
     `qk_l2norm` (with `eps`) and `scale` are the op's attributes, `compute_dtype` the dtype it computes in (float32
-    only in this release); none has a default. The launch is the certified configuration of the key
-    `launch_keys.gated_delta_rule_launches` forms. Refused by name: a shape, a dtype or a length the op does not take.
+    only in this release); none has a default. L is any length from one token: the state handed back is the next
+    call's start. The launch is the certified configuration of the key `launch_keys.gated_delta_rule_launches` forms
+    (the length is not in it). Refused by name: a shape, a dtype or a length the op does not take.
     """
     B, L, Hk, Hv, dk, dv = gated_delta_rule_shapes(q, k, v, g, beta, state)
-    gated_delta_rule_dtypes(q, k, v, g, beta, state, compute_dtype)
+    gated_delta_rule_dtypes(*(None if t is None else t.nbx_dtype for t in (q, k, v, g, beta, state)), compute_dtype)
     out = NBXTensor.empty((B, L, Hv, dv), dtype=v.nbx_dtype, device=v.device)
     state_out = NBXTensor.empty((B, Hv, dk, dv), dtype=NBXDtype.float32, device=v.device)
     state_in = state_out if state is None else state

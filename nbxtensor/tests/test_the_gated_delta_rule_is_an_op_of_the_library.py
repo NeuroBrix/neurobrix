@@ -4,7 +4,7 @@ beta[, state]) -> (o, state), registered under the graph op `gated_delta_rule`, 
 
 Before this lot the library had no such op: the import fails (red). What this test does if the code is wrong: a
 compute dtype other than float32 accepted, a state or a decay narrowed below float32 accepted, value heads that are not
-a whole multiple of the key heads accepted, a length the release does not run accepted, a shape that disagrees with q
+a whole multiple of the key heads accepted, a sequence of no token accepted, a shape that disagrees with q
 and v accepted, the op missing from the dispatch table, a launch key that is not one key of the scan kernel - red.
 No device needed: the refusals happen on the operands' shapes and dtypes."""
 import pytest
@@ -72,9 +72,9 @@ def test_value_heads_not_a_multiple_of_the_key_heads_are_refused_by_name():
         G.gated_delta_rule_wrapper(*_ops(Hk=2, Hv=5), compute_dtype=F32, **ATTRS)
 
 
-@pytest.mark.parametrize("L", [0, 2, 23])
+@pytest.mark.parametrize("L", [0])
 def test_a_length_this_release_does_not_run_is_refused_by_name(L):
-    with pytest.raises(ValueError, match=f"a sequence of length {L}: this release runs the delta rule at the lengths"):
+    with pytest.raises(ValueError, match=f"a sequence of length {L}: the delta rule runs over at least 1 token"):
         G.gated_delta_rule_wrapper(*_ops(L=L), compute_dtype=F32, **ATTRS)
 
 

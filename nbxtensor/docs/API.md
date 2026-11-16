@@ -1780,17 +1780,23 @@ def gather_kernel(inp, index, out, N, inp_dim_stride, idx_stride_outer, idx_stri
 ```python
 GATED_DELTA_RULE_INPUT_DTYPES = (float16, bfloat16, float32)   # the dtypes q, k, v, beta may arrive in
 GATED_DELTA_RULE_COMPUTE_DTYPES = (float32,)                   # the compute dtype this release runs in
-GATED_DELTA_RULE_LENGTHS = (1,)                                # the token step; a longer scan is refused by name
+GATED_DELTA_RULE_MIN_LENGTH = 1                                # one token; L is symbolic above it (no token: refused by name)
 def gated_delta_rule_scan_kernel(q_ptr, k_ptr, v_ptr, g_ptr, beta_ptr, s_in_ptr, o_ptr, ...)
     # serial scan, grid (B, Hv, cdiv(dv, BV)); a dk x BV float32 state tile stays on chip; BV and warps are certified candidates
 def gated_delta_rule_shapes(q, k, v, g, beta, state=None) -> tuple
-def gated_delta_rule_dtypes(q, k, v, g, beta, state, compute_dtype) -> NBXDtype
+def gated_delta_rule_dtypes(q, k, v, g, beta, state, compute_dtype) -> NBXDtype   # on the operands' NBXDtypes (state None: zeros)
 def gated_delta_rule_wrapper(q, k, v, g, beta, state=None, *, qk_l2norm: bool, eps: float, scale: float, compute_dtype)
     # The gated delta rule over q, k [B, L, Hk, dk], v [B, L, Hv, dv], g, beta [B, L, Hv] from state [B, Hv, dk, dv]
-    # float32 (None: zeros) -> (o [B, L, Hv, dv] at v's dtype, state_out float32). Refuses by name: compute dtype not
-    # float32, g or state not float32, inputs not float16/bfloat16/float32, bad shapes, Hv % Hk != 0, L != 1.
+    # float32 (None: zeros) -> (o [B, L, Hv, dv] at v's dtype, state_out float32), at any length L >= 1: the state
+    # handed back is the next call's start (a prompt in two calls, or then one token at a time, is one recurrence).
+    # Refuses by name: compute dtype not float32, g or state not float32, inputs not float16/bfloat16/float32, bad
+    # shapes, Hv % Hk != 0, L < 1. No chunk size anywhere: not an argument, not in the launch key.
     # Dispatch name: "gated_delta_rule".
 ```
+
+Its cost: `nbxtensor.ops._cost.gated_delta_rule(q, k, v, g, beta, state, *, qk_l2norm, compute_dtype) -> Cost` on
+`_cost.Spec`s, refused where the wrapper refuses: the output and the state out (both returned, no workspace), every
+operand read once, both outputs written once, the recurrence's flops at L tokens.
 
 `nbxtensor.ops.ge`
 

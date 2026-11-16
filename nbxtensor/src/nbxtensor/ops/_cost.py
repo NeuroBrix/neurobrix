@@ -23,7 +23,7 @@ from nbxtensor.dtype.itemsize import itemsize
 from nbxtensor.shape import contiguous_strides, is_contiguous, numel
 
 __all__ = ["Spec", "Buffer", "Cost", "elementwise_unary", "elementwise_binary", "softmax", "rms_norm",
-           "native_layer_norm", "reduction"]
+           "native_layer_norm", "reduction", "gated_delta_rule"]
 
 
 @dataclass(frozen=True)
@@ -231,3 +231,28 @@ def reduction(x: Spec, dim: Optional[int], keepdim: bool, out_dtype: str, cast_t
         st.alloc("result", rows * itemsize(out_dtype), returned=True)
         st.moved += rows * itemsize("float32") + rows * itemsize(out_dtype)
     return st.done(numel(x.shape))
+
+
+def gated_delta_rule(q: Spec, k: Spec, v: Spec, g: Spec, beta: Spec, state: Optional[Spec], *, qk_l2norm: bool,
+                     compute_dtype) -> Cost:
+    """`ops.gated_delta_rule.gated_delta_rule_wrapper` over a length L, refused by name where the wrapper refuses (the
+    same `gated_delta_rule_shapes` and `gated_delta_rule_dtypes`): two buffers, both returned, the output
+    [B, L, Hv, dv] at v's dtype and the state out [B, Hv, dk, dv] float32 (a new tensor, the state in never written);
+    no workspace, the operands read through their own strides (q, k, v as views of one projection never copied).
+    Bytes moved: every operand read once (the state in only when given), both outputs written once. Flops per (batch
+    row, token, value head), where the kernel computes them: the decay dk*dv, the correction 2*dk*dv + 2*dv, the
+    rank-one write 2*dk*dv, the read 2*dk*dv, the query scale dk and, with `qk_l2norm`, two norms of 3*dk + 1 (each
+    value head normalises its key head's q and k)."""
+    from nbxtensor.dtype.nbx_dtype import NBXDtype
+    from nbxtensor.ops.gated_delta_rule import gated_delta_rule_dtypes, gated_delta_rule_shapes
+    B, L, Hk, Hv, dk, dv = gated_delta_rule_shapes(q, k, v, g, beta, state)
+    gated_delta_rule_dtypes(*(None if t is None else NBXDtype[t.dtype] for t in (q, k, v, g, beta, state)),
+                            compute_dtype)
+    st = _Steps()
+    out = Spec.contiguous((B, L, Hv, dv), v.dtype)
+    state_out = Spec.contiguous((B, Hv, dk, dv), NBXDtype.float32.name)
+    st.alloc("output", out.nbytes, returned=True)
+    st.alloc("state out", state_out.nbytes, returned=True)
+    st.moved += sum(t.nbytes for t in (q, k, v, g, beta, state) if t is not None) + out.nbytes + state_out.nbytes
+    norms = 2 * (3 * dk + 1) if qk_l2norm else 0
+    return st.done(B * L * Hv * (7 * dk * dv + 2 * dv + dk + norms))
