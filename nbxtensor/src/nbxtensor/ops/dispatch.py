@@ -785,6 +785,8 @@ def _build_recurrent_ops():
     return {
         "lstm": _nbx_elementwise_wrappers.lstm_wrapper,                 # triton-pure assembly
         "gated_delta_rule": _nbx_gated_delta_rule.gated_delta_rule_wrapper,   # the serial scan
+        # no "moe_route" here, by ruling 2 of DECISIONS_445: the routing stays outside the dispatch and reaches
+        # fused_moe through its precomputed-routing entry (ops/moe_route.py)
     }
 
 def _build_op_map() -> Dict[str, Callable]:

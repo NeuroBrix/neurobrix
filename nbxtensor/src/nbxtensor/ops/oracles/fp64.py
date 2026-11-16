@@ -27,7 +27,7 @@ __all__ = ["ORACLE_MAX_MACS", "ROW_F64_ARRAYS", "values", "f64", "row_windows", 
            "Exact", "WindowedOracle", "RowWindowedOracle", "HostWindows", "oracle_rows", "conv_out_hw", "conv2d_oracle",
            "matmul_oracle", "moe_oracle", "attention_oracle", "softmax_oracle", "gemv_oracle", "rownorm_oracle",
            "row_reduce_oracle", "groupnorm_oracle", "conv_oracle", "head_windows", "HeadWindowedOracle",
-           "delta_rule_oracle", "host_values", "materialise", "deviation_against",
+           "delta_rule_oracle", "moe_route_oracle", "host_values", "materialise", "deviation_against",
            "causal_conv1d_oracle",
            "oracle_deviation"]
 
@@ -457,6 +457,50 @@ def delta_rule_oracle(q, k, v, g, beta, state=None, *, qk_l2norm: bool, eps: flo
         return (HeadWindowedOracle([(w, o) for w, (o, _) in parts], 2, B, Hv),
                 HeadWindowedOracle([(w, s) for w, (_, s) in parts], 1, B, Hv))
     return build
+
+def _top_first(v: np.ndarray, n: int) -> np.ndarray:
+    """The ids of the n largest values of each row, the largest first, the lower id first on an exact tie."""
+    ids = np.broadcast_to(np.arange(v.shape[-1]), v.shape)
+    return np.stack([np.lexsort((i, -r))[:n] for i, r in zip(ids, v)])
+
+
+def _group_scores(c: np.ndarray, n_group: int, group_score: str) -> np.ndarray:
+    g = np.sort(c.reshape(c.shape[0], n_group, -1), axis=-1)[..., ::-1]
+    return g[..., :2].sum(-1) if group_score == "top2_sum" else g[..., 0]
+
+
+def moe_route_oracle(hidden, router_weight, choice_bias, *, score_fn: str, top_k: int, n_group: int, topk_group: int,
+                     group_score: str, fill: float, renorm_eps: Optional[float], scale: float
+                     ) -> Callable[[], Tuple[Any, Any, Any, Any]]:
+    """The reference of the routing op (`ops.moe_route`) of hidden [T, H] over router_weight [E, H] with choice_bias
+    [E] (or None), in float64: (indices [T, top_k] int64, weights [T, top_k], the choice values the final top-k ranks
+    [T, E] (a dropped group's experts at `fill`), the group scores [T, n_group]). The slots come largest first, the
+    lower id first on an exact tie (the op's slot order is not its contract: compare sets, pair weights by id)."""
+    x, w = f64(hidden), f64(router_weight)
+    bias = None if choice_bias is None else f64(choice_bias)
+    if score_fn not in ("sigmoid", "softmax") or group_score not in ("top2_sum", "max"):
+        raise ValueError(f"moe_route_oracle: score_fn {score_fn!r} / group_score {group_score!r} is not one the op "
+                         f"computes")
+
+    def build():
+        logits = x @ w.T
+        if score_fn == "sigmoid":
+            s = 1.0 / (1.0 + np.exp(-logits))
+        else:
+            p = np.exp(logits - logits.max(-1, keepdims=True))
+            s = p / p.sum(-1, keepdims=True)
+        c = s if bias is None else s + bias
+        gs = _group_scores(c, n_group, group_score)
+        kept = np.zeros(gs.shape, dtype=bool)
+        np.put_along_axis(kept, _top_first(gs, topk_group), True, axis=-1)
+        c = np.where(np.repeat(kept, c.shape[-1] // n_group, axis=-1), c, fill)
+        idx = _top_first(c, top_k)
+        wt = np.take_along_axis(s, idx, -1)
+        if renorm_eps is not None:
+            wt = wt / (wt.sum(-1, keepdims=True) + renorm_eps)
+        return idx.astype(np.int64), wt * scale, c, gs
+    return build
+
 
 def host_values(t) -> np.ndarray:
     """A kernel's output as NUMBERS, whatever dtype it carries: `NBXTensor.numpy()` hands bf16 back as 2-byte void

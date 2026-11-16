@@ -1080,6 +1080,8 @@ def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional
     # `lstm_wrapper` -> `_lstm_run_direction`, per layer and direction
 def gated_delta_rule_launches(dk: int, dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, g: NBXDtype, beta: NBXDtype)
     # `gated_delta_rule_wrapper`: one launch of the serial scan at any length and batch (the length is never in the key)
+def moe_route_launches(E: int, H: int, top_k: int, hidden: NBXDtype, router_weight: NBXDtype)
+    # `moe_route`: one launch, one program per token row; key (E, H, top_k) and the five operands' dtype tags (n_group never in the key)
 def dft_r2c_launches(M: int, N: int, onesided: bool, native_bf16: bool)
     # `fft_r2c_wrapper` on a length that is not a power of two
 def dft_c2r_launches(M: int, bins: int, N: int, native_bf16: bool)
@@ -2195,6 +2197,28 @@ def fused_moe_across_devices(hidden_states, flat_indices, flat_scores, tables, t
     # The routed SwiGLU sum of a layer whose experts sit on several devices, [M, K] on `act_dev`: for each device of `tables.device_experts`, the pairs routed to its experts are aligned there and mapped back to their flat positions, the three grouped passes run against the device's own table, and its per-token share crosses back and is added. `tables`: the layer's `PtrTables`; `n_gate`: the experts' intermediate width; `block_m`: the alignment's block (`moe_wrappers.MOE_BLOCK_M`)
 ```
 
+`nbxtensor.ops.moe_route`
+
+```python
+MOE_ROUTE_INPUT_DTYPES = (float16, bfloat16, float32)   # the dtypes hidden and router_weight may arrive in
+MOE_ROUTE_SCORE_FNS = ("sigmoid", "softmax")
+MOE_ROUTE_GROUP_SCORES = ("top2_sum", "max")
+MOE_ROUTE_MAX_EXPERTS = 256                             # one row of experts per program
+MOE_ROUTE_TOKENS = (1,)                                 # the token step; more tokens are refused by name
+def moe_route_kernel(x_ptr, w_ptr, bias_ptr, idx_ptr, wt_ptr, E, H, TOP_K, N_GROUP, TOPK_GROUP, ...)
+    # one program per token row: the fp32 router product over BLOCK_H tiles, scores, bias, groups, two selections, gather, renorm, scale in registers; BLOCK_H and warps are certified candidates
+def moe_route_shapes(hidden, router_weight, choice_bias) -> tuple   # (T, H, E)
+def moe_route_dtypes(hidden, router_weight, choice_bias) -> None
+def moe_route_attributes(E, *, score_fn, top_k, n_group, topk_group, group_score, fill, renorm_eps, scale) -> None
+def moe_route(hidden, router_weight, *, choice_bias, score_fn, top_k, n_group, topk_group, group_score, fill, renorm_eps, scale)
+    # The routing of hidden [T, H] over router_weight [E, H] (+ choice_bias [E] float32 or None) -> (indices [T, top_k]
+    # int64, weights [T, top_k] float32): s = sigmoid|softmax(fp32 product), choice c = s + bias, the topk_group best of
+    # n_group groups by top2_sum|max of c (the others at `fill`), top_k of c, weights = s at the chosen ids, then
+    # / (sum + renorm_eps) when renorm_eps is not None, then * scale. n_group 1 = the ungrouped routing. Slots largest
+    # first, the slot order not part of the contract. No attribute has a default. Refuses by name: bad shapes or dtypes,
+    # E > 256, T != 1, groups that do not cut E, topk_group or top_k out of range, fill NaN or +inf, bad renorm_eps.
+```
+
 `nbxtensor.ops.mse_loss`
 
 ```python
@@ -2839,6 +2863,7 @@ def head_windows(batch: int, heads: int, per_head: int) -> Optional[List[(batch 
 class HeadWindowedOracle(blocks, head_axis, batch, heads)   # windows over batch rows x independent heads, whole length kept
 def delta_rule_oracle(q, k, v, g, beta, state=None, *, qk_l2norm, eps, scale)   # (out, state) float64 of the gated delta rule
 def causal_conv1d_oracle(x, weight, bias=None, state=None) -> (y, state_out)   # the state joined, one shifted product a tap
+def moe_route_oracle(hidden, router_weight, choice_bias, *, score_fn, top_k, n_group, topk_group, group_score, fill, renorm_eps, scale)   # (indices, weights, choice values, group scores) float64 of the routing op
 def host_values(t) -> np.ndarray             # a kernel's output as numbers (bf16 decoded)
 def materialise(piece)                       # a device cut made contiguous before it crosses
 def deviation_against(out_tensor, oracle) -> float   # read off the device only where the oracle measures
