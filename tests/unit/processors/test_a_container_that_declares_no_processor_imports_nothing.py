@@ -1,7 +1,7 @@
 """A container without the `processors` key costs nothing: in a fresh interpreter, the run door's module loaded and
 a container without the key opened, the processors' call returns None, its door (store.py: the network, the hash,
-the lock) is never imported and the HTTP GET it was given is never called. Both doors that load a model (the run
-command and the serving daemon's load) make the call.
+the lock) is never imported and the HTTP GET (`requests.get`, replaced by a counter) is never called. Both doors
+that load a model (the run command and the serving daemon's load) make the call.
 
 Red without the change: `neurobrix.processors` does not exist (the child fails on the import), and neither door
 calls it."""
@@ -18,13 +18,14 @@ REPO = Path(__file__).resolve().parents[3]
 CHILD = r"""
 import sys
 from pathlib import Path
+import requests
 import neurobrix.cli.commands.run
 from neurobrix.nbx import NBXContainer
 from neurobrix.processors import open_declared
 container = NBXContainer.load(sys.argv[1])
 asked = []
-got = open_declared(container.get_manifest(), Path(sys.argv[1]), [c.name for c in container.get_neural_components()],
-                    get=lambda *a, **k: asked.append(a))
+requests.get = lambda *a, **k: asked.append(a)
+got = open_declared(container.get_manifest(), Path(sys.argv[1]), [c.name for c in container.get_neural_components()])
 assert got is None, got
 assert "neurobrix.processors.store" not in sys.modules, "the processors' door was imported"
 assert not asked, "the download was asked"

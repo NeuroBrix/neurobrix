@@ -20,14 +20,13 @@ def model_name(container_dir) -> str:
     return recorded_name(Path(container_dir)) or Path(container_dir).name
 
 
-def open_declared(manifest: dict, container_dir, components, labels=None, get=None):
+def open_declared(manifest: dict, container_dir, components):
     """The entry processor `manifest` declares, present, verified and loaded; None when it declares none.
 
     `components`: the names of the container's parts (a declaration that names another is refused before any
-    fetch). `labels`: the engine's runner of a declared component, lent to the processor through `ask.labels`.
-    `get`: the HTTP GET the download uses (tests inject a local one)."""
+    fetch)."""
     decls = declared(manifest)
     if not decls:
         return None
     from neurobrix.processors import store
-    return store.open_all(decls, components, model_name(container_dir), labels=labels, get=get)
+    return store.open_all(decls, components, model_name(container_dir))

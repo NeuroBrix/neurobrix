@@ -35,7 +35,9 @@ class _Get:
 def _open(places, records, get):
     from neurobrix.processors import open_declared
     entry = toy.install_model(places["NEUROBRIX_CACHE"], "toy", records)
-    return open_declared({"processors": records}, entry, ["text_tagger"], get=get)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("requests.get", get)
+        return open_declared({"processors": records}, entry, ["text_tagger"])
 
 
 def test_the_entry_processor_answers_from_its_verified_bytes(places):

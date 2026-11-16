@@ -29,7 +29,7 @@ import shutil
 import sys
 import zipfile
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from neurobrix.processors import messages
 from neurobrix.processors.declaration import ARTIFACT_SUFFIX, Declaration, entry_of
@@ -90,14 +90,14 @@ def _announced(decl: Declaration):
     return bar
 
 
-def _download(decl: Declaration, arrived: Path, model: str, get) -> None:
+def _download(decl: Declaration, arrived: Path, model: str) -> None:
     """The declared sources tried in order into `arrived`; the next only when one does not answer."""
     import requests
     from neurobrix.cli.commands.registry import IncompleteDownload, download_resumable
     cause = None
     for url in source_urls(decl):
         try:
-            download_resumable(url, arrived, total_hint=decl.size, desc=decl.label, get=get, progress=_announced(decl))
+            download_resumable(url, arrived, total_hint=decl.size, desc=decl.label, progress=_announced(decl))
             return
         except (requests.ConnectionError, requests.Timeout) as exc:
             cause = exc
@@ -111,10 +111,10 @@ def _download(decl: Declaration, arrived: Path, model: str, get) -> None:
     raise messages.refusal(messages.UNREACHABLE, label=decl.label, model=model, file=decl.file) from cause
 
 
-def _fetch(decl: Declaration, dest: Path, model: str, get) -> bytes:
+def _fetch(decl: Declaration, dest: Path, model: str) -> bytes:
     """Download `decl` beside `dest`, verify it, give it `dest`'s name; the ready line once it holds."""
     arrived = dest.with_name(dest.name + ".arrived")
-    _download(decl, arrived, model, get)
+    _download(decl, arrived, model)
     data = arrived.read_bytes()
     if hashlib.sha256(data).hexdigest() != decl.sha256:
         arrived.unlink()
@@ -124,7 +124,7 @@ def _fetch(decl: Declaration, dest: Path, model: str, get) -> bytes:
     return data
 
 
-def ensure(decl: Declaration, model: str, root: Optional[Path] = None, get: Optional[Callable] = None) -> bytes:
+def ensure(decl: Declaration, model: str, root: Optional[Path] = None) -> bytes:
     """The verified bytes of `decl`'s artifact in `root` (the cache by default): found there in silence, or fetched
     once under the lock beside it."""
     from neurobrix.nbx.atomic_install import held_in_turn
@@ -134,7 +134,7 @@ def ensure(decl: Declaration, model: str, root: Optional[Path] = None, get: Opti
         return data
     with held_in_turn(dest.with_name(dest.name + ".lock"), label=f"fetch {decl.file}", poll_seconds=LOCK_POLL_SECONDS):
         data = verified(dest, decl)
-        return data if data is not None else _fetch(decl, dest, model, get)
+        return data if data is not None else _fetch(decl, dest, model)
 
 
 class _VerifiedCode(importlib.abc.MetaPathFinder, importlib.abc.Loader):
@@ -153,9 +153,6 @@ class _VerifiedCode(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             return importlib.util.spec_from_loader(name, self, origin=f"{self.origin}/{package}", is_package=True)
         if f"code/{rel}.py" in self.members:
             return importlib.util.spec_from_loader(name, self, origin=f"{self.origin}/code/{rel}.py")
-        return None
-
-    def create_module(self, spec):
         return None
 
     def exec_module(self, module):
@@ -185,19 +182,20 @@ def load(decl: Declaration, data: bytes):
     return getattr(module, class_name)(ArtifactData(archive))
 
 
-def open_all(decls: List[Declaration], components, model: str, labels=None, get=None) -> Held:
-    """Every declared processor checked, made present, verified and loaded; the entry one returned, bound."""
+def open_all(decls: List[Declaration], components, model: str) -> Held:
+    """Every declared processor checked, made present, verified and loaded; the entry one returned, bound (no runner
+    of a declared component is lent yet: `Ask.labels` refuses by its sentence)."""
     for decl in decls:
         refuse_unspoken(decl)
         source_urls(decl)
         refuse_missing_components(decl, components)
-    loaded = {d.name: load(d, ensure(d, model, get=get)) for d in decls}
+    loaded = {d.name: load(d, ensure(d, model)) for d in decls}
     held: Dict[str, Held] = {}
 
     def bind(decl: Declaration) -> Held:
         if decl.name not in held:
             used = {role: bind(next(d for d in decls if d.name == target)) for role, target in decl.uses.items()}
-            held[decl.name] = Held(decl, loaded[decl.name], Ask(decl, used, labels))
+            held[decl.name] = Held(decl, loaded[decl.name], Ask(decl, used, None))
         return held[decl.name]
     return bind(entry_of(decls))
 

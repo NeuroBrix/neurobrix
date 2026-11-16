@@ -21,6 +21,8 @@ import subprocess
 import sys
 import tempfile
 
+#: the corpus's two variants, as build_reference.py writes them
+VARIANTS = ("us", "gb")
 LAYERS = ["in_list", "rules", "affixes", "numbers", "abbreviations", "symbols", "unknown", "stress_context"]
 
 
@@ -51,10 +53,10 @@ def grade_layer(ref, cand):
 PIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "archive_pin.py")
 
 
-def load_pin(path=PIN):
+def load_pin():
     ns = {}
-    with open(path, encoding="utf-8") as f:
-        exec(compile(f.read(), path, "exec"), ns)
+    with open(PIN, encoding="utf-8") as f:
+        exec(compile(f.read(), PIN, "exec"), ns)
     pin = ns.get("PIN", {})
     for k in ("name", "size", "sha256"):
         if k not in pin:
@@ -103,9 +105,9 @@ def unpack_reference(archive, into, pin=None):
     return os.path.join(root, "reference")
 
 
-def grade(reference, candidate, variants=("us", "gb")):
+def grade(reference, candidate):
     out = {}
-    for v in variants:
+    for v in VARIANTS:
         for layer in LAYERS:
             ref = read_rows(reference, v, layer)
             if ref is None:

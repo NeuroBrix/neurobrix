@@ -102,6 +102,8 @@ def parse_voice(text, source="voice file"):
 # ---------------------------------------------------------------------------------------------------------------
 # The phoneme definitions (`phonemes` and the files it includes).
 
+#: the master phoneme file of the phoneme folder, which includes the others
+MASTER_FILE = "phonemes"
 ONE_VALUE = ("starttype", "endtype", "length", "lengthmod", "ipa", "stress_type", "voicingswitch",
              "import_phoneme", "CALL")
 REST_OF_LINE = ("Vowelin", "Vowelout")
@@ -338,12 +340,12 @@ class _Builder(object):
         return j + 1
 
 
-def read_phoneme_source(folder, master="phonemes", tables=None):
-    """Reads the master phoneme file of a folder and the files it includes (relative to that folder)."""
+def read_phoneme_source(folder, tables=None):
+    """Reads the master phoneme file of a folder (MASTER_FILE) and the files it includes (relative to that folder)."""
     def read(name):
         path = os.path.join(folder, name)
         if not os.path.isfile(path):
             raise DataFileError("the phoneme file %s is absent: fetch the pinned data of the processor" % path)
         with open(path, encoding="utf-8") as f:
             return f.read()
-    return parse_phoneme_source(read(master), read, master, tables)
+    return parse_phoneme_source(read(MASTER_FILE), read, MASTER_FILE, tables)
