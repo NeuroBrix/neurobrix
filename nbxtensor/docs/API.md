@@ -189,6 +189,21 @@ class MetalStateFence
     # the Metal kernels' release fence (record, completed, drain(pool)) over the Apple backend handed in; one without fence() / completed_fence() refused by name
 ```
 
+`nbxtensor.memory.fixed_state` — a session's fixed-size state: the kinds whose bytes do not grow with the tokens
+
+```python
+STATE_KINDS                       # ("recurrent", "conv"); "kv" is the paged KV cache's and is refused by name here
+class StateDeclaration(kind, shape, dtype, ops)
+    # recurrent: shape ["batch", heads, k_dim, v_dim], float32 always; conv: ["batch", channels, taps-1], a floating
+    # dtype (the op's); `ops` the ordered op ids it serves, one buffer each; shape(batch), nbytes(batch) (exact, every op)
+class FixedState(declaration, batch, devices, fence=None)
+    # allocated at zero, each op's buffer on its device (one index, or one per op), fixed addresses until forget:
+    # tensor(op_id) (the buffer a kernel writes in place), write(op_id, src), zero(), reorder(index) (an index gather
+    # of the batch rows, in place), copy() / restore() / release_copy() (the one kept copy: refused while one is kept),
+    # forget(); held_bytes(), copy_bytes(), has_copy, forgotten; host rewrites inside `fence` (drain before, record
+    # after); every other use refused by name
+```
+
 `nbxtensor.memory.kv_session` — a serving session's cache between turns (pure bookkeeping)
 
 ```python
