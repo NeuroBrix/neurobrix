@@ -1202,6 +1202,17 @@ class PrismSolver:
             return int(self._whole_usable_mb(dev) * 1024 * 1024)
         return int(self._effective_capacity_mb(dev) * 1024 * 1024)
 
+    def _kv_growth_reserve_bytes(self, cards, bounded: set) -> int:
+        """The allocator's reserve (`_margin_mb`) the decode cache may not take on `cards`, its floor included
+        (`price.kv_cache_size`): summed over the cards whose capacity is the raw rung — the compiled engine on a card no
+        residency is granted on after the cache. 0 where `_kv_capacity_bytes` already holds the band back: the usable
+        part (`bounded`), and on the Triton engine the whole-usable part (its runtime growth measured, `_rung_part_mb`).
+        Run or served, the cache that took the band left the first prefill no room: a 7B decoder held lazy on a 16 GB
+        card, plan + cache = the 15 845 MB budget, out of memory on a 260 MiB matmul; its floor granted inside the band,
+        out of memory from 4 358 positions (2026-11-15)."""
+        raw = [] if engine_of(getattr(self, "_mode", "compiled")) == "triton" else [d for d in cards if d.device_string not in bounded]
+        return sum(int(self._margin_mb(self._effective_capacity_mb(d)) * 1024 * 1024) for d in raw)
+
     def _kv_card_room(self, cards, held: int, kv_plan) -> Optional[Tuple[str, int]]:
         """(card, bytes) the decode cache and what the plan holds beside it leave the cache's ONE card on the Triton
         engine, from the accounting that sized the cache — the drain's room there (`_assign_drain_cliffs`). Sized apart,
@@ -2943,7 +2954,7 @@ class PrismSolver:
 
         for best in ranked:
             score, strat_name, strat_allocs, strat_devices = best
-            _kv_only, self._kv_card_left = None, None
+            _kv_only, self._kv_card_left, kv_growth_reserve = None, None, 0
 
             if strat_name in self._host_declined:
                 self._rejected.append((strat_name, float(score), "its host side overshot the pool the profile declares (installed RAM less the engine's measured base), at this rung"))
@@ -3046,7 +3057,9 @@ class PrismSolver:
                     # ... and on the Triton engine a card whose components are held WHOLE keeps the drain's floor
                     # (`_kv_capacity_bytes`): never a cache granted on the hot loop's queue (2026-11-12)
                     total_capacity = min(total_capacity, sum(self._kv_capacity_bytes(d, _bounded) for d in _cards))
-                    _kv_only = _cards
+                    # ... and the cache, its floor included, only above the allocator's reserve where the capacity is the raw
+                    # rung (`_kv_growth_reserve_bytes`): a floor inside it refuses this strategy (`kv_cache_size`)
+                    _kv_only, kv_growth_reserve = _cards, self._kv_growth_reserve_bytes(_cards, _bounded)
 
                 if strat_name == "zero3":
                     # Weights leave the device only where the host is a
@@ -3148,7 +3161,7 @@ class PrismSolver:
                     # `target_dtype_str`, the dtype after the fp32 fallback if it fired — the
                     # pre-fallback `target_dtype` sized an fp32 plan's cache at 2 bytes.
                     kv_plan = self._compute_kv_cache_plan(container, target_dtype_str, remaining, profile=profile,
-                                                          kv_devices=self._kv_devices(strat_allocs, profile))
+                        kv_devices=self._kv_devices(strat_allocs, profile), growth_reserve_bytes=kv_growth_reserve)
                 except RuntimeError as exc:
                     # The whole-precision cache does not fit this rung: the state engine's policies are scored
                     # (step 5, core/state/policy.py). An output-changing policy is taken only with a measured cost;
@@ -3494,7 +3507,7 @@ class PrismSolver:
         # runtime's own rules (host_footprint.py): what this process holds now (the parsed container
         # included) + what the engine adds, this machine's measured value carried by the hardware profile
         # (or absent and said to be) + what the plan holds and loads.
-        from neurobrix.core.prism.host_footprint import host_footprint, engine_of, process_footprint_now
+        from neurobrix.core.prism.host_footprint import host_footprint, process_footprint_now
         from neurobrix.triton.weight_loader import is_block_key   # torch-free
         _engine = engine_of(self._mode)
         _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
@@ -5176,7 +5189,7 @@ class PrismSolver:
         return reserved
 
     def _compute_kv_cache_plan(
-        self, container, target_dtype: str, remaining_vram_bytes: int, profile=None, kv_devices=None
+        self, container, target_dtype: str, remaining_vram_bytes: int, profile=None, kv_devices=None, growth_reserve_bytes: int = 0,
     ) -> Optional[KVCachePlan]:
         """The decode cache, sized from the container's declared KV state (core/state/price.py) within the remaining
         budget: as many positions as it affords, bounded by the request (run) or the declared window (serve), never
@@ -5188,20 +5201,18 @@ class PrismSolver:
         decoder, entry = declared
         defaults = self._read_defaults(container) or {}
         per_token_bytes = self._kv_token_bytes(container, target_dtype)
-        size = kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
-                             bool(getattr(self, "_serve_mode", False)), remaining_vram_bytes,
-                             floor_max_tokens=self._request_max_tokens(defaults))
-        # what a serving session would hold in the same room, bounded by the declared window: the context a request can
+        common = (entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
+        room = {"remaining_bytes": remaining_vram_bytes, "growth_reserve_bytes": growth_reserve_bytes}
+        size = kv_cache_size(*common, bool(getattr(self, "_serve_mode", False)), floor_max_tokens=self._request_max_tokens(defaults), **room)
+        # what a serving session would hold in the same room — the same reserve kept: a reach past what a served cache
+        # is granted would promise positions it cannot hold — bounded by the declared window: the context a request can
         # reach on this class (the derived census keys a prompt up to it). No window, or no session floor in the room:
         # None, stated by the record, never a guess.
         session_reach = None
         if entry.get("window"):
-            from neurobrix.core.state.price import StateUndeclared
             try:
-                session_reach = int(kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0,
-                                                  defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN), True,
-                                                  remaining_vram_bytes)["max_cache_len"])
-            except (RuntimeError, StateUndeclared):
+                session_reach = int(kv_cache_size(*common, True, **room)["max_cache_len"])
+            except RuntimeError:            # StateUndeclared included: it is a RuntimeError
                 session_reach = None
         plan = KVCachePlan(
             max_cache_len=size["max_cache_len"],
