@@ -136,6 +136,51 @@ def _json_object(resp):
     return body if isinstance(body, dict) else None
 
 
+UPGRADE_COMMAND = "pip install -U neurobrix"
+
+
+def hub_refusal_lines(e, what):
+    """What the person reads when the hub refused (a 4xx): the hub's own message when its body has one, else its status
+    and reason; a 426 adds the command that upgrades."""
+    resp = e.response
+    status = resp.status_code if resp is not None else 0
+    body = _json_object(resp) or {}
+    code = body.get("code", "")
+    message = body.get("message") or body.get("error") or ""
+    if not isinstance(message, str):
+        message = ""
+    if not message and resp is not None:
+        message = (getattr(resp, "text", "") or "").strip()[:200] or (getattr(resp, "reason", "") or "")
+    lines = [f"ERROR: {what} ({status}): {message or code or 'refused by the hub'}"]
+    if code and message:
+        lines.append(f"   Server error code: {code}")
+    if status == 426:
+        lines.append(f"   Your neurobrix ({__version__}) is too old for this hub: run {UPGRADE_COMMAND}")
+    return lines
+
+
+def _version_tuple(text):
+    parts = text.split(".")
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def behind_pypi_line():
+    """One line when the installed neurobrix is older than the latest release on the package index, else None. Never
+    raises: no network, no reply in 3 s, or an answer that is not a release number is silence (one call)."""
+    try:
+        import requests
+        from neurobrix.cli.utils import PYPI_INDEX_URL
+        latest = requests.get(f"{PYPI_INDEX_URL.rstrip('/')}/neurobrix/json", timeout=3).json()["info"]["version"]
+        have, last = _version_tuple(__version__), _version_tuple(latest)
+        if have and last and have < last:
+            return f"neurobrix {latest} is available (you have {__version__}): {UPGRADE_COMMAND}"
+    except Exception:       # advice only: it must never fail or delay an import
+        return None
+    return None
+
+
 def file_sha256(path) -> str:
     import hashlib
     h = hashlib.sha256()
@@ -375,7 +420,7 @@ def _import_body(args):
         if status == 404:
             _die(args, f"ERROR: Model '{org}/{name}' not found on registry.",
                  f"Browse available models: {registry}")
-        _die(args, f"ERROR: Registry returned {status}: {e}")
+        _die(args, *hub_refusal_lines(e, "Registry refused the model lookup"))
 
     model_data = model_info.get("model", model_info)
     # The model's one name, as the hub record gives it (its own case), recorded beside the entry it installs or
@@ -505,6 +550,8 @@ def _import_body(args):
     else:
         # 2. Get signed download URL
         log.debug("[2/4] Getting download URL...")
+        if not wants_json(args) and (_behind := behind_pypi_line()):
+            print(_behind)
         try:
             # Who asks: the engine's command line, by name and version — the hub serves the engine client without a
             # session (the user accepted at this terminal) and sends a browser without one to its login (the owner,
@@ -518,21 +565,15 @@ def _import_body(args):
         except HubUnanswered as e:
             _die(args, *e.lines)
         except requests.HTTPError as e:
-            status = e.response.status_code if e.response is not None else 0
-            if (server_error := _json_object(e.response)) is not None:
-                code = server_error.get("code", "")
-                message = server_error.get("message") or server_error.get("error") or ""
-                if code == "LICENSE_LOGIN_REQUIRED":
-                    _die(args,
-                         f"ERROR: {message}" if message else
-                         "ERROR: License acceptance on the hub is required for this model.",
-                         "The hub requires a logged-in license acceptance for this model.",
-                         f"Log in on {registry}, accept the license for {org}/{name}, then retry the import.")
-                if code or message:
-                    _die(args, f"ERROR: Failed to get download URL ({status}): {message or code}",
-                         *( [f"   Server error code: {code}"] if code and message else [] ))
-
-            _die(args, f"ERROR: Failed to get download URL: {e}")
+            server_error = _json_object(e.response) or {}
+            message = server_error.get("message") or server_error.get("error") or ""
+            if server_error.get("code") == "LICENSE_LOGIN_REQUIRED":
+                _die(args,
+                     f"ERROR: {message}" if message else
+                     "ERROR: License acceptance on the hub is required for this model.",
+                     "The hub requires a logged-in license acceptance for this model.",
+                     f"Log in on {registry}, accept the license for {org}/{name}, then retry the import.")
+            _die(args, *hub_refusal_lines(e, "Failed to get download URL"))
 
         file_name = download_info.get("fileName", f"{name}.nbx")
         if not (download_url := download_info.get("url")):
