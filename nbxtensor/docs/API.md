@@ -1061,6 +1061,8 @@ def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: boo
     # `matmul_wrapper` (and `linear_wrapper`, which calls it with the transposed weight)
 def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional: bool, x: NBXDtype, native_bf16: bool)
     # `lstm_wrapper` -> `_lstm_run_direction`, per layer and direction
+def gated_delta_rule_launches(dk: int, dv: int, q: NBXDtype, k: NBXDtype, v: NBXDtype, g: NBXDtype, beta: NBXDtype)
+    # `gated_delta_rule_wrapper`: one launch of the serial scan at any length and batch (the length is never in the key)
 def dft_r2c_launches(M: int, N: int, onesided: bool, native_bf16: bool)
     # `fft_r2c_wrapper` on a length that is not a power of two
 def dft_c2r_launches(M: int, bins: int, N: int, native_bf16: bool)
@@ -1756,6 +1758,23 @@ def make_upsample_proxy_interceptor()
 ```python
 def gather_kernel(inp, index, out, N, inp_dim_stride, idx_stride_outer, idx_stride_dim, idx_stride_inner, inp_stride_outer, inp_stride_inner, out_stride_outer, out_stride_dim, out_stride_inner, outer_size, dim_size, inner_size, BLOCK_SIZE: tl.constexpr)
     # Gather kernel — works for any tensor rank via pre-computed strides.
+```
+
+`nbxtensor.ops.gated_delta_rule`
+
+```python
+GATED_DELTA_RULE_INPUT_DTYPES = (float16, bfloat16, float32)   # the dtypes q, k, v, beta may arrive in
+GATED_DELTA_RULE_COMPUTE_DTYPES = (float32,)                   # the compute dtype this release runs in
+GATED_DELTA_RULE_LENGTHS = (1,)                                # the token step; a longer scan is refused by name
+def gated_delta_rule_scan_kernel(q_ptr, k_ptr, v_ptr, g_ptr, beta_ptr, s_in_ptr, o_ptr, ...)
+    # serial scan, grid (B, Hv, cdiv(dv, BV)); a dk x BV float32 state tile stays on chip; BV and warps are certified candidates
+def gated_delta_rule_shapes(q, k, v, g, beta, state=None) -> tuple
+def gated_delta_rule_dtypes(q, k, v, g, beta, state, compute_dtype) -> NBXDtype
+def gated_delta_rule_wrapper(q, k, v, g, beta, state=None, *, qk_l2norm: bool, eps: float, scale: float, compute_dtype)
+    # The gated delta rule over q, k [B, L, Hk, dk], v [B, L, Hv, dv], g, beta [B, L, Hv] from state [B, Hv, dk, dv]
+    # float32 (None: zeros) -> (o [B, L, Hv, dv] at v's dtype, state_out float32). Refuses by name: compute dtype not
+    # float32, g or state not float32, inputs not float16/bfloat16/float32, bad shapes, Hv % Hk != 0, L != 1.
+    # Dispatch name: "gated_delta_rule".
 ```
 
 `nbxtensor.ops.ge`
@@ -2791,6 +2810,9 @@ def rownorm_oracle(x, w, b, layer)           # layer norm (eps 1e-5) or RMS norm
 def row_reduce_oracle(x, red)                # "mean" / "sum" / "amax" over rows
 def groupnorm_oracle(x, w, b)                # one channel per group, eps 1e-5
 def conv_oracle(x, wt, stride, padding, dilation, groups)
+def head_windows(batch: int, heads: int, per_head: int) -> Optional[List[(batch row, h0, h1)]]   # None when whole; a head is never cut
+class HeadWindowedOracle(blocks, head_axis, batch, heads)   # windows over batch rows x independent heads, whole length kept
+def delta_rule_oracle(q, k, v, g, beta, state=None, *, qk_l2norm, eps, scale)   # (out, state) float64 of the gated delta rule
 def host_values(t) -> np.ndarray             # a kernel's output as numbers (bf16 decoded)
 def materialise(piece)                       # a device cut made contiguous before it crosses
 def deviation_against(out_tensor, oracle) -> float   # read off the device only where the oracle measures
