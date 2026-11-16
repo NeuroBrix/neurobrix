@@ -7,14 +7,16 @@ a bias, at a fill of -inf AND of 0; a softmax with the group maximum, no bias, n
 negative bias makes a fill of 0 outrank kept experts (the test checks the two fills route differently there). H 1000
 is not a multiple of any hidden tile. n_group 1 gives the same bytes as every group kept.
 
-The comparison: the indices as a SET per token (the slot order is not the contract), the weights paired by expert id.
-A token whose set differs is accepted ONLY when the reference's k-th and (k+1)-th choice values (or its kept and first
-dropped group scores) lie within the band below: a near-tie. Every such token is counted and printed; a set that
-differs elsewhere fails. The near-tie test reads the reference alone, so a wrong kernel cannot widen it.
+The comparison is `_moe_route_compare.compare` (its docstring is the rule; a host test proves it goes red): an exact
+tie (the fill lanes of a dropped group) requires the reference set, a gap above 0 and within the band accepts a
+different set, and the weights are compared on the device's own set either way. Two cases are built so that tokens
+route to filled experts at fill 0 (a negative bias mean); the test asserts from the reference that they do.
 
 A card test: on a host with no device it skips by name. It runs on a V100 card job and on the Mac (Metal), the same file.
 
-THE BOUNDS, stated from what was measured (2026-11-16, this lot's proof folder, `measure_tolerances.out`): a float32
+THE BOUNDS (stated as they are: the weights deviation is relative to the token's largest weight, not per weight; the
+device bounds are four times a HOST emulation, not a device measure, and no bound changes without a device measurement),
+stated from what was measured (2026-11-16, this lot's proof folder, `measure_tolerances.out`): a float32
 emulation of the kernel's order of operations against the oracle, worst over 8 draws of 32 tokens per case: weights
 1.01e-06 relative to the token's largest weight, choice values 2.53e-07 absolute. The device's bounds are four times
 that (weights 4e-06, choice values 1e-06: the card's fused multiply-adds, its own exp and its tile order round
@@ -29,6 +31,7 @@ import math
 import numpy as np
 import pytest
 
+from _moe_route_compare import compare
 from _moe_route_draw import draw
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.ops.oracles import fp64 as O
@@ -43,6 +46,12 @@ CASES = {
     "E160-softmax-max": (160, 5120, None, dict(score_fn="softmax", group_score="max", renorm_eps=None, top_k=6,
                                                n_group=8, topk_group=3, fill=0.0, scale=16.0)),
     "E64-g8-tg2-k8-zero-H1000": (64, 1000, -0.6, dict(SIGMOID, top_k=8, n_group=8, topk_group=2, fill=0.0, scale=1.0)),
+    # mean -1.0: most kept choice values fall below 0, so many tokens route to filled experts, some in part
+    "E64-g8-tg2-k8-zero-H1000-mostly-filled": (64, 1000, -1.0, dict(SIGMOID, top_k=8, n_group=8, topk_group=2,
+                                                                    fill=0.0, scale=1.0)),
+    # mean -1.5: every kept choice value is below 0, every token routes to filled experts only (an exact tie on 0)
+    "E64-g8-tg2-k8-zero-H1000-all-filled": (64, 1000, -1.5, dict(SIGMOID, top_k=8, n_group=8, topk_group=2,
+                                                                 fill=0.0, scale=1.0)),
     "E64-g8-tg2-k8-inf-H1000": (64, 1000, -0.6, dict(SIGMOID, top_k=8, n_group=8, topk_group=2, fill=-math.inf,
                                                      scale=1.0)),
 }
@@ -86,27 +95,6 @@ def _route_on_device(x, w, b, dt, a):
     return np.stack(idx), np.stack(wt)
 
 
-def _gap(v, n):
-    """The gap between the n-th and (n+1)-th largest values of a row (inf when there is no (n+1)-th)."""
-    srt = np.sort(v)[::-1]
-    return math.inf if n >= len(srt) else float(srt[n - 1] - srt[n])
-
-
-def _compare(idx, wt, ref, a, name):
-    ri, rw, rc, rg = ref
-    worst, ties = 0.0, []
-    for t in range(idx.shape[0]):
-        assert len(set(idx[t].tolist())) == a["top_k"] and idx[t].min() >= 0 and idx[t].max() < rc.shape[1]
-        if set(idx[t].tolist()) != set(ri[t].tolist()):
-            gap = min(_gap(rc[t], a["top_k"]), _gap(rg[t], a["topk_group"]) / 2 if a["n_group"] > 1 else math.inf)
-            assert gap <= 2 * CHOICE, f"{name} token {t}: set {sorted(idx[t])} against {sorted(ri[t])}, gap {gap}"
-            ties.append((t, gap))
-            continue
-        mine, theirs = wt[t][np.argsort(idx[t])], rw[t][np.argsort(ri[t])]
-        worst = max(worst, float(np.abs(mine - theirs).max() / np.abs(theirs).max()))
-    return worst, ties
-
-
 @pytest.mark.parametrize("dt", DTYPES, ids=["fp32", "fp16", "bf16"])
 @pytest.mark.parametrize("name", list(CASES))
 def test_one_token_is_the_oracle(dt, name):
@@ -115,8 +103,12 @@ def test_one_token_is_the_oracle(dt, name):
     x, w, b = draw(TOKENS, E, H, 41, bias_mean)
     xr, wr = _host(_to_device(x, dt)), _host(_to_device(w, dt))       # the numbers the kernel reads
     idx, wt = _route_on_device(x, w, b, dt, a)
-    worst, ties = _compare(idx, wt, O.moe_route_oracle(xr, wr, b, **a)(), a, name)
-    print(f"{name} {dt.name}: weights {worst:.2e} (bound {WEIGHTS:.0e}); near-ties {len(ties)} of {TOKENS} {ties}")
+    ref = O.moe_route_oracle(xr, wr, b, **a)()
+    filled = int((ref[2][np.arange(TOKENS)[:, None], ref[0]] == a["fill"]).sum()) if a["fill"] == 0.0 else 0
+    if "filled" in name:                       # the case is built for it: the draw must really route to filled experts
+        assert filled > 0, f"{name}: the reference routes no token to a filled expert, the case tests nothing"
+    worst, ties = compare(idx, wt, ref, a, name, xr, wr, WEIGHTS, CHOICE)
+    print(f"{name} {dt.name}: weights {worst:.2e} (bound {WEIGHTS:.0e}); near-ties {len(ties)} of {TOKENS} {ties}; filled-expert slots {filled}")
     assert worst <= WEIGHTS
 
 
