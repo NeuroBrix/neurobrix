@@ -6,6 +6,7 @@ import os
 import triton
 from nbxtensor.ops.autotune_bucket import bucket_of as _bucket_of
 from nbxtensor.ops import launch_keys as _lk
+from nbxtensor.ops._causal_conv1d import causal_conv1d_contract
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, dtype_size
 from nbxtensor.memory.allocator import DeviceAllocator
@@ -953,6 +954,25 @@ def conv1d_wrapper(
         dilation=(1, dilation), groups=groups)
 
     return out_2d.squeeze(2)  # [N, C_out, L_out]
+
+def causal_conv1d_wrapper(x, weight, bias=None, state=None):
+    """The causal depthwise convolution over the sequence, with its state: (y, state_out).
+
+    x [B, C, L] at the model dtype; weight [C, K] or [C, 1, K] (depthwise, K taps); bias [C] or None; state the last
+    K-1 INPUT columns of the previous call [B, C, K-1] at x's dtype, or None for zeros before the start. y [B, C, L]
+    is y[t] = sum_j w[j] * x[t-K+1+j] over the state joined before x, written as `conv1d_wrapper` writes it (its
+    depthwise kernel, no padding, over the joined [B, C, K-1+L]); state_out [B, C, K-1] is the joined input's last K-1
+    columns, a new tensor. One pass over a length equals any prefix followed by the rest. The activation after the
+    convolution is not part of this op. What the op does not take is refused by name
+    (`ops._causal_conv1d.causal_conv1d_contract`)."""
+    B, C, L, K = causal_conv1d_contract(
+        x.shape, x.nbx_dtype, weight.shape, None if bias is None else bias.shape,
+        None if state is None else state.shape, None if state is None else state.nbx_dtype)
+    w3 = weight if weight.ndim == 3 else weight.unsqueeze(1)          # [C, 1, K]
+    past = state if state is not None else NBXTensor.zeros((B, C, K - 1), dtype=x.nbx_dtype, device=x.device)
+    joined = NBXTensor.cat([past, x], 2)                               # [B, C, K-1+L]
+    y = conv1d_wrapper(joined, w3, bias, stride=1, padding=0, dilation=1, groups=C)
+    return y, joined.narrow(2, L, K - 1).contiguous()
 
 
 def conv_transpose1d_wrapper(x, weight, bias=None, stride=1, padding=0,

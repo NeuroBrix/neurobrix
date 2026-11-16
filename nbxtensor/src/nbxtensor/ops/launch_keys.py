@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple
 
 from nbxtensor.ops import tiling_sizes as _ts
 from nbxtensor.ops.autotune_bucket import bucket_of
+from nbxtensor.ops._causal_conv1d import causal_conv1d_contract
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.tensor import _get_tl_dtype
 
@@ -863,6 +864,21 @@ def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool,
     dh, dw = _n(dilation, 2)
     return conv2d_launches(N, C, H, W, Co, kh, kw, sh, sw, ph, pw, dh, dw, groups, x, w, compute,
                            band_bytes, depthwise_enabled)
+
+
+# ---------------------------------------------------------------------------------------------
+# The causal convolution over the sequence with its state: `conv_wrappers.causal_conv1d_wrapper`.
+# ---------------------------------------------------------------------------------------------
+
+def causal_conv1d_launches(x_shape, w_shape, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype],
+                           band_bytes: int, depthwise_enabled: bool = True) -> List[Launch]:
+    """`causal_conv1d_wrapper` on an input [B, C, L] and a depthwise weight of K taps: the state
+    (or K-1 zero columns) joined before the input (a copy, no autotuned key), then ONE depthwise
+    conv1d without padding over [B, C, K-1+L] (`conv_launches`'s keys). Whether a state is given
+    changes no launch; the refusals are the wrapper's (`ops._causal_conv1d.causal_conv1d_contract`)."""
+    B, C, L, K = causal_conv1d_contract(x_shape, x, w_shape)
+    return conv_launches((B, C, K - 1 + L), (C, 1, K), 1, 0, 1, False, C, x, w, compute, band_bytes,
+                         depthwise_enabled)
 
 
 #: The longest row the single-program softmax holds (a row's padded length in registers); a longer one runs the looped

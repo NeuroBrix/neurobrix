@@ -28,6 +28,7 @@ __all__ = ["ORACLE_MAX_MACS", "ROW_F64_ARRAYS", "values", "f64", "row_windows", 
            "matmul_oracle", "moe_oracle", "attention_oracle", "softmax_oracle", "gemv_oracle", "rownorm_oracle",
            "row_reduce_oracle", "groupnorm_oracle", "conv_oracle", "head_windows", "HeadWindowedOracle",
            "delta_rule_oracle", "host_values", "materialise", "deviation_against",
+           "causal_conv1d_oracle",
            "oracle_deviation"]
 
 #: The cost under which a reference is computed whole: multiply-adds for a product or a convolution, bytes of float64
@@ -347,6 +348,27 @@ def conv_oracle(x, wt, stride, padding, dilation, groups) -> Callable[[], Any]:
         return lambda: conv2d_oracle(x, wt, stride, padding, dilation, groups)
     return lambda: WindowedOracle([(w, conv2d_oracle(x, wt, stride, padding, dilation, groups, window=w))
                                    for w in wins], oh, ow, n)
+
+def causal_conv1d_oracle(x, weight, bias=None, state=None) -> Tuple[np.ndarray, np.ndarray]:
+    """The reference of `causal_conv1d_wrapper` in float64: (y [B, C, L], state_out [B, C, K-1]). x [B, C, L], weight
+    [C, K] or [C, 1, K], bias [C] or None, state [B, C, K-1] or None (zeros before the start). The state is joined
+    before x and each tap is added as its own shifted product: y[t] = sum_j w[j] * joined[t + j] (+ bias); state_out is
+    the joined input's last K-1 columns. Computed whole (B * C * L * K multiply-adds); its channels are independent, so
+    a caller over the cap windows it by channels."""
+    xf = f64(x)
+    wf = f64(weight)
+    if wf.ndim == 3:
+        wf = wf[:, 0, :]
+    B, C, L = xf.shape
+    K = wf.shape[1]
+    past = np.zeros((B, C, K - 1), dtype=np.float64) if state is None else f64(state)
+    joined = np.concatenate([past, xf], axis=2)
+    y = np.zeros((B, C, L), dtype=np.float64)
+    for j in range(K):
+        y += wf[None, :, j, None] * joined[:, :, j:j + L]
+    if bias is not None:
+        y += f64(bias)[None, :, None]
+    return y, joined[:, :, L:L + K - 1].copy()
 
 
 def head_windows(batch: int, heads: int, per_head: int) -> Optional[List[Tuple[int, int, int]]]:

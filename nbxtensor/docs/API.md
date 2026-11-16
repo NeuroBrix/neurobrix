@@ -916,6 +916,8 @@ def conv2d_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1, transp
     # Convolution forward.
 def conv1d_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1)
     # Conv1D via conv2d with unsqueeze.
+def causal_conv1d_wrapper(x, weight, bias=None, state=None)
+    # The causal depthwise convolution over the sequence, with its state: (y, state_out); state = the last taps-1 input columns [B, C, K-1] at x's dtype.
 def conv_transpose1d_wrapper(x, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1)
     # aten::conv_transpose1d — 1D transposed convolution.
 def avg_pool2d_wrapper(x, kernel_size, stride=None, padding=0, ceil_mode=False, count_include_pad=True, divisor_override=None)
@@ -1143,6 +1145,8 @@ def tiled_conv2d_launches(N: int, in_c: int, IH: int, IW: int, out_c: int, kh: i
     # The launches of an op-level tiled conv
 def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool, groups: int, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, depthwise_enabled: bool=True)
     # `conv2d_wrapper` by the weight's rank
+def causal_conv1d_launches(x_shape, w_shape, x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int, depthwise_enabled: bool=True)
+    # `causal_conv1d_wrapper`: the state joined (no key), then one depthwise conv1d over [B, C, K-1+L]
 def softmax_feat_bucket(feat: int)
     # The row length's class in a softmax key
 def softmax_launches(rows: int, feat: int, log: bool, x: NBXDtype, out: NBXDtype)
@@ -2834,6 +2838,7 @@ def conv_oracle(x, wt, stride, padding, dilation, groups)
 def head_windows(batch: int, heads: int, per_head: int) -> Optional[List[(batch row, h0, h1)]]   # None when whole; a head is never cut
 class HeadWindowedOracle(blocks, head_axis, batch, heads)   # windows over batch rows x independent heads, whole length kept
 def delta_rule_oracle(q, k, v, g, beta, state=None, *, qk_l2norm, eps, scale)   # (out, state) float64 of the gated delta rule
+def causal_conv1d_oracle(x, weight, bias=None, state=None) -> (y, state_out)   # the state joined, one shifted product a tap
 def host_values(t) -> np.ndarray             # a kernel's output as numbers (bf16 decoded)
 def materialise(piece)                       # a device cut made contiguous before it crosses
 def deviation_against(out_tensor, oracle) -> float   # read off the device only where the oracle measures
