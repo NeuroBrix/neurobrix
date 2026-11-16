@@ -76,17 +76,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     tensors = dag.get("tensors", {})
 
     # Single O(N) pass: find all topk ops with k > 1
-    moe_topk_uids = []
-    for op_uid in execution_order:
-        op_data = ops.get(op_uid)
-        if op_data is None:
-            continue
-        if op_data.get("op_type") != "aten::topk":
-            continue
-        # Extract k from attributes.args[1] (positional arg)
-        k = _extract_topk_k(op_data)
-        if k is not None and k > 1:
-            moe_topk_uids.append(op_uid)
+    moe_topk_uids = _wide_topks(ops, execution_order)
 
     if not moe_topk_uids:
         return dag  # Not MoE — unchanged
@@ -94,6 +84,13 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     # Build maps ONCE, then update incrementally after each fusion
     consumer_map = _build_consumer_map(ops, execution_order)
     producer_map = _build_producer_map(ops, execution_order)
+
+    # The router is the top-k that reaches the dispatch: the top-k's of a group
+    # cluster are part of its router, never routers of their own; a router that
+    # selects on choice scores (sigmoid, choice bias, group mask) is refused by
+    # name and handed to no matcher.
+    choice = _choice_routers(ops, tensors, producer_map, moe_topk_uids)
+    moe_topk_uids = [u for u in moe_topk_uids if u not in _choice_members(choice)]
 
     # Multi-gate routers (one MoE layer driven by N sibling gates whose
     # topk results are blended by per-token modality masks). Empty dict on
@@ -104,7 +101,9 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     fused_count = 0
     ops_removed_total = 0
     dead_outputs_total = 0
-    declined: Dict[str, str] = {}
+    declined: Dict[str, str] = {u: c.reason for u, c in choice.items()}
+    if refusals is not None:
+        refusals.update(declined)
     swept_whole = False       # the first per-expert fusion sweeps every op; the next ones sweep what they removed
 
     for topk_uid in moe_topk_uids:
@@ -159,7 +158,8 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     # layer was fused) or a fused op names it in its gate group (a multi-gate
     # layer keeps its gates in the graph and binds their blend).
     if declared:
-        left = unfused_routers({"ops": ops, "execution_order": execution_order})
+        left = unfused_routers({"ops": ops, "execution_order": execution_order,
+                                "tensors": tensors})
         if left:
             named = "; ".join(
                 f"{u}: {declined.get(u, 'no matcher recognised an expert block behind it')}"
@@ -189,20 +189,122 @@ def unfused_routers(dag: Dict[str, Any]) -> List[str]:
     multi-gate layer's gates stay and are named in its fused op's gate group."""
     ops = dag.get("ops", {})
     order = dag.get("execution_order", [])
+    wide = _wide_topks(ops, order)
     covered: Set[str] = set()
+    if wide:    # a group cluster's top-k's belong to their router
+        covered = _choice_members(_choice_routers(
+            ops, dag.get("tensors", {}), _build_producer_map(ops, order), wide), routers=False)
     for uid in order:
         op = ops.get(uid) or {}
         if op.get("op_type") == "custom::moe_fused":
             covered.update((op.get("attributes") or {}).get("gate_group") or [])
-    left = []
+    return [uid for uid in wide if uid not in covered]
+
+
+def _wide_topks(ops: Dict[str, Any], order: List[str]) -> List[str]:
+    """The top-k's of the order that keep more than one entry (k > 1), in order."""
+    out = []
     for uid in order:
-        op = ops.get(uid) or {}
-        if op.get("op_type") != "aten::topk" or uid in covered:
+        op = ops.get(uid)
+        if op is not None and op.get("op_type") == "aten::topk":
+            k = _extract_topk_k(op)
+            if k is not None and k > 1:
+                out.append(uid)
+    return out
+
+
+# A router that SELECTS on scores other than the ones it WEIGHTS with: sigmoid
+# scores, a choice bias of the expert count added before the selection, a group
+# mask that zeroes the experts of the groups not kept. Both matchers would bind
+# the top-k input as the gate scores and the dispatch would re-select and
+# renormalise those biased, masked scores — wrong weights, no error. Refused by
+# name until a routing op that reads this cluster is bound.
+_SCORE_VIEW = frozenset(("aten::view", "aten::reshape", "aten::_unsafe_view",
+                         "aten::_to_copy", "aten::clone"))
+_GROUP_STOP = frozenset(("aten::mm", "aten::bmm", "aten::addmm", "aten::matmul",
+                         "aten::linear"))
+
+
+class ChoiceRouter(NamedTuple):
+    reason: str
+    group_topks: Tuple[str, ...]
+
+
+def _choice_members(choice: Dict[str, ChoiceRouter], routers: bool = True) -> Set[str]:
+    """The top-k's the choice routers hold: their group top-k's, and the routers too."""
+    out = {u for c in choice.values() for u in c.group_topks}
+    return out | set(choice) if routers else out
+
+
+def _choice_routers(ops, tensors, producer_map, topk_uids) -> Dict[str, ChoiceRouter]:
+    """{router top-k uid: ChoiceRouter} for every top-k among `topk_uids` whose
+    input is choice scores. Empty on a router that selects on its plain scores."""
+    found: Dict[str, ChoiceRouter] = {}
+    for uid in topk_uids:
+        tid = _get_input_tensor_id(ops[uid], 0)
+        shape = _tensor_shape(tensors, tid)
+        if not shape or len(shape) != 2:
             continue
-        k = _extract_topk_k(op)
-        if k is not None and k > 1:
-            left.append(uid)
-    return left
+        chain, bias, mask, src = _walk_choice_scores(ops, tensors, producer_map, tid, shape[-1])
+        if src != "aten::sigmoid" and mask is None and not (
+                bias is not None and src == "aten::_softmax"):
+            continue    # plain scores (a logits bias after the router mm is no choice bias)
+        groups, n_group = _group_topks(ops, tensors, producer_map, mask, chain)
+        what = [f"its scores come from {src!r}"]
+        if bias is not None:
+            what.append(f"a choice bias {bias} of the expert count [{shape[-1]}] is added "
+                        "before the selection")
+        if mask is not None:
+            what.append(f"a group mask (n_group {n_group}, read through {len(groups)} top-k of "
+                        "the group cluster) zeroes the experts of the groups not kept")
+        found[uid] = ChoiceRouter(
+            "the router selects its experts on choice scores (" + "; ".join(what) + "): "
+            "the fused dispatch would re-select and renormalise those scores as its gate "
+            "scores. Missing: a routing op bound to this cluster (score function, choice "
+            "bias, group geometry, scale read from the graph), which this engine does not "
+            "bind yet", tuple(groups))
+    return found
+
+
+def _walk_choice_scores(ops, tensors, producer_map, tid, E):
+    """Up from a top-k's input through views and casts, one group mask (masked_fill)
+    and one add of a [E] tensor: (tensors walked, bias tid, mask tid, the op type
+    the scores come from)."""
+    chain, bias, mask = {tid}, None, None
+    while True:
+        p = ops.get(producer_map.get(tid)) or {}
+        t, ins = p.get("op_type"), _collect_input_tids(p)
+        if t in _SCORE_VIEW and ins:
+            tid = ins[0]
+        elif t in ("aten::masked_fill", "aten::masked_fill_") and len(ins) >= 2 and mask is None:
+            mask, tid = ins[1], ins[0]
+        elif t == "aten::add" and len(ins) == 2 and bias is None and any(
+                _tensor_shape(tensors, b) == [E] for b in ins):
+            bias = next(b for b in ins if _tensor_shape(tensors, b) == [E])
+            tid = next((a for a in ins if a != bias), ins[0])
+        else:
+            return chain, bias, mask, t
+        chain.add(tid)
+
+
+def _group_topks(ops, tensors, producer_map, mask, chain):
+    """Up from a group mask to the choice scores (`chain`): the top-k's of the group
+    cluster in order met, and n_group (the middle axis of the [T, G, E/G] top-k)."""
+    groups: List[str] = []
+    n_group = None
+    seen, todo = set(chain), [mask] if mask is not None else []
+    while todo:
+        m = todo.pop()
+        g = ops.get(producer_map.get(m)) or {}
+        if m in seen or not g or g.get("op_type") in _GROUP_STOP:
+            continue
+        seen.add(m)
+        if g.get("op_type") == "aten::topk" and producer_map[m] not in groups:
+            groups.append(producer_map[m])
+            gsh = _tensor_shape(tensors, _get_input_tensor_id(g, 0))
+            n_group = gsh[1] if gsh and len(gsh) == 3 else n_group
+        todo.extend(_collect_input_tids(g))
+    return groups, n_group
 
 
 def _fuse_one_moe_layer(
