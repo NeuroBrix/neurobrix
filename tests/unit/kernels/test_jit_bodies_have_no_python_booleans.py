@@ -1,7 +1,6 @@
 """No Python `and` / `or` produces a value inside a @triton.jit body.
 
 A user's A40 report carried four copies of the same deprecation warning per run,
-import importlib.util
 from `tril.py:32`, on a non-scalar `and`. The warning names a scheduled
 breakage: Triton will raise on this construct in a future version.
 
@@ -52,6 +51,7 @@ Run: PYTHONPATH=src python -m pytest tests/unit/kernels/test_jit_bodies_have_no_
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 
 #: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
