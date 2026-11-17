@@ -35,7 +35,7 @@ KEPT = {
     "pos_bias_u": {"pos_bias_u"},
     "pos_bias_v": {"pos_bias_v"},
     "post_norm": {"post_norm", "post_layernorm", "ln_post"},
-    "pre_norm": {"pre_norm", "pre_layrnorm"},
+    "pre_norm": {"pre_norm", "pre_layrnorm", "ln_pre"},
     "ref_pos_embed": {"ref_pos_embed"},
     "speech_head": {"speech_head"},
     "text_head": {"text_head"},

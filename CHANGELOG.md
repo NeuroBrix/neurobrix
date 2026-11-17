@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request.** Its decode cache, the positions the request asks for included, and a served session's window with it,
   take only the memory above the reserve the engine keeps for the allocator; a request whose cache does not fit there
   is planned another way before anything is loaded, or refused by a sentence naming the positions and the room.
+- **A vision encoder whose weights spell its patch stem `patch_conv`, its pre-norm `ln_pre`, its position table
+  `patch_positional_embedding` and its patch merger `patch_merger.merging_layer` gets standard names.** These five
+  spellings name roles the vocabulary already had (patch embedding, pre-norm, position embedding, a patch merger's
+  down-sampling and its linear); no name an existing container carries changes.
 
 ## [0.6.16] - 2026-11-15
 

@@ -735,6 +735,15 @@ class SynonymRegistry:
         "embed_positions": "pos_embed",
         "positional_embedding": "pos_embed",
         "patch_embeddings": "patch_embed",
+        # A vision encoder's patch stem, pre-norm and position table under their Pixtral-style
+        # spellings: the same roles as `patch_embedding`, `pre_layrnorm`, `position_embedding`.
+        "patch_conv": "patch_embed",
+        "ln_pre": "pre_norm",
+        "patch_positional_embedding": "pos_embed",
+        # A patch merger that folds each window of neighbouring patches into one token through a
+        # linear (Swin's `downsample` PatchMerging, the same operation): `down_sample` and its `proj`.
+        "patch_merger": "down_sample",
+        "merging_layer": "proj",
         "token_type_embeddings": "type_embed",
         "class_embedding": "cls_embed",
         "position_ids": "pos_ids",
