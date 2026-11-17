@@ -51,11 +51,12 @@ Run: PYTHONPATH=src python -m pytest tests/unit/kernels/test_jit_bodies_have_no_
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 
 #: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
 OPS_DIRS = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
-            Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+            Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops")
 
 
 def _ops_files(pattern="*.py"):

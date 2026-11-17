@@ -28,6 +28,7 @@ only in a report is not a census.
 
 from __future__ import annotations
 
+import importlib.util
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import ast
@@ -63,7 +64,7 @@ def clear_caches() -> list:
 def library_kernels() -> list:
     """Every `@triton.jit` kernel in the ops library, read from the source."""
     roots = (REPO_ROOT / "src" / "neurobrix" / "kernels" / "ops",       # the engine's kernel files still to move
-             REPO_ROOT / "nbxtensor" / "src" / "nbxtensor" / "ops")       # and the tensor library's (M1)
+             Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops")       # and the tensor library's (M1)
     found = []
     for root, f in sorted(((r, f) for r in roots for f in r.rglob("*.py")), key=lambda rf: rf[1].name):
         try:

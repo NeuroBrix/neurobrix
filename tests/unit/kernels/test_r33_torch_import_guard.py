@@ -24,6 +24,7 @@ and no kernel we write can remove it. The runtime half of the audit
 
 from __future__ import annotations
 
+import importlib.util
 import ast
 from pathlib import Path
 
@@ -34,7 +35,7 @@ KERNELS = SRC / "kernels"          # the dispatch layer: dispatch, wrappers, ada
 TRITON = SRC / "triton"            # the whole triton branch
 #: the tensor library the Triton branch is built on (nbxtensor, M1 2026-10-29): the dispatch layer, the wrappers, NBXTensor,
 #: the launcher and the Metal backend live there now — scanned with NO exception (R-NBXT 6)
-LIB = SRC.parents[1] / "nbxtensor" / "src" / "nbxtensor"
+LIB = Path(importlib.util.find_spec("nbxtensor").origin).parent
 
 # Every file under kernels/ still allowed to import torch, with the reason it
 # is allowed and what would remove it. Adding a line here is a deliberate act

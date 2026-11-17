@@ -2,8 +2,9 @@
 
 A test that cannot run must SAY so, not fail: on a host with no device to give it (no card visible to the process,
 or a GPU runtime installed without its driver), a card test skips by name. The condition and the conversion live in
-ONE place, the library suite's `nbxtensor/tests/_no_device.py` (the library owns the device question; its door,
-`nbxtensor.device.count()`, is what is asked), and this file registers the same hooks for the engine's suite. Its
+`tests/_no_device.py`, the engine suite's copy of the library suite's own `tests/_no_device.py` (the library owns the
+device question; its door, `nbxtensor.device.count()`, is what is asked; the library lives in its own repository and
+ships no test helper, so the engine's suite carries the file, byte for byte), and this file registers its hooks. Its
 docstring says how "no driver" is told from "a broken driver": a host whose driver is there and refuses is never
 armed, and its failures stay failures. (Measured on 2026-09-16 under `CUDA_VISIBLE_DEVICES=`: 50 failures, 42 of them
 the absence of a card; on 2026-11-13 on a host whose runtime has no driver: 169.)
@@ -20,7 +21,7 @@ import pytest
 def _no_device_module():
     name = "_no_device"
     if name not in sys.modules:
-        path = Path(__file__).resolve().parents[1] / "nbxtensor" / "tests" / "_no_device.py"
+        path = Path(__file__).resolve().parent / "_no_device.py"
         spec = importlib.util.spec_from_file_location(name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module

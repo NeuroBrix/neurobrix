@@ -68,7 +68,7 @@ def test_an_executed_unit_moves_and_an_unexecuted_one_does_not(tmp_path, a_commu
     assert CI.static_move(rec, repo=root) == f"code repo:{REL}::<module> changed"
 
 
-LIB_REL = "nbxtensor/src/nbxtensor/shape/__init__.py"
+LIB_REL = "nbxtensor/shape/__init__.py"      # as the record writes it: `lib:`, under the installed package's directory
 
 
 def test_the_librarys_executed_code_is_an_input_and_moves(tmp_path, a_communication_root):
@@ -82,15 +82,15 @@ def test_the_librarys_executed_code_is_an_input_and_moves(tmp_path, a_communicat
     m = CI.take()
     sys.settrace(None)
     units, _files = CI.units_and_files(m)
-    rec = {"units": {k: v for k, v in units.items() if k.startswith(f"repo:{LIB_REL}::")}, "files": {}}
-    assert f"repo:{LIB_REL}::numel" in rec["units"], sorted(units)[:20]
-    root = tmp_path / "tree"
+    rec = {"units": {k: v for k, v in units.items() if k.startswith(f"lib:{LIB_REL}::")}, "files": {}}
+    assert f"lib:{LIB_REL}::numel" in rec["units"], sorted(units)[:20]
+    root = tmp_path / "site"
     (root / LIB_REL).parent.mkdir(parents=True)
-    shutil.copy(REPO / LIB_REL, root / LIB_REL)
-    assert CI.static_move(rec, repo=root) == ""
+    shutil.copy(CI.LIBRARY.parent / LIB_REL, root / LIB_REL)
+    assert CI.static_move(rec, lib=root) == ""
     src = (root / LIB_REL).read_text()
     (root / LIB_REL).write_text(src.replace("        n *= int(d)\n    return n", "        n = n * int(d)\n    return n"))
-    assert CI.static_move(rec, repo=root) == f"code repo:{LIB_REL}::numel changed"
+    assert CI.static_move(rec, lib=root) == f"code lib:{LIB_REL}::numel changed"
 
 
 def test_a_record_taken_under_other_roots_is_derived_again():
@@ -102,7 +102,7 @@ def test_a_record_taken_under_other_roots_is_derived_again():
         f"recorded under the roots ['src', 'tools'], this tree records {CI.recorded_roots()}")
     del rec["roots"]
     assert DC._moved("m", None, rec, "c", []).startswith("recorded under the roots None")
-    assert "nbxtensor/src" in CI.recorded_roots()
+    assert "lib:nbxtensor" in CI.recorded_roots()
 
 
 def test_a_read_file_moves(tmp_path):

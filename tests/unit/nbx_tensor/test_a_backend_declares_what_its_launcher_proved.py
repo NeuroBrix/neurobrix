@@ -11,6 +11,7 @@ main dcbd4748: no `declare_backend_capability`, the ratchet cell red.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -51,7 +52,7 @@ def test_a_declaration_is_a_bool():
 
 
 def test_the_selection_declares_what_it_selected():
-    src = (REPO / "nbxtensor/src/nbxtensor/backend/metal_backend.py").read_text()
+    src = (Path(importlib.util.find_spec("nbxtensor").origin).parent / "backend" / "metal_backend.py").read_text()
     body = src.split("def selected_metal_backend(", 1)[1].split("\ndef ", 1)[0]
     assert body.count("return _declare_selected(") == 2 and "return declared" not in body
     helper = src.split("def _declare_selected(", 1)[1].split("\ndef ", 1)[0]
@@ -59,5 +60,5 @@ def test_the_selection_declares_what_it_selected():
 
 
 def test_nbx_tensor_no_longer_imports_the_metal_backend():
-    src = (REPO / "nbxtensor/src/nbxtensor/tensor.py").read_text()
+    src = (Path(importlib.util.find_spec("nbxtensor").origin).parent / "tensor.py").read_text()
     assert "nbxtensor.backend.metal_backend" not in src

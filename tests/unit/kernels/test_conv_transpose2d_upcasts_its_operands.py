@@ -143,9 +143,10 @@ def test_the_source_upcasts_both_operands_at_the_load():
     """A door, not a census: the numbers above pass on CUDA even with the defect present,
     so the one thing this rack CAN assert universally is that neither operand is multiplied
     in its own dtype."""
+    import importlib.util
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[3]
-           / "nbxtensor/src/nbxtensor/ops/conv_transpose2d.py").read_text()   # moved into the library (M1)
+    src = (Path(importlib.util.find_spec("nbxtensor").origin).parent
+           / "ops" / "conv_transpose2d.py").read_text()   # the installed library's (moved into it, M1)
     assert "in_val = tl.load(input_ptr + in_offset, mask=valid, other=0.0).to(tl.float32)" in src, \
         "the masked input operand is no longer upcast at the load"
     assert "w_val = tl.load(weight_ptr + w_offset).to(tl.float32)" in src, \

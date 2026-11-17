@@ -23,13 +23,14 @@ engine dispatches on a Metal device.
 """
 from __future__ import annotations
 
+import importlib.util
 import pathlib
 
 import pytest
 
 #: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
 OPS_DIRS = (pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
-            pathlib.Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+            pathlib.Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops")
 
 
 def _ops_files(pattern="*.py"):

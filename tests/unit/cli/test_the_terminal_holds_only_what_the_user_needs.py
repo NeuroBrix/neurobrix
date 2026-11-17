@@ -58,7 +58,7 @@ NOISE = [
 def _env(**extra) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in ("NBX_LOG", "NBX_DEBUG")}
     env.update(PYTHONNOUSERSITE="1",
-               PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]),
+               PYTHONPATH=str(REPO / "src"),
                PATH=os.pathsep.join([str(Path(PY).parent), env.get("PATH", "")]))
     env.update(extra)
     return env

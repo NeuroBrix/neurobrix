@@ -69,6 +69,7 @@ R34 preserved — nothing here is keyed on a model name.
 
 from __future__ import annotations
 
+import importlib.util
 import atelier as _atelier  # the workshop's roots (docs/internal/_atelier.md v2 §4)
 import argparse
 import importlib
@@ -84,7 +85,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 OPS_PKG = "neurobrix.kernels.ops"
 OPS_DIR = REPO_ROOT / "src" / "neurobrix" / "kernels" / "ops"
 #: the tensor library's kernel files (nbxtensor/ops, M1), scanned with the engine's
-LIB_OPS_DIR = REPO_ROOT / "nbxtensor" / "src" / "nbxtensor" / "ops"
+LIB_OPS_DIR = Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops"
 
 # Pipeline stages, in the order the Metal backend declares them. `_STAGE_ORDER`
 # is what `--through` truncates and what failure attribution reports.

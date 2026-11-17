@@ -54,7 +54,7 @@ def _run(mode: str, chunk: int) -> dict:
     tmp.mkdir(parents=True, exist_ok=True)
     out = tmp / f"{mode}_{chunk}.json"
     env = dict(os.environ, PYTHONNOUSERSITE="1", NBX_AUTOTUNE_CERTIFIED_ONLY="1", NBX_SESSION_KV_TMP=str(tmp),
-               PYTHONPATH=f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}")
+               PYTHONPATH=f"{REPO / 'src'}")
     p = subprocess.run([sys.executable, str(HERE / "session_kv_driver.py"), "--model", MODEL, "--mode", mode,
                         "--chunk", str(chunk), "--conv", str(HERE / "data" / "two_turns_garden.json"),
                         "--out", str(out)], env=env, capture_output=True, text=True, timeout=1800, cwd=str(tmp))

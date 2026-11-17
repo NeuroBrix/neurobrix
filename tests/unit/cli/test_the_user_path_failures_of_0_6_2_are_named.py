@@ -36,7 +36,7 @@ PY = sys.executable
 def _env(**extra) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in ("NBX_LOG", "NBX_DEBUG")}
     env.update(PYTHONNOUSERSITE="1",
-               PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]))
+               PYTHONPATH=str(REPO / "src"))
     env.update(extra)
     return env
 

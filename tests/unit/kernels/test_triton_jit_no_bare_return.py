@@ -7,12 +7,13 @@ This gate refuses any bare return in any @triton.jit function of the engine —
 the fixes are proven bit-identical on CUDA by their own tests. Portability
 discipline, not optimisation.
 """
+import importlib.util
 import ast
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
 #: the tensor library's sources, where the kernels move (M1): scanned with the engine's
-LIB = Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor"
+LIB = Path(importlib.util.find_spec("nbxtensor").origin).parent
 
 
 def _is_jit(dec: ast.expr) -> bool:

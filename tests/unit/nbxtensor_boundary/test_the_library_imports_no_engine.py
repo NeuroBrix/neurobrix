@@ -11,11 +11,12 @@ Parsed with `ast`, not grepped: a docstring mentioning torch is not an import.
 
 from __future__ import annotations
 
+import importlib.util
 import ast
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-LIB = REPO / "nbxtensor" / "src" / "nbxtensor"
+LIB = Path(importlib.util.find_spec("nbxtensor").origin).parent
 
 TORCH_ALLOWED: frozenset = frozenset()   # empty, and it stays empty
 

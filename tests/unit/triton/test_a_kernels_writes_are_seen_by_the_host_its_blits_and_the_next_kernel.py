@@ -9,7 +9,7 @@ Until 2026-11-12 triton-ext ran the kernels on a queue of its own, and these cro
 queue before every launch and a whole-device wait after it (82 % of a decode's wall time). Now nbxtensor encodes
 kernels and blits on ONE serial stream (`nbxtensor/backend/metal_dispatch.py`): Metal orders them, and the host waits
 only where it reads. This file says whether the three still hold; each was seen red when its ordering was removed
-(nbxtensor/tests/test_a_metal_kernel_runs_on_nbxtensors_own_stream.py removes them one by one).
+(the library's tests/test_a_metal_kernel_runs_on_nbxtensors_own_stream.py removes them one by one).
 """
 from __future__ import annotations
 

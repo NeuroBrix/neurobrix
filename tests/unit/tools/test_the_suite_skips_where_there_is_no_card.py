@@ -8,7 +8,7 @@ meaning "no card here" is a suite nobody runs beside a campaign, which is the on
 place the door exists for.
 
 `tests/conftest.py` converts that ONE failure into a skip, through the hooks of
-`nbxtensor/tests/_no_device.py` (the library suite registers the same ones). This file is what
+`tests/_no_device.py` (the library suite registers the same ones from its own copy). This file is what
 keeps the conversion from becoming a swallow, and it pins both directions:
 
 * a failure whose text carries a no-device mark becomes a skip — **only** when an
@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-NO_DEVICE = ROOT / "nbxtensor" / "tests" / "_no_device.py"
+NO_DEVICE = ROOT / "tests" / "_no_device.py"
 
 _TWO_TESTS = '''
 def test_it_cannot_reach_a_card():
@@ -49,7 +49,7 @@ def _run(tmp_path: Path, visible: str | None):
         "pytest_runtest_setup\n")
     (tmp_path / "test_two.py").write_text(_TWO_TESTS)
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT / "nbxtensor" / "src")))
+    env["PYTHONPATH"] = str(ROOT / "src")
     if visible is None:
         env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
@@ -192,7 +192,7 @@ def test_a_session_on_a_host_with_no_gpu_runtime_collects_and_runs(tmp_path):
     (tmp_path / "conftest.py").write_text(_NO_RUNTIME_CONFTEST)
     (tmp_path / "test_two.py").write_text(_TWO_TESTS)
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT / "nbxtensor" / "src")))
+    env["PYTHONPATH"] = str(ROOT / "src")
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rs", str(tmp_path)],
                        capture_output=True, text=True, env=env, timeout=300, cwd=str(tmp_path))
     tail = (r.stdout + r.stderr)[-1500:]

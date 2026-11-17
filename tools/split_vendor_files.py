@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Split a vendor's files into the LIBRARY's device files and the ENGINE's vendor files, on one key list
-(`nbxtensor/docs/device_keys.txt`, the device-key census) — Hocine Benkelaya 2026-10-29 16:28, API.md section 11.
+(`the library's docs/device_keys.txt`, the device-key census) — Hocine Benkelaya 2026-10-29 16:28, API.md section 11.
 
 nbxtensor reads the kernel-relevant description of a device (tiles, shared memory, registers, warp size, the matrix
 unit, the dispatch limits, the identification a profile is matched by); NeuroBrix reads the rest (Prism's measured
@@ -17,8 +17,8 @@ original (no key in both, no value changed or lost); otherwise nothing is writte
 already split takes the keys the list gained: they are appended to its library file, and the proof is then that the
 new halves merge back to the old ones.
 
-    python3 tools/split_vendor_files.py --vendor apple --keys nbxtensor/docs/device_keys.txt \\
-        --engine src/neurobrix/config/vendors --library nbxtensor/src/nbxtensor/backend/devices [--check]
+    python3 tools/split_vendor_files.py --vendor apple --keys <nbxtensor checkout>/docs/device_keys.txt \\
+        --engine src/neurobrix/config/vendors --library <nbxtensor checkout>/src/nbxtensor/backend/devices [--check]
 """
 from __future__ import annotations
 

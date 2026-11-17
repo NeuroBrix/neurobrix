@@ -59,7 +59,7 @@ def test_a_long_row_reduction_reserves_no_local_memory():
         print(used() - u0)
     """)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600,
-                       env={"PYTHONPATH": f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}", "PYTHONNOUSERSITE": "1",
+                       env={"PYTHONPATH": f"{REPO / 'src'}", "PYTHONNOUSERSITE": "1",
                             "PATH": "/usr/bin:/bin",
                             **{k: v for k, v in __import__("os").environ.items() if k.startswith(("CUDA", "LD_", "HOME"))}})
     assert r.returncode == 0, r.stderr[-2000:]

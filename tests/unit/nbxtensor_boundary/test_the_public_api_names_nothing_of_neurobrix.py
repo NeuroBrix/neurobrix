@@ -11,11 +11,12 @@ leave the list (an exact match both ways), so the list states what is left of th
 """
 from __future__ import annotations
 
+import importlib.util
 import ast
 import re
 from pathlib import Path
 
-LIB = Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor"
+LIB = Path(importlib.util.find_spec("nbxtensor").origin).parent
 NEUROBRIX_NAMES = re.compile(r"vendor|rung|census|neurobrix|memory_class|profile", re.I)
 
 # What is left (API.md section 11 names each row's fate and owner). Shrinks only.

@@ -64,9 +64,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 REPO = Path(__file__).resolve().parent.parent
-for _p in (REPO / "src", REPO / "nbxtensor" / "src"):
-    if str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
+if str(REPO / "src") not in sys.path:                  # the tree's engine; the library is the installed one
+    sys.path.insert(0, str(REPO / "src"))
 
 
 class Refused(RuntimeError):

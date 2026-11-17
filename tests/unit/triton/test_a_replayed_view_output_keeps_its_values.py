@@ -8,7 +8,7 @@ I2V conditioning came back scrambled, the 88-frame video a mosaic of tiles (2026
 before the replay was the default).
 
 What this test would do if the code were wrong: a storage hash for the verify — red at the hash of a view against its
-scrambled copy. One card. (The hand-over's copies are the library's: nbxtensor/tests/test_a_replayed_view_output_keeps_its_values.py.)"""
+scrambled copy. One card. (The hand-over's copies are the library's: the library's tests/test_a_replayed_view_output_keeps_its_values.py.)"""
 import numpy as np
 import pytest
 

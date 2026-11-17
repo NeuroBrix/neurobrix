@@ -144,7 +144,7 @@ def test_the_command_line_refuses_the_entry_name_of_a_recorded_model_in_one_line
     names.record_name(home / "cache" / "Kokoro-82M", "hexgrad/Kokoro-82M")
     repo = Path(__file__).resolve().parents[3]
     env = {**os.environ, "NEUROBRIX_HOME": str(home), "CUDA_VISIBLE_DEVICES": "", "PYTHONNOUSERSITE": "1",
-           "PYTHONPATH": os.pathsep.join([str(repo / "src"), str(repo / "nbxtensor" / "src")])}
+           "PYTHONPATH": str(repo / "src")}
     p = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", "Kokoro-82M", "--prompt", "hi"],
                        capture_output=True, text=True, env=env, timeout=120)
     assert p.returncode == 1, p.stderr

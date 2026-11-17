@@ -247,7 +247,7 @@ def test_gpus_hidden_by_the_environment_are_named_never_a_torch_mismatch():
     pytest.importorskip("torch")
     repo = Path(__file__).resolve().parents[3]
     env = dict(os.environ, CUDA_VISIBLE_DEVICES="", PYTHONNOUSERSITE="1",
-               PYTHONPATH=os.pathsep.join([str(repo / "src"), str(repo / "nbxtensor" / "src")]))
+               PYTHONPATH=str(repo / "src"))
     env.pop("NBX_LOG", None)
     p = subprocess.run([sys.executable, "-m", "neurobrix", "doctor"], capture_output=True, text=True, env=env,
                        timeout=300)

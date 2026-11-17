@@ -2,7 +2,7 @@
 supervisor 2026-11-03 10:32: the copy is 75-93 % of a mixture-of-experts decode's GPU time on the V100s): the profile's
 `measured.expert_copy` (block, warps), written by `autodetect.ensure_measured_facts` from
 `nbxtensor.ops.moe_device_residency.measure_miss_copy`. What the store does with the fact — launch it, refuse without
-it — is the library's test (`nbxtensor/tests/test_the_expert_slots_copy_with_the_measured_launch.py`). What this test
+it — is the library's test (`the library's tests/test_the_expert_slots_copy_with_the_measured_launch.py`). What this test
 would do if the code were wrong: a first launch that measures again what the profile carries, or never measures — RED;
 a unified device probed — RED. No card."""
 from __future__ import annotations

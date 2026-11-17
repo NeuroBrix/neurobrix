@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
 import os
 import sys
 import threading
@@ -29,15 +30,18 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 # the engine, its tensor library and the tools: since the library left the engine (2026-10-28) the key path's code —
-# launch_keys, the wrappers, the buckets — lives under nbxtensor/src, and a record that left it out marked no model
-# moved when it changed (the stale rows of TinyLlama and whisper the lot-2 key compare found, 2026-10-29)
-ROOTS = (REPO / "src", REPO / "nbxtensor" / "src", REPO / "tools")
+# launch_keys, the wrappers, the buckets — lives in the library, and a record that left it out marked no model
+# moved when it changed (the stale rows of TinyLlama and whisper the lot-2 key compare found, 2026-10-29). The library
+# is the INSTALLED package (its own repository): its code and files are written `lib:` relative to the directory that
+# holds the package, never as a machine's path.
+LIBRARY = Path(importlib.util.find_spec("nbxtensor").origin).resolve().parent
+ROOTS = (REPO / "src", LIBRARY, REPO / "tools")
 
 
 def recorded_roots() -> list:
     """The roots a record is taken under, as the record writes them: a record taken under other roots holds none of
     the units the missing roots executed, so `static_move` could never see them move — it is derived again instead."""
-    return sorted(str(r.relative_to(REPO)) for r in ROOTS)
+    return sorted([str(r.relative_to(REPO)) for r in ROOTS if r != LIBRARY] + [f"lib:{LIBRARY.name}"])
 
 import gate_scope_code as GC                   # noqa: E402  (tools/ is on the path of every tool)
 
@@ -141,22 +145,25 @@ def _unit_sha(node) -> str:
 
 
 def _rel(path: Path) -> str:
-    """A path as the record writes it: relative to the repository (`repo:`), to the catalogue (`cache:`), to the
+    """A path as the record writes it: relative to the installed library's directory (`lib:`), to the repository
+    (`repo:`), to the catalogue (`cache:`), to the
     engine's home (`home:`, the calibration records and hardware profiles of ~/.neurobrix) or to the workshop's
     communication directory (`comm:`, the catalogue), absolute otherwise — a
     committed record never names a machine's home directory (the owner, 2026-11-07)."""
     from neurobrix.core.paths import cache_dir, neurobrix_home
     rp = path.resolve()
-    for tag, root in (("repo", REPO), ("cache", Path(cache_dir()).resolve()), ("home", Path(neurobrix_home()).resolve()),
+    for tag, root in (("lib", LIBRARY.parent), ("repo", REPO), ("cache", Path(cache_dir()).resolve()), ("home", Path(neurobrix_home()).resolve()),
                       ("comm", _communication_root())):
         if rp.is_relative_to(root):
             return f"{tag}:{rp.relative_to(root)}"
     return str(rp)
 
 
-def _abs(name: str, repo: Path = REPO) -> Path:
+def _abs(name: str, repo: Path = REPO, lib: Path = None) -> Path:
     from neurobrix.core.paths import cache_dir
     tag, _, rest = name.partition(":")
+    if tag == "lib":
+        return (lib or LIBRARY.parent) / rest
     if tag == "repo":
         return repo / rest
     if tag == "cache":
@@ -191,6 +198,8 @@ def _skip_read(p: Path) -> bool:
     rp = p.resolve()
     if any(rp == o or rp.is_relative_to(o) for o in (Path(x).resolve() for x in OUTPUTS)):
         return True
+    if rp.is_relative_to(LIBRARY):          # the library's own files (its tables) are inputs, wherever it is installed
+        return False
     s = str(p)
     if s.startswith(("/proc/", "/sys/", "/dev/")):
         return True
@@ -227,12 +236,13 @@ def units_and_files(measured: dict) -> tuple:
     return units, files
 
 
-def static_move(record: dict, repo: Path = REPO) -> str:
-    """The first code unit or file of `record` whose hash moved in the tree at `repo` (this one by default), named
-    with why; '' if none."""
+def static_move(record: dict, repo: Path = REPO, lib: Path = None) -> str:
+    """The first code unit or file of `record` whose hash moved in the tree at `repo` (this one by default) or in the
+    library installed at `lib` (the directory holding the package; the installed one by default), named with why; ''
+    if none."""
     for name, sha in sorted(record.get("units", {}).items()):
         rel, _, q = name.partition("::")
-        path = _abs(rel, repo)
+        path = _abs(rel, repo, lib)
         if not path.is_file():
             return f"code {name}: its file is gone"
         us, _ = _units(path)
@@ -241,7 +251,7 @@ def static_move(record: dict, repo: Path = REPO) -> str:
         if _unit_sha(us[q]) != sha:
             return f"code {name} changed"
     for name, sha in sorted(record.get("files", {}).items()):
-        path = _abs(name, repo)
+        path = _abs(name, repo, lib)
         if not path.is_file():
             return f"file {name}: gone"
         if _file_sha(path) != sha:

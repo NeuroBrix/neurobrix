@@ -7,6 +7,7 @@ physical card (red); a library that still reads NeuroBrix's variable or asks the
 stays after the rung is lifted (red)."""
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ from pathlib import Path
 from tests.unit.child_env import child_env
 
 REPO = Path(__file__).resolve().parents[3]
-LIB = REPO / "nbxtensor" / "src" / "nbxtensor"
+LIB = Path(importlib.util.find_spec("nbxtensor").origin).parent
 
 _PROBE = r"""
 import neurobrix
@@ -25,7 +26,7 @@ print("LIMIT", D._imposed_bytes(0))
 
 def _limit_seen(**env):
     out = subprocess.run([sys.executable, "-c", _PROBE], cwd=REPO, capture_output=True, text=True, timeout=300,
-                         env=child_env(PYTHONPATH=f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}", PYTHONNOUSERSITE="1",
+                         env=child_env(PYTHONPATH=f"{REPO / 'src'}", PYTHONNOUSERSITE="1",
                                        CUDA_VISIBLE_DEVICES="", **env))
     return out.stdout + out.stderr
 

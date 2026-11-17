@@ -39,7 +39,7 @@ def host():
 
 def neurobrix(*argv, env=None, timeout=120):
     """The real command, in a child interpreter, its stdout and stderr captured (a pipe, not a terminal)."""
-    child = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]),
+    child = dict(os.environ, PYTHONPATH=str(REPO / "src"),
                  **(env or {}))
     return subprocess.run([sys.executable, "-m", "neurobrix", *argv], capture_output=True, text=True, env=child,
                           timeout=timeout)

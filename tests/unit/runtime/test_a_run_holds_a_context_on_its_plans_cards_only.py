@@ -58,7 +58,7 @@ def test_host_to_card_and_back_keep_values_dtype_and_shape():
 
 _TWO = '''
 import os, subprocess, sys, torch
-sys.path[:0] = [{src!r}, {lib!r}]
+sys.path[:0] = [{src!r}]
 from neurobrix.core.runtime.card_handoff import to_card
 def cards():
     rows = subprocess.run(["nvidia-smi", "--query-compute-apps=gpu_bus_id,pid", "--format=csv,noheader"],
@@ -81,7 +81,7 @@ def test_crossing_two_cards_leaves_the_process_on_those_two():
     n = _cards()
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=",".join(str(i) for i in [n - 2, n - 1] + list(range(n - 2))),
                PYTHONNOUSERSITE="1")
-    out = subprocess.run([sys.executable, "-c", _TWO.format(src=str(REPO / "src"), lib=str(REPO / "nbxtensor" / "src"))],
+    out = subprocess.run([sys.executable, "-c", _TWO.format(src=str(REPO / "src"))],
                          capture_output=True, text=True, timeout=300, env=env)
     assert out.returncode == 0, out.stderr[-800:]
     said = dict(line.split()[:2] for line in out.stdout.splitlines() if line.startswith(("OURS", "TORCH")))
@@ -134,7 +134,7 @@ def _run_and_list(model, profile):
                           "Say hello.", "--max-tokens", "8", "--seed", "7", "--compiled"], capture_output=True, text=True,
                          timeout=1500, cwd=str(REPO),
                          env=dict({k: v for k, v in os.environ.items() if k != "CUDA_VISIBLE_DEVICES"},
-                                  PYTHONNOUSERSITE="1", PYTHONPATH=f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}"))
+                                  PYTHONNOUSERSITE="1", PYTHONPATH=f"{REPO / 'src'}"))
     line = [l for l in out.stdout.splitlines() if l.startswith("CARDS")]
     assert out.returncode == 0 and line, (out.stdout[-600:], out.stderr[-600:])
     return sorted(line[-1].split()[1:])

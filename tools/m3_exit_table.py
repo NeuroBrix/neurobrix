@@ -215,7 +215,7 @@ def _explain(row: dict, tree: Path, python: str, scratch: Path, hw: str, rung_mb
         argv += ["--hardware", hw]
     env = dict(os.environ, CUDA_VISIBLE_DEVICES="", NBX_CENSUS="1", NBX_CENSUS_DEVICES="1",
                NBX_PRISM_BUDGET_MB=str(rung_mb), PYTHONNOUSERSITE="1",
-               PYTHONPATH=f"{tree / 'src'}:{tree / 'nbxtensor' / 'src'}",
+               PYTHONPATH=f"{tree / 'src'}",
                NEUROBRIX_REPLAY_CACHE=str(scratch / f"replay_{row['model']}_{row['mode']}"))
     p = subprocess.run(argv, cwd=tree, env=env, capture_output=True, text=True, timeout=1200)
     return p.returncode, p.stdout + p.stderr

@@ -51,7 +51,7 @@ print("RC", rc)
 
 
 def _run(*flags):
-    env = child_env(PYTHONPATH=f"{REPO / 'src'}{os.pathsep}{REPO / 'nbxtensor' / 'src'}{os.pathsep}{REPO}",
+    env = child_env(PYTHONPATH=f"{REPO / 'src'}{os.pathsep}{REPO}",
                     PYTHONNOUSERSITE="1", CUDA_VISIBLE_DEVICES="")
     out = subprocess.run([sys.executable, "-c", _DRIVER, *flags], cwd=REPO, env=env, capture_output=True, text=True,
                          timeout=300)
@@ -96,7 +96,7 @@ _MAIN = _DRIVER.replace(
 
 def test_through_the_entry_point_main_the_refusal_is_a_message_and_rc_1():
     assert _MAIN != _DRIVER
-    env = child_env(PYTHONPATH=f"{REPO / 'src'}{os.pathsep}{REPO / 'nbxtensor' / 'src'}{os.pathsep}{REPO}",
+    env = child_env(PYTHONPATH=f"{REPO / 'src'}{os.pathsep}{REPO}",
                     PYTHONNOUSERSITE="1", CUDA_VISIBLE_DEVICES="")
     out = subprocess.run([sys.executable, "-c", _MAIN, "--compiled"], cwd=REPO, env=env, capture_output=True,
                          text=True, timeout=300)

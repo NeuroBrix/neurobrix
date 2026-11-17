@@ -17,7 +17,7 @@ Two readings:
                        carry a refused word with their counts, the string values that carry one, and the member names that
                        carry one.
 
-Usage: python tools/persisted_names_scan.py source src nbxtensor/src > hits.tsv
+Usage: python tools/persisted_names_scan.py source src <a checkout of the nbxtensor repository>/src > hits.tsv
        python tools/persisted_names_scan.py containers <models root> > containers.jsonl
 """
 import ast

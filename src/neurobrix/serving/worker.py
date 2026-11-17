@@ -6,7 +6,7 @@ order it was submitted. The connection threads only parse, submit, wait, and sen
 
 Why one thread and not "whichever connection thread holds the lock": a device runtime may keep per-thread state
 that a thread hop leaks. On Metal a Python thread has no autorelease pool of its own, so what the driver autoreleases
-outside a pool is never released (nbxtensor/src/nbxtensor/backend/triton_ext_driver.py, the note before its
+outside a pool is never released (nbxtensor's backend/triton_ext_driver.py, the note before its
 `objc.autorelease_pool()`: arenas kept for good). One long-lived thread makes the engine's view of threads the same
 as `neurobrix run`'s: one.
 

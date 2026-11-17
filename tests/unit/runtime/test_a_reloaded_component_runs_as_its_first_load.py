@@ -92,7 +92,7 @@ def test_a_second_request_after_a_reload_gives_the_first_requests_bytes(tmp_path
     if not (Path(atelier.root("cache")) / model).exists():
         pytest.skip(f"{model} is not in the engine cache")
     env = dict(os.environ, PYTHONNOUSERSITE="1", NBX_AUTOTUNE_CERTIFIED_ONLY="1",
-               PYTHONPATH=f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}")
+               PYTHONPATH=f"{REPO / 'src'}")
     p = subprocess.run([sys.executable, "-c", CHILD, model, str(tmp_path / "logits.json")], env=env,
                        capture_output=True, text=True, timeout=1200, cwd=str(tmp_path))
     assert p.returncode == 0, (p.stdout[-3000:], p.stderr[-3000:])
