@@ -74,7 +74,12 @@ def test_every_shipped_profile_answers_without_refusing():
     vendors = pathlib.Path(__file__).resolve().parents[3] / "src/neurobrix/config/vendors"
     profiles = accelerator_vendor_files()
     assert profiles, "no vendor profiles found — the check would be vacuous"
+    from tests.unit.accelerator_vendor_files import documentation_sourced_unmeasured
     for p in profiles:
         profile = vendor_file(p) or {}
         for dim in ("M", "N", "K", "W"):
+            if documentation_sourced_unmeasured(p):     # no measured ladder: the door refuses it by name (above)
+                with pytest.raises(Exception, match="ladder"):
+                    bucket_of(dim, 226, profile)
+                continue
             assert bucket_of(dim, 226, profile) > 0, f"{p} refused dimension {dim}"

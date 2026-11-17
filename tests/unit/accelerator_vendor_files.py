@@ -9,6 +9,16 @@ import yaml
 VENDORS = Path(__file__).resolve().parents[2] / "src" / "neurobrix" / "config" / "vendors"
 
 
+def documentation_sourced_unmeasured(path) -> bool:
+    """A vendor file that says it is DOCUMENTATION-SOURCED AND UNMEASURED (written with no such card, every value read
+    from the vendor's documentation: nvidia/ada.yml, GitHub issue 6) and states no Triton dead-tensor queue
+    (`memory.deferred_drain_cliff_bytes`), so a Triton plan on it is refused by name. Such a file carries none of the
+    Triton branch's MEASURED tuning values (the owner's rule of 2026-11-17: never copied from a neighbour)."""
+    text = Path(path).read_text()
+    memory = (yaml.safe_load(text) or {}).get("memory") or {}
+    return "DOCUMENTATION-SOURCED AND UNMEASURED" in text and "deferred_drain_cliff_bytes" not in memory
+
+
 def accelerator_vendor_files():
     """Sorted paths of every vendor file whose `device_prefix` is not `cpu`; refused when none is found."""
     out = sorted(p for p in VENDORS.glob("*/*.yml")

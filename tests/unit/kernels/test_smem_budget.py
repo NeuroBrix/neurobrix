@@ -31,6 +31,7 @@ from nbxtensor.ops._configs import arch_smem_budget, configs_within_smem_budget,
 from nbxtensor.ops.matmul import _MATMUL_AUTOTUNE_AMPERE_PLUS, _MATMUL_AUTOTUNE_VOLTA
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
+from tests.unit.accelerator_vendor_files import documentation_sourced_unmeasured
 
 VENDORS = (Path(__file__).resolve().parents[3]
            / "src" / "neurobrix" / "config" / "vendors")
@@ -240,6 +241,25 @@ def _flatten(d, prefix=""):
     return out
 
 
+#: What a DOCUMENTATION-SOURCED AND UNMEASURED profile (its header says so: written with no such card, every value
+#: read from the vendor's documentation, nvidia/ada.yml for GitHub issue 6) may leave unstated, and why: no vendor
+#: document gives these; each is MEASURED on a card (tiles, thresholds, ladders, screens, the dead-tensor queue, the
+#: pool) and the owner's rule of 2026-11-17 forbids copying them from a neighbouring architecture. All belong to the
+#: Triton branch, and such a profile states no `memory.deferred_drain_cliff_bytes`, so a Triton plan on it is refused
+#: by name (core/prism/memory_budget.deferred_drain_policy_of; held by
+#: tests/unit/prism/test_every_nvidia_architecture_the_detector_names_has_a_profile_or_is_refused_by_name.py). The
+#: compiled engine reads none of them. A key outside this list is still required of such a profile.
+_UNMEASURED_MAY_OMIT_PREFIX = ("autotune.", "autotune_screen_rtol.", "block_sizes.", "pipelining.")
+_UNMEASURED_MAY_OMIT = {
+    "autotune_screen_max_bytes", "sdpa_smem_safety",
+    "tiling.extent_lattice", "memory.alloc_pool_fit_slack_fraction", "memory.alloc_pool_parked_cap_fraction",
+    "memory.deferred_drain_cliff_bytes", "memory.deferred_drain_floor_bytes", "memory.deferred_drain_freecheck_interval",
+    "memory.deferred_drain_pressure_reserve_bytes", "memory.sdpa_math_max_scores_bytes",
+    "memory.sdpa_math_min_chunk_rows",
+}
+
+
+
 @pytest.mark.parametrize("path", accelerator_vendor_files(),
                          ids=lambda p: f"{p.parent.name}/{p.stem}")
 def test_every_profile_declares_what_the_reference_declares(path):
@@ -260,8 +280,11 @@ def test_every_profile_declares_what_the_reference_declares(path):
         return
     reference = set(_flatten(vendor_file(
         (VENDORS / "nvidia" / "volta.yml"))))
-    mine = set(_flatten(vendor_file(path)))
+    cfg = vendor_file(path)
+    mine = set(_flatten(cfg))
     missing = sorted(k for k in reference - mine - set(_MAY_OMIT) if not k.startswith(tuple(_MAY_OMIT_PREFIX)))
+    if documentation_sourced_unmeasured(path):
+        missing = [k for k in missing if k not in _UNMEASURED_MAY_OMIT and not k.startswith(_UNMEASURED_MAY_OMIT_PREFIX)]
     assert not missing, (
         f"{name} does not declare, and has no recorded reason to omit:\n  "
         + "\n  ".join(missing)
@@ -290,9 +313,12 @@ def test_capability_resolution_covers_more_than_three_cards(monkeypatch):
 
     # The capability comes from the launcher's target (engine data), never
     # from Triton's driver probe (R33, universal since 2026-09-05).
-    for sm, expect in ((70, "nvidia/volta"), (75, "nvidia/volta"),
+    # 7.5 and 8.9 resolve to their own profiles since 2026-11-17 (GitHub issue 6): before, a T4 took Volta's 96 KB
+    # and an RTX 4070 Ampere's 164 KB, budgets larger than the 64 KB and 99 KB NVIDIA documents for them. 8.6 keeps
+    # Ampere's, the profile its shipped hardware files plan and launch on (no 8.6 profile ships in 0.6.17).
+    for sm, expect in ((70, "nvidia/volta"), (75, "nvidia/turing"),
                        (80, "nvidia/ampere"), (86, "nvidia/ampere"),
-                       (89, "nvidia/ampere"), (90, "nvidia/hopper")):
+                       (89, "nvidia/ada"), (90, "nvidia/hopper"), (100, "nvidia/blackwell")):
         monkeypatch.setattr(launcher, "target",
                             lambda sm=sm: types.SimpleNamespace(arch=sm, backend="cuda"))
         got = _configs.arch_smem_budget()

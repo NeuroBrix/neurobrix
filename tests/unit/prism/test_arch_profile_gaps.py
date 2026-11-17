@@ -30,10 +30,14 @@ from neurobrix.core.config.loader import (
 from neurobrix.core.prism.autodetect import _nvidia_cc_to_arch
 
 
+# 2026-11-17 (GitHub issue 6): turing and ada have their own profiles, read from NVIDIA's documentation (below); the
+# architectures still without one keep the refusal. ampere_consumer (8.6) is one of them in 0.6.17: a profile declaring
+# 8.6 would replace, by capability, the Ampere profile an 8.6 hardware file plans and launches on.
 @pytest.mark.parametrize("cc,arch,card", [
-    ("7.5", "turing", "T4 / RTX 2080"),
     ("8.6", "ampere_consumer", "A10 / RTX 3090"),
-    ("8.9", "ada", "L4 / RTX 4090"),
+    ("3.5", "kepler", "Tesla K80"),
+    ("5.2", "maxwell", "GTX 980 / Tesla M40"),
+    ("6.1", "pascal", "GTX 1080 / Tesla P40"),
 ])
 def test_an_unprofiled_card_is_named_and_refused(cc, arch, card):
     assert _nvidia_cc_to_arch(cc) == arch, (
@@ -55,12 +59,20 @@ def test_the_profiled_cards_still_load(cc, arch):
     assert cfg["memory"]["max_shared_memory_per_block"] > 0
 
 
+@pytest.mark.parametrize("cc,arch,budget", [("7.5", "turing", 64 * 1024), ("8.9", "ada", 99 * 1024)])
+def test_a_card_that_inherited_a_neighbours_budget_has_its_own_documented_one(cc, arch, budget):
+    """The two cards that inherited a larger budget load their OWN profile, with the per-block budget NVIDIA
+    documents (CUDA Programming Guide, Table 34, opt-in): 64 KB at 7.5, 99 KB at 8.9."""
+    assert _nvidia_cc_to_arch(cc) == arch
+    assert get_vendor_config("nvidia", arch)["memory"]["max_shared_memory_per_block"] == budget
+
+
 def test_the_refusal_says_what_would_close_the_gap():
     """A refusal that only says "no" leaves the reader with no next step. It
     must name the file to write and the keys it must carry — and say the
     values come from the vendor's specification, not from a neighbour."""
     with pytest.raises(UnsupportedArchitectureError) as excinfo:
-        get_vendor_config("nvidia", "turing")
+        get_vendor_config("nvidia", "pascal")
     msg = str(excinfo.value)
     for needed in ("max_shared_memory_per_block", "compute_capability",
                    "block_sizes", "pipelining.max_num_stages", "volta.yml"):

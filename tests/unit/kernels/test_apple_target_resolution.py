@@ -77,9 +77,13 @@ def _budget_for(arch):
 # only ones the change was allowed to move, and they are asserted separately.
 _BUDGETS_THAT_MUST_NOT_MOVE = {
     70: 98304,          # V100, exact match on "7.0"
-    75: 98304,          # T4 — no 7.5 profile, resolved by NVIDIA major
+    # 75 and 89 MOVED on 2026-11-17 (GitHub issue 6), to the per-block budgets NVIDIA documents for them (CUDA
+    # Programming Guide, Table 34): their own profiles replaced Volta's and Ampere's larger budgets. Both cards were
+    # refused by name before (no turing or ada profile), so no run that worked moves.
+    75: 65536,          # T4, exact on "7.5" (nvidia/turing.yml)
     80: 167936,         # A100, exact on "8.0"
-    86: 167936,         # 3090 — resolved by major
+    86: 167936,         # 3090 / A10, resolved by major to ampere's 8.0, never to ada's 8.9: unchanged in 0.6.17
+    89: 101376,         # RTX 4070, exact on "8.9" (nvidia/ada.yml)
     90: 232448,         # H100, exact on "9.0"
     "gfx908": 65536,    # CDNA1
     "gfx90a": 65536,    # CDNA2, exact
