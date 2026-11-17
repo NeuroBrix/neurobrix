@@ -162,6 +162,33 @@ def _smart_resize(num_frames: int, height: int, width: int,
     return h_bar, w_bar
 
 
+def _require_values(cfg, keys, what: str) -> None:
+    """Refuse, by name, every preprocessing value the container does not carry (no family default)."""
+    missing = [k for k in keys if not isinstance(cfg, dict) or cfg.get(k) is None]
+    if missing:
+        raise RuntimeError(
+            f"ZERO FALLBACK: {what} preprocessing is missing {missing} in the vision "
+            "component's preprocessing block (topology.flow.vlm.preprocessing). The "
+            "container must carry these values, taken from the model's "
+            "preprocessor_config.json: rebuild the container so the block holds them.")
+
+
+def _pixel_budget(cfg: dict):
+    """The pixel budget the container declares: (flat_form, min_pixels, max_pixels).
+
+    The two vendor processor-config forms carry two different budget arithmetics:
+    flat ``min_pixels``/``max_pixels`` -> per-frame 2-D budget h_bar*w_bar;
+    ``size.{shortest_edge,longest_edge}`` -> budget with the temporal factor t_bar*h_bar*w_bar.
+    The flat form wins when the block carries it; a form in part, or none, is refused by name.
+    """
+    if cfg.get("min_pixels") is not None or cfg.get("max_pixels") is not None:
+        _require_values(cfg, ("min_pixels", "max_pixels"), "native_patch_grid pixel budget")
+        return True, int(cfg["min_pixels"]), int(cfg["max_pixels"])
+    _require_values(cfg.get("size"), ("shortest_edge", "longest_edge"),
+                    "native_patch_grid pixel budget (min_pixels and max_pixels, or size)")
+    return False, int(cfg["size"]["shortest_edge"]), int(cfg["size"]["longest_edge"])
+
+
 def native_patch_grid_np(image_path: str, preprocessing_cfg: dict):
     """Dynamic-resolution flattened patch grid (Qwen2-VL / GLM-4.1V lineage),
     vendor Glm4vImageProcessor contract: smart-resize to the pixel budget
@@ -173,36 +200,18 @@ def native_patch_grid_np(image_path: str, preprocessing_cfg: dict):
              grid_thw int64 [1, 3])."""
     from PIL import Image
     cfg = preprocessing_cfg
-    # Defaults below are used ONLY when the embedded preprocessor_config.json
-    # omits the keys — they mirror the vendor processor class's own
-    # documented defaults (same policy as _CLIP_MEAN/_CLIP_STD).
-    p = int(cfg.get("patch_size", 14))
-    tp = int(cfg.get("temporal_patch_size", 2))
-    merge = int(cfg.get("merge_size", 2))
-    mean = np.asarray(cfg.get("image_mean", list(_CLIP_MEAN)), dtype=np.float32)
-    std = np.asarray(cfg.get("image_std", list(_CLIP_STD)), dtype=np.float32)
-
+    _require_values(cfg, ("patch_size", "temporal_patch_size", "merge_size",
+                          "image_mean", "image_std"), "native_patch_grid")
+    p, tp, merge = int(cfg["patch_size"]), int(cfg["temporal_patch_size"]), int(cfg["merge_size"])
+    mean = np.asarray(cfg["image_mean"], dtype=np.float32)
+    std = np.asarray(cfg["image_std"], dtype=np.float32)
     img = _load_rgb(image_path)
-    # Pixel-budget form, read from the emitted block — the two vendor
-    # processor-config shapes carry two DIFFERENT budget arithmetics and
-    # the config shape is the only data-driven signal for which one:
-    #   flat `min_pixels`/`max_pixels` (Qwen2-VL / Qwen2.5-VL / bailingmm
-    #   processors)  -> per-frame 2-D budget h_bar*w_bar, no temporal term
-    #   `size.{shortest_edge,longest_edge}` (Glm4vImageProcessor)
-    #   -> budget includes the temporal factor t_bar*h_bar*w_bar
-    # The video variant below already uses the 2-D form unconditionally.
-    # Clean end state: an explicit emitted flag instead of this key-shape
-    # proxy (registry/topology change, not a runtime one).
-    if cfg.get("min_pixels") is not None or cfg.get("max_pixels") is not None:
-        min_px = int(cfg.get("min_pixels", 56 * 56))
-        max_px = int(cfg.get("max_pixels", 28 * 28 * 1280))
+    flat_budget, min_px, max_px = _pixel_budget(cfg)
+    if flat_budget:
         h_bar, w_bar = _smart_resize_2d(img.height, img.width,
                                         factor=p * merge,
                                         min_pixels=min_px, max_pixels=max_px)
     else:
-        size = cfg.get("size", {}) or {}
-        min_px = int(size.get("shortest_edge", 112 * 112))
-        max_px = int(size.get("longest_edge", 14 * 14 * 2 * 2 * 2 * 6144))
         h_bar, w_bar = _smart_resize(tp, img.height, img.width,
                                      temporal_factor=tp, factor=p * merge,
                                      min_pixels=min_px, max_pixels=max_px)

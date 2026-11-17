@@ -192,3 +192,41 @@ def test_missing_file_raises():
 def test_clip_requires_config(synthetic_png):
     with pytest.raises(RuntimeError, match="preprocessor_config"):
         ImageInputProcessor.process("clip_centercrop", synthetic_png)
+
+
+# ── native_patch_grid takes every value from the container, never a family default ──
+
+def test_native_patch_grid_refuses_an_empty_preprocessing_block_naming_each_missing_value(synthetic_png):
+    with pytest.raises(RuntimeError, match="ZERO FALLBACK") as err:
+        ImageInputProcessor.process("native_patch_grid", synthetic_png, preprocessor_config={})
+    for key in ("patch_size", "temporal_patch_size", "merge_size", "image_mean", "image_std"):
+        assert key in str(err.value)
+    assert "topology.flow.vlm.preprocessing" in str(err.value)
+
+
+def test_native_patch_grid_refuses_a_block_without_its_patch_size(synthetic_png):
+    cfg = {k: v for k, v in _GLM_PREPROC.items() if k != "patch_size"}
+    with pytest.raises(RuntimeError, match=r"missing \['patch_size'\]"):
+        ImageInputProcessor.process("native_patch_grid", synthetic_png, preprocessor_config=cfg)
+
+
+def test_native_patch_grid_refuses_a_block_without_any_pixel_budget(synthetic_png):
+    cfg = {k: v for k, v in _GLM_PREPROC.items() if k != "size"}
+    with pytest.raises(RuntimeError, match="pixel budget.*shortest_edge.*longest_edge"):
+        ImageInputProcessor.process("native_patch_grid", synthetic_png, preprocessor_config=cfg)
+
+
+def test_native_patch_grid_refuses_a_flat_budget_given_in_part(synthetic_png):
+    cfg = {k: v for k, v in _GLM_PREPROC.items() if k != "size"}
+    cfg["min_pixels"] = 3136
+    with pytest.raises(RuntimeError, match=r"missing \['max_pixels'\]"):
+        ImageInputProcessor.process("native_patch_grid", synthetic_png, preprocessor_config=cfg)
+
+
+def test_native_patch_grid_with_a_full_flat_budget_resizes_per_frame(synthetic_png):
+    cfg = {k: v for k, v in _GLM_PREPROC.items() if k != "size"}
+    cfg.update(patch_size=16, min_pixels=32 * 32, max_pixels=64 * 64)
+    out = ImageInputProcessor.process("native_patch_grid", synthetic_png, preprocessor_config=cfg)
+    t, gh, gw = out["image_grid_thw"][0].tolist()
+    assert t == 1 and gh * gw * 16 * 16 <= 64 * 64 and gh % 2 == 0 and gw % 2 == 0
+    assert out["pixel_values"].shape == (gh * gw, 3 * 2 * 16 * 16)
