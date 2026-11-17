@@ -9,6 +9,7 @@ What this test does if the packaging were wrong: a dependency named by a path or
 one, is back — red at the first test; an empty file other than a package marker is shipped — red at the second."""
 from __future__ import annotations
 
+import importlib.metadata
 import re
 from pathlib import Path
 
@@ -46,3 +47,13 @@ def test_the_engine_depends_on_one_exact_release_of_the_library():
     deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
     pins = [d.replace(" ", "") for d in deps if re.match(r"nbxtensor\b", d)]
     assert len(pins) == 1 and re.fullmatch(r"nbxtensor==\d+\.\d+\.\d+", pins[0]), pins
+
+
+def test_the_library_the_engine_imports_is_the_exact_release_it_pins():
+    # A python holding another release of the library graded the engine against code it does not ship with (for example
+    # a venv with 0.1.6 under a pin of 0.1.10): the version installed is the pinned one, read from pyproject, exactly
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+    pinned = next(d.replace(" ", "").split("==", 1)[1] for d in deps if re.match(r"nbxtensor\b", d))
+    installed = importlib.metadata.version("nbxtensor")
+    assert installed == pinned, (f"this python imports nbxtensor {installed}, pyproject.toml pins {pinned}: install "
+                                 f"nbxtensor=={pinned}")

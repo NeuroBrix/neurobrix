@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Split a vendor's files into the LIBRARY's device files and the ENGINE's vendor files, on one key list
-(`the library's docs/device_keys.txt`, the device-key census) — Hocine Benkelaya 2026-10-29 16:28, API.md section 11.
+(`the library's docs/device_keys.txt`, the device-key census), API.md section 11.
 
 nbxtensor reads the kernel-relevant description of a device (tiles, shared memory, registers, warp size, the matrix
 unit, the dispatch limits, the identification a profile is matched by); NeuroBrix reads the rest (Prism's measured
@@ -161,7 +161,7 @@ def main(argv=None) -> int:
             (dst / f.name).write_text(lib)                           # the note is already at its head
             f.write_text(eng)
             continue
-        note = (f"# The library's half of {a.vendor}/{f.name}: the keys nbxtensor reads (nbxtensor/docs/device_keys.txt),\n"
+        note = (f"# The library's half of {a.vendor}/{f.name}: the keys nbxtensor reads (its docs/device_keys.txt),\n"
                 f"# moved with their sources by tools/split_vendor_files.py. NeuroBrix's half stays in\n"
                 f"# src/neurobrix/config/vendors/{a.vendor}/{f.name}; the engine reads the two merged.\n\n")
         (dst / f.name).write_text(note + lib)
