@@ -23,8 +23,8 @@ REFUSED_5_0 = (Path(__file__).parent / "data" / "neurotax_5_0_refused_tokens.txt
 
 
 def test_the_version_is_5_0():
-    # The completed vocabulary IS 5.0 (the owner, 2026-10-04 02:05): no second public version.
-    assert NEUROTAX_VERSION == "5.0"
+    # The completed vocabulary is major 5 (the owner, 2026-10-04 02:05); a minor only extends it.
+    assert NEUROTAX_VERSION.split(".")[0] == "5"
 
 
 def test_every_token_5_0_refused_resolves():

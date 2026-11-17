@@ -67,8 +67,8 @@ CACHE = Path.home() / ".neurobrix" / ("ca" + "che") / "chatterbox"
 STAGE = Path("~/nbx/stage/neurotax/chatterbox")
 
 
-@pytest.mark.skipif(not CACHE.exists() or json.loads((CACHE / "manifest.json").read_text()).get(
-    "neurotax_version") != NEUROTAX_VERSION, reason="the rack's partial chatterbox is not here")
+@pytest.mark.skipif(not CACHE.exists() or str(json.loads((CACHE / "manifest.json").read_text()).get(
+    "neurotax_version")).split(".")[0] != NEUROTAX_VERSION.split(".")[0], reason="the rack's partial chatterbox is not here")
 def test_the_caches_partial_chatterbox_is_refused_by_name():
     if first_non_canonical(json.loads((CACHE / "components" / "s3gen" / "weights_index.json").read_text())["tensors"]) is None:
         pytest.skip("the cache's chatterbox has been rewritten")

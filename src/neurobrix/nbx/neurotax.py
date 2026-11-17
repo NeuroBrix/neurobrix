@@ -25,19 +25,51 @@ import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-#: The one version of the neurotaxe (the owner, 2026-09-26: "NeuroTax 5.0, one version"). the container builder
-#: writes it in the manifest (`neurotax_version`); the runtime loader refuses by name a container
-#: whose keys were written under another version — a key the parser no longer emits is a key no
-#: reader will find (the MoE fusion's expert match, first of them).
-#: 5.0: the parser is a fixed point on its own output — the SwiGLU gate is `ffn_gate` (was `gate`,
-#: the vendors' router token), diffusers' `attn1` is `attn` (was `self_attn`).
-#: The vocabulary completed over the catalogue (2026-10-04) IS 5.0 (the owner, 2026-10-04 02:05: no
-#: public engine reads the partial vocabulary of 2026-09-27): 362 tokens it refused are translated,
-#: and every container is written once with the complete vocabulary (the container builder `tools/neurotax_rename.py`).
-#: The version string cannot tell a partial container from a complete one; the parser's own law
-#: does — `refuse_non_canonical`, at load. After the release a new model ADDS synonyms and never
-#: changes a key already emitted, so 5.0 stays and existing containers never move.
-NEUROTAX_VERSION = "5.0"
+#: The neurotaxe's version; the container builder writes it in the manifest (`neurotax_version`).
+#: VERSION RULE: the MINOR rises when the vocabulary is EXTENDED (names added, nothing renamed,
+#: nothing removed); the MAJOR rises only for a rename or a removal. Versions compare as
+#: (major, minor) integers, never as floats or strings. The loader accepts a container of the same
+#: major whose minor is at most its own and refuses by name a higher minor or another major
+#: (`refuse_other_neurotax`). A key already emitted never moves inside one major, so every older
+#: container of that major stays a fixed point of the parser and is never rewritten.
+#: 5.0: the parser is a fixed point on its own output, over the whole catalogue's vocabulary.
+#: 5.1: adds the linear-attention block's names by role (lin_attn, decay_log, step_bias,
+#: short_conv, qkv, out_gate_proj, decay_gate_proj, beta_proj).
+NEUROTAX_VERSION = "5.1"
+
+
+def _neurotax_major_minor(version) -> Tuple[int, int]:
+    m = re.fullmatch(r"(\d+)\.(\d+)", version) if isinstance(version, str) else None
+    if m is None:
+        raise ValueError(f"{version!r} is not a NeuroTax version 'MAJOR.MINOR'")
+    return int(m.group(1)), int(m.group(2))
+
+
+def refuse_other_neurotax(version, container: str) -> None:
+    """The NeuroTax door, at load: a container of this engine's major and a minor at most its own
+    reads with this engine's names; a higher minor holds names this engine does not know, another
+    major holds names it reads differently. Both refused by name, before any weight I/O; a manifest
+    with no version (or no readable one) is refused, never guessed."""
+    own = _neurotax_major_minor(NEUROTAX_VERSION)
+    try:
+        got = _neurotax_major_minor(version)
+    except ValueError as e:
+        raise RuntimeError(
+            f"NEUROTAX VERSION: container '{container}' states no readable NeuroTax version ({e}); "
+            f"this engine reads NeuroTax {NEUROTAX_VERSION}.\n"
+            f"  FIX: rebuild the container with the container builder, or install the container "
+            f"published for this engine.") from None
+    if got[0] == own[0] and got[1] > own[1]:
+        raise RuntimeError(
+            f"NEUROTAX VERSION: container '{container}' is named under NeuroTax {version}, newer than "
+            f"this engine's NeuroTax {NEUROTAX_VERSION}: it holds names this engine does not know.\n"
+            f"  FIX: update neurobrix (pip install -U neurobrix).")
+    if got[0] != own[0]:
+        raise RuntimeError(
+            f"NEUROTAX VERSION: container '{container}' is named under NeuroTax {version}; this engine "
+            f"reads NeuroTax {NEUROTAX_VERSION}, another major: names were renamed or removed between them.\n"
+            f"  FIX: install the neurobrix release of NeuroTax major {got[0]}, or the container "
+            f"published for this engine.")
 
 
 class SynonymRegistry:

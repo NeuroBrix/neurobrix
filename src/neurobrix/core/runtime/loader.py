@@ -90,19 +90,9 @@ class NBXRuntimeLoader:
                     f"  FIX: upgrade neurobrix, or use the full-precision "
                     f"build published next to this variant.")
 
-        # 1c. The neurotaxe's version (NeuroTax 5.0, 2026-09-26): the keys are the parser's names,
-        # and a container named by another version holds keys the engine's readers no longer
-        # match — the MoE fusion would find no expert and run unfused, silently. Refused here,
-        # by name, before any weight I/O.
-        from neurobrix.nbx.neurotax import NEUROTAX_VERSION
-        ntx = core_data["manifest"].get("neurotax_version")
-        if ntx != NEUROTAX_VERSION:
-            raise RuntimeError(
-                f"NEUROTAX VERSION: this container's tensor keys were written under NeuroTax "
-                f"{ntx!r}; this engine reads NeuroTax {NEUROTAX_VERSION!r}.\n"
-                f"  Container: {cache_path}\n"
-                f"  FIX: rename its keys in place with the container builder (outputs "
-                f"byte-identical) or install the container published for this engine.")
+        # 1c. The neurotaxe's version: same major, minor at most the engine's; refused by name else.
+        from neurobrix.nbx.neurotax import refuse_other_neurotax
+        refuse_other_neurotax(core_data["manifest"].get("neurotax_version"), str(cache_path))
 
         # 1d. The parser's own law (the owner, 2026-10-04 02:05): every weight key is a fixed point of
         # the engine's parser. The version string cannot tell a container of the partial 5.0

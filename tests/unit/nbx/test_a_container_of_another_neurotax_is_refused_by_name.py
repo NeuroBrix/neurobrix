@@ -1,13 +1,14 @@
-"""A container whose keys were written under another NeuroTax version is refused at load, by name.
+"""The engine loads a container of its NeuroTax major and a minor at most its own; any other is refused by name.
 
-NeuroTax 5.0 renamed two canonical tokens (the SwiGLU gate `gate` -> `ffn_gate`, diffusers'
-`attn1` `self_attn` -> `attn`) so the parser is a fixed point on its own output. The engine's
-readers follow the parser — the MoE fusion finds experts by the parser's tokens — so a
-container still named under 0.1 would load, find no expert, and run unfused without a word.
-The loader refuses it before any weight I/O and names the version and the fix.
+The minor rises when the vocabulary is extended (names added, none renamed or removed), so a
+container of an older minor holds only names this engine knows and loads unchanged. A higher minor
+holds names this engine does not know: refused, the message names both versions and says to update
+neurobrix. Another major renamed or removed names: refused, both versions named. A manifest with no
+version, or none readable, is refused, never guessed. Versions compare as integers: 5.10 is newer
+than 5.9.
 
-What these would do without the door: the two refusal tests fail (the load proceeds past the
-manifest and dies later, or not at all).
+What these would do with the door of equality: a lower minor is refused; the higher-minor message
+has no update instruction.
 """
 from __future__ import annotations
 
@@ -16,7 +17,9 @@ import json
 import pytest
 
 from neurobrix.core.runtime.loader import NBXRuntimeLoader
-from neurobrix.nbx.neurotax import NEUROTAX_VERSION
+from neurobrix.nbx.neurotax import NEUROTAX_VERSION, _neurotax_major_minor
+
+MAJOR, MINOR = _neurotax_major_minor(NEUROTAX_VERSION)
 
 
 def _container(tmp_path, manifest):
@@ -30,19 +33,52 @@ def _container(tmp_path, manifest):
     return d
 
 
-@pytest.mark.parametrize("manifest", [{"neurotax_version": "0.1"}, {}])
-def test_another_version_is_refused_by_name(tmp_path, manifest):
-    with pytest.raises(RuntimeError, match="NEUROTAX VERSION") as e:
-        NBXRuntimeLoader().load(str(_container(tmp_path, {"model_name": "m", **manifest})))
-    assert repr(manifest.get("neurotax_version")) in str(e.value)
-    assert NEUROTAX_VERSION in str(e.value) and "FIX: rename its keys in place with the container builder" in str(e.value)
+def _load(tmp_path, manifest):
+    NBXRuntimeLoader().load(str(_container(tmp_path, {"model_name": "m", **manifest})))
 
 
-def test_the_engines_version_passes_the_door(tmp_path):
+def _passes_the_door(tmp_path, version):
     try:
-        NBXRuntimeLoader().load(str(_container(
-            tmp_path, {"model_name": "m", "neurotax_version": NEUROTAX_VERSION})))
+        _load(tmp_path, {"neurotax_version": version})
     except RuntimeError as e:
         assert "NEUROTAX VERSION" not in str(e)
     except Exception:
         pass  # the empty fixture fails further on; only the door is under test
+
+
+@pytest.mark.parametrize("manifest", [{"neurotax_version": "0.1"}, {}, {"neurotax_version": 5.0},
+                                      {"neurotax_version": "5"}])
+def test_another_version_is_refused_by_name(tmp_path, manifest):
+    with pytest.raises(RuntimeError, match="NEUROTAX VERSION") as e:
+        _load(tmp_path, manifest)
+    assert NEUROTAX_VERSION in str(e.value) and "FIX:" in str(e.value)
+
+
+def test_the_engines_version_passes_the_door(tmp_path):
+    _passes_the_door(tmp_path, NEUROTAX_VERSION)
+
+
+def test_a_lower_minor_of_the_same_major_passes_the_door(tmp_path):
+    assert MINOR >= 1
+    _passes_the_door(tmp_path, f"{MAJOR}.{MINOR - 1}")
+    _passes_the_door(tmp_path / "zero", f"{MAJOR}.0")
+
+
+@pytest.mark.parametrize("minor", [MINOR + 1, MINOR + 10])
+def test_a_higher_minor_is_refused_with_the_update_instruction(tmp_path, minor):
+    newer = f"{MAJOR}.{minor}"
+    with pytest.raises(RuntimeError, match="NEUROTAX VERSION") as e:
+        _load(tmp_path, {"neurotax_version": newer})
+    msg = str(e.value)
+    assert f"NeuroTax {newer}," in msg and f"NeuroTax {NEUROTAX_VERSION}:" in msg
+    assert "update neurobrix" in msg
+
+
+@pytest.mark.parametrize("major", [MAJOR - 1, MAJOR + 1])
+def test_another_major_is_refused_naming_both_versions(tmp_path, major):
+    other = f"{major}.{MINOR}"
+    with pytest.raises(RuntimeError, match="NEUROTAX VERSION") as e:
+        _load(tmp_path, {"neurotax_version": other})
+    msg = str(e.value)
+    assert f"NeuroTax {other};" in msg and f"NeuroTax {NEUROTAX_VERSION}," in msg
+    assert "another major" in msg
