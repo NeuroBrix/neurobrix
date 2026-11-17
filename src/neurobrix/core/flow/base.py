@@ -337,8 +337,8 @@ def _vlm_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool,
         return set()
     out = set()
     # The modality towers (`TOWER_INPUTS`): a single request whose inputs are known and carry none of a tower's never
-    # loads it. Devstral-Small-2-24B, a text request on its vlm container: the vision tower's activations were walked
-    # at a height the request never named and the plan refused (MissingRuntimeValue s1, 2026-11-17). `inputs` None:
+    # loads it. A text request on a vlm container: the vision tower's activations were walked at a height the request
+    # never named and the plan refused (MissingRuntimeValue s1, 2026-11-17). `inputs` None:
     # not known, every tower is priced. A component the decode also reads (the language model, the head) stays.
     if inputs is not None:
         vlm = flow.get("vlm") or {}
