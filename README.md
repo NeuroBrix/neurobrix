@@ -164,6 +164,21 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install "neurobrix[pytorch]"
 ```
 
+**On the CPU of a machine that has an NVIDIA GPU.** Hide the GPU from NeuroBrix with `CUDA_VISIBLE_DEVICES=-1`:
+the machine is then detected without a GPU and every model is planned on its CPU (the PyTorch engine, with any
+PyTorch build). The variable must be set in the shell that starts `neurobrix run` or `neurobrix serve`.
+
+```bash
+CUDA_VISIBLE_DEVICES=-1 neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0    # Linux, macOS
+```
+
+```bat
+set CUDA_VISIBLE_DEVICES=-1
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
+```
+
+In PowerShell: `$env:CUDA_VISIBLE_DEVICES = "-1"`, then the same command. Windows reads the variable from 0.6.17.
+
 `neurobrix doctor` checks that the `neurobrix` command is on your PATH, whether the Triton
 engine can run (nbxtensor, Triton and a GPU runtime), which PyTorch build is installed if any,
 and whether it can see the GPUs your driver reports. It exits non-zero when neither engine can
