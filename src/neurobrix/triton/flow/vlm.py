@@ -321,6 +321,22 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(vision_name)
                 release_flow_memory(self.ctx.primary_device)
+            t, h, wgrid = _read_small_ints(vis_grid, 3)
+            expected = t * (h // merge) * (wgrid // merge)
+            if n_modal != expected:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: vision output has {n_modal} tokens but "
+                    f"grid {t}x{h}x{wgrid} / merge {merge} expects {expected}.")
+            if has_image:
+                span_token_id = image_token_id
+                span_content_type = "image"
+            else:
+                span_token_id = vlm.get("video_token_id")
+                if span_token_id is None:
+                    raise RuntimeError(
+                        "ZERO FALLBACK: topology.flow.vlm carries no "
+                        "video_token_id — video understanding needs it.")
+                span_content_type = "video"
         else:
             # ── Step 2 (audio): mel features → audio tower forward ──
             # R30 mirror of the compiled audio branch: the mel DSP is the
@@ -394,25 +410,6 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(audio_name)
                 release_flow_memory(self.ctx.primary_device)
-
-        if has_visual:
-            t, h, wgrid = _read_small_ints(vis_grid, 3)
-            expected = t * (h // merge) * (wgrid // merge)
-            if n_modal != expected:
-                raise RuntimeError(
-                    f"ZERO FALLBACK: vision output has {n_modal} tokens but "
-                    f"grid {t}x{h}x{wgrid} / merge {merge} expects {expected}.")
-            if has_image:
-                span_token_id = image_token_id
-                span_content_type = "image"
-            else:
-                span_token_id = vlm.get("video_token_id")
-                if span_token_id is None:
-                    raise RuntimeError(
-                        "ZERO FALLBACK: topology.flow.vlm carries no "
-                        "video_token_id — video understanding needs it.")
-                span_content_type = "video"
-        else:
             span_token_id = vlm.get("audio_token_id")
             if span_token_id is None:
                 raise RuntimeError(
