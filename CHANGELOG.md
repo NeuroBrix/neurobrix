@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `patch_positional_embedding` and its patch merger `patch_merger.merging_layer` gets standard names.** These five
   spellings name roles the vocabulary already had (patch embedding, pre-norm, position embedding, a patch merger's
   down-sampling and its linear); no name an existing container carries changes.
+- **A vision-language container answers a text request with no image.** The language model reads the chat-formatted
+  prompt alone, as the vendor's own processor does; before, a text request was refused unless it asked for speech.
+  The positions it is handed take the form its graph declares (one index per token, or the three planes of
+  multimodal rotary positions), so a model whose language model takes one index per token is no longer handed three.
 
 ## [0.6.16] - 2026-11-15
 

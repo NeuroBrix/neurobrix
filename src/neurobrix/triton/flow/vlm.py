@@ -239,16 +239,9 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         # the generative-speech contract needs NO modality INPUT; the
         # LM runs the empty-stub deepstack form and the speech leg
         # consumes the generated ids + hidden tap as usual.
-        text_only = (
-            not has_visual and audio_path is None
-            and requests_speech(resolved.get("global.mode"))
-            and bool(self.ctx.pkg.topology.get("flow", {}).get("speech")))
-        if not has_visual and audio_path is None and not text_only:
-            raise RuntimeError(
-                "ZERO FALLBACK: vlm flow requires a modality input — "
-                "provide --input-image, --input-video or --audio "
-                "(text-only requests are accepted only with --mode "
-                "audio on a build declaring topology.flow.speech).")
+        # The same form serves a plain text request (the LM alone over
+        # the chat-templated prompt): shared_steps.VLMSteps.
+        text_only = self._text_only_request(has_visual, audio_path)
         if not has_visual and not text_only and not audio_name:
             raise RuntimeError(
                 "ZERO FALLBACK: this build declares no audio_component — "
@@ -522,7 +515,14 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             segments.append(("text", n_modal, None))
         if suffix_ids:
             segments.append(("text", len(suffix_ids), None))
-        base_positions_np, next_pos = self._build_mrope_positions_np(segments)
+        # Positions in the form the LM graph declares — R30 mirror of the
+        # compiled flow (rank 2: one index per token; rank 3: M-RoPE planes).
+        _pos_rank = self._lm_position_rank(_lm_dag_tensors)
+        if _pos_rank == 3:
+            base_positions_np, next_pos = self._build_mrope_positions_np(segments)
+        else:
+            next_pos = int(context_embeds.shape[1])
+            base_positions_np = np.arange(next_pos, dtype=np.int64).reshape(1, -1)
 
         logits_source = ("lm_head"
                          if (head_name and head_name in self.ctx.executors)
@@ -551,8 +551,9 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             n_gen = len(generated_ids)
             if n_gen:
                 gen = np.arange(next_pos, next_pos + n_gen, dtype=np.int64)
-                gen = np.broadcast_to(gen.reshape(1, 1, -1), (3, 1, n_gen))
-                pos_np = np.concatenate([base_positions_np, gen], axis=2)
+                gen = (np.broadcast_to(gen.reshape(1, 1, -1), (3, 1, n_gen)) if _pos_rank == 3
+                       else gen.reshape(1, -1))
+                pos_np = np.concatenate([base_positions_np, gen], axis=-1)
             else:
                 pos_np = base_positions_np
             # A cached step hands the LM the one new token at its absolute position; the prefill

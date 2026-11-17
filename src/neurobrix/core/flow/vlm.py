@@ -183,16 +183,9 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         # same gap for deepstack (2026-08-08 finding: text-only
         # prompt→speech had NO path — vlm refused the missing modality
         # while the AR flow has no speech leg).
-        text_only = (
-            not has_visual and audio_path is None
-            and requests_speech(resolved.get("global.mode"))
-            and bool(self.ctx.pkg.topology.get("flow", {}).get("speech")))
-        if not has_visual and audio_path is None and not text_only:
-            raise RuntimeError(
-                "ZERO FALLBACK: vlm flow requires a modality input — "
-                "provide --input-image, --input-video or --audio "
-                "(text-only requests are accepted only with --mode "
-                "audio on a build declaring topology.flow.speech).")
+        # The same form serves a plain text request (the LM alone over
+        # the chat-templated prompt): shared_steps.VLMSteps.
+        text_only = self._text_only_request(has_visual, audio_path)
         if not has_visual and not text_only and not audio_name:
             raise RuntimeError(
                 "ZERO FALLBACK: this build declares no audio_component — "
@@ -473,7 +466,14 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             segments.append(("text", n_modal, None))
         if suffix_ids:
             segments.append(("text", len(suffix_ids), None))
-        base_positions, next_pos = self._build_mrope_positions(segments, device)
+        # The positions take the form the LM graph declares (rank 2: one
+        # index per token over the whole context; rank 3: the M-RoPE planes).
+        _pos_rank = self._lm_position_rank(_dag_tensors)
+        if _pos_rank == 3:
+            base_positions, next_pos = self._build_mrope_positions(segments, device)
+        else:
+            next_pos = int(context_embeds.shape[1])
+            base_positions = torch.arange(next_pos, dtype=torch.long, device=device).view(1, -1)
 
         logits_source = "lm_head" if (head_name and head_name in self.ctx.executors) \
             else "embed_weight_tied"
@@ -498,9 +498,10 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         for step in range(max_tokens):
             n_gen = len(generated_ids)
             if n_gen:
-                gen_pos = torch.arange(next_pos, next_pos + n_gen, dtype=torch.long,
-                                       device=device).view(1, 1, -1).expand(3, 1, -1)
-                position_ids = torch.cat([base_positions, gen_pos], dim=2)
+                gen_pos = torch.arange(next_pos, next_pos + n_gen, dtype=torch.long, device=device)
+                gen_pos = (gen_pos.view(1, 1, -1).expand(3, 1, -1) if _pos_rank == 3
+                           else gen_pos.view(1, -1))
+                position_ids = torch.cat([base_positions, gen_pos], dim=-1)
             else:
                 position_ids = base_positions
 
@@ -562,7 +563,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                            f"{float(context_embeds.float().norm()):.4f} "
                            f"hidden_norm={float(output.float().norm()):.4f} "
                            f"ds_norms={_ds_norms} "
-                           f"pos_head={position_ids[:, 0, :3].tolist()} "
+                           f"pos_head={position_ids[..., :3].tolist()} "
                            f"top5_ids={_top.indices.tolist()} "
                            f"top5_logits={[round(float(x), 3) for x in _top.values]}")
             next_token = sample_next_id(sampler, logits, generated_ids)

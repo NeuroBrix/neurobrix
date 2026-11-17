@@ -17,6 +17,29 @@ class VLMSteps:
     """The steps the compiled `VLMEngine` and the Triton `TritonVLMEngine` ran alike (core/flow/vlm.py, triton/flow/vlm.py)."""
 
     @staticmethod
+    def _lm_position_rank(lm_tensors: Dict[str, Any]) -> int:
+        """The language model's position contract, read from its graph's declared `position_ids` input: rank 2
+        `[B, S]` is one index per token (rotary over the sequence), rank 3 `[3, B, S]` the three M-RoPE planes. The
+        flow builds the form the graph declares, never the one a model family is known for; a graph that declares
+        neither is refused by name."""
+        decl = lm_tensors.get("input::position_ids")
+        rank = len((decl or {}).get("shape") or [])
+        if rank not in (2, 3):
+            raise RuntimeError(
+                "ZERO FALLBACK: the vlm flow feeds the language model its positions as the graph declares them — "
+                "rank 2 [B, S] or rank 3 [3, B, S]; this LM graph declares "
+                + ("no input::position_ids" if decl is None else f"position_ids of rank {rank}") + ".")
+        return rank
+
+    @staticmethod
+    def _text_only_request(has_visual: bool, audio_path: Any) -> bool:
+        """A request with no image, video or audio is the text-only form: no modality tower runs and the language
+        model reads the chat-templated prompt alone (the vendor's own processor does the same with text and no
+        image). Whether its output is text or speech is the request mode's business, checked where the speech leg
+        runs."""
+        return not has_visual and audio_path is None
+
+    @staticmethod
     def _mrope_segments(seq_len: int, img_span: Tuple[int, int],
                         aud_span: Tuple[int, int],
                         vis_grid_llm: Optional[Tuple[int, int, int]]):

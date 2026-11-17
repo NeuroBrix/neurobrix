@@ -38,8 +38,13 @@ execution:
   compiled_mode: true
 
 inputs:
-  required: ["--prompt", "--input-image"]
+  # The prompt alone is a request: with no image, video or audio the language model reads the chat-formatted
+  # prompt alone (the flow's text-only form, core/flow/shared_steps.VLMSteps._text_only_request).
+  required: ["--prompt"]
   optional:
+    - flag: "--input-image"
+    - flag: "--input-video"
+    - flag: "--audio"
     - flag: "--system"
     - flag: "--chat"
     - flag: "--no-chat"
