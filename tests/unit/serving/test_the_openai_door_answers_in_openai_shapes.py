@@ -408,9 +408,14 @@ def test_a_vlm_reads_one_user_message_and_its_image_part_spooled_then_removed(ma
     assert body["choices"][0]["message"]["content"] == "Hello world."
     assert ("image_path", b"\x89PNG pixels") in engine.calls
     assert not any(srv._door.spool_root.iterdir()), "the request's spool was left behind"
+    # The vlm family requires the prompt alone (config/families/vlm.yml inputs.required): a text message is answered,
+    # no image handed to the engine.
+    calls_before = len(engine.calls)
     status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": [
         {"role": "user", "content": "no image"}]})
-    _assert_error(status, body, 400, param="messages")
+    assert status == 200, body
+    assert body["choices"][0]["message"]["content"] == "Hello world."
+    assert not any(c[0] == "image_path" for c in engine.calls[calls_before:]), "a text message was handed an image"
 
 
 def test_an_image_generation_answers_base64_png_and_refuses_urls(make):
