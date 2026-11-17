@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ============================================================================
 
 from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
-from neurobrix.core.prism import launch_lines
+from neurobrix.core.prism import launch_lines, other_card_models
 import logging
 from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
@@ -2581,7 +2581,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     # measured above and not yet written (the stable's install test, 2026-11-05)
     added.update(P.complete_runtime_card_facts(devices, P.card_facts_in_a_child))
     if added:
-        _write_first(path, data, devices, first)
+        _write_first(path, data, devices, first, measured_of, added, q)
     if engine is not None:
         # the per-piece reload rate a streamed plan is priced with, per stored dtype of the requested model (of the
         # cache without one) that neither block states (the supervisor 2026-11-03 22:50): until now only a streamed run
@@ -2613,15 +2613,15 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         added["expert_copy"] = first["expert_copy"]
     if not added:
         return {}
-    _write_first(path, data, devices, first)
+    _write_first(path, data, devices, first, measured_of, added, q)
     _log.debug(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
 
 
-def _write_first(path, data, devices, first) -> None:
-    """The first launch's device facts onto every card of card 0's model (they share what card 0 measured), written."""
-    for d in (d for d in devices if d.get("model") == devices[0].get("model")):
-        d["measured"] = dict(first)
+def _write_first(path, data, devices, first, measured_of, added, q) -> None:
+    """The first launch's device facts onto every card of card 0's model (they share what card 0 measured), and each
+    other model's own facts onto its cards (`other_card_models`: a second write finds their chunk in the blocks and measures nothing), written."""
+    other_card_models.place(devices, first, other_card_models.measured_of_others(devices, measured_of, added, q))
     _write_profile_atomically(path, data)
 
 

@@ -433,6 +433,7 @@ class GraphExecutor:
         # Weight loading params for lazy loading (set by ExecutorFactory)
         self._weight_loading_params: Optional[Dict[str, Any]] = None
         self._weights_loaded: bool = False
+        self._fp32_constants_bound: bool = False   # the Triton constants bound in fp32 (`_bind_fp32_constants`)
 
         # Persistent mode: when True, cleanup() and unload_weights() preserve weights in VRAM.
         # Set by serving layer for warm-compatible strategies (load once, serve many).
@@ -2495,7 +2496,7 @@ class GraphExecutor:
         only: the compiled engine's DtypeEngine keeps its own contract."""
         if self.mode not in ("triton", "triton_sequential") or not self._weights or not self._dag:
             return
-        if getattr(self, "_fp32_constants_bound", False):
+        if self._fp32_constants_bound:
             return
         from neurobrix.triton.dtype import fp32_constant_names
         from nbxtensor.tensor import NBXTensor
@@ -5968,9 +5969,7 @@ class GraphExecutor:
         # an unload: the last run's tensors were cleared above, and every reader checks None.
         self._ctx = None
         self._resolver = None
-        self._weights_loaded = False
-        self._weights_bound = False
-        self._fp32_constants_bound = False
+        self._weights_loaded = self._weights_bound = self._fp32_constants_bound = False
 
     def cleanup(self) -> None:
         """
