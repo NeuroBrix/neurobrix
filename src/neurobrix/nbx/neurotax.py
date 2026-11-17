@@ -33,8 +33,9 @@ from dataclasses import dataclass
 #: (`refuse_other_neurotax`). A key already emitted never moves inside one major, so every older
 #: container of that major stays a fixed point of the parser and is never rewritten.
 #: 5.0: the parser is a fixed point on its own output, over the whole catalogue's vocabulary.
-#: 5.1: adds the linear-attention block's names by role (lin_attn, decay_log, step_bias,
-#: short_conv, qkv, out_gate_proj, decay_gate_proj, beta_proj).
+#: 5.1: names the linear-attention block by role: the block and its short convolution take the
+#: 5.0 roles token_mixer and depthwise_conv; adds decay_log, step_bias, out_gate_proj,
+#: decay_gate_proj, beta_proj.
 NEUROTAX_VERSION = "5.1"
 
 
@@ -298,13 +299,13 @@ class SynonymRegistry:
         # LINEAR ATTENTION (gated delta rule)
         # ===========================================
         # The recurrent token mixer that replaces softmax attention in a linear-attention block,
-        # named by ROLE. Its state decays by exp(-exp(A_log) * softplus(a + dt_bias)) and is
+        # named by ROLE: the 5.0 `token_mixer` (the sublayer that mixes the sequence's tokens). Its state decays by exp(-exp(A_log) * softplus(a + dt_bias)) and is
         # written with strength sigmoid(b); a short causal depthwise conv runs over the fused qkv;
         # z gates the normed output.
-        "linear_attn": "lin_attn",
+        "linear_attn": "token_mixer",
         "A_log": "decay_log",                # log of the per-head decay rate
         "dt_bias": "step_bias",              # time-step bias added before the softplus
-        "conv1d": "short_conv",              # short causal (depthwise) convolution over q, k, v
+        "conv1d": "depthwise_conv",          # short causal depthwise convolution over q, k, v (groups = channels)
         "in_proj_qkv": "qkv",                # fused query-key-value input projection
         "in_proj_z": "out_gate_proj",        # z: the output gate's projection
         "in_proj_a": "decay_gate_proj",      # a: the decay gate's projection
