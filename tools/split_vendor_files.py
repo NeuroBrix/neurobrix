@@ -161,7 +161,7 @@ def main(argv=None) -> int:
             (dst / f.name).write_text(lib)                           # the note is already at its head
             f.write_text(eng)
             continue
-        note = (f"# The library's half of {a.vendor}/{f.name}: the keys nbxtensor reads (nbxtensor/docs/device_keys.txt),\n"
+        note = (f"# The library's half of {a.vendor}/{f.name}: the keys nbxtensor reads (its docs/device_keys.txt),\n"
                 f"# moved with their sources by tools/split_vendor_files.py. NeuroBrix's half stays in\n"
                 f"# src/neurobrix/config/vendors/{a.vendor}/{f.name}; the engine reads the two merged.\n\n")
         (dst / f.name).write_text(note + lib)

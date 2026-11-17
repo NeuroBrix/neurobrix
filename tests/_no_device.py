@@ -1,6 +1,6 @@
 """Whether this host has no device to give a test, and the one conversion of a failure into a skip that says so.
 
-THE ONE PLACE the suites learn it: `nbxtensor/tests/conftest.py` and the engine's `tests/conftest.py` both register the
+THE ONE PLACE the suites learn it: the library's test conftest and the engine's `tests/conftest.py` both register the
 hooks below. A card test does not ask "is a card visible" its own way: on a host whose GPU runtime library is installed
 without its driver, the runtime refuses to count its devices (CUDA error 35) and the library raises `DeviceQueryError`
 by name. A test that asked only "how many cards" failed there instead of skipping: 169 cells of the CPU suite
