@@ -31,6 +31,20 @@ out without slowing any command.
   `patch_positional_embedding` and its patch merger `patch_merger.merging_layer` gets standard names.** These five
   spellings name roles the vocabulary already had (patch embedding, pre-norm, position embedding, a patch merger's
   down-sampling and its linear); no name an existing container carries changes.
+- **An NVIDIA T4, RTX 20xx, L4, L40S, RTX 40xx or B200 plans on its own hardware profile (GitHub issue 6).** On 0.6.16
+  a T4 or RTX 20xx (compute capability 7.5), an L4, L40S or RTX 40xx (8.9, the issue's RTX 4070) and a B200 (10.0)
+  were detected and then refused with "No hardware profile for nvidia/<architecture>". They now plan on the default
+  engine where PyTorch is installed, on three new profiles (`turing`, `ada`, `blackwell`) that hold the values NVIDIA
+  documents for each compute capability, each with its source. These profiles are documentation-sourced and
+  UNMEASURED: no kernel has run on these cards, no autotune key is certified for them, their speed is unknown. The
+  Triton engine (`--triton`) is refused by name on them: they hold no measured tuning values. On them the default
+  engine runs PyTorch's caching allocator with expandable segments, as on every other NVIDIA card.
+  - An A10 or RTX 30xx (8.6) is unchanged: a hardware profile given with `--hardware` that names the card
+    `architecture: ampere` plans on the Ampere (A100) profile, as on 0.6.16; detected with no `--hardware`, it is
+    still refused with "No hardware profile for nvidia/ampere_consumer".
+  - On Windows, `CUDA_VISIBLE_DEVICES` is read when NeuroBrix detects the GPUs, as on Linux: `-1` hides every GPU.
+  - The README says how to run on the CPU of a machine that has an NVIDIA GPU (Linux, macOS, cmd.exe, PowerShell).
+  - Kepler, Maxwell, Pascal and the capabilities of major 11 and 12 are still refused by name.
 
 ### Changed
 
