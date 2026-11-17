@@ -1169,7 +1169,8 @@ class PrismSolver:
         from neurobrix.core.flow.base import unloaded_by_request
         return unloaded_by_request(self._flow_topology(container),
                                    getattr(getattr(self, "_input_config", None), "mode", None),
-                                   served=bool(getattr(self, "_serve_requested", False)))
+                                   served=bool(getattr(self, "_serve_requested", False)),
+                                   inputs=getattr(getattr(self, "_input_config", None), "inputs", None))
 
     def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None,
                     holding: Optional[str] = None) -> int:
@@ -2217,7 +2218,7 @@ class PrismSolver:
         carried, best, seen = 0, 0, set()
         for ph in phases:
             best = max(best, loose + sum(costs.get(n, 0) for n in ph) + carried)
-            for n in ph - seen:
+            for n in ph - seen - unloaded:       # a component that never runs hands nothing on
                 carried += self._component_output_bytes(n)
             seen |= ph
         return best / (1024 * 1024)
@@ -3639,8 +3640,10 @@ class PrismSolver:
 
         dtype_bytes = _itemsize.itemsize(target_dtype_str)
 
+        # a component the request never loads (`_unloaded_by_request`) runs no op to tile
+        unloaded = self._unloaded_by_request(container) if container is not None else set()
         for comp in components:
-            if comp.graph is None:
+            if comp.graph is None or comp.name in unloaded:
                 continue
             alloc = allocations.get(comp.name)
             if alloc is None:
@@ -4340,6 +4343,9 @@ class PrismSolver:
         # {component: ExpertTopology} of the routed components sized below (`expert_topology.py`).
         self._expert_topology = {}
         self._executed_graphs = {}
+        # A component the request never loads (`_unloaded_by_request`) runs no activation: its walk would bind symbols
+        # the request does not state (a VLM's vision tower on a text request: no height) and price nothing that runs.
+        unloaded = self._unloaded_by_request(container) if container is not None else set()
         for comp in components:
             source_dtype = comp.get_dominant_dtype()
             # Per-component runtime dtype (the dtype this component ACTUALLY
@@ -4420,7 +4426,7 @@ class PrismSolver:
             attn_per_block = 0
             attn_dominates = False
 
-            if comp.graph is not None:
+            if comp.graph is not None and comp.name not in unloaded:
                 try:
                     profiler = ActivationProfiler(comp.graph)
                     dtype_bytes = _itemsize.itemsize(comp_dtype_str)
@@ -4643,8 +4649,13 @@ class PrismSolver:
             # renders 320x224 correctly from a 112x80 build), so the estimate is
             # scaled by the pixel ratio the two sizes imply. Derived from the
             # graph's own declared trace_value and the request; no per-model data.
-            activation_bytes = self._scale_activations_to_request(
-                comp, activation_bytes, input_config)
+            if comp.name in unloaded:
+                # nothing runs: no activation, and that zero is exact, not a figure nobody walked — no `overhead_factor`
+                # on its weights (`_overhead_bytes`), no size of the request to follow
+                activation_bytes, activation_profiled = 0, True
+            else:
+                activation_bytes = self._scale_activations_to_request(
+                    comp, activation_bytes, input_config)
             if activation_profiled and _kept is not None and _kept.live_before_op:
                 # What is ALREADY live as each op begins, at its largest, on the profile this figure was kept
                 # from (tiling-aware where it was), scaled as the figure is: an op-level tile cuts an op's own
@@ -8047,7 +8058,11 @@ class PrismSolver:
         except TE.MissingFact as exc:
             return {name: f"not estimated: {exc}" for _s, name, _a, _d in ranked}
         works, runs, prompt = {}, {}, {}
+        # a component the request never loads (`_unloaded_by_request`) does no work in it
+        unloaded = self._unloaded_by_request(container)
         for comp in getattr(self, "_neural_components", []) or []:
+            if comp.name in unloaded:
+                continue
             prof = ActivationProfiler(comp.graph)
             kind, n = uses.get(comp.name, ("once", 1))
             w = component_work(prof, prof.build_symbol_map(input_config))

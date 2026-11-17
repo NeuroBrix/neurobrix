@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt alone, as the vendor's own processor does; before, a text request was refused unless it asked for speech.
   The positions it is handed take the form its graph declares (one index per token, or the three planes of
   multimodal rotary positions), so a model whose language model takes one index per token is no longer handed three.
+- **A text request to a vision-language container is planned without its vision or audio encoder.** The memory plan
+  counts an encoder only for a request that carries its input (an image or a video, an audio file): a text request was
+  refused for an image size it never states, and now takes the placement its language model alone needs. A request
+  that generates an image is planned a little smaller for the same reason: the components it never loads count no
+  working memory.
 
 ## [0.6.16] - 2026-11-15
 

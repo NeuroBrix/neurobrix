@@ -313,16 +313,40 @@ def requests_speech(mode: Optional[str]) -> bool:
     return str(mode or "") == SPEECH_MODE
 
 
-def _vlm_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool) -> set:
+#: The request input each modality tower of a VLM flow reads (the `flow.vlm` keys `resident_together` names): a
+#: request that carries none of a tower's inputs never runs it, in either engine's VLM handler (core/flow/vlm.py and
+#: triton/flow/vlm.py load a tower on demand, under `has_visual` / `audio_path`; a request with neither is the
+#: text-only form, `shared_steps.VLMSteps._text_only_request`).
+TOWER_INPUTS = {
+    "vision_component": ("image", "video"),
+    "vision_projection_component": ("image", "video"),
+    "audio_component": ("audio",),
+    "audio_projection_component": ("audio",),
+}
+
+
+def _vlm_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool,
+                  inputs: Optional[frozenset] = None) -> set:
     # The speech components (`flow.speech.components`) are loaded by the speech legs alone
     # (core/flow/speech.py, speech_cfm.py and their triton mirrors), and both engines' VLM handlers
     # run a leg only on a request that `requests_speech`; weights load on demand, when a component is
     # run (`ensure_weights_fn`). A single request of another mode never loads them. A SERVED session
     # may take a speech request later, and a request whose mode is not known may be one: both hold
     # the leg (the bound of `_vlm_phases`).
-    if served or mode is None:
+    if served:
         return set()
     out = set()
+    # The modality towers (`TOWER_INPUTS`): a single request whose inputs are known and carry none of a tower's never
+    # loads it. Devstral-Small-2-24B, a text request on its vlm container: the vision tower's activations were walked
+    # at a height the request never named and the plan refused (MissingRuntimeValue s1, 2026-11-17). `inputs` None:
+    # not known, every tower is priced. A component the decode also reads (the language model, the head) stays.
+    if inputs is not None:
+        vlm = flow.get("vlm") or {}
+        decode = {vlm.get("lm_component"), vlm.get("head_component")}
+        out |= {vlm[k] for k, needs in TOWER_INPUTS.items()
+                if isinstance(vlm.get(k), str) and vlm[k] not in decode and not set(needs) & set(inputs)}
+    if mode is None:
+        return out
     if not requests_speech(mode):
         out |= {c for c in ((flow.get("speech") or {}).get("components") or {}).values() if isinstance(c, str)}
     # The generative-image leg (`flow.image_gen`, P-OMNI-GEN) runs on `--mode image` alone, in both engines' VLM
@@ -356,7 +380,8 @@ def _named_outside_image_gen(flow: Dict[str, Any]) -> set:
     return names
 
 
-def _autoregressive_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool) -> set:
+def _autoregressive_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool,
+                            inputs: Optional[frozenset] = None) -> set:
     # An IMAGE decode (`generation.type: autoregressive_image`): both engines' handlers load, on demand, exactly the
     # components its `generation` block names — the language model (`_ensure_weights_loaded(lm_name)`), the head, the
     # embedding and the aligner (`_create_strategy`), the decoder (`process_output`) — in core/flow/autoregressive.py
@@ -382,12 +407,14 @@ UNLOADED_BY_REQUEST = {
 }
 
 
-def unloaded_by_request(topology: Dict[str, Any], mode: Optional[str] = None, served: bool = False) -> set:
-    """The components a request of output `mode` never loads (`UNLOADED_BY_REQUEST`); empty when
-    its flow type declares none, when the mode is not known, or for a served session."""
+def unloaded_by_request(topology: Dict[str, Any], mode: Optional[str] = None, served: bool = False,
+                        inputs: Optional[frozenset] = None) -> set:
+    """The components a request of output `mode` carrying the input modalities `inputs` ("image", "video",
+    "audio"; None: not known) never loads (`UNLOADED_BY_REQUEST`); empty when its flow type declares none, or for a
+    served session."""
     flow = (topology or {}).get("flow") or {}
     rule = UNLOADED_BY_REQUEST.get(flow.get("type"))
-    return set(rule(flow, mode, served)) if rule else set()
+    return set(rule(flow, mode, served, inputs)) if rule else set()
 
 
 #: flow type -> the sets of components its handlers hold loaded AT THE SAME TIME, from the topology's

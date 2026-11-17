@@ -409,6 +409,9 @@ def request_input_config(args, manifest: dict, family, cache_path):
         scoring=scoring_request(args),
         guidance_passes=guidance_passes,
         mode=resolve_mode(family, args),
+        # the input modalities the request carries (the CLI's --input-image, --input-video, --audio)
+        inputs=frozenset(m for m, flag in (("image", "input_image"), ("video", "input_video"), ("audio", "audio"))
+                         if getattr(args, flag, None)),
         dtype=dtype,
         vae_scale=vae_scale,
         num_frames=num_frames,

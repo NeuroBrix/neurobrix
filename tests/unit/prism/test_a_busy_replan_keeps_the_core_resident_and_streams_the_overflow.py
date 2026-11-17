@@ -37,16 +37,18 @@ def test_janus_triton_on_a_busy_mac_holds_its_language_model_and_streams_only_th
 
 
 def test_janus_triton_where_the_lazy_load_fits_runs_lazy_not_streamed(monkeypatch):
-    """At 16 732 MB free (the Mac with 677 MB taken, 2026-10-27) single_gpu lacks 122 MB, and the fastest plan that fits
+    """At 16 732 MB free (the Mac with 677 MB taken, 2026-10-27) single_gpu lacks 101 MB, and the fastest plan that fits
     is lazy_sequential, at single_gpu's estimate: no piece streamed where the whole fits loaded on demand (rule 7, the
     fastest plan that fits). The shortfall was 237 MB (the Mac's door, 2026-10-29 21:22) while the language model's
     prefill was priced at the cache's prompt margin; since the prompt is priced at its own length (2026-11-08, the gate's
-    Janus prompt is ~75 tokens) it is 122 MB — the strategy, which is what this cell guards, is unchanged."""
+    Janus prompt is ~75 tokens) it was 122 MB; since a component the request never loads is priced no activation
+    (2026-11-17: the understanding tower and its aligner, 22 MB, never run in an image decode) it is 101 MB — the strategy,
+    which is what this cell guards, is unchanged."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 16732, "the Mac with 677 MB taken by other applications")
     p, _ = _plan("Janus-Pro-7B", "triton")
     assert p.strategy == "lazy_sequential", (p.strategy, p.selection_reason[:300])
-    assert "lacks 122 MB" in p.selection_reason, p.selection_reason[:300]
+    assert "lacks 101 MB" in p.selection_reason, p.selection_reason[:300]
 
 
 def test_a_component_run_once_keeps_the_plain_cut(monkeypatch):

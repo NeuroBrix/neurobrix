@@ -98,6 +98,10 @@ class InputConfig:
     # the legs a flow runs (`core.flow.base.unloaded_by_request`: a VLM's speech components load only
     # for a speech request). None: not known — every leg the flow declares is priced.
     mode: Optional[str] = None
+    # The input modalities the request carries beside its prompt ("image", "video", "audio"; `run.request_input_config`
+    # reads them from the request), which decide the modality towers a flow runs (`core.flow.base.unloaded_by_request`:
+    # a VLM's vision tower loads only for a request with an image or a video). None: not known — every tower is priced.
+    inputs: Optional[frozenset] = None
 
     def positional_symbol_map(self) -> Dict[str, int]:
         """The POSITIONAL base, which GUESSES what each symbol id means.
