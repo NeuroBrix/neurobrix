@@ -14,7 +14,7 @@ def test_two_runs_at_once_ask_the_host_once_and_one_of_them_speaks(places):
     data = toy.artifact(padding=400_000)
     toy.install_model(places["NEUROBRIX_CACHE"], "toy", [toy.declaration(data)])
     hub = toy.Host({toy.FILE: data}, rate=200_000)
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(REPO / "src"), str(REPO / "nbxtensor" / "src")]),
+    env = dict(os.environ, PYTHONPATH=str(REPO / "src"),
                **env_of(places, hub.url, toy.dead_url()))
     argv = [sys.executable, "-m", "neurobrix", "processor", "fetch", toy.hub_name("toy")]
     try:

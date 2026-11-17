@@ -3,12 +3,12 @@
 How a version of either product is published. This file IS the release workflow: one step per line, who does it, in
 order. **The owner's GO is the gate of every tag and every publication** — no step below the gate is taken without it.
 
-Two products, one repository:
+Two products, each in its own repository:
 
 | product | changelog | tag | package | public repository |
 |---|---|---|---|---|
 | the engine (`neurobrix`) | `CHANGELOG.md` | `vX.Y.Z` | PyPI `neurobrix` | GitHub `NeuroBrix/neurobrix`, GitLab mirror |
-| the library (`nbxtensor`) | `nbxtensor/CHANGELOG.md` | `nbxtensor-vX.Y.Z` | PyPI `nbxtensor` | GitHub `NeuroBrix/nbxtensor` (the export of `nbxtensor/`) |
+| the library (`nbxtensor`) | `CHANGELOG.md` of the library's repository | `nbxtensor-vX.Y.Z` | PyPI `nbxtensor` | GitHub `NeuroBrix/nbxtensor` (its own repository) |
 
 Both changelogs follow [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning 2](https://semver.org/spec/v2.0.0.html).
@@ -42,7 +42,9 @@ Both changelogs follow [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.
 3. In the product's changelog, `[Unreleased]` becomes `[X.Y.Z] - YYYY-MM-DD` and a new empty `[Unreleased]` opens above
    it; the comparison links at the bottom gain the new version. X.Y.Z is the number main already carries (rule 0): the
    version field and the engine's dependency on the library (`nbxtensor==X.Y.Z` in `pyproject.toml`) are checked, not
-   changed. One commit, landed like any other. Right after the publication, one commit sets each published product's
+   changed. **The library is released first, from its own repository** (its own tag, wheels and PyPI upload, steps 1-10
+   there); only then does the engine's pin name that published release, and the engine's new user's path (step 4)
+   installs the library from it. The engine never builds, ships or imports a copy of the library. One commit, landed like any other. Right after the publication, one commit sets each published product's
    field (and the pin) to its next number. — the Dell.
 4. **Before the tag, the new user's path, on the BUILT wheels (never on PyPI), all green — or nothing is tagged:**
    (L) a clean Linux container on a free card: `pip install` of the built engine and library wheels, `neurobrix doctor`,

@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 @pytest.mark.parametrize("module", ["nbxtensor.memory.pages", "nbxtensor.memory.kv_session"])
 def test_the_bookkeeping_loads_no_triton_and_no_torch(module):
-    env = dict(os.environ, PYTHONNOUSERSITE="1", PYTHONPATH=f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}")
+    env = dict(os.environ, PYTHONNOUSERSITE="1", PYTHONPATH=f"{REPO / 'src'}")
     code = (f"import sys, json; import {module}; "
             "print(json.dumps(sorted(m for m in sys.modules if m.split('.')[0] in ('triton', 'torch'))))")
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)

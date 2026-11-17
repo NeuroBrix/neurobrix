@@ -35,7 +35,7 @@ print(json.dumps({"acceptances": str(registry._ACCEPTANCES_FILE), "replay_sizes"
 def test_every_directory_is_under_the_configured_home(tmp_path):
     home = tmp_path / "engine_home"
     home.mkdir()
-    env = child_env(PYTHONPATH=f"{REPO / 'src'}{os.pathsep}{REPO / 'nbxtensor' / 'src'}{os.pathsep}{REPO}",
+    env = child_env(PYTHONPATH=f"{REPO / 'src'}{os.pathsep}{REPO}",
                     PYTHONNOUSERSITE="1", CUDA_VISIBLE_DEVICES="", NEUROBRIX_HOME=str(home))
     env.pop("NEUROBRIX_REPLAY_CACHE", None)
     out = subprocess.run([sys.executable, "-c", _DRIVER], env=env, capture_output=True, text=True, timeout=300)

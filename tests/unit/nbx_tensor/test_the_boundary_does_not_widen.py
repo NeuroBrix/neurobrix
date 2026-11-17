@@ -10,6 +10,7 @@ nbx_tensor.py made this RED; removed, green.
 """
 from __future__ import annotations
 
+import importlib.util
 import ast
 import sys
 from pathlib import Path
@@ -17,7 +18,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-NBX_TENSOR = REPO / "nbxtensor/src/nbxtensor/tensor.py"
+NBX_TENSOR = Path(importlib.util.find_spec("nbxtensor").origin).parent / "tensor.py"
 
 # Every engine-or-torch import nbx_tensor.py carried on 2026-09-14, by the scope
 # that carries it. Each is a debt of the separation; none may be joined by another.

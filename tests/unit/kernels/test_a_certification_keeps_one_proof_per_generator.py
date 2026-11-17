@@ -262,7 +262,7 @@ def test_the_rename_tool_renames_every_proof_of_a_multi_proof_entry(tmp_path):
 
 def test_the_checkpointers_gate_commits_a_multi_proof_file_and_refuses_a_bad_further_proof(tmp_path, monkeypatch):
     # the gate runs in the checkpointed repository's directory: the engine under test is named absolutely
-    monkeypatch.setenv("PYTHONPATH", f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}")
+    monkeypatch.setenv("PYTHONPATH", f"{REPO / 'src'}")
     sys.path.insert(0, str(REPO / "tools"))
     import certified_checkpoint as CP
 

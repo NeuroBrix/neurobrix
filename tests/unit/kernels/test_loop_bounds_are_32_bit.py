@@ -9,12 +9,13 @@ is not cast to int32 at its definition is refused.
 Injection: one `.to(tl.int32)` removed from cumsum's `block_offset` made this
 RED; restored, green.
 """
+import importlib.util
 import re
 from pathlib import Path
 
 #: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
 OPS_DIRS = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
-            Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+            Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops")
 
 
 def _ops_files(pattern="*.py"):

@@ -1,4 +1,4 @@
-"""The backend conformance suite (nbxtensor/docs/BACKENDS.md): what any nbxtensor backend must do, checked against a
+"""The backend conformance suite (the library's docs/BACKENDS.md): what any nbxtensor backend must do, checked against a
 numpy oracle — allocation and copies, one kernel of each family, views and strides, a README example. Parametrized by
 backend: the backend in force on this machine runs; the others are skipped with the reason. It imports the library
 only: a backend is proven without the application around it.
@@ -139,9 +139,9 @@ def test_views_read_through_their_strides(backend):
 
 # --- a README example --------------------------------------------------------------------------------------------
 def test_a_readme_example_runs_on_this_backend(backend):
-    import pathlib, re
-    readme = pathlib.Path(__file__).resolve().parents[2] / "nbxtensor" / "README.md"
-    blocks = re.findall(r"```python\n(.*?)```", readme.read_text(), re.S)
+    import importlib.metadata, re
+    readme = importlib.metadata.metadata("nbxtensor").get_payload()      # the installed release's README (its description)
+    blocks = re.findall(r"```python\n(.*?)```", readme, re.S)
     assert blocks
     for i, block in enumerate(blocks):
         exec(compile(block, f"README.md example {i + 1}", "exec"), {})

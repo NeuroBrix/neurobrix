@@ -21,9 +21,10 @@ def test_the_flash_wrapper_consults_the_budget_before_launching():
     needs the card this defect is about.
     """
     import ast
+    import importlib.util
     import pathlib
 
-    src = (pathlib.Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops" / "attention_wrappers.py")  # its family (M2 split)
+    src = (pathlib.Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops" / "attention_wrappers.py")  # its family (M2 split)
     tree = ast.parse(src.read_text(), filename=str(src))
     fn = next((n for n in ast.walk(tree)
                if isinstance(n, ast.FunctionDef)

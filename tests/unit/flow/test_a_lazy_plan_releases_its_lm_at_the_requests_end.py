@@ -67,7 +67,7 @@ def test_three_requests_on_a_lazy_plan_hold_what_the_first_holds(tmp_path):
     if not (Path(atelier.root("cache")) / MODEL).exists():
         pytest.skip(f"{MODEL} is not in the engine cache")
     env = dict(os.environ, PYTHONNOUSERSITE="1", NBX_AUTOTUNE_CERTIFIED_ONLY="1",
-               PYTHONPATH=f"{REPO / 'src'}:{REPO / 'nbxtensor' / 'src'}")
+               PYTHONPATH=f"{REPO / 'src'}")
     p = subprocess.run([sys.executable, "-c", CHILD, MODEL], env=env, capture_output=True, text=True, timeout=3000,
                        cwd=str(tmp_path))
     out = p.stdout + p.stderr

@@ -49,12 +49,12 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 def _repo(tmp_path: Path) -> Path:
     r = tmp_path / "repo"
-    _write(r, "nbxtensor/src/nbxtensor/__init__.py", "")
-    _write(r, "nbxtensor/src/nbxtensor/shape/__init__.py",
+    _write(r, "site/nbxtensor/__init__.py", "")
+    _write(r, "site/nbxtensor/shape/__init__.py",
            "def numel(shape):\n    n = 1\n    for d in shape:\n        n *= d\n    return n\n")
-    _write(r, "nbxtensor/src/nbxtensor/dtype/__init__.py", "def itemsize(name):\n    return _SIZES[name]\n")
-    _write(r, "nbxtensor/src/nbxtensor/ops/__init__.py", "")
-    _write(r, "nbxtensor/src/nbxtensor/ops/kernels.py", "def library_twin(values, limit):\n" + _BODY)
+    _write(r, "site/nbxtensor/dtype/__init__.py", "def itemsize(name):\n    return _SIZES[name]\n")
+    _write(r, "site/nbxtensor/ops/__init__.py", "")
+    _write(r, "site/nbxtensor/ops/kernels.py", "def library_twin(values, limit):\n" + _BODY)
     _write(r, "src/neurobrix/__init__.py", "")
     _write(r, "src/neurobrix/a.py", A)
     _write(r, "src/neurobrix/b.py", B)
@@ -63,7 +63,8 @@ def _repo(tmp_path: Path) -> Path:
 
 
 def test_each_kind_is_found_and_nothing_in_use_is(tmp_path):
-    got = {(k, p, s) for k, p, s, _ in S.scan(_repo(tmp_path))}
+    r = _repo(tmp_path)
+    got = {(k, p, s) for k, p, s, _ in S.scan(r, r / "site" / "nbxtensor")}
     a, b = "src/neurobrix/a.py", "src/neurobrix/b.py"
     expected = {
         ("dead", a, "dead_one"), ("dead", a, "recursive"),            # a self-call is no use

@@ -4,7 +4,7 @@ is stable (another reader on the storage) — never None, never a default.
 
 The measure reads the real storage for minutes and is red whenever anything else reads it (a parallel unit suite: the
 refusal after 475 s, the Dell 2026-10-31 21:02), so it runs only on request: NBX_STORAGE_MEASURE=1, on a quiet machine
-— the first launch IS that measure. The contract with a stubbed measure is held in nbxtensor/tests/test_io_read_rate.py."""
+— the first launch IS that measure. The contract with a stubbed measure is held in the library's tests/test_io_read_rate.py."""
 import os
 
 import pytest

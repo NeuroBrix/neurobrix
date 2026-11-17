@@ -13,7 +13,8 @@ process) records EVERY attempt to import torch or a submodule with its call site
 attempt is a red that names its importer.
 
 THE STEPS (each one's verdict and log in --out):
-  library   the library's own tests, README examples included (`nbxtensor/tests`)
+  library   the library's own tests, README examples included (`tests/` of the checkout `--library-tree` names: the
+            library lives in its own repository)
   models    the small reference models through the entry point (`neurobrix run --triton`, the request the gate
             derives, `tools/container_request.gate_request`); an output's sha is compared with `--expect` when given
   sweep     an uncertified runtime autotune sweep: `NBX_AUTOTUNE_CERTIFIED=off`, an EMPTY replay cache
@@ -21,7 +22,7 @@ THE STEPS (each one's verdict and log in --out):
   command   any further command (`--command`, repeatable: the card-less coverage, a backend's own suite)
 
     python3 tools/torch_free_proof.py --python <venv without torch>/bin/python --tree <worktree> --out <dir> \\
-        [--steps library,models,sweep] [--models A,B] [--sweep-model M] [--expect <file: model sha16 per line>] \\
+        [--steps library,models,sweep] [--library-tree <nbxtensor checkout>] [--models A,B] [--sweep-model M] [--expect <file: model sha16 per line>] \\
         [--command "<shell command run in the tree>"]
 
 The machine's own values (which models, their expected shas) are arguments, never written here: the same tool
@@ -66,7 +67,7 @@ sys.meta_path.insert(0, _TorchAttempts())
 
 def _env(tree: Path, out: Path, extra=None) -> dict:
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join([str(out / "recorder"), str(tree / "src"), str(tree / "nbxtensor" / "src")])
+    env["PYTHONPATH"] = os.pathsep.join([str(out / "recorder"), str(tree / "src")])
     env["NBX_TORCH_ATTEMPTS"] = str(out / "torch_attempts.jsonl")
     env["NBX_LOG"] = "debug"          # the run's developer lines in its log (nbxtensor/terminal.py)
     env.update(extra or {})
@@ -122,6 +123,7 @@ def main(argv=None) -> int:
     ap.add_argument("--tree", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--steps", default="library,models,sweep")
+    ap.add_argument("--library-tree", default="", help="a checkout of the nbxtensor repository: the library step runs its tests/")
     ap.add_argument("--models", default="")
     ap.add_argument("--sweep-model", default="")
     ap.add_argument("--expect", default="", help="file: '<model> <sha16>' per line, this machine's reference outputs")
@@ -155,7 +157,10 @@ def main(argv=None) -> int:
     steps = [s for s in a.steps.split(",") if s]
     verdicts = []
     if "library" in steps:
-        rc = _run([a.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "nbxtensor/tests"], tree,
+        if not a.library_tree:
+            ap.error("the library step runs the library's own suite, which lives in its own repository: "
+                     "--library-tree <a checkout of the nbxtensor repository>, or leave 'library' out of --steps")
+        rc = _run([a.python, "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"], Path(a.library_tree).resolve(),
                   _env(tree, out), out / "library.log")
         verdicts.append(("library", rc == 0, f"rc={rc} {(out / 'library.log').read_text().strip().splitlines()[-1]}"))
     if "models" in steps:

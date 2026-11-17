@@ -79,7 +79,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 OPS = REPO / "src" / "neurobrix" / "kernels" / "ops"
 #: the tensor library's kernel files (nbxtensor/ops, M1): a file is read from whichever holds it
-LIB_OPS = REPO / "nbxtensor" / "src" / "nbxtensor" / "ops"
+LIB_OPS = Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops"
 
 
 def _op_path(name):

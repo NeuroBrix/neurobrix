@@ -1,6 +1,7 @@
 """No Python `and` / `or` produces a value inside a @triton.jit body.
 
 A user's A40 report carried four copies of the same deprecation warning per run,
+import importlib.util
 from `tril.py:32`, on a non-scalar `and`. The warning names a scheduled
 breakage: Triton will raise on this construct in a future version.
 
@@ -55,7 +56,7 @@ from pathlib import Path
 
 #: the kernel files: the engine's still to move and the tensor library's (nbxtensor/ops, M1)
 OPS_DIRS = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels" / "ops",
-            Path(__file__).resolve().parents[3] / "nbxtensor" / "src" / "nbxtensor" / "ops")
+            Path(importlib.util.find_spec("nbxtensor").origin).parent / "ops")
 
 
 def _ops_files(pattern="*.py"):

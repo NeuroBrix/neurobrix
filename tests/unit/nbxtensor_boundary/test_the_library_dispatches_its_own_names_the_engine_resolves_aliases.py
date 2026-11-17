@@ -27,7 +27,7 @@ print("MUL", mul is not None, "ATEN_MUL", dispatch("aten::mul") is mul, "ALIAS",
 
 def test_the_library_dispatches_its_own_names_with_nothing_provided():
     out = subprocess.run([sys.executable, "-c", _LIBRARY_ALONE], cwd=REPO, capture_output=True, text=True, timeout=300,
-                         env=child_env(PYTHONPATH=str(REPO / "nbxtensor" / "src"), PYTHONNOUSERSITE="1",
+                         env=child_env(PYTHONNOUSERSITE="1",
                                        CUDA_VISIBLE_DEVICES=""))
     assert "MUL True ATEN_MUL True ALIAS None" in out.stdout, out.stdout[-2000:] + out.stderr[-3000:]
 

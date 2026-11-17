@@ -376,7 +376,7 @@ def test_the_sizing_half_imports_no_torch():
     import subprocess
     from pathlib import Path
     root = Path(__file__).resolve().parents[3]
-    src = f"{root / 'src'}:{root / 'nbxtensor' / 'src'}"      # the tree's library, installed or not
+    src = f"{root / 'src'}"      # the tree's engine; the library is the installed one
     probe = ("import sys; import nbxtensor.ops.tiling_sizes as T; T.conv3d_chunk_bytes(); "
              "print('torch' in sys.modules)")
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60,

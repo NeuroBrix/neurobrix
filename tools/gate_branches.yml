@@ -29,25 +29,12 @@ shared:
   - src/
   - tools/
   - pyproject.toml
-  # the tensor library (nbxtensor/, moved out of the engine 2026-10-28): its code, packaging and tools reach both engines
-  # through the engine's imports — a change there replays every branch
-  - nbxtensor/src/
-  - nbxtensor/pyproject.toml
-  - nbxtensor/tools/
+  # the tensor library is the installed release pyproject.toml pins (its own repository): a move of that pin replays
+  # every branch, through pyproject.toml above
 inert:
   - docs/
   - release/
   - tests/
-  - nbxtensor/tests/
-  - nbxtensor/docs/
-  - nbxtensor/README.md
-  - nbxtensor/CONTRIBUTING.md
-  - nbxtensor/assets/
-  - nbxtensor/.github/
-  - nbxtensor/CHANGELOG.md
-  - nbxtensor/LICENSE
-  - nbxtensor/NOTICE
-  - nbxtensor/THIRD_PARTY_NOTICES.md
   - benchmarks/
   - assets/
   - scripts/

@@ -1,9 +1,9 @@
-"""Every Python source of the engine and of nbxtensor compiles with warnings as errors."""
+"""Every Python source of the engine compiles with warnings as errors (the library's sources are its own repository's)."""
 import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-TREES = (ROOT / "src" / "neurobrix", ROOT / "nbxtensor" / "src")
+TREES = (ROOT / "src" / "neurobrix",)
 
 
 def test_every_engine_source_compiles_without_a_warning():
@@ -18,5 +18,5 @@ def test_every_engine_source_compiles_without_a_warning():
                     compile(path.read_bytes(), str(path), "exec")
                 except (SyntaxError, Warning) as exc:
                     failures.append(f"{path.relative_to(ROOT)}: {exc}")
-    assert count > 0, "no source found under src/neurobrix or nbxtensor/src"
+    assert count > 0, "no source found under src/neurobrix"
     assert not failures, "\n".join(failures)

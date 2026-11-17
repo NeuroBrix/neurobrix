@@ -23,7 +23,7 @@ For every new or touched component — the engine, nbxtensor, nbxgrammar, a devi
 
 ## The ratchet — `tools/brick_ratchet.py`
 
-It reads the code (AST and tokens; nothing is imported) and counts, for `src/neurobrix` and `nbxtensor/src/nbxtensor`:
+It reads the code (AST and tokens; nothing is imported) and counts, for `src/neurobrix` (the tensor library, in its own repository, is measured there):
 
 | figure | what is counted |
 |---|---|

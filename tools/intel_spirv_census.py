@@ -29,6 +29,7 @@ refusal with its stage and reason); `--spv` also keeps each module's bytes (`spv
 """
 from __future__ import annotations
 
+import importlib.util
 import argparse
 import json
 import os
@@ -38,7 +39,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "src"))
-sys.path.insert(0, str(REPO_ROOT / "nbxtensor" / "src"))
 
 SUB_GROUP_SIZES = [8, 16, 32]          # CL_DEVICE_SUB_GROUP_SIZES_INTEL of every Xe generation (compute-runtime)
 MAX_GROUP = 1024                       # maxTotalGroupSize
@@ -54,7 +54,7 @@ def build_target(device_file: str, facts: str):
     if not hasattr(knobs, "intel"):
         raise SystemExit("REFUSING: this Triton has no Intel backend (knobs.intel is absent) — run this tool with the "
                          "python of an environment holding triton-xpu alone")
-    path = REPO_ROOT / "nbxtensor" / "src" / "nbxtensor" / "backend" / "devices" / "intel" / f"{device_file}.yml"
+    path = Path(importlib.util.find_spec("nbxtensor").origin).parent / "backend" / "devices" / "intel" / f"{device_file}.yml"
     if not path.exists():
         raise SystemExit(f"REFUSING: no Intel device file {path.name} (have: "
                          f"{sorted(p.stem for p in path.parent.glob('*.yml'))})")

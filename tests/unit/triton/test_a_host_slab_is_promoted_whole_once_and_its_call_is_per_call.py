@@ -1,8 +1,8 @@
 """The triton dispatchers promote a host-resident stacked expert slab ONCE and WHOLE, and tell `execute_moe_fused` its
 weights live for this call (see the test's own text below). The table builder's refusal of a projection mixing two
-layouts, which stood here, is the library's test: `nbxtensor/tests/test_the_moe_table_refuses_experts_of_two_layouts.py`;
+layouts, which stood here, is the library's test: `the library's tests/test_the_moe_table_refuses_experts_of_two_layouts.py`;
 so is the rule that a per-call table never enters the pointer-table cache, and the promotion itself
-(`nbxtensor/tests/test_a_promoted_slab_crosses_once_and_its_table_is_never_cached.py`). What stays here is the
+(`the library's tests/test_a_promoted_slab_crosses_once_and_its_table_is_never_cached.py`). What stays here is the
 engine's: the views it cuts from a promoted slab, and the flag both of its dispatchers hand on.
 """
 from __future__ import annotations
