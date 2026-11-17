@@ -30,8 +30,7 @@ import nbxtensor.memory.allocator as _nbx_allocator  # the module the moved name
 
 REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "src"
-sys.path.insert(0, str(REPO / "tests" / "unit"))
-from child_env import child_env  # noqa: E402
+from tests.unit.child_env import child_env  # noqa: E402
 
 
 def _gpu():
