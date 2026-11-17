@@ -7,14 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **Since 0.6.16, two tokenizers give their vendor's ids for the separator characters U+001C..U+001F.** The
-  tokenizers of chatterbox and Open-Sora now split a text holding one of these four characters as the vendor's
-  tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
-  tokenizer checked (19 of the catalogue) gives the same ids as before.
+## [0.6.17] - 2026-11-17
+
+With nbxtensor 0.1.10: `neurobrix import` shows what the hub answered and says when a newer neurobrix is out, a 7B
+language model's first request fits a 16 GB card, and a model's sub-components can be fetched ahead and carried to a
+machine with no network.
+
+### Fixed
+
+- **`neurobrix import` shows the hub's own message when the hub refuses, and says when your neurobrix is behind its
+  latest release.** A refusal prints the hub's status and its message; a hub that needs a newer client (HTTP 426)
+  adds the command that upgrades, `pip install -U neurobrix`; and an import tells you when a newer neurobrix is
+  published, with the same command.
 - **A 7B language model run on a 16 GB card with the PyTorch engine no longer runs out of memory on its first
   request.** Its decode cache, the positions the request asks for included, and a served session's window with it,
   take only the memory above the reserve the engine keeps for the allocator; a request whose cache does not fit there
   is planned another way before anything is loaded, or refused by a sentence naming the positions and the room.
+- **A mixture-of-experts model whose router chooses its experts on sigmoid, biased or group-masked scores is refused
+  by name** before it runs.
+- **The engine's sources compile with no warning on recent Pythons**: the tokenizer files that show `\p{L}` in
+  their documentation no longer print a `SyntaxWarning`.
+
+### Added
+
+- **`neurobrix processor fetch`, `install` and `list`.** A model's declared sub-components are downloaded once,
+  verified by the checksum its container states, and can be carried to an offline machine and installed there.
+
+### Changed
+
+- **Since 0.6.16, two tokenizers give their vendor's ids for the separator characters U+001C..U+001F.** The
+  tokenizers of chatterbox and Open-Sora now split a text holding one of these four characters as the vendor's
+  tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
+  tokenizer checked (19 of the catalogue) gives the same ids as before.
+- **The engine requires nbxtensor 0.1.10**, installed from its published release.
 
 ## [0.6.16] - 2026-11-15
 
