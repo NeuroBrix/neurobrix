@@ -78,7 +78,9 @@ dependencies = [
 [project.optional-dependencies]
 # The PyTorch branch (--compiled, the default when no mode flag is given and torch is installed, and --sequential): torch + the
 # cuDNN/cuBLAS/cuFFT it bridges. The Triton branch (--triton, --triton-sequential) runs without it.
-pytorch = ["torch>=2.1.0"]
+# torch 2.10.0 is the first release with the setter the compiled engine applies its vendor profile's allocator settings
+# through (core/runtime/torch_allocator.py SETTER_TORCH); an older torch is refused there by name.
+pytorch = ["torch>=2.10.0"]
 # psutil: the gate harness (tools/regression_matrix.py) reads a cell's process tree with it, and its tests
 # need it; the runtime engine does not import it (the host is read by core/host_memory.memory_state).
 # imageio: the harness's judge reads a video's size and frames with it (tools/judge_artefact.video_degeneracy);

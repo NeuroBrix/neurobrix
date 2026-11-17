@@ -49,6 +49,10 @@ OPERATOR_ENV = ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_HIP_AL
 
 #: The vendor-profile key, under `memory:`.
 PROFILE_KEY = "compiled_allocator_settings"
+#: The first torch release whose torch._C has the setter the settings go through
+#: (https://github.com/pytorch/pytorch/blob/v2.10.0/torch/csrc/DeviceAccelerator.cpp#L167; absent at v2.9.1); the
+#: `pytorch` extra's minimum in pyproject.toml is this release (tests/unit/packaging holds them equal).
+SETTER_TORCH = "2.10.0"
 #: The vendor-profile key of the pool's growth bound, a fraction of the device's memory, and the operator's own
 #: spelling of it (https://github.com/pytorch/pytorch/blob/v2.14.0/aten/src/ATen/mps/MPSAllocator.mm).
 FRACTION_KEY = "compiled_allocator_memory_fraction"
@@ -176,7 +180,13 @@ def configure_torch_allocator(plan: Any) -> Optional[str]:
     if _applied == value:
         return value
     import torch
-    torch._C._accelerator_setAllocatorSettings(value)
+    setter = getattr(torch._C, "_accelerator_setAllocatorSettings", None)
+    if setter is None:
+        raise RuntimeError(f"the vendor profile declares memory.{PROFILE_KEY} {value!r}, applied through torch's "
+                           f"allocator setter, first released in torch {SETTER_TORCH}; the installed torch is "
+                           f"{torch.__version__}: upgrade it, pip install --upgrade \"torch>={SETTER_TORCH}\" (your "
+                           f"platform's build: https://pytorch.org/get-started/locally/)")
+    setter(value)
     _applied = value
     _log.debug(f"   [Allocator] compiled engine: torch caching allocator {value} "
                f"(vendor profile memory.{PROFILE_KEY})")

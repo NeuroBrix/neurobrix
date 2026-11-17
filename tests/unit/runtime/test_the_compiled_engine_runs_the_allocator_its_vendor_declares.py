@@ -12,6 +12,7 @@ Injections (each seen red, then restored green):
   * removed from amd/cdna3.yml, or added to an Apple profile -> the per-profile test names it;
   * the engine test in `setup` dropped (applied under every mode) -> the Triton setup calls it.
 """
+import os
 import sys
 import types
 
@@ -34,7 +35,7 @@ V100 = (["cuda:0"], "nvidia", "volta")
 def setter(monkeypatch):
     import torch
     calls = []
-    monkeypatch.setattr(torch._C, "_accelerator_setAllocatorSettings", calls.append)
+    monkeypatch.setattr(torch._C, "_accelerator_setAllocatorSettings", calls.append, raising=False)  # a stub on any torch
     monkeypatch.setattr(TA, "_applied", None)
     for k in TA.OPERATOR_ENV:
         monkeypatch.delenv(k, raising=False)
@@ -58,6 +59,22 @@ def test_the_compiled_setup_applies_the_vendors_allocator_before_the_executors(m
     monkeypatch.setattr(ex, "_setup_executors", lambda: order.append(list(setter)))
     ex.setup()
     assert order == [["expandable_segments:True"]], order     # set before any executor exists
+
+
+def test_a_torch_without_the_setter_is_refused_naming_the_release_it_needs_and_the_installed_one(monkeypatch, setter):
+    # torch 2.5.1 has no torch._C._accelerator_setAllocatorSettings (first released in v2.10.0): an AttributeError was
+    # all such a user read; the refusal names both versions, never sets the old environment variable, never skips
+    import torch
+    monkeypatch.delattr(torch._C, "_accelerator_setAllocatorSettings")
+    monkeypatch.setattr(torch, "__version__", "2.5.1")
+    with pytest.raises(RuntimeError, match=r"first released in torch 2\.10\.0; the installed torch is 2\.5\.1"):
+        TA.configure_torch_allocator(_plan(V100))
+    assert TA._applied is None and not any(os.environ.get(k) for k in TA.OPERATOR_ENV)
+
+
+def test_a_torch_with_the_setter_applies_the_declared_setting(setter):
+    assert TA.configure_torch_allocator(_plan(V100)) == "expandable_segments:True"
+    assert setter == ["expandable_segments:True"]
 
 
 def test_the_triton_engine_never_touches_torchs_allocator(monkeypatch, setter):

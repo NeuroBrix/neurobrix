@@ -57,3 +57,11 @@ def test_the_library_the_engine_imports_is_the_exact_release_it_pins():
     installed = importlib.metadata.version("nbxtensor")
     assert installed == pinned, (f"this python imports nbxtensor {installed}, pyproject.toml pins {pinned}: install "
                                  f"nbxtensor=={pinned}")
+
+
+def test_the_pytorch_extra_asks_for_the_first_torch_with_the_allocator_setter():
+    # the compiled engine applies its vendor profile's allocator settings through a setter first released in torch
+    # 2.10.0 (core/runtime/torch_allocator.py): an extra that admits an older torch installs an engine that refuses
+    from neurobrix.core.runtime.torch_allocator import SETTER_TORCH
+    extra = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]["pytorch"]
+    assert extra == [f"torch>={SETTER_TORCH}"], extra
