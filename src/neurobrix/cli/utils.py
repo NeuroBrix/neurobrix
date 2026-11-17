@@ -46,7 +46,7 @@ CACHE_DIR = _cache_dir()               # Extracted models (runtime)
 # failed on certificate verification -- correctly. It returns every weekend.
 import os as _os
 REGISTRY_URL = _os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.org"
-# The package index `neurobrix import` asks, once, for the latest release (to say when the installed one is behind).
+# The package index the engine asks, once a day, for the latest releases (cli/update_check: says when it is behind).
 PYPI_INDEX_URL = _os.environ.get("NEUROBRIX_PYPI_INDEX") or "https://pypi.org/pypi"
 
 # The model references `neurobrix import --help` and its error messages show as

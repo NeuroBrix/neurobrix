@@ -7,6 +7,7 @@ Commands: run, info, inspect, validate, import, list, remove, clean, hub
 # The host's thread counts are NOT set here: the hardware profile is their one source
 # (core/prism/cpu_config.apply_thread_config, called once the profile is read, before execution).
 # 2026-10-26: this block set OMP_NUM_THREADS / MKL_NUM_THREADS from the machine's core count at import.
+import os
 import sys
 import argparse
 import importlib
@@ -14,6 +15,16 @@ from pathlib import Path
 
 from neurobrix import __version__
 from neurobrix.cli.engine_choice import add_engine_flags
+
+# The top-level help's closing lines.
+EPILOG = """
+Examples:
+  neurobrix hub                                        # the models on the registry
+  neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0  # download one
+  neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "What is the capital of France?"
+
+-v shows the engine's developer lines, -vv an error's traceback too (NBX_LOG=debug: both).
+Daily update check on stderr (NEUROBRIX_NO_UPDATE_CHECK=1: off). More: https://neurobrix.org"""
 
 
 def _add_run_command_arguments(p):
@@ -143,14 +154,7 @@ def create_parser(show_dev: bool = False):
     parser = argparse.ArgumentParser(
         prog='neurobrix', description='NeuroBrix - Universal Deep Learning Inference Engine',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  neurobrix hub                                        # the models on the registry
-  neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0  # download one
-  neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "What is the capital of France?"
-
--v shows the engine's developer lines, -vv an error's traceback too (NBX_LOG=debug: both).
-For more information: https://neurobrix.org"""
+        epilog=EPILOG,
     )
 
     parser.add_argument(
@@ -633,13 +637,14 @@ def main():
         _fail_path(e)
     args = parser.parse_args()
     _configure(getattr(args, "verbose", 0) or 0, bool(getattr(args, "json", False)))
-    import os as _os_census
-    if _os_census.environ.get("NBX_CENSUS") == "1":
+    if os.environ.get("NBX_CENSUS") == "1":
         # The certification census (kernels/census.py): this process becomes a shadow —
         # no device memory, no launch, no value, no weight file — and records every key
         # the dispatch would hand the launcher. Installed before any engine import.
         from neurobrix.kernels import census as _census
         _census.install(hardware=getattr(args, "hardware", None))
+    # the update notice from the cache and the local metadata only; the index is asked by a detached child
+    importlib.import_module("neurobrix.cli.update_check").warn(args)
 
     from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError
     from neurobrix.processors.messages import COMMAND as PROCESSOR_COMMAND

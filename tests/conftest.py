@@ -74,6 +74,11 @@ def installed_container(name: str) -> Path:
 # that imports nbxtensor alone runs under the engine all the same, whatever test ran before it.
 import neurobrix  # noqa: E402,F401
 
+# No test asks the real package index: every `neurobrix` the suite starts (in process or as a child) runs with the
+# update check off; tests/unit/cli/test_the_engine_says_when_it_is_behind_the_index.py turns it on against a fake one.
+import os as _os  # noqa: E402
+_os.environ["NEUROBRIX_NO_UPDATE_CHECK"] = "1"
+
 
 @pytest.fixture
 def engine_log(caplog):

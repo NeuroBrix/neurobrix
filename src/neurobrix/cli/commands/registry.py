@@ -159,28 +159,6 @@ def hub_refusal_lines(e, what):
     return lines
 
 
-def _version_tuple(text):
-    parts = text.split(".")
-    if not parts or not all(p.isdigit() for p in parts):
-        return None
-    return tuple(int(p) for p in parts)
-
-
-def behind_pypi_line():
-    """One line when the installed neurobrix is older than the latest release on the package index, else None. Never
-    raises: no network, no reply in 3 s, or an answer that is not a release number is silence (one call)."""
-    try:
-        import requests
-        from neurobrix.cli.utils import PYPI_INDEX_URL
-        latest = requests.get(f"{PYPI_INDEX_URL.rstrip('/')}/neurobrix/json", timeout=3).json()["info"]["version"]
-        have, last = _version_tuple(__version__), _version_tuple(latest)
-        if have and last and have < last:
-            return f"neurobrix {latest} is available (you have {__version__}): {UPGRADE_COMMAND}"
-    except Exception:       # advice only: it must never fail or delay an import
-        return None
-    return None
-
-
 def file_sha256(path) -> str:
     import hashlib
     h = hashlib.sha256()
@@ -550,8 +528,6 @@ def _import_body(args):
     else:
         # 2. Get signed download URL
         log.debug("[2/4] Getting download URL...")
-        if not wants_json(args) and (_behind := behind_pypi_line()):
-            print(_behind)
         try:
             # Who asks: the engine's command line, by name and version — the hub serves the engine client without a
             # session (the user accepted at this terminal) and sends a browser without one to its login (the owner,

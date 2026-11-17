@@ -354,6 +354,20 @@ unless something is wrong.
         └── ...
 ```
 
+## Update check
+
+Once a day, in a short separate process the command never waits for, the engine asks PyPI for the latest `neurobrix` and
+`nbxtensor` and keeps the answer in `update_check.json` in the engine home. When the installed release is behind, the
+next command prints one notice on stderr with the command that updates it for the way it was installed (pip, uv,
+pipx, or a source checkout). The installed `nbxtensor` is also checked against the version this `neurobrix` requires,
+locally, without the network. The check never refuses a command, says nothing when the network does not answer, and
+prints nothing under `--json`.
+
+| Variable | Effect |
+|----------|--------|
+| `NEUROBRIX_NO_UPDATE_CHECK=1` | No network call and no notice |
+| `NEUROBRIX_PYPI_INDEX=<url>` | The package index asked (default `https://pypi.org/pypi`) |
+
 ## Debug environment variables
 
 | Variable | Effect |
