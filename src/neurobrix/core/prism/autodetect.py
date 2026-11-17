@@ -1016,7 +1016,7 @@ def _detect_gpus_windows() -> Tuple[List[Dict[str, Any]], str]:
     ]:
         devices = detector()
         if _driven(devices):
-            return devices, brand
+            return _apply_visible_filter(_driven(devices)) + _refusals(devices), brand   # CUDA_VISIBLE_DEVICES, as on Linux
 
     # no backend drives a GPU here: what Windows lists, each refused by name
     devices, brand = _parse_listed()
