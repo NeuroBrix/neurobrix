@@ -260,11 +260,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     anything."""
     from neurobrix.core.prism import InputConfig
     defaults_path = cache_path / "runtime" / "defaults.json"
-    if defaults_path.exists():
-        with open(defaults_path) as f:
-            cached_defaults = json.load(f)
-    else:
-        cached_defaults = {}
+    cached_defaults = json.loads(defaults_path.read_text()) if defaults_path.exists() else {}
 
     # Resolution for the Prism activation estimate MUST match the resolution the
     # executor actually generates at — otherwise Prism over/under-estimates the VAE

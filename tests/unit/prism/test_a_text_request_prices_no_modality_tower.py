@@ -87,6 +87,7 @@ def test_no_pass_of_the_plan_follows_an_unloaded_component():
     # the request-size scaler of the memory pass and the work table of the time estimate skip it too
     from neurobrix.core.prism import solver
     mem = inspect.getsource(solver.PrismSolver._compute_memory)
-    assert "activation_bytes, activation_profiled = 0, True" in mem.split("self._scale_activations_to_request(")[0][-400:]
-    assert "if comp.name in unloaded:" in inspect.getsource(solver.PrismSolver._estimate_times)
+    assert "activation_bytes, activation_profiled = (0, True) if comp.name in unloaded else (" in \
+        mem.split("self._scale_activations_to_request(")[0][-400:]
+    assert "if c.name not in unloaded):" in inspect.getsource(solver.PrismSolver._estimate_times)
     assert "comp.name in unloaded" in inspect.getsource(solver.PrismSolver._detect_op_level_tiling_pairs)

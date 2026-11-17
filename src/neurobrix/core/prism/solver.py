@@ -1167,10 +1167,9 @@ class PrismSolver:
         6 345 MB, code2wav, the talker pieces — filled the 11 305 MB usable beside the thinker's
         segments. Empty for a served session, and where the mode is not known: every leg is priced."""
         from neurobrix.core.flow.base import unloaded_by_request
-        return unloaded_by_request(self._flow_topology(container),
-                                   getattr(getattr(self, "_input_config", None), "mode", None),
-                                   served=bool(getattr(self, "_serve_requested", False)),
-                                   inputs=getattr(getattr(self, "_input_config", None), "inputs", None))
+        request = getattr(self, "_input_config", None)
+        return unloaded_by_request(self._flow_topology(container), getattr(request, "mode", None),
+                                   bool(getattr(self, "_serve_requested", False)), getattr(request, "inputs", None))
 
     def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None,
                     holding: Optional[str] = None) -> int:
@@ -3634,14 +3633,12 @@ class PrismSolver:
         # Per-GPU capacity in bytes — pick the smallest assigned device for
         # this component (op-level tiling only fires if the worst-case GPU
         # can't hold the op).
-        device_caps = {}
-        for dev in profile.devices:
-            device_caps[dev.get_device_string()] = int(dev.memory_mb * 1024 * 1024)
+        device_caps = {dev.get_device_string(): int(dev.memory_mb * 1024 * 1024) for dev in profile.devices}
 
         dtype_bytes = _itemsize.itemsize(target_dtype_str)
 
-        # a component the request never loads (`_unloaded_by_request`) runs no op to tile
-        unloaded = self._unloaded_by_request(container) if container is not None else set()
+        # a component the request never loads (`_unloaded_by_request`, empty with no container) runs no op to tile
+        unloaded = self._unloaded_by_request(container)
         for comp in components:
             if comp.graph is None or comp.name in unloaded:
                 continue
@@ -4318,8 +4315,7 @@ class PrismSolver:
         needs_kv_cache = getattr(self, '_needs_kv_cache', False)
 
         # Identify which component is the language model (for KV cache budgeting)
-        lm_component_name = None
-        self._lm_component_name = None
+        lm_component_name = self._lm_component_name = None
         if needs_kv_cache:
             lm_config = self._read_lm_config(container)
             if lm_config:
@@ -4345,7 +4341,7 @@ class PrismSolver:
         self._executed_graphs = {}
         # A component the request never loads (`_unloaded_by_request`) runs no activation: its walk would bind symbols
         # the request does not state (a VLM's vision tower on a text request: no height) and price nothing that runs.
-        unloaded = self._unloaded_by_request(container) if container is not None else set()
+        unloaded = self._unloaded_by_request(container)
         for comp in components:
             source_dtype = comp.get_dominant_dtype()
             # Per-component runtime dtype (the dtype this component ACTUALLY
@@ -4649,13 +4645,10 @@ class PrismSolver:
             # renders 320x224 correctly from a 112x80 build), so the estimate is
             # scaled by the pixel ratio the two sizes imply. Derived from the
             # graph's own declared trace_value and the request; no per-model data.
-            if comp.name in unloaded:
-                # nothing runs: no activation, and that zero is exact, not a figure nobody walked — no `overhead_factor`
-                # on its weights (`_overhead_bytes`), no size of the request to follow
-                activation_bytes, activation_profiled = 0, True
-            else:
-                activation_bytes = self._scale_activations_to_request(
-                    comp, activation_bytes, input_config)
+            # A component that never runs: no activation, and that zero is exact, not a figure nobody walked — no
+            # `overhead_factor` on its weights (`_overhead_bytes`), no size of the request to follow.
+            activation_bytes, activation_profiled = (0, True) if comp.name in unloaded else (
+                self._scale_activations_to_request(comp, activation_bytes, input_config), activation_profiled)
             if activation_profiled and _kept is not None and _kept.live_before_op:
                 # What is ALREADY live as each op begins, at its largest, on the profile this figure was kept
                 # from (tiling-aware where it was), scaled as the figure is: an op-level tile cuts an op's own
@@ -8035,12 +8028,11 @@ class PrismSolver:
             return {}
         plan_devices = devices          # the planner's device objects (the residency's), before the facts below
         devices = {}
-        import dataclasses as _dc
         for d in profile.devices:
             if getattr(d, "measured", None):
                 f = TE.device_facts(d.measured, f"device {d.index}")
                 for prefix in ("cuda", "mps", "hip", "xpu"):
-                    devices[f"{prefix}:{d.index}"] = (_dc.replace(f, unified=True)
+                    devices[f"{prefix}:{d.index}"] = (dataclasses.replace(f, unified=True)
                                                       if _device_is_unified(f"{prefix}:{d.index}", profile) else f)
         try:
             host = TE.host_facts(getattr(profile, "host_measured", None))
@@ -8060,9 +8052,7 @@ class PrismSolver:
         works, runs, prompt = {}, {}, {}
         # a component the request never loads (`_unloaded_by_request`) does no work in it
         unloaded = self._unloaded_by_request(container)
-        for comp in getattr(self, "_neural_components", []) or []:
-            if comp.name in unloaded:
-                continue
+        for comp in (c for c in getattr(self, "_neural_components", []) or [] if c.name not in unloaded):
             prof = ActivationProfiler(comp.graph)
             kind, n = uses.get(comp.name, ("once", 1))
             w = component_work(prof, prof.build_symbol_map(input_config))
