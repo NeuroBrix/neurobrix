@@ -1,7 +1,6 @@
 """NBXTensor is ONE library, and the engine's scatter of tensor semantics can only shrink.
 
-Hocine Benkelaya's rule (28/10/2026): NBXTensor is NeuroBrix's master piece, a library of its own that the engine
-imports. `tools/scatter_scan.py` finds the tensor-semantics definitions still written in the engine;
+The rule: NBXTensor is NeuroBrix's tensor library, a library of its own that the engine imports. `tools/scatter_scan.py` finds the tensor-semantics definitions still written in the engine;
 `tools/scatter_list.tsv` is the engine's reviewed list of them, each with its destination in the library.
 
 1. A definition found in the engine and NOT on the list fails: the scatter grew. Write it in nbxtensor instead.

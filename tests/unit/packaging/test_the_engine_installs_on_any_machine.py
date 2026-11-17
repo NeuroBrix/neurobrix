@@ -50,7 +50,7 @@ def test_the_engine_depends_on_one_exact_release_of_the_library():
 
 
 def test_the_library_the_engine_imports_is_the_exact_release_it_pins():
-    # A python holding another release of the library graded the engine against code it does not ship with (qa 721:
+    # A python holding another release of the library graded the engine against code it does not ship with (for example
     # a venv with 0.1.6 under a pin of 0.1.10): the version installed is the pinned one, read from pyproject, exactly
     deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
     pinned = next(d.replace(" ", "").split("==", 1)[1] for d in deps if re.match(r"nbxtensor\b", d))

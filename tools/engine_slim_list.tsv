@@ -127,7 +127,7 @@ wrapper	src/neurobrix/core/runtime/symexpr.py	UnknownExpression	a typed refusal 
 wrapper	src/neurobrix/core/runtime/symint.py	__radd__	Python's reflected-operator protocol: 2 + s calls it, never by name
 wrapper	src/neurobrix/core/runtime/symint.py	__rmul__	Python's reflected-operator protocol: 2 * s calls it, never by name
 wrapper	src/neurobrix/core/runtime/symint.py	__str__	Python's str() protocol
-wrapper	src/neurobrix/core/runtime/tensor_compat.py	aten	a named question (is torch loaded?) asked by the shared orchestration code, never importing it
+wrapper	src/neurobrix/core/runtime/tensor_compat.py	aten	a named question (is torch loaded?) asked by the engine's runtime before it chooses a code path, so the engine can answer without importing torch itself
 wrapper	src/neurobrix/core/runtime_values.py	MissingRuntimeValue	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
 wrapper	src/neurobrix/core/state/policy.py	StatePolicyRefused	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
 wrapper	src/neurobrix/core/state/price.py	StateUndeclared	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing

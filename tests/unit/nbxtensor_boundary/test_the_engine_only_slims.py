@@ -1,4 +1,4 @@
-"""The engine only slims (Hocine Benkelaya 2026-10-29 22:39): its code lines and its slimming findings may only go down.
+"""The engine only slims: its code lines and its slimming findings may only go down.
 
 `tools/engine_slim_scan.py` lists what the engine carries that nbxtensor makes unnecessary, scanning the engine against
 the INSTALLED library (the release pyproject.toml pins). Every finding is on the engine's own list,

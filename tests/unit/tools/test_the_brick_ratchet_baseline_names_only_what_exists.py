@@ -1,6 +1,6 @@
 """The brick ratchet's baseline names only packages the ratchet measures and files of this repository that exist.
 
-qa 721 (2026-11-17): the library's copy left the engine (h/715) and the baseline kept 111 functions, 63 private imports
+When the library's copy left the engine, the baseline kept 111 functions, 63 private imports
 and a long module under `nbxtensor/src/...`, paths of a tree that is no longer here: figures no run can measure, so no
 run could ever hold them down. What this test does if a stale entry is back: a package missing from
 `tools/brick_ratchet.json`, or a path that names no file, is RED by name."""
