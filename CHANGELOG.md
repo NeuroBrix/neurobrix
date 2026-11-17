@@ -7,27 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **Since 0.6.16, two tokenizers give their vendor's ids for the separator characters U+001C..U+001F.** The
-  tokenizers of chatterbox and Open-Sora now split a text holding one of these four characters as the vendor's
-  tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
-  tokenizer checked (19 of the catalogue) gives the same ids as before.
-- **A 7B language model run on a 16 GB card with the PyTorch engine no longer runs out of memory on its first
-  request.** Its decode cache, the positions the request asks for included, and a served session's window with it,
-  take only the memory above the reserve the engine keeps for the allocator; a request whose cache does not fit there
-  is planned another way before anything is loaded, or refused by a sentence naming the positions and the room.
-- **A vision encoder whose weights spell its patch stem `patch_conv`, its pre-norm `ln_pre`, its position table
-  `patch_positional_embedding` and its patch merger `patch_merger.merging_layer` gets standard names.** These five
-  spellings name roles the vocabulary already had (patch embedding, pre-norm, position embedding, a patch merger's
-  down-sampling and its linear); no name an existing container carries changes.
+## [0.6.17] - 2026-11-17
+
+0.6.17 is the engine that runs Devstral for text on the PyTorch branch. A vision-language container answers a text
+request with no image, NeuroTax 5.1 names the linear-attention blocks, and the engine says when a newer release is
+out without slowing any command.
+
+### Added
+
 - **A vision-language container answers a text request with no image.** The language model reads the chat-formatted
   prompt alone, as the vendor's own processor does; before, a text request was refused unless it asked for speech.
   The positions it is handed take the form its graph declares (one index per token, or the three planes of
   multimodal rotary positions), so a model whose language model takes one index per token is no longer handed three.
+- **The engine says when a newer release is out.** Once a day a detached process asks the package index for the
+  latest release and stores the answer; every command reads the stored answer and prints one line with the command
+  that updates when it is behind, so a short command never waits for the index and never loses the answer.
+  `neurobrix import` reads the same stored answer and opens no connection but the hub's.
+- **NeuroTax 5.1 names a linear-attention block and its short convolution by the roles 5.0 already has.** The block
+  that mixes the tokens in place of self-attention is `token_mixer`, its one-filter-per-channel convolution
+  `depthwise_conv`; 5.1 adds the names of the block's decay, step bias and gates. No name an existing container
+  carries changes.
+- **A vision encoder whose weights spell its patch stem `patch_conv`, its pre-norm `ln_pre`, its position table
+  `patch_positional_embedding` and its patch merger `patch_merger.merging_layer` gets standard names.** These five
+  spellings name roles the vocabulary already had (patch embedding, pre-norm, position embedding, a patch merger's
+  down-sampling and its linear); no name an existing container carries changes.
+
+### Changed
+
+- **The engine reads NeuroTax 5.1 and loads a container of the same major version whose minor is at most its own.**
+  A container of a newer minor is refused with the instruction to update neurobrix, a container of another major is
+  refused naming both versions, and a container whose manifest carries no readable version is refused by name.
+- **Image preprocessing refuses a missing value by name.** When a vision component's preprocessing lacks its patch
+  size, temporal patch size, merge size, image mean, image standard deviation or its pixel budget, the request stops
+  with an error that lists the missing values and says the container must carry them, instead of using another model
+  family's default. A container that carries its values gives byte-identical output.
 - **A text request to a vision-language container is planned without its vision or audio encoder.** The memory plan
   counts an encoder only for a request that carries its input (an image or a video, an audio file): a text request was
   refused for an image size it never states, and now takes the placement its language model alone needs. A request
   that generates an image is planned a little smaller for the same reason: the components it never loads count no
   working memory.
+- **Since 0.6.16, two tokenizers give their vendor's ids for the separator characters U+001C..U+001F.** The
+  tokenizers of chatterbox and Open-Sora now split a text holding one of these four characters as the vendor's
+  tokenizer splits it, so a prompt that contains one gets different ids than it did up to 0.6.15. Every other
+  tokenizer checked (19 of the catalogue) gives the same ids as before.
+
+### Fixed
+
+- **A text-only request on a vision-language container no longer stops on the Triton branch.** A build that declares
+  no audio placeholder token stopped on it, though the request carried no audio; the Triton branch now reads the
+  placeholder of a modality only for a request that carries it, as the PyTorch branch does.
+- **A machine whose cards are not all one model starts on every card.** Its first launch measures the memory-pool
+  facts of each card model on a card of that model; before, the cards of the other model were left without them and
+  every allocation on them was refused, on every run.
+- **A 7B language model run on a 16 GB card with the PyTorch engine no longer runs out of memory on its first
+  request.** Its decode cache, the positions the request asks for included, and a served session's window with it,
+  take only the memory above the reserve the engine keeps for the allocator; a request whose cache does not fit there
+  is planned another way before anything is loaded, or refused by a sentence naming the positions and the room.
+
+### Upgrade note
+
+- **Containers built with this engine need engine 0.6.17.** The container builder writes into each container's
+  manifest the NeuroTax version of the engine it builds with: 5.1 with this release. An engine of 0.6.16 or older
+  reads exactly NeuroTax 5.0 and refuses such a container by name; install 0.6.17 to run it. Containers built for
+  5.0 load in 0.6.17 unchanged.
+
+### Known issue
+
+- **A served model may answer a repeated request differently after a prefix-cache hit; fix planned in the library.**
+  On one NVIDIA card, a served model's 20 repeated answers after a cache hit were byte-equal from run to run and
+  between 0.6.16 and 0.6.17; the same comparison has not been measured on a Mac.
 
 ## [0.6.16] - 2026-11-15
 
