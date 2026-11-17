@@ -17,14 +17,15 @@ function, no adaptation layer. This scan lists, in `src/neurobrix` (both branche
 
 Every finding ends deleted, or stays with its reason in one sentence: the engine's list of them is
 `tools/engine_slim_list.tsv` (kind, path, symbol, why it stays), whose header records the nbxtensor release it was scanned
-against, the engine's code-line count and the number of findings. Both counts can only go down
-(`tests/unit/nbxtensor_boundary/test_the_engine_only_slims.py`). The list is the output of `--write-list`, which keeps
-every reason already written and refuses to write a count above its header. The library read is the INSTALLED package
+against, the engine's code-line count and the number of findings. The findings count can only go down
+(`tests/unit/nbxtensor_boundary/test_the_engine_only_slims.py`); the code-line count is a measure, never a refusal
+(ruling 17/11 16:11). The list is the output of `--write-list`, which keeps every reason already written and refuses
+to write a findings count above its header. The library read is the INSTALLED package
 (the release `pyproject.toml` pins), never a copy inside this repository.
 
     python tools/engine_slim_scan.py            # the findings, one per line: kind, path, symbol, detail
     python tools/engine_slim_scan.py --lines    # the engine's code-line count
-    python tools/engine_slim_scan.py --write-list   # rewrite tools/engine_slim_list.tsv (refused if a count rose)
+    python tools/engine_slim_scan.py --write-list   # rewrite tools/engine_slim_list.tsv (refused if the findings rose)
 
 Standard library only (ast). A scan, not a proof: its rules are syntactic, so a finding is a question a person answers
 (delete it, or write why it stays) — never deleted on the scan's word alone.
@@ -44,7 +45,8 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "src" / "neurobrix"
 LIBRARY = Path(importlib.util.find_spec("nbxtensor").origin).resolve().parent    # the installed library
-#: the engine's own list of its findings, each with why it stays (its header: the two counts that only go down)
+#: the engine's own list of its findings, each with why it stays (its header: the findings count, which only goes
+#: down, and the code-line count, a measure)
 LIST = Path(__file__).with_name("engine_slim_list.tsv")
 #: the code whose references prove a definition is used (tests excluded, by the order); the library's own code (the
 #: installed package, read beside these roots) counts: a library that calls an engine definition back is a use the scan
@@ -121,17 +123,19 @@ def read_list(path: Path = LIST) -> Tuple[Dict[str, str], Dict[Tuple[str, str, s
 
 
 def write_list(repo: Path = REPO, library: Path = LIBRARY, path: Path = LIST) -> int:
-    """Rewrite the list from a fresh scan, every reason already written kept; refused if a count rose over its header."""
+    """Rewrite the list from a fresh scan, every reason already written kept; refused if the findings rose over its
+    header (the code-line count is written as a measure, never refused)."""
     library = installed_library(repo, library)
     found = sorted({(k, p, s) for k, p, s, _ in scan(repo, library)})
     lines = engine_lines(repo)
     head, why = read_list(path) if path.exists() else ({}, {})
-    for name, now in (("engine_lines", lines), ("findings", len(found))):
-        if name in head and now > int(head[name]):
-            raise ScanRefused(f"{path.name}: {name} rose from {head[name]} to {now}; the engine only slims: delete "
-                              f"what was added, never raise the list")
+    if "findings" in head and len(found) > int(head["findings"]):
+        raise ScanRefused(f"{path.name}: findings rose from {head['findings']} to {len(found)}; the engine only slims: "
+                          f"delete what was added, never raise the list")
     out = ["# The engine's slimming findings (tools/engine_slim_scan.py --write-list): kind, path, symbol, why it stays.",
-           "# A new finding is written into the engine: delete it, or move it into nbxtensor. The two counts only go down.",
+           "# A new finding is written into the engine: delete it, or move it into nbxtensor. Rule (ruling 17/11 16:11):",
+           "# the findings count, and the scatter count of scatter_list.tsv, only go down; engine_lines is a measure:",
+           "# the test prints the current count against it and never fails on it.",
            f"# nbxtensor: {library_version(library)}", f"# engine_lines: {lines}", f"# findings: {len(found)}",
            "kind\tpath\tsymbol\twhy it stays"]
     out += ["\t".join((k, p, s, why.get((k, p, s), ""))) for k, p, s in found]
@@ -502,7 +506,7 @@ def _never_passed(fn, param: str, sites: List[ast.Call]) -> bool:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="the engine's slimming scan")
     ap.add_argument("--lines", action="store_true", help="print the engine's Python line count")
-    ap.add_argument("--write-list", action="store_true", help=f"rewrite {LIST.name} (refused if a count rose)")
+    ap.add_argument("--write-list", action="store_true", help=f"rewrite {LIST.name} (refused if the findings rose)")
     a = ap.parse_args(argv)
     if a.lines:
         print(engine_lines())

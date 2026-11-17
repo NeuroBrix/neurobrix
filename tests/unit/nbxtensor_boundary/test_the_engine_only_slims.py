@@ -1,4 +1,4 @@
-"""The engine only slims: its code lines and its slimming findings may only go down.
+"""The engine only slims: its tensor mechanics (slimming findings, scattered definitions) may only go down.
 
 `tools/engine_slim_scan.py` lists what the engine carries that nbxtensor makes unnecessary, scanning the engine against
 the INSTALLED library (the release pyproject.toml pins). Every finding is on the engine's own list,
@@ -8,12 +8,13 @@ the INSTALLED library (the release pyproject.toml pins). Every finding is on the
    (delete it, or move it into nbxtensor).
 2. A listed finding the scan no longer finds fails: it was resolved (`--write-list` deletes its line).
 3. A finding listed without its reason fails.
-4. The engine's code-line count (`tools/brick_ratchet.code_lines`) and the number of findings never exceed the list's
-   header; the header states the count truthfully.
+4. The number of findings never exceeds the list's header, and the scattered tensor definitions
+   (`tools/scatter_scan.py`) never exceed `tools/scatter_list.tsv`'s header. The engine's code-line count
+   (`tools/brick_ratchet.code_lines`) is a measure, printed against the header, never a failure (ruling 17/11 16:11).
 5. The list was scanned against the release the engine pins, read from the installed package, never from this tree.
 
-What would this file do if the engine grew? A new dead or duplicated definition: rules 1 and 4 RED; new lines: rule 4
-RED; a list regenerated against another release of the library: rule 5 RED."""
+What would this file do if the engine grew? A new dead or duplicated definition: rules 1 and 4 RED; a new scattered
+definition: rule 4 RED; new plain lines: printed, green; a list regenerated against another release of the library: rule 5 RED."""
 from __future__ import annotations
 
 import functools
@@ -31,6 +32,9 @@ REPO = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location("engine_slim_scan", REPO / "tools" / "engine_slim_scan.py")
 S = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(S)
+_scatter_spec = importlib.util.spec_from_file_location("scatter_scan", REPO / "tools" / "scatter_scan.py")
+SC = importlib.util.module_from_spec(_scatter_spec)
+_scatter_spec.loader.exec_module(SC)
 
 
 @functools.lru_cache(maxsize=1)
@@ -68,11 +72,18 @@ def test_every_listed_finding_says_why_it_stays():
 
 def test_the_engine_and_its_findings_only_go_down():
     listed, lines = len(_list()[1]), S.engine_lines()
+    print(f"engine code lines: {lines} (the list's header: {_header('engine_lines')}, a measure)")
     assert listed == _header("findings"), f"the list holds {listed} findings, its header says {_header('findings')}"
+    new = sorted(_found() - set(_list()[1]))
     assert len(_found()) <= _header("findings"), (
-        f"the engine holds {len(_found())} findings (the list's header: {_header('findings')}): it only slims")
-    assert lines <= _header("engine_lines"), (
-        f"the engine grew to {lines} code lines (the list's header: {_header('engine_lines')}): it only slims")
+        f"the engine holds {len(_found())} findings (the list's header: {_header('findings')}): it only slims; "
+        f"new: " + "; ".join(f"{k} {p}:{s}" for k, p, s in new[:40]))
+    head = SC.read_list()[0]
+    assert "definitions" in head, f"{SC.LIST.name}: its header states no definitions count"
+    scattered = sorted({(r[0], r[1]) for r in SC.scan()})
+    assert len(scattered) <= int(head["definitions"]), (
+        f"the engine holds {len(scattered)} scattered tensor definitions (the header of {SC.LIST.name}: "
+        f"{head['definitions']}): it only shrinks; found: " + "; ".join(f"{p}:{s}" for p, s in scattered))
 
 
 def test_the_list_was_scanned_against_the_installed_pinned_release():
