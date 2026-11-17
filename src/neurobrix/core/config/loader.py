@@ -87,11 +87,11 @@ def vendor_config_for_device(vendor: str, architecture: Optional[str], compute_c
                              model: Optional[str] = None) -> Dict[str, Any]:
     """The vendor file that describes ONE device, by the rule the kernels resolve their active profile with
     (`kernels/ops/_configs.py`, the shared-memory budget): the file whose declared `compute_capability` equals the
-    device's, else one whose `compute_capability_matches` prefixes it, else the same major family of a dotted
-    capability, else the architecture's file. The Apple M4 Pro reports `apple-m4-pro` and its facts live in the CHIP
-    file `apple/apple_m4_pro.yml`, not in the family file `apple_silicon.yml` (the Mac, 2026-10-25 17:20: the time
-    estimate found no measured facts there). A device whose detection reports no capability (autodetect writes "0.0"
-    for every non-NVIDIA brand; the Mac's generated profile, 17:37) is resolved by the arch string of its MODEL name
+    device's, else one whose `compute_capability_matches` prefixes it, else the same major's, dotted, at or below it,
+    else the architecture's file. The Apple M4 Pro reports `apple-m4-pro` and its facts live in the CHIP file
+    `apple/apple_m4_pro.yml`, not in the family file `apple_silicon.yml` (the Mac, 2026-10-25 17:20: the time estimate
+    found no measured facts there). A device whose detection reports no capability (autodetect writes "0.0" for every
+    non-NVIDIA brand; the Mac's generated profile, 17:37) is resolved by the arch string of its MODEL name
     (`device_arch_string`: "Apple M4 Pro" -> "apple-m4-pro"), the string the chip files are keyed by."""
     found = _vendor_file_for_device(vendor, compute_capability, model)
     if found is not None:
@@ -131,9 +131,9 @@ def _vendor_file_for_device(vendor: str, compute_capability: Optional[str], mode
             if declared and (declared == wanted or declared == by_model):
                 return path.stem, cfg
             prefixes = [str(m).strip().lower() for m in (cfg.get("compute_capability_matches") or [])]
-            if family is None and (
-                    any(w.startswith(m) for m in prefixes for w in (wanted, by_model) if w)
-                    or (declared and "." in declared and "." in wanted and declared.split(".")[0] == wanted.split(".")[0])):
+            major = declared.split(".")[0] == wanted.split(".")[0] and "." in declared and "." in wanted
+            if family is None and (any(w.startswith(m) for m in prefixes for w in (wanted, by_model) if w)
+                                   or (declared and major and declared <= wanted)):    # 8.6 is 8.0's, not 8.9's
                 family = (path.stem, cfg)
     return family
 

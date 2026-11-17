@@ -1,0 +1,109 @@
+# NVIDIA Turing: compute capability 7.5
+# Example cards (https://developer.nvidia.com/cuda-gpus, read 2026-11-17): NVIDIA T4; Quadro RTX 8000/6000/5000/4000; TITAN RTX; GeForce RTX 2080 Ti, 2080, 2070; GeForce GTX 1650 Ti
+#
+# validation_status: hand_curated_from_docs
+# DOCUMENTATION-SOURCED AND UNMEASURED. No card of this architecture is on any NeuroBrix machine. Every
+#   hardware value below is READ FROM NVIDIA'S OWN DOCUMENTATION, its address and the date it was read written
+#   beside it; nothing is estimated from a neighbouring architecture's file. No kernel has run on this
+#   architecture, no autotune key is certified for it, its speed is unknown. Written 2026-11-17 for
+#   GitHub issue 6 (an Ada card refused with "No hardware profile for nvidia/ada").
+#
+# What this file does NOT state, and what the engine does without it:
+#   * The Triton branch's tuning values (block_sizes, sdpa_thresholds, autotune buckets and screen,
+#     tiling.extent_lattice, pipelining.max_num_stages) and its dead-tensor queue
+#     (memory.deferred_drain_*): no vendor document gives them; they are measured on a card. Absent,
+#     a --triton plan on this architecture is refused by name (core/prism/memory_budget.py
+#     `deferred_drain_policy_of`: "declares no deferred_drain_cliff_bytes"). The default branch where
+#     PyTorch is installed (--compiled) reads none of them.
+#   * memory.compiled_conv3d_workspace_*: absent, a compiled plan holding a 3-D convolution is refused by
+#     name (core/prism/op_workspace.conv3d_workspace_bytes).
+#   * the autotune bucket ladders (autotune.buckets): absent, a Triton launch key on this profile is refused by
+#     name (nbxtensor ops/autotune_bucket.ladder_for).
+#   * measured: (bandwidths, rates): measured at a machine's first launch, never written here.
+
+# The engine's device string for the CUDA platform (the PyTorch branch's `cuda`, the Triton launcher's CUDA backend).
+device_prefix: "cuda"
+
+# Identity. `architecture` is the name the detector gives compute capability 7.5
+# (core/prism/autodetect.py `_NVIDIA_ARCH_MAP` / `_NVIDIA_ARCH_REFINE`); the capability is how the kernels'
+# resolver finds this file (core/config/loader.py `vendor_config_for_device`).
+architecture: turing
+compute_capability: "7.5"
+
+memory:
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html, read 2026-11-17,
+  # Table 34 "Memory Information per Compute Capability", column 7.5: "Maximum amount of shared memory per
+  # thread block: 64 KB" (with explicit opt-in; the page states 1 KB = 1024 bytes). 64 x 1024 = 65536.
+  # (Per SM: 64 KB.)
+  max_shared_memory_per_block: 65536
+  # SOURCE: same table, "Maximum number of 32-bit registers per thread block: 64 K" (1 K = 1024).
+  max_registers_per_block: 65536
+  # SOURCE: same table, "Maximum number of 32-bit registers per thread: 255".
+  max_registers_per_thread: 255
+  # SOURCE: same page, Table 33 "Device and Streaming Multiprocessor (SM) Information per Compute Capability":
+  # "Warp size: 32".
+  warp_size: 32
+  # A state page row is read in global-memory transactions of 32-byte segments of 128-byte lines.
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html, read 2026-11-17, "Coalesced Access to Global Memory": "the number of required
+  # transactions is equal to the number of required 128-byte aligned segments".
+  state_page_granule_bytes: 128
+  # A released page returns to the pool at once: kernels on one stream run in issue order.
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html, read 2026-11-17: "The order of execution of operations in a stream is sequential and the
+  # operations are executed in the order they are enqueued into the stream."
+  async_release: false
+  # NOT MEASURED on this architecture: the value that says so. The Triton arena's hold over the walked
+  # activations (core/prism/solver.py `_live_activation_mb`) and a stream chunk's driver overhead.
+  triton_arena_activation_factor: null
+  compiled_stream_driver_over_price: null
+  # THE COMPILED ENGINE'S TORCH CACHING ALLOCATOR (core/runtime/torch_allocator.py), a PyTorch setting, not an NVIDIA
+  # hardware value: PyTorch's CUDA caching allocator, the same allocator on every CUDA card, implements expandable
+  # segments (SOURCE: https://docs.pytorch.org/docs/2.14/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf
+  # "expandable_segments"; https://github.com/pytorch/pytorch/blob/v2.14.0/c10/cuda/CUDAAllocatorConfig.h). Every
+  # profile whose vendor allocator implements it declares it (nvidia/volta.yml holds the measured case and the reason),
+  # so a plan that mixes this card with another NVIDIA one runs one allocator mode. Not measured on this architecture.
+  # An operator's PYTORCH_ALLOC_CONF wins and is logged.
+  compiled_allocator_settings: "expandable_segments:True"
+  # THE COMPILED ENGINE'S ATTENTION (a fact of PyTorch on CUDA, not of the card): scaled_dot_product_attention
+  # dispatches to its memory-efficient kernel on compute capability 5.0 to 12.0 and its flash kernel on 8.0 to
+  # 12.0 (SOURCE: https://github.com/pytorch/pytorch/blob/v2.7.0/aten/src/ATen/native/transformers/cuda/sdp_utils.cpp, read 2026-11-17:
+  # check_mem_efficient_hardware_support, check_sm_version<sm50, sm120>), neither of which writes the full scores.
+  compiled_sdpa_full_scores: false
+  # PyTorch's CUDA caching allocator reuses a freed block for any request that fits (the same allocator on every
+  # CUDA card; nvidia/volta.yml holds the measured case): no retention beyond the live set.
+  compiled_allocator_retention: null
+  # What the compiled engine's other ops hold beyond their price: none stated for CUDA (core/prism/op_workspace.py).
+  compiled_op_workspace: {}
+
+precision:
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html, read 2026-11-17, Table 36 "Input Data Types Supported by Tensor Core Acceleration per
+  # Compute Capability", row 7.5: FP16 Yes.
+  supports_fp16: true
+  # SOURCE: same page, Table 32 "Bfloat16-precision floating-point operations": 7.x No; Table 36: no BF16 Tensor Core input at 7.5.
+  supports_bf16: false
+  # SOURCE: same page, Table 36, TF32 column: absent (no entry).
+  supports_tf32: false
+  # SOURCE: same page, Table 36, FP8 column: absent (no entry).
+  supports_fp8: false
+  # IEEE-754 binary64 in hardware. SOURCE: same page, Table 33, "Ratio of FP32 to FP64 Throughput": 32:1
+  # (a throughput ratio, so the unit exists; slow, not absent).
+  supports_fp64: true
+  # The two lines below are not card values. kernels_carry_fp64 is a CAPABILITY of each branch's own kernels:
+  # ATen carries float64 wherever the device does; Triton lowers double on the CUDA backend. stores_fp64 is the
+  # DtypeEngine's POLICY (the Triton branch is fp32-max). Read by `config.device_supports_fp64`.
+  kernels_carry_fp64:
+    compiled: true
+    triton: true
+  stores_fp64:
+    compiled: true
+    triton: false
+  # Attention operands that disagree in dtype take the narrowest: an engine POLICY (the half attention stays on the
+  # matrix unit), not a card value; read by `dtype.attention_operand_alignment`.
+  attention_operands: narrowest
+
+# NOT MEASURED on this architecture: the values that say so. The flash kernel at a power-of-two head dim >= 128
+# keeps its zero-pad detour (true only where the correctness oracle ran with the detour off on the arch).
+flash:
+  pow2_head_dim_correct: false
+# Convolution weights stay in the container's own order (KCRS) until KRSC is measured faster on the arch.
+conv:
+  weight_layout: KCRS
