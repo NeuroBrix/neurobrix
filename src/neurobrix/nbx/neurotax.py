@@ -263,6 +263,22 @@ class SynonymRegistry:
         "shared_expert_gate": "shared_router",
 
         # ===========================================
+        # LINEAR ATTENTION (gated delta rule)
+        # ===========================================
+        # The recurrent token mixer that replaces softmax attention in a linear-attention block,
+        # named by ROLE. Its state decays by exp(-exp(A_log) * softplus(a + dt_bias)) and is
+        # written with strength sigmoid(b); a short causal depthwise conv runs over the fused qkv;
+        # z gates the normed output.
+        "linear_attn": "lin_attn",
+        "A_log": "decay_log",                # log of the per-head decay rate
+        "dt_bias": "step_bias",              # time-step bias added before the softplus
+        "conv1d": "short_conv",              # short causal (depthwise) convolution over q, k, v
+        "in_proj_qkv": "qkv",                # fused query-key-value input projection
+        "in_proj_z": "out_gate_proj",        # z: the output gate's projection
+        "in_proj_a": "decay_gate_proj",      # a: the decay gate's projection
+        "in_proj_b": "beta_proj",            # b: the write-strength (beta) gate's projection
+
+        # ===========================================
         # ENCODERS (CLIP/T5)
         # ===========================================
         # `shared` is the T5/UMT5/CLIP TIED input embedding: the model ties one
