@@ -37,11 +37,14 @@ out without slowing any command.
   engine where PyTorch is installed, on three new profiles (`turing`, `ada`, `blackwell`) that hold the values NVIDIA
   documents for each compute capability, each with its source. These profiles are documentation-sourced and
   UNMEASURED: no kernel has run on these cards, no autotune key is certified for them, their speed is unknown. The
-  Triton engine (`--triton`) is refused by name on them: they hold no measured tuning values. On them the default
-  engine runs PyTorch's caching allocator with expandable segments, as on every other NVIDIA card.
-  - An A10 or RTX 30xx (8.6) is unchanged: a hardware profile given with `--hardware` that names the card
-    `architecture: ampere` plans on the Ampere (A100) profile, as on 0.6.16; detected with no `--hardware`, it is
-    still refused with "No hardware profile for nvidia/ampere_consumer".
+  Triton engine (`--triton`) is refused on them: the error names `deferred_drain_cliff_bytes`, a tuning value these
+  profiles do not state because it has never been measured on such a card. On them the default engine runs PyTorch's
+  caching allocator with expandable segments, as on every other NVIDIA card.
+  - An A10 or RTX 30xx (8.6) behaves exactly as on 0.6.16: detected with no `--hardware`, it is still refused with
+    "No hardware profile for nvidia/ampere_consumer"; a hardware file given with `--hardware` is read as before.
+  - The default engine on an NVIDIA or AMD GPU sets PyTorch's allocator through a call first released in torch 2.10.0.
+    An older torch is now refused before any weight loads, with the version it needs and the one installed (it ended
+    in an AttributeError); `pip install "neurobrix[pytorch]"` asks for torch 2.10.0 or newer.
   - On Windows, `CUDA_VISIBLE_DEVICES` is read when NeuroBrix detects the GPUs, as on Linux: `-1` hides every GPU.
   - The README says how to run on the CPU of a machine that has an NVIDIA GPU (Linux, macOS, cmd.exe, PowerShell).
   - Kepler, Maxwell, Pascal and the capabilities of major 11 and 12 are still refused by name.
