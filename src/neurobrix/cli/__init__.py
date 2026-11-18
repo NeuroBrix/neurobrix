@@ -696,12 +696,12 @@ def main():
     except ValueError as e:
         _fail(e, trace=False)
     except (PyTorchBranchNotInstalledError, TritonBranchNotInstalledError) as e:
-        # An engine asked for where its branch (torch, triton) is not installed: the named message, never a trace
+        # An engine asked for where its branch (torch, triton) is not installed: the named message, never a traceback dump
         _fail(e, trace=False)
     except ModuleNotFoundError as e:
         if (e.name or "").split(".")[0] != "torch":
             _fail(e, unexpected=True)
-        # a PyTorch-engine path that imports torch before any mode check: the same message, never a trace
+        # a PyTorch-engine path that imports torch before any mode check: the same message, never a traceback dump
         from neurobrix.core.runtime.engines import torch_missing_message
         _fail(torch_missing_message(f'neurobrix {args.command}'), trace=False)
     except Exception as e:
