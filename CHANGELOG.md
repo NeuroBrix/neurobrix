@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Six Apple kernel settings re-measured with a corrected timer.** Results were correct; the choice of the fastest setting was not proven.
+
 ## [0.6.17] - 2026-11-17
 
 With nbxtensor 0.1.11: 0.6.17 is the engine that runs Devstral for text on the PyTorch branch. A vision-language container answers a text

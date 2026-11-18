@@ -47314,19 +47314,19 @@
   "(1536, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_M": 64,
-     "BLOCK_N": 64,
+     "BLOCK_M": 32,
+     "BLOCK_N": 32,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-11-12T22:23:23+00:00",
-    "engine_version": "0.6.13",
+    "date": "2026-11-18T22:23:18+00:00",
+    "engine_version": "0.6.17",
     "backend": {
      "triton": "3.8.0+git4a15f415.nbx1",
      "name": "mps",
@@ -47365,21 +47365,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 0.044219496302133385,
-    "second_ms": 0.045086573033802285,
+    "best_ms": 2.3960024328792797,
+    "second_ms": 2.403877426596249,
     "candidates": 14,
     "accepted": 14,
-    "benched": 12,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.028,
-     "runs": 0.576,
-     "bench": 87.135
+     "oracle": 0.031,
+     "runs": 1.893,
+     "bench": 2.515
     },
     "stability_witness": {
-     "open_ms": 0.0819,
-     "close_ms": 0.0824,
-     "drift": 0.006,
+     "open_ms": 3.0691,
+     "close_ms": 3.1158,
+     "drift": 0.0152,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -47390,34 +47390,42 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 3",
-       "open_ms": 0.0931,
-       "close_ms": 0.0869,
-       "drift": 0.0672,
+       "what": "chunk 1 of 4",
+       "open_ms": 3.151,
+       "close_ms": 3.3351,
+       "drift": 0.0584,
        "attempt": 1,
        "contenders": 4
       },
       {
-       "what": "chunk 2 of 3",
-       "open_ms": 0.0848,
-       "close_ms": 0.0825,
-       "drift": 0.028,
+       "what": "chunk 2 of 4",
+       "open_ms": 3.1066,
+       "close_ms": 3.0863,
+       "drift": 0.0065,
        "attempt": 1,
        "contenders": 4
       },
       {
-       "what": "chunk 3 of 3",
-       "open_ms": 0.0831,
-       "close_ms": 0.0832,
-       "drift": 0.0015,
+       "what": "chunk 3 of 4",
+       "open_ms": 3.0848,
+       "close_ms": 3.0797,
+       "drift": 0.0017,
        "attempt": 1,
        "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.0783,
+       "close_ms": 3.0774,
+       "drift": 0.0003,
+       "attempt": 1,
+       "contenders": 2
       },
       {
        "what": "the final two",
-       "open_ms": 0.0819,
-       "close_ms": 0.0824,
-       "drift": 0.006,
+       "open_ms": 3.0691,
+       "close_ms": 3.1158,
+       "drift": 0.0152,
        "attempt": 1,
        "contenders": 2
       }
@@ -47534,8 +47542,8 @@
    "config": {
     "kwargs": {
      "BLOCK_M": 32,
-     "BLOCK_N": 32,
-     "BLOCK_K": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 2,
@@ -47544,8 +47552,8 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-11-12T22:29:54+00:00",
-    "engine_version": "0.6.13",
+    "date": "2026-11-18T22:23:21+00:00",
+    "engine_version": "0.6.17",
     "backend": {
      "triton": "3.8.0+git4a15f415.nbx1",
      "name": "mps",
@@ -47564,9 +47572,9 @@
     "launches": 1,
     "fp16_contract": false,
     "launch_deviations": [
-     0.0023197184405079636
+     0.0024416373639223735
     ],
-    "deviation": 0.0023197184405079636,
+    "deviation": 0.0024416373639223735,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-57; rows 739-796; rows 1479-1536) of 1536 rows",
     "machine": {
@@ -47584,21 +47592,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 0.04892707406099104,
-    "second_ms": 0.049759997175631294,
+    "best_ms": 6.127694447835286,
+    "second_ms": 6.1864097118377686,
     "candidates": 14,
     "accepted": 14,
     "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.055,
-     "runs": 0.134,
-     "bench": 177.434
+     "oracle": 0.065,
+     "runs": 0.138,
+     "bench": 3.171
     },
     "stability_witness": {
-     "open_ms": 0.08,
-     "close_ms": 0.0817,
-     "drift": 0.0203,
+     "open_ms": 3.0734,
+     "close_ms": 3.0765,
+     "drift": 0.001,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -47610,41 +47618,41 @@
      "brackets": [
       {
        "what": "chunk 1 of 4",
-       "open_ms": 0.0824,
-       "close_ms": 0.0835,
-       "drift": 0.013,
-       "attempt": 1,
+       "open_ms": 3.0694,
+       "close_ms": 3.1336,
+       "drift": 0.0209,
+       "attempt": 2,
        "contenders": 4
       },
       {
        "what": "chunk 2 of 4",
-       "open_ms": 0.0821,
-       "close_ms": 0.0822,
-       "drift": 0.001,
+       "open_ms": 3.0905,
+       "close_ms": 3.0652,
+       "drift": 0.0082,
        "attempt": 1,
        "contenders": 4
       },
       {
        "what": "chunk 3 of 4",
-       "open_ms": 0.0818,
-       "close_ms": 0.0815,
-       "drift": 0.0034,
+       "open_ms": 3.0733,
+       "close_ms": 3.0752,
+       "drift": 0.0006,
        "attempt": 1,
        "contenders": 4
       },
       {
        "what": "chunk 4 of 4",
-       "open_ms": 0.0801,
-       "close_ms": 0.082,
-       "drift": 0.0229,
+       "open_ms": 3.0737,
+       "close_ms": 3.0601,
+       "drift": 0.0044,
        "attempt": 1,
        "contenders": 1
       },
       {
        "what": "the final two",
-       "open_ms": 0.08,
-       "close_ms": 0.0817,
-       "drift": 0.0203,
+       "open_ms": 3.0734,
+       "close_ms": 3.0765,
+       "drift": 0.001,
        "attempt": 1,
        "contenders": 2
       }
@@ -47661,19 +47669,19 @@
   "(1536, 256, 2048, False, False, 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
-     "BLOCK_M": 64,
+     "BLOCK_M": 32,
      "BLOCK_N": 32,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 2,
-    "num_stages": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-11-12T22:23:53+00:00",
-    "engine_version": "0.6.13",
+    "date": "2026-11-18T22:23:27+00:00",
+    "engine_version": "0.6.17",
     "backend": {
      "triton": "3.8.0+git4a15f415.nbx1",
      "name": "mps",
@@ -47692,9 +47700,9 @@
     "launches": 1,
     "fp16_contract": false,
     "launch_deviations": [
-     0.0031877125764724575
+     0.00298893142480287
     ],
-    "deviation": 0.0031877125764724575,
+    "deviation": 0.00298893142480287,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-1536) of 1536 rows",
     "machine": {
@@ -47712,21 +47720,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 0.04390863797594259,
-    "second_ms": 0.04436368515902976,
+    "best_ms": 0.4613410897699057,
+    "second_ms": 0.46221898131900363,
     "candidates": 14,
     "accepted": 14,
-    "benched": 5,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.009,
-     "runs": 0.045,
-     "bench": 29.75
+     "oracle": 0.01,
+     "runs": 0.041,
+     "bench": 5.818
     },
     "stability_witness": {
-     "open_ms": 0.0818,
-     "close_ms": 0.0853,
-     "drift": 0.0432,
+     "open_ms": 3.1134,
+     "close_ms": 3.126,
+     "drift": 0.0041,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -47737,26 +47745,42 @@
      "chunk": 4,
      "brackets": [
       {
-       "what": "chunk 1 of 2",
-       "open_ms": 0.083,
-       "close_ms": 0.0823,
-       "drift": 0.0089,
+       "what": "chunk 1 of 4",
+       "open_ms": 3.2669,
+       "close_ms": 3.1637,
+       "drift": 0.0316,
+       "attempt": 3,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.097,
+       "close_ms": 3.1003,
+       "drift": 0.0011,
        "attempt": 1,
        "contenders": 4
       },
       {
-       "what": "chunk 2 of 2",
-       "open_ms": 0.0813,
-       "close_ms": 0.0827,
-       "drift": 0.017,
+       "what": "chunk 3 of 4",
+       "open_ms": 3.0973,
+       "close_ms": 3.0694,
+       "drift": 0.009,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.0888,
+       "close_ms": 3.1239,
+       "drift": 0.0114,
+       "attempt": 1,
+       "contenders": 2
       },
       {
        "what": "the final two",
-       "open_ms": 0.0818,
-       "close_ms": 0.0853,
-       "drift": 0.0432,
+       "open_ms": 3.1134,
+       "close_ms": 3.126,
+       "drift": 0.0041,
        "attempt": 1,
        "contenders": 2
       }
@@ -48496,8 +48520,8 @@
    "config": {
     "kwargs": {
      "BLOCK_M": 32,
-     "BLOCK_N": 32,
-     "BLOCK_K": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 2,
@@ -48506,8 +48530,8 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-11-12T22:26:56+00:00",
-    "engine_version": "0.6.13",
+    "date": "2026-11-18T22:23:30+00:00",
+    "engine_version": "0.6.17",
     "backend": {
      "triton": "3.8.0+git4a15f415.nbx1",
      "name": "mps",
@@ -48526,9 +48550,9 @@
     "launches": 1,
     "fp16_contract": false,
     "launch_deviations": [
-     0.003242367642368608
+     0.0033239631873195805
     ],
-    "deviation": 0.003242367642368608,
+    "deviation": 0.0033239631873195805,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-57; rows 739-796; rows 1479-1536) of 1536 rows",
     "machine": {
@@ -48546,21 +48570,21 @@
      },
      "clocks_mhz": null
     },
-    "best_ms": 0.048209201397020264,
-    "second_ms": 0.05006033350589375,
+    "best_ms": 6.174000104268392,
+    "second_ms": 6.300562381744385,
     "candidates": 14,
     "accepted": 14,
-    "benched": 13,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.054,
-     "runs": 0.181,
-     "bench": 182.409
+     "oracle": 0.06,
+     "runs": 0.163,
+     "bench": 2.654
     },
     "stability_witness": {
-     "open_ms": 0.0816,
-     "close_ms": 0.0827,
-     "drift": 0.0139,
+     "open_ms": 3.1004,
+     "close_ms": 3.1828,
+     "drift": 0.0266,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -48572,41 +48596,41 @@
      "brackets": [
       {
        "what": "chunk 1 of 4",
-       "open_ms": 0.0836,
-       "close_ms": 0.0839,
-       "drift": 0.0029,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 2 of 4",
-       "open_ms": 0.0825,
-       "close_ms": 0.0829,
-       "drift": 0.0045,
-       "attempt": 1,
-       "contenders": 4
-      },
-      {
-       "what": "chunk 3 of 4",
-       "open_ms": 0.0828,
-       "close_ms": 0.0814,
+       "open_ms": 3.1535,
+       "close_ms": 3.0997,
        "drift": 0.0171,
        "attempt": 1,
        "contenders": 4
       },
       {
-       "what": "chunk 4 of 4",
-       "open_ms": 0.0807,
-       "close_ms": 0.0812,
-       "drift": 0.0072,
+       "what": "chunk 2 of 4",
+       "open_ms": 3.1062,
+       "close_ms": 3.3254,
+       "drift": 0.0706,
        "attempt": 1,
-       "contenders": 1
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.1561,
+       "close_ms": 3.1078,
+       "drift": 0.0153,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.0952,
+       "close_ms": 3.1247,
+       "drift": 0.0095,
+       "attempt": 1,
+       "contenders": 2
       },
       {
        "what": "the final two",
-       "open_ms": 0.0816,
-       "close_ms": 0.0827,
-       "drift": 0.0139,
+       "open_ms": 3.1004,
+       "close_ms": 3.1828,
+       "drift": 0.0266,
        "attempt": 1,
        "contenders": 2
       }
