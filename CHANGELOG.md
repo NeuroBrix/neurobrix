@@ -112,12 +112,13 @@ out without slowing any command.
 - In a served conversation an answer continued from the cached context can differ from the same answer computed
   fresh; not fixed in this release.
 - On the Triton branch on our NVIDIA test machine, turn 5 of one served test conversation was judged wrong; the cause
-  is not determined; it is not new in this release.
+  is not determined; it is new in this release: 0.6.16 answered it right.
 - On Metal with cold caches the chunked gated delta rule can return a wrong value; present in nbxtensor 0.1.10 and
   0.1.11.
 - One Granite fresh answer differs in wording from 0.6.16; both coherent; cause not determined.
-- On a machine with several cards the very first launch of a model can take much longer than announced (18 minutes
-  measured on four cards); later launches are not affected.
+- On a machine with several cards the very first launch of a model can take much longer than announced: the
+  first-launch measurement announced about 86 s took 761 s on two cards and 981 s on four; later launches are not
+  affected.
 - Kepler GPUs (K40, K80) are not supported yet.
 - The native Windows install has not yet been run by us. Reports are welcome.
 
