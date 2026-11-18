@@ -111,8 +111,8 @@ out without slowing any command.
 
 - In a served conversation an answer continued from the cached context can differ from the same answer computed
   fresh; not fixed in this release.
-- On the Triton branch on Volta cards, turn 5 of one served test conversation was judged wrong; cause not determined;
-  also present in 0.6.16.
+- On the Triton branch on our NVIDIA test machine, turn 5 of one served test conversation was judged wrong; the cause
+  is not determined; it is not new in this release.
 - On Metal with cold caches the chunked gated delta rule can return a wrong value; present in nbxtensor 0.1.10 and
   0.1.11.
 - One Granite fresh answer differs in wording from 0.6.16; both coherent; cause not determined.
