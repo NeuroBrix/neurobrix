@@ -278,7 +278,10 @@ class _Normalizer:
     def __init__(self, spec: Optional[dict]):
         self.spec = spec
 
-    def __call__(self, text: str) -> str:
+    def __call__(self, text: str, prefix: bool = True) -> str:
+        """`prefix` False: the segment does not start the input and the tokenizer prefixes only the input's start
+        (`PyTokenizer.prefix_only_at_start`), so a `Prepend` step leaves it as it is."""
+        self._prefix = prefix
         return self._apply(self.spec, text)
 
     def _apply(self, spec: Optional[dict], text: str) -> str:
@@ -300,7 +303,7 @@ class _Normalizer:
         if t == "Lowercase":
             return text.lower()
         if t == "Prepend":
-            return spec.get("prepend", "") + text
+            return spec.get("prepend", "") + text if getattr(self, "_prefix", True) else text
         if t == "Replace":
             return self._replace(spec, text)
         if t == "Strip":
@@ -338,7 +341,10 @@ class _PreTokenizer:
     def __init__(self, spec: Optional[dict]):
         self.spec = spec
 
-    def __call__(self, text: str) -> List[str]:
+    def __call__(self, text: str, at_start: bool = True, prefix_only_at_start: bool = False) -> List[str]:
+        """`at_start`: the segment begins the input (offset 0). Metaspace's `first` scheme prefixes only such a segment,
+        and so does `always` when the tokenizer prefixes only the input's start (`PyTokenizer.prefix_only_at_start`)."""
+        self._at_start, self._prefix_only_at_start = at_start, prefix_only_at_start
         pieces = [text]
         pieces = self._apply(self.spec, pieces)
         return pieces
@@ -564,6 +570,9 @@ class _PreTokenizer:
         split = spec.get("split", True)
         out: List[str] = []
         first = True
+        at_start = getattr(self, "_at_start", True)
+        if prepend_scheme == "first" or getattr(self, "_prefix_only_at_start", False):
+            first = at_start
         for p in pieces:
             seg = p
             if (add_prefix_space or prepend_scheme in ("always", "first")) and first:
@@ -899,6 +908,11 @@ class PyTokenizer:
         for entry in data.get("added_tokens", []):
             self._add_token(_AddedToken(entry))
 
+        # The vendor's non-legacy SentencePiece tokenizers (tokenizer_config `legacy: false`) put the word-start prefix
+        # only at the start of the input, never again after an added token (transformers `_get_prepend_scheme`:
+        # "first"); the tokenizer.json alone says "Prepend" on every segment. Set by the owner that reads the config.
+        self.prefix_only_at_start = False
+
         # Post-processor
         self._post = data.get("post_processor")
         self._post_special = self._collect_post_special()
@@ -964,16 +978,20 @@ class PyTokenizer:
 
         tokens: List[str] = []
         ids: List[int] = []
+        at_start = True        # no added token before this segment: it begins the input
         for seg_text, seg_added in segments:
             if seg_added is not None:
                 tokens.append(seg_added.content)
                 ids.append(seg_added.id)
+                at_start = False
                 continue
             if seg_text == "":
                 continue
             # 2) normalize, 3) pre-tokenize, 4) BPE
-            norm = self._normalizer(seg_text)
-            for piece in self._pretok(norm):
+            norm = self._normalizer(seg_text, prefix=at_start or not self.prefix_only_at_start)
+            pieces = self._pretok(norm, at_start=at_start, prefix_only_at_start=self.prefix_only_at_start)
+            at_start = False
+            for piece in pieces:
                 for tok in self._bpe.tokenize_piece(piece):
                     tid = self._vocab.get(tok)
                     if tid is None:

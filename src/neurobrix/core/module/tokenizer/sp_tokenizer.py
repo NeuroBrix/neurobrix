@@ -719,6 +719,9 @@ class HFTokenizer:
 
         self._tokenizer = PyTokenizer.from_file(tokenizer_path)
         self._config = config if config is not None else {}
+        # tokenizer_config `legacy: false` (absent = legacy, the vendor's default): the word-start prefix goes only at
+        # the start of the input, as the vendor's tokenizer does, not after every added token
+        self._tokenizer.prefix_only_at_start = self._config.get("legacy", True) is False
 
         # Merge config-only added tokens (added_tokens_decoder) into the
         # matcher — PreTrainedTokenizerFast does this at load; some vendors
@@ -850,8 +853,9 @@ class HFTokenizer:
         if not tokenize:
             return formatted
 
-        # Tokenize the formatted string
-        encoding = self._tokenizer.encode(formatted)
+        # The template has written every special token it wants (its own BOS, or none): encoded as the vendor's
+        # apply_chat_template does, with no special token added (transformers: add_special_tokens=False)
+        encoding = self._tokenizer.encode(formatted, add_special_tokens=False)
         return encoding.ids
 
     def encode(
