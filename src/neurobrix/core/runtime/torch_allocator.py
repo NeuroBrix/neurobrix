@@ -49,10 +49,12 @@ OPERATOR_ENV = ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_HIP_AL
 
 #: The vendor-profile key, under `memory:`.
 PROFILE_KEY = "compiled_allocator_settings"
-#: The first torch release whose torch._C has the setter the settings go through
-#: (https://github.com/pytorch/pytorch/blob/v2.10.0/torch/csrc/DeviceAccelerator.cpp#L167; absent at v2.9.1); the
-#: `pytorch` extra's minimum in pyproject.toml is this release (tests/unit/packaging holds them equal).
-SETTER_TORCH = "2.10.0"
+#: The torch APIs the compiled engine calls that an older torch lacks, each "module, attribute": the allocator setter
+#: below (https://github.com/pytorch/pytorch/blob/v2.10.0/torch/csrc/DeviceAccelerator.cpp#L167) and the pinned
+#: host-cache release after every cuda/hip weight load (core/io/weight_loader.py;
+#: https://github.com/pytorch/pytorch/blob/v2.12.0/torch/accelerator/__init__.py#L15, absent at v2.11.0). The release that
+#: ships them all lives in ONE place, the `pytorch` extra of pyproject.toml, read back from the package metadata.
+COMPILED_TORCH_APIS = (("torch._C", "_accelerator_setAllocatorSettings"), ("torch.accelerator", "empty_host_cache"))
 #: The vendor-profile key of the pool's growth bound, a fraction of the device's memory, and the operator's own
 #: spelling of it (https://github.com/pytorch/pytorch/blob/v2.14.0/aten/src/ATen/mps/MPSAllocator.mm).
 FRACTION_KEY = "compiled_allocator_memory_fraction"
@@ -164,6 +166,46 @@ def declared_settings(plan: Any) -> Optional[str]:
     return next(iter(declared), None)
 
 
+def pytorch_extra_torch() -> str:
+    """The torch requirement of neurobrix's `pytorch` extra (pyproject.toml), read from the installed package's metadata:
+    the one place the compiled engine's torch minimum lives. Metadata that cannot say it is refused by name."""
+    import importlib.metadata
+    from packaging.requirements import Requirement
+    try:
+        requires = importlib.metadata.requires("neurobrix") or []
+    except importlib.metadata.PackageNotFoundError:
+        raise RuntimeError("this python has no package metadata for neurobrix (a source tree on the path, not installed), "
+                           "so the torch its `pytorch` extra asks for cannot be read: install it, pip install -e "
+                           "\".[pytorch]\" from the source tree") from None
+    for line in requires:
+        req = Requirement(line)
+        if req.name == "torch" and req.marker is not None and req.marker.evaluate({"extra": "pytorch"}):
+            return f"torch{req.specifier}"
+    raise RuntimeError(f"the installed neurobrix metadata names no torch under its `pytorch` extra ({requires}): "
+                       f"reinstall neurobrix")
+
+
+def require_compiled_torch(torch: Any) -> None:
+    """Refuse, by name, a torch that lacks an API the compiled engine calls (COMPILED_TORCH_APIS): before the allocator
+    setter and before any cuda/hip weight load, never a skipped call nor an older API in its place."""
+    missing = []
+    for module, name in COMPILED_TORCH_APIS:
+        owner = torch
+        for part in module.split(".")[1:]:
+            owner = getattr(owner, part, None)
+        if not hasattr(owner, name):
+            missing.append(f"{module}.{name}")
+    if not missing:
+        return
+    lacks = f"the compiled engine calls {', '.join(missing)}, which the installed torch {torch.__version__} lacks"
+    try:
+        need = pytorch_extra_torch()
+    except RuntimeError as exc:
+        raise RuntimeError(f"{lacks}; {exc}") from None
+    raise RuntimeError(f"{lacks}; neurobrix's pytorch extra asks for {need}: upgrade it, pip install --upgrade "
+                       f"\"{need}\" (your platform's build: https://pytorch.org/get-started/locally/)")
+
+
 def configure_torch_allocator(plan: Any) -> Optional[str]:
     """Apply the declared allocator settings to torch's caching allocator. Returns the settings
     in force by the engine's doing, or None (none declared, or the operator's own)."""
@@ -180,12 +222,8 @@ def configure_torch_allocator(plan: Any) -> Optional[str]:
     if _applied == value:
         return value
     import torch
-    setter = getattr(torch._C, "_accelerator_setAllocatorSettings", None)
-    if setter is None:
-        raise RuntimeError(f"the vendor profile declares memory.{PROFILE_KEY} {value!r}, applied through torch's "
-                           f"allocator setter, first released in torch {SETTER_TORCH}; the installed torch is "
-                           f"{torch.__version__}: upgrade it, pip install --upgrade \"torch>={SETTER_TORCH}\" (your "
-                           f"platform's build: https://pytorch.org/get-started/locally/)")
+    require_compiled_torch(torch)
+    setter = getattr(torch._C, "_accelerator_setAllocatorSettings")      # present: required just above
     setter(value)
     _applied = value
     _log.debug(f"   [Allocator] compiled engine: torch caching allocator {value} "

@@ -62,6 +62,7 @@ PINNED_IN_FLIGHT = _pinned_in_flight()
 
 # Centralized dtype conversion — single source of truth
 from neurobrix.core.device_utils import device_sync
+from neurobrix.core.runtime.torch_allocator import require_compiled_torch
 from neurobrix.core.dtype.converter import safe_dtype_convert
 # The absent-weight rule and the safetensors header reader: the container layer's, torch-free —
 # one rule and one message for both engines and the validator (R30).
@@ -874,6 +875,8 @@ class WeightLoader:
 
         # Determine if we're loading to GPU
         is_cuda = device.startswith("cuda") or device.startswith("hip")
+        if is_cuda:
+            require_compiled_torch(torch)       # before this file's first byte (core/runtime/torch_allocator.py)
 
         # FAST PATH: Load from cache (no ZIP extraction needed)
         if self.use_cache and self._cache_path:
@@ -994,6 +997,8 @@ class WeightLoader:
         """
         # Determine if we're loading to GPU
         is_cuda = device.startswith("cuda") or device.startswith("hip")
+        if is_cuda:
+            require_compiled_torch(torch)       # before this file's first byte (core/runtime/torch_allocator.py)
 
         # FAST PATH: Load from cache
         if self.use_cache and self._cache_path:

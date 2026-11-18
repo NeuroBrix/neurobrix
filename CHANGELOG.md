@@ -42,9 +42,13 @@ out without slowing any command.
   caching allocator with expandable segments, as on every other NVIDIA card.
   - An A10 or RTX 30xx (8.6) behaves exactly as on 0.6.16: detected with no `--hardware`, it is still refused with
     "No hardware profile for nvidia/ampere_consumer"; a hardware file given with `--hardware` is read as before.
-  - The default engine on an NVIDIA or AMD GPU sets PyTorch's allocator through a call first released in torch 2.10.0.
-    An older torch is now refused before any weight loads, with the version it needs and the one installed (it ended
-    in an AttributeError); `pip install "neurobrix[pytorch]"` asks for torch 2.10.0 or newer.
+  - The default engine on an NVIDIA or AMD GPU needs torch 2.12.0 or newer: it sets PyTorch's allocator through a call
+    first released in torch 2.10.0 and releases PyTorch's pinned host cache after every GPU load through one first
+    released in torch 2.12.0. An older torch is now refused before any weight loads, naming the calls it lacks, the
+    version installed and the one needed (it ended in an AttributeError), for example on torch 2.11:
+    `the compiled engine calls torch.accelerator.empty_host_cache, which the installed torch 2.11.0+cpu lacks;
+    neurobrix's pytorch extra asks for torch>=2.12.0: upgrade it, pip install --upgrade "torch>=2.12.0"`.
+    `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer.
   - On Windows, `CUDA_VISIBLE_DEVICES` is read when NeuroBrix detects the GPUs, as on Linux: `-1` hides every GPU.
   - The README says how to run on the CPU of a machine that has an NVIDIA GPU (Linux, macOS, cmd.exe, PowerShell).
   - Kepler, Maxwell, Pascal and the capabilities of major 11 and 12 are still refused by name.
