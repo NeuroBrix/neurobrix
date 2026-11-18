@@ -68,8 +68,9 @@ def _load_and_preprocess_image(image_path: str, cache_path: Path):
 def cmd_upscale(args):
     """Image super-resolution via an upscaler container."""
     from neurobrix.nbx import NBXContainer
-    from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
+    from neurobrix.core.prism import PrismSolver, InputConfig
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.core.prism.loader import launch_profile
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.core.runtime.output_dispatch import save_image
@@ -111,10 +112,8 @@ def cmd_upscale(args):
     input_var = _find_input_variable(topology)
 
     log.debug("[2/4] Solving hardware allocation...")
-    if args.hardware:
-        hw_profile = load_profile(args.hardware)
-    else:
-        hw_profile = load_profile(get_or_create_default_profile())
+    hw_profile = launch_profile(args.hardware or get_or_create_default_profile(), execution_mode,
+                                container_dir=cache_path)
     log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
     log.debug("[3/4] Preprocessing input image...")

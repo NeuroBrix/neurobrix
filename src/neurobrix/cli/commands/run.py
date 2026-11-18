@@ -527,7 +527,7 @@ def _execute(executor, inputs, args):
 def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
-    from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
+    from neurobrix.core.prism import PrismSolver, InputConfig
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.executor import RuntimeExecutor
@@ -679,12 +679,8 @@ def cmd_run(args):
     hardware_id = args.hardware or get_or_create_default_profile()
     # A generated profile measures, once, the device and host facts Prism's time estimate reads and neither it nor its
     # vendor file states; the loader's rate is measured by the loader itself at its first real load (S2, 2026-10-27)
-    from neurobrix.core.prism import autodetect as _autodetect
-    from neurobrix.core.prism.host_footprint import engine_of as _engine_of
-    _autodetect.ACTIVE_HARDWARE_ID = hardware_id       # the profile this run's loaders measure themselves into (set
-    # before the first device is touched: a device's refusal there names the profile that planned it)
-    _autodetect.ensure_measured_facts(hardware_id, _engine_of(execution_mode), container_dir=cache_path)
-    hw_profile = load_profile(hardware_id)
+    from neurobrix.core.prism.loader import launch_profile
+    hw_profile = launch_profile(hardware_id, execution_mode, container_dir=cache_path)
     log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
     # Build InputConfig for activation profiling (cache_path: the container's, read and asserted above)

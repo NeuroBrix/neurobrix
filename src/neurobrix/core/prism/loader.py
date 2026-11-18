@@ -276,6 +276,20 @@ def _refuse_unified_without_largest_allocation(spec: DeviceSpec, path) -> None:
         f"missing).")
 
 
+def launch_profile(hardware_id: str, mode: str, container_dir=None) -> PrismProfile:
+    """The profile a launch that loads a model on a device plans with: THE one path of every such entry point (`run`,
+    the serve daemon's engine, `upscale`). This launch's profile named for the loaders' own rates
+    (`autodetect.ACTIVE_HARDWARE_ID`, set before the first device is touched: a device's refusal there names the profile
+    that planned it), the first-launch measurements asked for the engine `mode` runs on (`ensure_measured_facts`: a
+    generated profile's card gets its runtime total and context there), then the profile read. A first serve on a fresh
+    home planned on a profile without them and was refused (gate cell L3, 18/11/2026)."""
+    from neurobrix.core.prism import autodetect
+    from neurobrix.core.prism.host_footprint import engine_of
+    autodetect.ACTIVE_HARDWARE_ID = hardware_id
+    autodetect.ensure_measured_facts(hardware_id, engine_of(mode), container_dir=container_dir)
+    return load_profile(hardware_id)
+
+
 def load_profile(hardware_id: str) -> PrismProfile:
     """
     Load hardware profile from YAML file.

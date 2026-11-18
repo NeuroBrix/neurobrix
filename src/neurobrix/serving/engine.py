@@ -114,7 +114,7 @@ class InferenceEngine:
         weights persist across all subsequent requests.
         """
         from neurobrix.nbx import NBXContainer
-        from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
+        from neurobrix.core.prism import PrismSolver, InputConfig
         from neurobrix.core.runtime.loader import NBXRuntimeLoader
         from neurobrix.core.runtime.executor import RuntimeExecutor
         from neurobrix.cli.utils import find_model
@@ -130,19 +130,16 @@ class InferenceEngine:
         self._family = manifest.get("family")
         neural_components = self._container.get_neural_components()
 
-        # 3. Solve Prism allocation
-        hw_profile = load_profile(self.hardware_id)
-
+        # 3. Solve Prism allocation, on the profile every launch plans with (the first-launch measurements asked)
         cache_path = self._container._cache_path
+        from neurobrix.core.prism.loader import launch_profile
+        hw_profile = launch_profile(self.hardware_id, self.mode, container_dir=cache_path)
         # the declared sub-components, once, at load: a daemon that cannot get one never becomes ready, and a request
         # never fetches, hashes or imports one
         from neurobrix.processors import open_declared
         open_declared(manifest, cache_path, [c.name for c in neural_components])
         defaults_path = cache_path / "runtime" / "defaults.json"
-        cached_defaults = {}
-        if defaults_path.exists():
-            with open(defaults_path) as f:
-                cached_defaults = json.load(f)
+        cached_defaults = json.loads(defaults_path.read_text()) if defaults_path.exists() else {}
 
         # Same cascade as the CLI, same refusal. 1024/1024/8 stood here and made
         # the serving path plan for a request nobody sent — and it is the SAME
