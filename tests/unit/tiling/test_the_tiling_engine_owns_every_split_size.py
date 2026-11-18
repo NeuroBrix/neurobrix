@@ -342,7 +342,7 @@ def test_a_refused_attention_chunk_is_an_error_naming_its_key_never_a_smaller_re
 
     launches = []
 
-    def _refused(q_c, k, v, attn_mask=None, is_causal=False, scale=None):
+    def _refused(q_c, k, v, attn_mask=None, is_causal=False, scale=None, return_lse=False):   # nbxtensor 0.1.11 call shape
         launches.append(1)
         raise DeviceOOMError("GPU malloc failed (injected)", requested=4 * GiB, device_idx=0)
 
