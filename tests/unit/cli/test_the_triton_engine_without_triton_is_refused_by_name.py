@@ -107,3 +107,30 @@ def test_the_refusal_says_where_a_triton_comes_from_or_that_none_exists(monkeypa
     assert expect in text, text
     if "PyPI publishes no triton" in text:
         assert 'pip install "neurobrix[pytorch]"' in text and "--compiled" in text, text
+
+
+@pytest.mark.parametrize("torch_installed", [True, False])
+def test_where_neurobrix_asks_for_triton_the_pytorch_engine_is_offered_by_its_flag_only_when_torch_is_installed(
+        monkeypatch, torch_installed):
+    """Linux x86_64 (neurobrix asks for triton there), triton absent: with torch installed the refusal offers
+    --compiled; with torch absent too it names the PyTorch install, never --compiled alone (that flag would meet the
+    torch refusal next). Decided by what is installed (the import finder), never by the platform. Before 2026-11-18 the
+    torch-absent text offered "--compiled (or --sequential)" alone (red)."""
+    import importlib.metadata
+    import importlib.util
+    import platform
+    from neurobrix.core.runtime import engines
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.metadata, "requires", lambda name: [_triton_line(), "numpy>=1.24.0"])
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a: None if name == "torch" and not torch_installed else real(name, *a))
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    text = engines.triton_missing_message("execution mode 'triton'")
+    assert 'neurobrix asks for it on linux x86_64: pip install "triton"' in text, text
+    if torch_installed:
+        assert text.endswith("Or run the PyTorch engine, which needs no triton: --compiled (or --sequential)."), text
+    else:
+        assert "needs no triton: --compiled" not in text, text
+        assert 'pip install "neurobrix[pytorch]", and run with --compiled (or --sequential).' in text, text
+        assert "https://pytorch.org/get-started/locally/" in text, text

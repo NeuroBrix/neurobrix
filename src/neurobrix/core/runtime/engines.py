@@ -76,14 +76,15 @@ def triton_missing_message(what: str) -> str:
     here = {"sys_platform": sys.platform, "platform_machine": platform.machine()}     # what the message names
     req = next((r for r in reqs if r.name == "triton" and (r.marker is None or r.marker.evaluate(here))), None)
     here = " ".join(here.values())
-    if req is not None:
+    install = ("install the PyTorch build for your hardware (https://pytorch.org/get-started/locally/), then pip "
+               "install \"neurobrix[pytorch]\", and run with --compiled")
+    if req is not None:     # the PyTorch engine as it stands here: its flag with torch installed, else its install
         return (f"{what} runs on the Triton engine, and triton is not installed in this environment "
                 f"({sys.executable}).\n  neurobrix asks for it on {here}: pip install \"{req.name}{req.specifier}\"\n"
-                f"  Or run the PyTorch engine, which needs no triton: --compiled (or --sequential).")
-    return (f"{what} runs on the Triton engine, which needs triton, and PyPI publishes no triton for {here}: the "
-            f"Triton engine does not run on this platform.\n  The PyTorch engine runs here: install the PyTorch build "
-            f"for your hardware (https://pytorch.org/get-started/locally/), then pip install \"neurobrix[pytorch]\", "
-            f"and run with --compiled (or no engine flag).")
+                f"  Or run the PyTorch engine, which needs no triton: "
+                f"{'--compiled' if importlib.util.find_spec('torch') is not None else install} (or --sequential).")
+    return (f"{what} runs on the Triton engine, which needs triton, and PyPI publishes no triton for {here}: the Triton "
+            f"engine does not run on this platform.\n  The PyTorch engine runs here: {install} (or no engine flag).")
 
 
 def default_mode() -> tuple:
