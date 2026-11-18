@@ -109,16 +109,15 @@ out without slowing any command.
 
 ### Known issues
 
-- With `neurobrix serve`, a request that continues an earlier conversation (a turn that reuses the cached history) can
-  give a different answer than the same prompt computed fresh, even at temperature 0. This happens with nbxtensor
-  0.1.10 as with 0.1.11. It is known and the root, in the tensor library, is not fixed: the single-token decode step
-  does not compute its rows in the same order as the prefill. With nbxtensor 0.1.11 the served bytes are the same from
-  run to run on one install.
-- In our five-turn served test with a small model (granite-3.1-1b-a400m-instruct), the answer to the fifth turn was
-  wrong on the Triton engine, on an NVIDIA GPU and on a Mac. On the NVIDIA GPU we have not determined whether the
-  reused history or the model itself causes it.
-- On Metal, models that use the chunked gated delta rule can get a wrong result from it at sequence length 1 when
-  every cache is cold (nbxtensor 0.1.10 and 0.1.11). The root is not located.
+- In a served conversation an answer continued from the cached context can differ from the same answer computed
+  fresh; not fixed in this release.
+- On the Triton branch on Volta cards, turn 5 of one served test conversation was judged wrong; cause not determined;
+  also present in 0.6.16.
+- On Metal with cold caches the chunked gated delta rule can return a wrong value; present in nbxtensor 0.1.10 and
+  0.1.11.
+- One Granite fresh answer differs in wording from 0.6.16; both coherent; cause not determined.
+- On a machine with several cards the very first launch of a model can take much longer than announced (18 minutes
+  measured on four cards); later launches are not affected.
 - Kepler GPUs (K40, K80) are not supported yet.
 - The native Windows install has not yet been run by us. Reports are welcome.
 
