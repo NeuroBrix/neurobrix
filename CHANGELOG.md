@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.17] - 2026-11-17
 
-0.6.17 is the engine that runs Devstral for text on the PyTorch branch. A vision-language container answers a text
+With nbxtensor 0.1.11: 0.6.17 is the engine that runs Devstral for text on the PyTorch branch. A vision-language container answers a text
 request with no image, NeuroTax 5.1 names the linear-attention blocks, and the engine says when a newer release is
 out without slowing any command.
 
@@ -81,7 +81,10 @@ out without slowing any command.
   x86_64 and aarch64 only, and the requirement now names those two. `--triton` and `--triton-sequential` where triton
   is not installed are refused before anything loads, on `neurobrix run` and `neurobrix serve` (`serve` let them
   through): on Windows `PyPI publishes no triton for win32 AMD64: the Triton engine does not run on this platform`,
-  followed by the PyTorch engine's install; where neurobrix asks for triton, `pip install "triton"`.
+  followed by the PyTorch engine's install; where neurobrix asks for triton, `pip install "triton"`, and the PyTorch
+  engine's flag, or its install where torch is not installed either. neurobrix pins nbxtensor 0.1.11, which asks for
+  triton on the same two platforms: nbxtensor 0.1.10 asked for it on every platform but macOS, so a native-Windows
+  `pip install neurobrix` found no solution.
 - **The PyTorch engine needs no triton in either mode.** `--sequential` made the Triton engine's hardware declaration
   and stopped with `No module named 'triton'` on a host without it; a plan that tiles a module with in-place adds or a
   pixel_shuffle chain imported the Triton kernels' modules under `--compiled` too. Both now reach triton only in the
@@ -104,11 +107,20 @@ out without slowing any command.
   reads exactly NeuroTax 5.0 and refuses such a container by name; install 0.6.17 to run it. Containers built for
   5.0 load in 0.6.17 unchanged.
 
-### Known issue
+### Known issues
 
-- **A served model may answer a repeated request differently after a prefix-cache hit; fix planned in the library.**
-  On one NVIDIA card, a served model's 20 repeated answers after a cache hit were byte-equal from run to run and
-  between 0.6.16 and 0.6.17; the same comparison has not been measured on a Mac.
+- With `neurobrix serve`, a request that continues an earlier conversation (a turn that reuses the cached history) can
+  give a different answer than the same prompt computed fresh, even at temperature 0. This happens with nbxtensor
+  0.1.10 as with 0.1.11. It is known and the root, in the tensor library, is not fixed: the single-token decode step
+  does not compute its rows in the same order as the prefill. With nbxtensor 0.1.11 the served bytes are the same from
+  run to run on one install.
+- In our five-turn served test with a small model (granite-3.1-1b-a400m-instruct), the answer to the fifth turn was
+  wrong on the Triton engine, on an NVIDIA GPU and on a Mac. On the NVIDIA GPU we have not determined whether the
+  reused history or the model itself causes it.
+- On Metal, models that use the chunked gated delta rule can get a wrong result from it at sequence length 1 when
+  every cache is cold (nbxtensor 0.1.10 and 0.1.11). The root is not located.
+- Kepler GPUs (K40, K80) are not supported yet.
+- The native Windows install has not yet been run by us. Reports are welcome.
 
 ## [0.6.16] - 2026-11-15
 
