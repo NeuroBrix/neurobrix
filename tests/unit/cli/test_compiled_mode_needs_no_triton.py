@@ -130,16 +130,21 @@ def test_the_wrappers_module_cannot_import_without_the_wheel(without_triton):
         _fresh("nbxtensor.ops.wrappers")
 
 
-def test_the_sequential_mode_makes_no_declaration_that_needs_triton(without_triton):
+def test_the_sequential_mode_makes_no_declaration_that_needs_triton(without_triton, monkeypatch):
     """`--sequential` on a host without triton died in `declare_for` (cli/engine_choice.py) with
     `No module named 'triton'`: the declaration imports `nbxtensor.ops.wrappers`, and no PyTorch mode reads it.
-    Measured 2026-11-18 on granite with triton blocked; with the declaration skipped the run answered."""
+    Measured 2026-11-18 on granite with triton blocked; with the declaration skipped the run answered. The declaration
+    is recorded, not made: whether the wrappers are already imported depends on the tests run before this one."""
     choice = _fresh("neurobrix.cli.engine_choice")
-    profile = object()          # the declaration's import comes before any read of the profile
+    import neurobrix.triton.dtype as tdt
+    declared = []
+    monkeypatch.setattr(tdt, "declare_hardware_profile", lambda profile: declared.append(profile))
     for mode in ("compiled", "sequential"):
-        choice.declare_for(mode, profile)
-    with pytest.raises(ModuleNotFoundError, match="triton"):
-        choice.declare_for("triton", profile)       # the Triton modes still declare: their wrappers read it
+        choice.declare_for(mode, "a profile")
+    assert declared == [], "a PyTorch mode made the Triton branch's declaration, which needs triton"
+    for mode in ("triton", "triton_sequential"):
+        choice.declare_for(mode, mode)              # the Triton modes still declare: their wrappers read it
+    assert declared == ["triton", "triton_sequential"], declared
 
 
 class _Executor:
