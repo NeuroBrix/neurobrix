@@ -89,9 +89,9 @@ def _triton_backend_present(log) -> bool:
 
 
 def declare_for(mode: str, hw_profile) -> None:
-    """The Triton branch's hardware declaration (`triton.dtype.declare_hardware_profile`), made where a Triton kernel
-    can run: every mode but `compiled`, as `run` has always done. `compiled` never imports the Triton modules, so a
-    host without Triton (a Mac's PyTorch engine) or without a GPU (a CPU host) runs it."""
-    if mode != "compiled":
+    """The Triton branch's hardware declaration (`triton.dtype.declare_hardware_profile`, which needs triton), in the
+    Triton modes only, as `serving/engine.py` gates it: no PyTorch mode reads it, so a host without triton runs them."""
+    from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
+    if mode in TRITON_ENGINES:
         from neurobrix.triton.dtype import declare_hardware_profile
         declare_hardware_profile(hw_profile)

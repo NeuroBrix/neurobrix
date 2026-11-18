@@ -106,7 +106,7 @@ def test_the_compiled_run_path_does_not_reach_the_triton_wrappers(without_triton
         "(cli/engine_choice.declare_for)")
     gate = inspect.getsource(choice.declare_for)
     i = gate.rindex("declare_hardware_profile(")    # the call: the engine's declaration of the profile to the Triton surface
-    assert 'mode != "compiled"' in gate[:i], (
+    assert "if mode in TRITON_ENGINES:" in gate[:i], (
         "the Triton wrapper surface is configured without asking the mode; "
         "on a machine with no Triton wheel that import is fatal and the "
         "compiled path never needed it")
@@ -128,3 +128,58 @@ def test_the_wrappers_module_cannot_import_without_the_wheel(without_triton):
     """
     with pytest.raises(ModuleNotFoundError, match="triton"):
         _fresh("nbxtensor.ops.wrappers")
+
+
+def test_the_sequential_mode_makes_no_declaration_that_needs_triton(without_triton):
+    """`--sequential` on a host without triton died in `declare_for` (cli/engine_choice.py) with
+    `No module named 'triton'`: the declaration imports `nbxtensor.ops.wrappers`, and no PyTorch mode reads it.
+    Measured 2026-11-18 on granite with triton blocked; with the declaration skipped the run answered."""
+    choice = _fresh("neurobrix.cli.engine_choice")
+    profile = object()          # the declaration's import comes before any read of the profile
+    for mode in ("compiled", "sequential"):
+        choice.declare_for(mode, profile)
+    with pytest.raises(ModuleNotFoundError, match="triton"):
+        choice.declare_for("triton", profile)       # the Triton modes still declare: their wrappers read it
+
+
+class _Executor:
+    """What `register_into_graph_executor` asks of a PyTorch-mode executor."""
+
+    def __init__(self, mode):
+        self.mode = mode
+        self.interceptors = {}
+
+    def register_op_uid_interceptors(self, interceptors, groups=(), planned=()):
+        self.interceptors.update(interceptors)
+
+
+@pytest.fixture
+def torch_first():
+    """torch imported before the block: the block's restore drops what it imported, and torch is not re-importable."""
+    return pytest.importorskip("torch")
+
+
+@pytest.mark.parametrize("mode", ["compiled", "sequential"])
+def test_the_tiling_interceptors_of_a_pytorch_mode_build_and_run_without_triton(torch_first, without_triton, mode,
+                                                                                  monkeypatch):
+    """A tiled plan with in-place adds and a pixel_shuffle proxy chain imported the NBX kernels' modules (which need
+    triton) before asking the tensor's type (core/module/tiling_engine.py): a PyTorch mode on a host without triton
+    met a raw ModuleNotFoundError. The torch tensors take the torch path and give torch's own answer."""
+    torch = torch_first
+    te = _fresh("neurobrix.core.module.tiling_engine")
+    plan = te.OpLevelTilingPlan("decoder")
+    plan.add_inplace_add("add_0", 0)
+    spec = {"expand_uid": "e", "clone_uid": "c", "view_uid": "v", "pixel_shuffle_uid": "ps", "bcast_dim": 1,
+            "bcast_factor": 4, "post_clone_shape": [1, 8, 2, 2], "post_view_shape": [1, 8, 2, 2], "upscale_factor": 2}
+    monkeypatch.setattr(te.OpLevelTilingEngine, "_detect_pixel_shuffle_broadcast_chains",
+                        staticmethod(lambda ge: [spec]))
+    monkeypatch.setattr(te.OpLevelTilingEngine, "_detect_inplace_unary_candidates",
+                        staticmethod(lambda ge: []))
+    ge = _Executor(mode)
+    te.OpLevelTilingEngine(plan).register_into_graph_executor(ge)
+    a, b = torch.arange(6.0).reshape(2, 3), torch.ones(2, 3)
+    expect = a + 2.0 * b
+    out = ge.interceptors["add_0"](a, b, 2.0)
+    assert out is a and torch.equal(out, expect)
+    x = torch.arange(32.0).reshape(1, 8, 2, 2)
+    assert torch.equal(ge.interceptors["ps"](x, 2), torch.nn.functional.pixel_shuffle(x, 2))

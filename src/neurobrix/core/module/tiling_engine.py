@@ -1401,14 +1401,14 @@ class OpLevelTilingEngine:
         # semantics — torch CachingAllocator already handles the alloc
         # pattern efficiently but in-place still saves a transient).
         if self.plan.inplace_adds:
-            from nbxtensor.ops.elementwise_wrappers import add_inplace_nbx
             from nbxtensor.tensor import NBXTensor
 
             def make_inplace_add_interceptor(_reuse_index):
                 def _inplace_add(a, b, alpha=1.0, *args, **kwargs):
                     target = a if _reuse_index == 0 else b
                     other = b if _reuse_index == 0 else a
-                    if isinstance(target, NBXTensor):
+                    if isinstance(target, NBXTensor):       # its kernel's module needs triton: imported here only
+                        from nbxtensor.ops.elementwise_wrappers import add_inplace_nbx
                         return add_inplace_nbx(target, other,
                                                alpha=float(alpha))
                     if not is_torch_tensor(target):
@@ -1509,14 +1509,14 @@ class OpLevelTilingEngine:
                 return _view_proxy
 
             def make_pixel_shuffle_proxy_interceptor():
-                from nbxtensor.ops.shape_wrappers import pixel_shuffle_wrapper as nbx_pixel_shuffle
-
                 def _pixel_shuffle_proxy(input_tensor, upscale_factor,
                                          *_args, **_kwargs):
                     # NBX path (proxy or plain NBXTensor): the wrapper
                     # auto-routes proxy -> _pixel_shuffle_broadcast_aware,
-                    # plain NBXTensor -> standard kernel.
+                    # plain NBXTensor -> standard kernel. Its module needs
+                    # triton: imported on this branch only.
                     if isinstance(input_tensor, (BroadcastClonePyroxy, NBXTensor)):
+                        from nbxtensor.ops.shape_wrappers import pixel_shuffle_wrapper as nbx_pixel_shuffle
                         return nbx_pixel_shuffle(input_tensor, int(upscale_factor))
                     # Torch path: native pixel_shuffle (compiled mode).
                     import torch.nn.functional as F
