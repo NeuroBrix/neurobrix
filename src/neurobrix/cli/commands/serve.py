@@ -56,10 +56,10 @@ def cmd_serve(args):
         mode, _said = default_mode()
         log.info(f"[Serve] {_said}")
     # The PyTorch branch without torch installed: refused by name before the daemon starts (core/runtime/engines.py).
-    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
+    from neurobrix.core.runtime import engines
     try:
-        require_engine(mode)
-    except PyTorchBranchNotInstalledError as exc:
+        engines.require_engine(mode)
+    except (engines.PyTorchBranchNotInstalledError, engines.TritonBranchNotInstalledError) as exc:
         log.error(f"Error: {exc}")
         sys.exit(1)
 

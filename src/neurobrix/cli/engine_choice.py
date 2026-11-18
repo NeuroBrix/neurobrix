@@ -57,10 +57,10 @@ def choose_engine(args, log) -> Optional[str]:
     if asked:
         log.info(f"[Engine] engine: {mode}")       # the engine a flag asked for, said like the default
     # The PyTorch branch without torch installed: refused by name before anything is loaded (core/runtime/engines.py).
-    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, require_engine
+    from neurobrix.core.runtime import engines
     try:
-        require_engine(mode)
-    except PyTorchBranchNotInstalledError as exc:
+        engines.require_engine(mode)
+    except (engines.PyTorchBranchNotInstalledError, engines.TritonBranchNotInstalledError) as exc:
         log.error(f"Error: {exc}")
         return None
     return mode

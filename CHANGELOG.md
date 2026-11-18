@@ -50,7 +50,7 @@ out without slowing any command.
     lacks; neurobrix's pytorch extra asks for torch>=2.12.0: upgrade it, pip install --upgrade "torch>=2.12.0"`.
     `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer on Linux and Windows. On macOS it asks for
     torch 2.1.0 or newer, as 0.6.16 did: a Mac reaches neither call (the Apple GPU runs through MPS, an Intel Mac on
-    its CPU), and PyPI's newest torch for an Intel Mac is 2.2.2, for a Mac on macOS 11 to 13 2.11.0.
+    its CPU), and PyPI's newest torch for an Intel Mac is 2.2.2, for an Apple-silicon Mac on macOS 11 to 13 2.11.0.
   - On Windows, `CUDA_VISIBLE_DEVICES` is read when NeuroBrix detects the GPUs, as on Linux: `-1` hides every GPU.
   - The README says how to run on the CPU of a machine that has an NVIDIA GPU (Linux, macOS, cmd.exe, PowerShell).
   - Kepler, Maxwell, Pascal and the capabilities of major 11 and 12 are still refused by name.
@@ -76,6 +76,16 @@ out without slowing any command.
 
 ### Fixed
 
+- **neurobrix asks for triton only where PyPI publishes a triton wheel, and a Triton mode without triton is refused by
+  name (GitHub issue 6).** 0.6.16 asked for triton on every platform but macOS; PyPI publishes triton wheels for Linux
+  x86_64 and aarch64 only, and the requirement now names those two. `--triton` and `--triton-sequential` where triton
+  is not installed are refused before anything loads, on `neurobrix run` and `neurobrix serve` (`serve` let them
+  through): on Windows `PyPI publishes no triton for win32 AMD64: the Triton engine does not run on this platform`,
+  followed by the PyTorch engine's install; where neurobrix asks for triton, `pip install "triton"`.
+- **The PyTorch engine needs no triton in either mode.** `--sequential` made the Triton engine's hardware declaration
+  and stopped with `No module named 'triton'` on a host without it; a plan that tiles a module with in-place adds or a
+  pixel_shuffle chain imported the Triton kernels' modules under `--compiled` too. Both now reach triton only in the
+  Triton modes.
 - **A text-only request on a vision-language container no longer stops on the Triton branch.** A build that declares
   no audio placeholder token stopped on it, though the request carried no audio; the Triton branch now reads the
   placeholder of a modality only for a request that carries it, as the PyTorch branch does.

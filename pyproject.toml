@@ -56,9 +56,10 @@ dependencies = [
     # constrained request answers 501 constrained_decoding_not_installed, by name.
     # (each platform by == : a marker's `in` on a string is a SUBSTRING test, which would admit "x86" or "64")
     "nbxgrammar==0.1.1; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')) or (sys_platform == 'win32' and platform_machine == 'AMD64')",
-    # Core compute. macOS has no triton wheel on PyPI: Apple Metal runs a triton built from source with its Metal
-    # backend (the Mac's install), which this line must not try to resolve.
-    "triton; platform_system != 'Darwin'",
+    # Core compute: triton only where PyPI publishes a triton wheel, manylinux x86_64 and aarch64 (recorded and checked
+    # by tests/unit/packaging). Elsewhere pip installs none and --triton is refused by name: Windows runs the PyTorch
+    # engine, Apple Metal a triton with its Metal backend (the Mac's install), which this line must not try to resolve.
+    "triton; sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64')",
     "numpy>=1.24.0",
     # .nbx container + config + schema
     "safetensors>=0.4.0",

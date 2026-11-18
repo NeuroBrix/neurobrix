@@ -25,9 +25,24 @@ class PyTorchBranchNotInstalledError(RuntimeError):
     """A PyTorch-branch mode was asked for and torch is not installed."""
 
 
+class TritonBranchNotInstalledError(RuntimeError):
+    """A Triton-branch mode (`what`) was asked for and triton is not installed: the library's own refusal where it has
+    one (`said`, an Apple GPU's), else where a triton comes from on this platform (`triton_missing_message`)."""
+
+    def __init__(self, what: str, said: str = ""):
+        super().__init__(said or triton_missing_message(what))
+
+
 def require_engine(mode: str) -> None:
-    """Refuse, by name, a mode no engine answers or a PyTorch-branch mode without torch."""
+    """Refuse, by name, a mode no engine answers, or a mode whose branch (torch, triton) is not installed."""
     if mode in TRITON_MODES:
+        if importlib.util.find_spec("triton") is None:
+            from nbxtensor.backend.metal_backend import TritonMetalNotInstalledError, ensure_triton_metal_or_raise
+            try:
+                ensure_triton_metal_or_raise()      # an Apple GPU: the library's refusal names its Metal triton
+            except TritonMetalNotInstalledError as exc:
+                raise TritonBranchNotInstalledError(f"execution mode {mode!r}", str(exc)) from None
+            raise TritonBranchNotInstalledError(f"execution mode {mode!r}")
         return
     if mode not in PYTORCH_MODES:
         raise ValueError(f"execution mode {mode!r} is none of {PYTORCH_MODES + TRITON_MODES}")
@@ -43,6 +58,32 @@ def torch_missing_message(what: str) -> str:
             f"https://pytorch.org/get-started/locally/), then:\n"
             f"      pip install \"neurobrix[pytorch]\"\n"
             f"  Or run the Triton engine, which needs no PyTorch: add --triton (or --triton-sequential).")
+
+
+def triton_missing_message(what: str) -> str:
+    """What a user without triton reads when `what` needs the Triton branch: the install line where neurobrix's triton
+    requirement holds (where PyPI ships a triton wheel, pyproject.toml), else that PyPI has none for this platform and
+    the PyTorch engine runs here. Read from the installed metadata; metadata that cannot say it is named."""
+    import importlib.metadata
+    import platform
+    from packaging.requirements import Requirement
+    try:
+        reqs = [Requirement(r) for r in importlib.metadata.requires("neurobrix") or []]
+    except importlib.metadata.PackageNotFoundError:
+        return (f"{what} runs on the Triton engine and triton is not installed; this python has no package metadata "
+                f"for neurobrix (a source tree on the path), so whether PyPI ships a triton for this platform cannot "
+                f"be read: install it, pip install -e . from the source tree")
+    here = {"sys_platform": sys.platform, "platform_machine": platform.machine()}     # what the message names
+    req = next((r for r in reqs if r.name == "triton" and (r.marker is None or r.marker.evaluate(here))), None)
+    here = " ".join(here.values())
+    if req is not None:
+        return (f"{what} runs on the Triton engine, and triton is not installed in this environment "
+                f"({sys.executable}).\n  neurobrix asks for it on {here}: pip install \"{req.name}{req.specifier}\"\n"
+                f"  Or run the PyTorch engine, which needs no triton: --compiled (or --sequential).")
+    return (f"{what} runs on the Triton engine, which needs triton, and PyPI publishes no triton for {here}: the "
+            f"Triton engine does not run on this platform.\n  The PyTorch engine runs here: install the PyTorch build "
+            f"for your hardware (https://pytorch.org/get-started/locally/), then pip install \"neurobrix[pytorch]\", "
+            f"and run with --compiled (or no engine flag).")
 
 
 def default_mode() -> tuple:

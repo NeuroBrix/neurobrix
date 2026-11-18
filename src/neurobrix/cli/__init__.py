@@ -646,7 +646,7 @@ def main():
     # the update notice from the cache and the local metadata only; the index is asked by a detached child
     importlib.import_module("neurobrix.cli.update_check").warn(args)
 
-    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError
+    from neurobrix.core.runtime.engines import PyTorchBranchNotInstalledError, TritonBranchNotInstalledError
     from neurobrix.processors.messages import COMMAND as PROCESSOR_COMMAND
     try:
         if args.command == 'autotune':
@@ -695,8 +695,8 @@ def main():
         _fail(e, trace=False)
     except ValueError as e:
         _fail(e, trace=False)
-    except PyTorchBranchNotInstalledError as e:
-        # The PyTorch engine asked for where torch is not installed: the named message, never a trace
+    except (PyTorchBranchNotInstalledError, TritonBranchNotInstalledError) as e:
+        # An engine asked for where its branch (torch, triton) is not installed: the named message, never a trace
         _fail(e, trace=False)
     except ModuleNotFoundError as e:
         if (e.name or "").split(".")[0] != "torch":
