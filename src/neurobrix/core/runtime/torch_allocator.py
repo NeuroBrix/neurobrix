@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from typing import Any, Optional
 _log = logging.getLogger(__name__)
 
@@ -166,9 +167,9 @@ def declared_settings(plan: Any) -> Optional[str]:
     return next(iter(declared), None)
 
 
-def pytorch_extra_torch() -> str:
-    """The torch requirement of neurobrix's `pytorch` extra (pyproject.toml), read from the installed package's metadata:
-    the one place the compiled engine's torch minimum lives. Metadata that cannot say it is refused by name."""
+def pytorch_extra_torch() -> "Requirement":
+    """The torch requirement of neurobrix's `pytorch` extra (pyproject.toml) whose marker holds here, read from the
+    installed metadata: the one place the compiled engine's torch minimum lives. Metadata that cannot say it is refused."""
     import importlib.metadata
     from packaging.requirements import Requirement
     try:
@@ -180,9 +181,9 @@ def pytorch_extra_torch() -> str:
     for line in requires:
         req = Requirement(line)
         if req.name == "torch" and req.marker is not None and req.marker.evaluate({"extra": "pytorch"}):
-            return f"torch{req.specifier}"
-    raise RuntimeError(f"the installed neurobrix metadata names no torch under its `pytorch` extra ({requires}): "
-                       f"reinstall neurobrix")
+            return req
+    raise RuntimeError(f"the installed neurobrix metadata names no torch under its `pytorch` extra on {sys.platform} "
+                       f"({requires}): reinstall neurobrix")
 
 
 def require_compiled_torch(torch: Any) -> None:
@@ -199,9 +200,13 @@ def require_compiled_torch(torch: Any) -> None:
         return
     lacks = f"the compiled engine calls {', '.join(missing)}, which the installed torch {torch.__version__} lacks"
     try:
-        need = pytorch_extra_torch()
+        req = pytorch_extra_torch()
     except RuntimeError as exc:
         raise RuntimeError(f"{lacks}; {exc}") from None
+    need = f"torch{req.specifier}"
+    if req.specifier.contains(torch.__version__, prereleases=True):
+        raise RuntimeError(f"{lacks}; neurobrix's pytorch extra asks for {need} on {sys.platform}, which it meets: these "
+                           f"calls serve a GPU its torch does not drive: plan it without another machine's --hardware")
     raise RuntimeError(f"{lacks}; neurobrix's pytorch extra asks for {need}: upgrade it, pip install --upgrade "
                        f"\"{need}\" (your platform's build: https://pytorch.org/get-started/locally/)")
 

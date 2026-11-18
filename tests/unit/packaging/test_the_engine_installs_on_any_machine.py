@@ -62,6 +62,7 @@ def test_the_library_the_engine_imports_is_the_exact_release_it_pins():
 def test_the_pytorch_extra_asks_for_the_first_torch_with_every_api_the_compiled_engine_calls():
     # torch 2.12.0 first ships torch.accelerator.empty_host_cache (the loader calls it after every cuda/hip load) beside
     # the allocator setter (2.10.0): an extra that admits an older torch installs an engine that refuses
-    # (core/runtime/torch_allocator.py COMPILED_TORCH_APIS reads this line back from the package metadata)
+    # (core/runtime/torch_allocator.py COMPILED_TORCH_APIS reads this line back from the package metadata). macOS reaches
+    # neither call and PyPI has no torch 2.12 for an Intel Mac or a macOS older than 14: there it asks what 0.6.16 asked
     extra = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]["pytorch"]
-    assert extra == ["torch>=2.12.0"], extra
+    assert extra == ["torch>=2.12.0; sys_platform != 'darwin'", "torch>=2.1.0; sys_platform == 'darwin'"], extra

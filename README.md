@@ -311,6 +311,12 @@ component with the memory it measured and goes on, once, keeping the components 
 
 - On an Intel Mac the integrated GPU is named from system_profiler without its platform; it is not driven, and the
   engine runs on the CPU.
+- `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer on Linux and Windows: there the default engine on
+  an NVIDIA or AMD GPU calls PyTorch's allocator setter (first in torch 2.10.0) and its pinned host-cache release
+  (first in torch 2.12.0), and refuses an older torch by name before any weight loads. On macOS it asks for torch 2.1.0
+  or newer, as 0.6.16 did: a Mac reaches neither call (the Apple GPU runs through MPS, an Intel Mac on its CPU), and
+  PyPI's newest torch for an Intel Mac is 2.2.2, for a Mac on macOS 11 to 13 2.11.0; pip installs the newest one your
+  Mac has.
 - Constrained decoding needs the grammar engine, the `nbxgrammar` package, which `pip install neurobrix` installs on
   Linux x86_64 and aarch64, macOS arm64 and x86_64 and Windows x86_64; on any other platform no wheel of it exists and a
   constrained request is refused by name (`501 constrained_decoding_not_installed`). It enforces a subset of JSON Schema (a

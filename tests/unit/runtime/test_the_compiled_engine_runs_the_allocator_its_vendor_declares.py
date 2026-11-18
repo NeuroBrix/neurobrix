@@ -83,10 +83,64 @@ def test_the_compiled_setup_applies_the_vendors_allocator_before_the_executors(m
 @pytest.fixture
 def metadata(monkeypatch):
     """The installed package's requirements, as pip writes them from pyproject.toml (this tree is not installed)."""
+    from packaging.requirements import Requirement
     extras = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]
-    lines = [f'{r}; extra == "{e}"' for e, reqs in extras.items() for r in reqs]
+    lines = []
+    for e, reqs in extras.items():
+        for r in map(Requirement, reqs):
+            on = f'({r.marker}) and extra == "{e}"' if r.marker else f'extra == "{e}"'
+            lines.append(f"{r.name}{r.specifier}; {on}")
     monkeypatch.setattr(importlib.metadata, "requires", lambda name: lines if name == "neurobrix" else None)
-    return extras["pytorch"][0]
+    return lines
+
+
+#: (sys.platform, platform.system(), platform.machine()) of the four platforms PyPI's torch ships for, and the torch
+#: the pytorch extra asks there: 2.12.0 where the compiled engine reaches the GPU calls, 0.6.16's 2.1.0 on macOS (no
+#: torch 2.12 wheel for an Intel Mac or a macOS older than 14, and no GPU there that reaches those calls).
+PLATFORMS = [("darwin", "Darwin", "x86_64", ">=2.1.0"), ("darwin", "Darwin", "arm64", ">=2.1.0"),
+             ("linux", "Linux", "x86_64", ">=2.12.0"), ("win32", "Windows", "AMD64", ">=2.12.0")]
+
+
+def _on(monkeypatch, sys_platform, system, machine):
+    """This process seen as another platform: the marker environment packaging evaluates (it caches the real one for
+    the process) and the sys.platform the refusal names."""
+    import packaging.markers
+    env = dict(packaging.markers.default_environment(), sys_platform=sys_platform, platform_system=system,
+               platform_machine=machine)
+    monkeypatch.setattr(packaging.markers, "default_environment", lambda: dict(env))
+    monkeypatch.setattr(sys, "platform", sys_platform)
+
+
+@pytest.mark.parametrize("sys_platform,system,machine,need", PLATFORMS)
+def test_the_metadata_read_picks_the_torch_requirement_whose_platform_marker_holds(monkeypatch, metadata, sys_platform,
+                                                                                    system, machine, need):
+    _on(monkeypatch, sys_platform, system, machine)
+    assert str(TA.pytorch_extra_torch().specifier) == need
+
+
+@pytest.mark.parametrize("device", ["cpu", "mps"])
+@pytest.mark.parametrize("machine", ["x86_64", "arm64"])
+@pytest.mark.parametrize("via,ext", [("load_component", ".safetensors"), ("load_component_with_shard_map", ".bin")])
+def test_on_macos_a_torch_at_2_2_2_loads_on_the_cpu_and_the_apple_gpu(monkeypatch, tmp_path, setter, metadata, machine,
+                                                                     device, via, ext):
+    # torch 2.2.2 is the last torch PyPI ships for an Intel Mac: neither GPU call is there, and none is reached
+    _on(monkeypatch, "darwin", "Darwin", machine)
+    loaded = []
+    ld = _loader(monkeypatch, tmp_path, loaded, ext)
+    _torch_at(monkeypatch, "2.2.2", setter=False, host_cache=False)
+    assert _load(ld, via, device) == {"w": device} and setter == []
+    assert TA.configure_torch_allocator(_plan(([device], "apple", "apple_m1"))) is None
+
+
+def test_on_macos_a_torch_meeting_the_extra_that_reaches_the_gpu_calls_is_refused_never_told_to_upgrade(monkeypatch,
+                                                                                                     setter, metadata):
+    # only another machine's --hardware profile puts a cuda/hip device in a Mac's plan: the extra's torch is met there
+    _on(monkeypatch, "darwin", "Darwin", "x86_64")
+    _torch_at(monkeypatch, "2.2.2", setter=False, host_cache=False)
+    with pytest.raises(RuntimeError, match=r"2\.2\.2 lacks; neurobrix's pytorch extra asks for torch>=2\.1\.0 on "
+                       r"darwin, which it meets: .*another machine's --hardware") as exc:
+        TA.configure_torch_allocator(_plan(V100))
+    assert "upgrade" not in str(exc.value) and setter == []
 
 
 def _torch_at(monkeypatch, version, setter=True, host_cache=True):
@@ -148,8 +202,11 @@ LOADS = [(via, ext) for via in ("load_component", "load_component_with_shard_map
 
 
 @pytest.mark.parametrize("via,ext", LOADS)
+@pytest.mark.parametrize("sys_platform,system,machine", [("linux", "Linux", "x86_64"), ("win32", "Windows", "AMD64")])
 def test_a_torch_without_the_host_cache_release_is_refused_before_any_weight_loads_on_a_gpu(monkeypatch, tmp_path,
-                                                                                          setter, metadata, via, ext):
+                                                                                          setter, metadata, via, ext,
+                                                                                          sys_platform, system, machine):
+    _on(monkeypatch, sys_platform, system, machine)
     loaded = []
     ld = _loader(monkeypatch, tmp_path, loaded, ext)
     _torch_at(monkeypatch, "2.11.0", host_cache=False)

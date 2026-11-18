@@ -46,9 +46,11 @@ out without slowing any command.
     first released in torch 2.10.0 and releases PyTorch's pinned host cache after every GPU load through one first
     released in torch 2.12.0. An older torch is now refused before any weight loads, naming the calls it lacks, the
     version installed and the one needed (it ended in an AttributeError), for example on torch 2.11:
-    `the compiled engine calls torch.accelerator.empty_host_cache, which the installed torch 2.11.0+cpu lacks;
-    neurobrix's pytorch extra asks for torch>=2.12.0: upgrade it, pip install --upgrade "torch>=2.12.0"`.
-    `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer.
+    `the compiled engine calls torch.accelerator.empty_host_cache, which the installed torch <installed version>
+    lacks; neurobrix's pytorch extra asks for torch>=2.12.0: upgrade it, pip install --upgrade "torch>=2.12.0"`.
+    `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer on Linux and Windows. On macOS it asks for
+    torch 2.1.0 or newer, as 0.6.16 did: a Mac reaches neither call (the Apple GPU runs through MPS, an Intel Mac on
+    its CPU), and PyPI's newest torch for an Intel Mac is 2.2.2, for a Mac on macOS 11 to 13 2.11.0.
   - On Windows, `CUDA_VISIBLE_DEVICES` is read when NeuroBrix detects the GPUs, as on Linux: `-1` hides every GPU.
   - The README says how to run on the CPU of a machine that has an NVIDIA GPU (Linux, macOS, cmd.exe, PowerShell).
   - Kepler, Maxwell, Pascal and the capabilities of major 11 and 12 are still refused by name.
