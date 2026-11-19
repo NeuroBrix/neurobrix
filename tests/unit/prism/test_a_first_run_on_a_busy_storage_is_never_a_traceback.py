@@ -21,8 +21,8 @@ def _no_trial(*a, **k):
 @pytest.fixture
 def no_trials(monkeypatch):
     import nbxtensor.io.read_rate as RR
-    for name in ("workers_for", "measure", "trial"):
-        monkeypatch.setattr(RR, name, _no_trial)
+    for name in ("workers_for", "measure", "trial"):          # the trial API leaves the library after this branch
+        monkeypatch.setattr(RR, name, _no_trial, raising=False)
 
 
 def test_a_profile_s_completion_measures_no_read_rate_and_keeps_no_count(no_trials, tmp_path, monkeypatch):

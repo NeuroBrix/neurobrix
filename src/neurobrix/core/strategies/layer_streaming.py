@@ -104,7 +104,7 @@ def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, second
     """The engine's own measure of its per-token reload, handed to the active generated profile
     (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with, BEFORE the run. A rate a
     neighbour can disturb is no fact (the supervisor 2026-11-02 09:50): three consecutive runs whose rates agree within
-    the steadiness the storage measure uses (5 %) give their median; three that do not are KEPT with their spread and
+    the steadiness gate (`autodetect.STEADY_SPREAD`) give their median; three that do not are KEPT with their spread and
     date, priced at their low draw (`note_reload_rate(spread=)`), and replaced by the first steady three — never
     dropped, which made every later launch on a busy machine probe again (the catalogue's kept homes, 2026-11-19)."""
     from neurobrix.core.prism import autodetect as _ad
@@ -121,7 +121,7 @@ def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, second
     med = rates[1]
     b, sec = sum(x[0] for x in last), sum(x[1] for x in last)
     where = f"{os.path.basename(str(nbx_path))}:{component}"
-    if rates[-1] - rates[0] > 0.05 * med:
+    if rates[-1] - rates[0] > _ad.STEADY_SPREAD * med:
         if _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med,
                                 f"{where}, 3 runs not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)} GB/s)",
                                 spread=(rates[0] / 1e9, rates[-1] / 1e9)):

@@ -2461,6 +2461,10 @@ FIRST_LAUNCH = {"gemm_sizes": (4096,), "gemm_warmup": 10, "gemm_rep": 30, "copy_
                 "expert_copy_reps": 5, "expert_copy_experts": 8}
 #: a load smaller than this is not a loader rate (its fixed costs dominate)
 LOADER_RATE_MIN_BYTES = 256 << 20
+#: draws of one measure agree when their spread is within this share of their median: the steadiness gate the
+#: supervisor set for profile facts a neighbour can disturb (2026-11-02 09:50) — the reload rate's three runs
+#: (`layer_streaming._note_reload`) and the arena factor's (`_measure_arena_factor`); a policy, not a measure
+STEADY_SPREAD = 0.05
 #: the hardware profile this process runs under (set by the run once it resolved it): the one its loaders write into
 ACTIVE_HARDWARE_ID: Optional[str] = None
 
@@ -2619,9 +2623,7 @@ def _measure_arena_factor(hardware_id: str, device: dict) -> float:
     unified = device.get("memory_mb") if device.get("unified_memory") else None   # the card as the planner reads it
     if unified is None and (total is None or ctx is None):
         raise RuntimeError("ZERO FALLBACK: no runtime_total_mb / runtime_context_mb (nor memory_mb on a unified device)")
-    import inspect
-    from nbxtensor.io import read_rate
-    steady = inspect.signature(read_rate.measure).parameters["within"].default   # the storage measure's steadiness
+    steady = STEADY_SPREAD
     root, comp = A.smallest_container(cache_dir())
     weights = sum(f.stat().st_size for f in (root / "components" / comp).rglob("*.safetensors"))
     import json as _json
