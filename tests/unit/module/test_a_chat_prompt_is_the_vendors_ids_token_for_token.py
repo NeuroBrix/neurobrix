@@ -48,3 +48,38 @@ def test_every_turn_is_prefilled_with_the_vendors_ids(model):
             wrong.append(f"turn {k}: {len(ours)} ids against the vendor's {len(turn['ids'])}, first difference at "
                          f"{at}: ours {ours[at:at + 3]} vendor {turn['ids'][at:at + 3]}")
     assert not wrong, f"{model}: " + "; ".join(wrong)
+
+
+def test_two_threads_encoding_at_once_each_get_the_vendors_ids():
+    """Serving encodes on more than one thread (the HTTP thread checks the context, the worker prefills), with ONE
+    tokenizer. Whether a segment is prefixed is a per-call fact: kept on the shared normalizer or pre-tokenizer, one
+    thread's call changes another's (qa, 2026-11-19: 5 wrong prompts of 12000 with two threads). The thread switch is
+    forced as often as the interpreter allows, so a shared per-call state shows within a few thousand encodes."""
+    import sys
+    import threading
+    model = "TinyLlama-1.1B-Chat-v1.0"
+    folder = SNAPSHOTS / model
+    if not (folder / "tokenizer.json").exists():
+        pytest.skip(f"{model}: no tokenizer files under {SNAPSHOTS} (set NBX_VENDOR_SNAPSHOTS)")
+    tok = load_tokenizer_from_path(folder)
+    turns = RECORD["models"][model]
+    wrong = []
+
+    def work(k):
+        turn = turns[k]
+        for _ in range(3000):
+            ours = [int(t) for t in tok.apply_chat_template(turn["messages"], tokenize=True, add_generation_prompt=True)]
+            if ours != turn["ids"]:
+                wrong.append(k)
+
+    kept = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=work, args=(k,)) for k in (0, 4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(kept)
+    assert not wrong, f"{len(wrong)} of 6000 encodes from two threads gave other ids than the vendor's"

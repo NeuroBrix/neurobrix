@@ -280,17 +280,17 @@ class _Normalizer:
 
     def __call__(self, text: str, prefix: bool = True) -> str:
         """`prefix` False: the segment does not start the input and the tokenizer prefixes only the input's start
-        (`PyTokenizer.prefix_only_at_start`), so a `Prepend` step leaves it as it is."""
-        self._prefix = prefix
-        return self._apply(self.spec, text)
+        (`PyTokenizer.prefix_only_at_start`), so a `Prepend` step leaves it as it is. Passed down, never stored: one
+        normalizer serves every thread that encodes."""
+        return self._apply(self.spec, text, prefix)
 
-    def _apply(self, spec: Optional[dict], text: str) -> str:
+    def _apply(self, spec: Optional[dict], text: str, prefix: bool) -> str:
         if spec is None:
             return text
         t = spec.get("type")
         if t == "Sequence":
             for sub in spec.get("normalizers", []):
-                text = self._apply(sub, text)
+                text = self._apply(sub, text, prefix)
             return text
         if t == "NFC":
             return unicodedata.normalize("NFC", text)
@@ -303,7 +303,7 @@ class _Normalizer:
         if t == "Lowercase":
             return text.lower()
         if t == "Prepend":
-            return spec.get("prepend", "") + text if getattr(self, "_prefix", True) else text
+            return spec.get("prepend", "") + text if prefix else text
         if t == "Replace":
             return self._replace(spec, text)
         if t == "Strip":
@@ -344,19 +344,18 @@ class _PreTokenizer:
     def __call__(self, text: str, at_start: bool = True, prefix_only_at_start: bool = False) -> List[str]:
         """`at_start`: the segment begins the input (offset 0). Metaspace's `first` scheme prefixes only such a segment,
         and so does `always` when the tokenizer prefixes only the input's start (`PyTokenizer.prefix_only_at_start`)."""
-        self._at_start, self._prefix_only_at_start = at_start, prefix_only_at_start
         pieces = [text]
-        pieces = self._apply(self.spec, pieces)
+        pieces = self._apply(self.spec, pieces, at_start, prefix_only_at_start)
         return pieces
 
     # -- dispatch ----------------------------------------------------------
-    def _apply(self, spec: Optional[dict], pieces: List[str]) -> List[str]:
+    def _apply(self, spec: Optional[dict], pieces: List[str], at_start: bool, prefix_only_at_start: bool) -> List[str]:
         if spec is None:
             return pieces
         t = spec.get("type")
         if t == "Sequence":
             for sub in spec.get("pretokenizers", []):
-                pieces = self._apply(sub, pieces)
+                pieces = self._apply(sub, pieces, at_start, prefix_only_at_start)
             return pieces
         if t == "Split":
             return self._split_all(spec, pieces)
@@ -372,7 +371,7 @@ class _PreTokenizer:
                 out.extend(p.split())
             return out
         if t == "Metaspace":
-            return self._metaspace_all(spec, pieces)
+            return self._metaspace_all(spec, pieces, at_start, prefix_only_at_start)
         if t == "BertPreTokenizer":
             return self._bert_all(pieces)
         # Unknown pre-tokenizer: identity
@@ -563,15 +562,14 @@ class _PreTokenizer:
         return out
 
     # -- Metaspace ---------------------------------------------------------
-    def _metaspace_all(self, spec: dict, pieces: List[str]) -> List[str]:
+    def _metaspace_all(self, spec: dict, pieces: List[str], at_start: bool, prefix_only_at_start: bool) -> List[str]:
         replacement = spec.get("replacement", "▁")
         prepend_scheme = spec.get("prepend_scheme", "always")
         add_prefix_space = spec.get("add_prefix_space", True)
         split = spec.get("split", True)
         out: List[str] = []
         first = True
-        at_start = getattr(self, "_at_start", True)
-        if prepend_scheme == "first" or getattr(self, "_prefix_only_at_start", False):
+        if prepend_scheme == "first" or prefix_only_at_start:
             first = at_start
         for p in pieces:
             seg = p
