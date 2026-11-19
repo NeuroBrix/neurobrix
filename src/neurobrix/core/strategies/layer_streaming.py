@@ -102,8 +102,10 @@ _RELOAD_DRAWS: Dict[tuple, list] = {}
 
 def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, seconds: float) -> None:
     """The engine's own measure of its per-token reload, handed to the active generated profile
-    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with, BEFORE the run. A rate a
-    neighbour can disturb is no fact (the supervisor 2026-11-02 09:50): three consecutive runs whose rates agree within
+    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with, BEFORE the run. The supervisor's row 167
+    (2026-11-19) REPLACES the ruling of 2026-11-02 09:50 that "a rate a neighbour can disturb is no fact": a measured
+    fact is kept once measured and never paid twice, and a measure that cannot conclude keeps its best figure with
+    its spread. Three consecutive runs whose rates agree within
     the steadiness gate (`autodetect.STEADY_SPREAD`) give their median; three that do not are KEPT with their spread and
     date, priced at their low draw (`note_reload_rate(spread=)`), and replaced by the first steady three — never
     dropped, which made every later launch on a busy machine probe again (the catalogue's kept homes, 2026-11-19)."""
