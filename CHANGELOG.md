@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Six Apple kernel settings re-measured with a corrected timer.** Results were correct; the choice of the fastest setting was not proven.
-
 ## [0.6.17] - 2026-11-17
 
 With nbxtensor 0.1.11: 0.6.17 is the engine that runs Devstral for text on the PyTorch branch. A vision-language container answers a text
@@ -104,6 +100,8 @@ out without slowing any command.
   take only the memory above the reserve the engine keeps for the allocator; a request whose cache does not fit there
   is planned another way before anything is loaded, or refused by a sentence naming the positions and the room.
 
+- **Six Apple kernel settings re-measured with a corrected timer.** Results were correct; the choice of the fastest setting was not proven.
+
 ### Upgrade note
 
 - **Containers built with this engine need engine 0.6.17.** The container builder writes into each container's
@@ -116,7 +114,8 @@ out without slowing any command.
 - In a served conversation an answer continued from the cached context can differ from the same answer computed
   fresh; not fixed in this release.
 - On the Triton branch on our NVIDIA test machine, turn 5 of one served test conversation was judged wrong; the cause
-  is not determined; it is new in this release: 0.6.16 answered it right.
+  is not determined; it is not new in this release: the published 0.6.16 gave the same wrong fifth turn in 3 of 6
+  fresh launches on that machine.
 - On Metal with cold caches the chunked gated delta rule can return a wrong value; present in nbxtensor 0.1.10 and
   0.1.11.
 - One Granite fresh answer differs in wording from 0.6.16; both coherent; cause not determined.
