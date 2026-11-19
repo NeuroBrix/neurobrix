@@ -214,18 +214,44 @@ def vmm_first_replay(device: int):
     return None if T.vmm_granularity(device) is None else T.first_replay(device)
 
 
+class UnconcludedChunk(int):
+    """The chunk of a sweep that could not conclude (no candidate within the driver segments' noise: a busy machine):
+    its best candidate, an int the allocator reads as any chunk, carrying `spread` — kept with it and replaced by a
+    sweep that concludes; never a 0 written as if measured (the supervisor, row 167: the rack's busy 4-card fresh home
+    wrote 0 on its four cards, kept for ever)."""
+
+
+def best_of_unconcluded(times) -> "UnconcludedChunk":
+    """The best candidate of a sweep with no chunk (`chunk_by_replay`'s times; 0 is the driver segments): the lowest
+    median replay, the larger chunk on a tie (fewer mappings, the cost the sweep measures), with its spread."""
+    import statistics
+    import time as _time
+    off = times[0]
+    med0 = statistics.median(off)
+    cands = {c: v for c, v in times.items() if c and v}
+    best = min(cands, key=lambda c: (statistics.median(cands[c]), -c))
+    out = UnconcludedChunk(best)
+    out.spread = {"concluded": False, "off_median_s": round(med0, 3), "bound_s": round(med0 + max(off) - med0, 3),
+                  "median_s": round(statistics.median(cands[best]), 3), "low_s": round(min(cands[best]), 3),
+                  "high_s": round(max(cands[best]), 3), "replays": len(cands[best]),
+                  "measured": _time.strftime("%Y-%m-%d %H:%M:%S %Z")}
+    return out
+
+
 def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int], off_first: Optional[float] = None) -> Optional[int]:
     """The expandable pool's chunk on `device`, measured on a REAL run's allocations (R16; the supervisor 2026-11-02
     17:15): the library's recorded allocation trace (`nbxtensor.memory.trace_replay`) replayed through the allocator on
-    this device, under the card size it was recorded on, with the range off (the driver segments) and then at each
-    chunk = granularity x k, `ks` ascending, `reps` replays each in its own process; the chunk is the first whose median
-    replay is within R16 OFF's median plus its spread. None when the device has no VMM, or when no chunk keeps up with
-    the segments (the pool keeps them). On the V100 16 GB: OFF 2.16-2.29 s, 16 MiB 2.7 s, 32 MiB 2.0 s -> 32 MiB; the
-    run itself, SANA-Video_2B_720p ttft 40.6/41.4 s at 32 MiB against 40.9/39.9 s OFF (vmm_v100.md). A synthetic
-    churn of the same bytes was measured and rejected: its cost per call is flat, so it always favours the largest."""
+    this device alone, under the card size it was recorded on, with the range off (the driver segments) and then at
+    each chunk = granularity x k, `ks` ascending; the chunk is the first whose median replay is within R16 OFF's median
+    plus its spread. None when the device has no VMM. A sweep where no chunk keeps up with the segments (a busy
+    machine) gives its best candidate with its spread (`UnconcludedChunk`, row 167), never a 0 as if measured. On the
+    V100 16 GB, quiet: OFF 2.16-2.29 s, 16 MiB 2.7 s, 32 MiB 2.0 s -> 32 MiB (vmm_v100.md)."""
     from nbxtensor.memory import trace_replay as T
     gran = T.vmm_granularity(device)
-    return None if gran is None else T.chunk_by_replay(device, gran, ks, reps, off_first=off_first)[0]
+    if gran is None:
+        return None
+    chunk, times = T.chunk_by_replay(device, gran, ks, reps, off_first=off_first)
+    return chunk if chunk is not None else best_of_unconcluded(times)
 
 
 def card_facts_in_a_child(index: int) -> dict:

@@ -2484,6 +2484,44 @@ def stored_major(cache_path, component: str) -> Optional[str]:
 _STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
 
 
+def _set_chunk(block: dict, measured) -> None:
+    """A sweep's chunk into a device's measured block: an unconcluded sweep's best candidate with its spread beside it
+    (`vmm_chunk_spread`), never a 0 written as if measured (row 167); 0 only for a device with no VMM."""
+    block["vmm_chunk_bytes"] = int(measured or 0)
+    if getattr(measured, "spread", None) is not None:
+        block["vmm_chunk_spread"] = dict(measured.spread)
+    else:
+        block.pop("vmm_chunk_spread", None)
+
+
+def _sweep_chunks(devices, first, measured_of, q, replay) -> Dict[Any, Any]:
+    """{card model: its chunk sweep's answer} for every model of the profile whose block states no chunk: each swept
+    on ITS OWN first card (every replay child sees that card alone), the models SIDE BY SIDE, a thread each; identical
+    cards answer once. The rack's fresh 4-card home ran its 48 replay children one after another: 1024 s of its 1236 s
+    to ready (py-spy, 2026-11-19)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from neurobrix.core.prism import facts_probe as P
+    todo: Dict[Any, int] = {}
+    for i, d in enumerate(devices):
+        own = first if d.get("model") == devices[0].get("model") else measured_of(d)
+        if "vmm_chunk_bytes" in own or d.get("model") in todo:
+            continue
+        if i and "index" not in d:
+            raise ValueError(f"profile {d.get('model')!r}: a device of this card model has no 'index' fact, so its "
+                             f"expandable-pool chunk cannot be measured on its own card; add 'index' to every device "
+                             f"of the profile's devices list")
+        todo[d.get("model")] = 0 if i == 0 else int(d["index"])
+    if not todo:
+        return {}
+
+    def sweep(item):
+        model, index = item
+        ahead = replay[0] if replay and model == devices[0].get("model") else None
+        return model, P.vmm_chunk_bytes(index, q["vmm_reps"], q["vmm_ks"], off_first=ahead)
+    with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+        return dict(pool.map(sweep, todo.items()))
+
+
 def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, container_dir=None) -> dict:
     """Measure, ONCE, on a GENERATED profile (`default-*`), the device and host facts Prism's time estimate reads that
     neither the profile nor its architecture's tracked vendor file states (the quick probe), and write them with their
@@ -2555,10 +2593,11 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first.setdefault("gemv_gbps", {})[engine] = {t: P.gemv_gbps(t, engine, *q["gemv_kn"], q["gemv_reps"]) for t in dtypes}
         added["gemv_gbps"] = [engine]
+    # every card model's chunk swept at once, each on its own first card, side by side (`_sweep_chunks`)
+    chunks = _sweep_chunks(devices, first, measured_of, q, replay)
     if "vmm_chunk_bytes" not in first:
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
-        first["vmm_chunk_bytes"] = int(P.vmm_chunk_bytes(0, q["vmm_reps"], q["vmm_ks"],
-                                                         off_first=replay[0] if replay else None) or 0)
+        _set_chunk(first, chunks[devices[0].get("model")])
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
     # the host's block over the vendor's, key by key (loader.load_profile): only what neither states is measured
     if "host_matmul_gflops" not in {**(_vendor_block(devices[0], "host_measured") or {}), **(data.get("host_measured") or {})}:
@@ -2570,7 +2609,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     # measured above and not yet written (the stable's install test, 2026-11-05)
     added.update(P.complete_runtime_card_facts(devices, P.card_facts_in_a_child))
     if added:
-        _write_first(path, data, devices, first, measured_of, added, q)
+        _write_first(path, data, devices, first, measured_of, added, q, chunks)
     if engine is not None:
         # the per-piece reload rate a streamed plan is priced with, per stored dtype of the requested model (of the
         # cache without one) that neither block states (the supervisor 2026-11-03 22:50): until now only a streamed run
@@ -2602,15 +2641,15 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         added["expert_copy"] = first["expert_copy"]
     if not added:
         return {}
-    _write_first(path, data, devices, first, measured_of, added, q)
+    _write_first(path, data, devices, first, measured_of, added, q, chunks)
     _log.debug(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
 
 
-def _write_first(path, data, devices, first, measured_of, added, q) -> None:
+def _write_first(path, data, devices, first, measured_of, added, q, chunks=None) -> None:
     """The first launch's device facts onto every card of card 0's model (they share what card 0 measured), and each
     other model's own facts onto its cards (`other_card_models`: a second write finds their chunk in the blocks and measures nothing), written."""
-    other_card_models.place(devices, first, other_card_models.measured_of_others(devices, measured_of, added, q))
+    other_card_models.place(devices, first, other_card_models.measured_of_others(devices, measured_of, added, q, chunks))
     _write_profile_atomically(path, data)
 
 
