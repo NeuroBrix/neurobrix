@@ -33,6 +33,20 @@ from neurobrix.core.config.loader import vendor_file  # the device whole: engine
 from tests.unit.accelerator_vendor_files import accelerator_vendor_files  # the cpu/ files hold only the CPU path's keys
 from tests.unit.accelerator_vendor_files import documentation_sourced_unmeasured
 
+
+@pytest.fixture(autouse=True)
+def _the_library_profile_is_left_as_found():
+    """A test here that resolves a capability under a patched launcher target (`arch_smem_budget`) leaves the library's
+    `_ACTIVE_PROFILE` on the last profile it resolved: `test_capability_resolution_covers_more_than_three_cards` ended
+    on Blackwell, and every later test in the same process read Blackwell's figures (45 failed on the Mac, 2026-11-19).
+    The profile is restored in place, on the object the test found."""
+    from nbxtensor.ops import _configs
+    held = _configs._ACTIVE_PROFILE
+    saved = dict(held)
+    yield
+    held.clear()
+    held.update(saved)
+
 VENDORS = (Path(__file__).resolve().parents[3]
            / "src" / "neurobrix" / "config" / "vendors")
 
