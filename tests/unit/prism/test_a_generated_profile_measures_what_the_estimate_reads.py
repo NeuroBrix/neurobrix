@@ -110,11 +110,14 @@ def test_the_engine_measures_its_per_token_reload_once_on_a_generated_profile(hw
     assert not A.note_reload_rate("c4140-something", "compiled", "bfloat16", 2 * 10 ** 9, 2.0, "m:c")
 
 
-def test_the_reload_rate_is_written_only_from_three_steady_runs(hw, monkeypatch):
-    """The supervisor 2026-11-02 09:50: a profile fact a neighbour can disturb is no fact. The engine's reload rate is
-    written from three consecutive runs whose rates agree within 5 % (their median), and an unsteady reading is never
-    written. What this test would do if the code wrote the first reading: a fact after one run, or after three runs
-    spread 2x — RED."""
+def test_an_unsteady_reload_is_kept_at_its_low_draw_until_a_steady_one(hw, monkeypatch):
+    """The supervisor 2026-11-02 09:50: a profile fact a neighbour can disturb is no fact — so three runs that disagree
+    were never written, and every later launch on a busy machine probed again (the catalogue's kept homes, 2026-11-19:
+    TinyLlama owed BF16 three launches in a row). The orchestrator's ruling (2026-11-19): the planner needs the figure
+    before the run, so the measure is KEPT with its spread and date and priced at its low draw; the first steady three
+    replace it; an unsteady one never replaces a kept figure. What this test would do if the code were wrong: nothing
+    kept after an unsteady three (red: the probe owed again), the high or median draw priced (red), a steady measure
+    not replacing it (red), a second unsteady measure moving it (red)."""
     from neurobrix.core.strategies import layer_streaming as LS
     _profile(hw, "default-abc", DEV)
     A.ensure_measured_facts("default-abc")
@@ -123,16 +126,53 @@ def test_the_reload_rate_is_written_only_from_three_steady_runs(hw, monkeypatch)
     monkeypatch.setattr(LS, "_RELOAD_DRAWS", {})
     ex = type("E", (), {"mode": "compiled"})()
 
+    def host():
+        return yaml.safe_load((hw / "default-abc.yml").read_text()).get("host_measured") or {}
+
     def written():
-        h = yaml.safe_load((hw / "default-abc.yml").read_text()).get("host_measured") or {}
-        return (h.get("weight_reload_gbps") or {}).get("compiled", {}).get("BF16")
+        return (host().get("weight_reload_gbps") or {}).get("compiled", {}).get("BF16")
 
     for b, s in ((10 ** 9, 1.0), (10 ** 9, 2.0), (10 ** 9, 1.0)):       # 1, 0.5, 1 GB/s: not steady
         LS._note_reload(ex, "/x", "lm", b, s)
-    assert written() is None
-    for b, s in ((10 ** 9, 1.0), (10 ** 9, 1.02), (10 ** 9, 0.99)):      # steady around 1 GB/s
+    assert written() == 0.5, written()
+    spread = host()["weight_reload_spread"]["compiled"]["BF16"]
+    assert spread["low"] == 0.5 and spread["high"] == 1.0 and spread["measured"]
+    LS._note_reload(ex, "/x", "lm", 10 ** 9, 4.0)                        # 0.5, 1, 0.25: unsteady again, kept as is
+    assert written() == 0.5
+    for b, s in ((10 ** 9, 1.0), (10 ** 9, 1.02), (10 ** 9, 0.99)):      # steady around 1 GB/s: replaces it
         LS._note_reload(ex, "/x", "lm", b, s)
     assert written() is not None and abs(written() - 0.98) < 0.03, written()
+    assert "weight_reload_spread" not in host()
+    # the launch's check finds it kept: no reload probe owed for this engine and stored dtype
+    assert A._STORED["bfloat16"] in host()["weight_reload_gbps"]["compiled"]
+
+
+def _decide(reload_gbps):
+    """The faster of two plans for one generating component, as Prism ranks them (`time_estimate.plan_seconds`): it
+    streamed (a quarter of it reloaded at the second use, at `reload_gbps`) or loaded on demand by each of the three
+    phases that use it (lazy: 4 GB cold, then twice warm)."""
+    from neurobrix.core.prism import time_estimate as T
+    from neurobrix.core.prism.work import Work
+    gb = 10 ** 9
+    dev = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=800 * gb, h2d_bps=10 * gb,
+                        load_rates={"compiled": {"BF16": {"device": {"cold": 1.0, "warm": 2.0}}}})
+    host = T.HostFacts(matmul_flops=1e12, memory_bps=10 * gb, reload_gbps={"compiled": {"BF16": reload_gbps}})
+    works, uses = {"lm": Work(flops=10 ** 9, weight_bytes=4 * gb)}, {"lm": 2}
+    kw = dict(engine="compiled", stored={"lm": "bfloat16"}, held={"lm": 0.75}, phases={"lm": 3})
+    plans = {s: T.plan_seconds(s, {"lm": "cuda:0"}, works, uses, {"cuda:0": dev}, host, "float16", **kw)
+             for s in ("layer_streaming", "lazy_sequential")}
+    return min(plans, key=plans.get)
+
+
+def test_a_plan_from_the_kept_figure_holds_across_its_spread():
+    """The ruling's proof: plans made from the low draw and from the high draw take the same decision, or differ — and
+    then the kept figure (the low draw, by rule) takes the safe one, never a streamed plan only the fast draw ranks
+    first. Two spreads: one where both draws stream, one where only the high draw would."""
+    assert _decide(4.0) == _decide(6.0) == "layer_streaming"            # same decision across the spread
+    low, high = 0.2, 6.0
+    assert _decide(high) == "layer_streaming" and _decide(low) == "lazy_sequential"
+    kept = min(low, high)                                              # what note_reload_rate(spread=) writes
+    assert _decide(kept) == _decide(low) == "lazy_sequential"          # the safe one: no reload promised at the fast draw
 
 
 def test_a_profile_s_host_facts_lie_over_its_vendor_s_key_by_key():

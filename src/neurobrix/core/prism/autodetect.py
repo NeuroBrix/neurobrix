@@ -2630,12 +2630,20 @@ def _measure_arena_factor(hardware_id: str, device: dict) -> float:
 
 
 def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloaded_bytes: int, seconds: float,
-                     what: str) -> bool:
+                     what: str, spread: Optional[Tuple[float, float]] = None) -> bool:
     """The engine measured ITSELF reloading streamed pieces at a real run (`core/strategies/layer_streaming.py`): the
     pieces a token loads again — read from the container through the page cache, decoded, converted, uploaded —
-    `reloaded_bytes` in `seconds`. Written once, on a GENERATED profile only, as `host_measured.weight_reload_gbps.
-    {engine}.{stored}` when neither it nor the vendor file states it: the fact Prism prices a per-token reload with
-    (`time_estimate.reload_bps`, refused by name without it — the supervisor 2026-11-02 06:40). True when written."""
+    `reloaded_bytes` in `seconds`. Written on a GENERATED profile only, as `host_measured.weight_reload_gbps.{engine}.
+    {stored}` when neither it nor the vendor file states it: the fact Prism prices a per-token reload with BEFORE the run
+    (`time_estimate.reload_bps`, refused by name without it — the supervisor 2026-11-02 06:40). True when written.
+
+    `spread`: (low, high) GB/s of draws that did not agree within the steadiness gate (a busy machine). Such a measure is
+    KEPT — with its spread and its date in `weight_reload_spread.{engine}.{stored}` — and the figure Prism reads is its
+    LOW draw: a plan priced at the slowest reload the machine showed holds across the spread (the estimate of a reloading
+    plan only grows as the rate falls, nothing else it is ranked against moves), so it is the safe decision of the two.
+    Until 2026-11-19 an unsteady measure was not written and every later launch made the probe again (the catalogue's
+    kept homes: TinyLlama owed BF16 three launches in a row). A later steady measure replaces it; an unsteady one never
+    replaces a kept figure."""
     if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
             or reloaded_bytes < LOADER_RATE_MIN_BYTES:
         return False
@@ -2650,17 +2658,33 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     host = data.get("host_measured")
     vendor = _vendor_block(devices[0], "host_measured") if devices else None
     for block in (host, vendor):
-        if (((block or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) is not None:
-            return False
+        if (((block or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) is None:
+            continue
+        unsteady = (((block or {}).get("weight_reload_spread") or {}).get(engine) or {}).get(st) is not None
+        if block is vendor or spread is not None or not unsteady:
+            return False                                  # kept: only a steady measure replaces an unsteady one
     host = data.setdefault("host_measured", {})           # over the vendor's block key by key (loader.load_profile)
-    gbps = round(reloaded_bytes / seconds / 1e9, 3)
+    stamp = _time.strftime('%Y-%m-%d %H:%M:%S %Z')
+    gbps = round(reloaded_bytes / seconds / 1e9, 3) if spread is None else round(float(min(spread)), 3)
     host.setdefault("weight_reload_gbps", {}).setdefault(engine, {})[st] = gbps
+    spreads = host.setdefault("weight_reload_spread", {})
+    if spread is None:
+        (spreads.get(engine) or {}).pop(st, None)
+        if not spreads.get(engine):
+            spreads.pop(engine, None)
+        if not spreads:
+            host.pop("weight_reload_spread")
+        how = f"{gbps} GB/s"
+    else:
+        spreads.setdefault(engine, {})[st] = {"low": gbps, "high": round(float(max(spread)), 3), "measured": stamp}
+        how = (f"{gbps} GB/s, the LOW draw of an unsteady measure ({gbps}-{round(float(max(spread)), 3)} GB/s: the "
+               f"plan is priced at the slowest; a later steady measure replaces it)")
     host.setdefault("weight_reload_source", []).append(
-        f"{engine} {st}: {gbps} GB/s measured by the engine itself reloading streamed pieces at a real run "
-        f"{_time.strftime('%Y-%m-%d %H:%M:%S %Z')}, {what}, {reloaded_bytes / 1e9:.2f} GB reloaded")
+        f"{engine} {st}: {how} measured by the engine itself reloading streamed pieces at a real run "
+        f"{stamp}, {what}, {reloaded_bytes / 1e9:.2f} GB reloaded")
     _write_profile_atomically(path, data)
-    _log.debug(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s, written into "
-               f"{path.name}")
+    _log.debug(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s"
+               f"{'' if spread is None else ' (unsteady: its low draw)'}, written into {path.name}")
     return True
 
 

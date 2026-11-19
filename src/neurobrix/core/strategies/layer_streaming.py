@@ -102,10 +102,11 @@ _RELOAD_DRAWS: Dict[tuple, list] = {}
 
 def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, seconds: float) -> None:
     """The engine's own measure of its per-token reload, handed to the active generated profile
-    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with. A rate a neighbour can
-    disturb is no fact (the supervisor 2026-11-02 09:50): it is written only from three consecutive runs whose rates
-    agree within the steadiness the storage measure uses (`nbxtensor.io.read_rate`: 5 %), their median; an unsteady
-    reading is said, never written."""
+    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with, BEFORE the run. A rate a
+    neighbour can disturb is no fact (the supervisor 2026-11-02 09:50): three consecutive runs whose rates agree within
+    the steadiness the storage measure uses (5 %) give their median; three that do not are KEPT with their spread and
+    date, priced at their low draw (`note_reload_rate(spread=)`), and replaced by the first steady three — never
+    dropped, which made every later launch on a busy machine probe again (the catalogue's kept homes, 2026-11-19)."""
     from neurobrix.core.prism import autodetect as _ad
     stored = _ad.stored_major(nbx_path, component)
     if stored is None or seconds <= 0:
@@ -118,14 +119,16 @@ def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, second
     last = draws[-3:]
     rates = sorted(b / s for b, s in last)
     med = rates[1]
-    if rates[-1] - rates[0] > 0.05 * med:
-        if len(draws) % 3 == 0:
-            _log.debug(f"   [Reload] {component}: per-token reload not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)}"
-                       f" GB/s over the last three runs): not recorded")
-        return
     b, sec = sum(x[0] for x in last), sum(x[1] for x in last)
-    _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med,
-                         f"{os.path.basename(str(nbx_path))}:{component}, median of 3 steady runs")
+    where = f"{os.path.basename(str(nbx_path))}:{component}"
+    if rates[-1] - rates[0] > 0.05 * med:
+        if _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med,
+                                f"{where}, 3 runs not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)} GB/s)",
+                                spread=(rates[0] / 1e9, rates[-1] / 1e9)):
+            _log.debug(f"   [Reload] {component}: per-token reload not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)}"
+                       f" GB/s over the last three runs): kept at its low draw until a steady measure")
+        return
+    _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med, f"{where}, median of 3 steady runs")
 
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
