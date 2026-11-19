@@ -2292,6 +2292,9 @@ class GraphExecutor:
         if stored is not None:
             _ad.note_loader_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, where, int(landed), float(seconds),
                                  f"{Path(str(nbx_path)).name}:{component}")
+        # what the weight reader measured on this load, kept with its spread (row 167): the next launch starts there
+        from neurobrix.core.workspace import weight_reader_measured
+        _ad.note_read_width(_ad.ACTIVE_HARDWARE_ID, weight_reader_measured())
 
     def _load_weights_native(self, nbx_path, component, shard_map, only=None):
         """Load weights as torch.Tensor (native mode)."""

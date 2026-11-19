@@ -2734,6 +2734,45 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     return True
 
 
+def kept_read_width(hardware_id: Optional[str]) -> Optional[int]:
+    """The weight reader's width this machine KEPT (`note_read_width`), or None: the next load starts there, never from
+    one again (row 167)."""
+    if not hardware_id or not str(hardware_id).startswith("default"):
+        return None
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return None
+    kept = ((yaml.safe_load(path.read_text()) or {}).get("host_measured") or {}).get("weight_read") or {}
+    return int(kept["workers"]) if kept.get("workers") else None
+
+
+def note_read_width(hardware_id: Optional[str], measured: Optional[dict]) -> bool:
+    """What the weight reader measured on this process's loads (`nbxtensor.io.reader.Reader.measured()`), KEPT on a
+    generated profile as `host_measured.weight_read`: the width, the low and high rate of its rounds at that width and
+    their count, whether its growth settled, the date. The library measures; the engine keeps and reuses (row 167). A
+    growth that did not settle keeps its best width so far with that width's spread. Written when none is kept, or over
+    an unsettled one by a reader that searched and settled (the quiet measure replaces the unconcluded); never
+    otherwise: a kept figure is never paid twice. True when written."""
+    if not hardware_id or not str(hardware_id).startswith("default") or not measured:
+        return False
+    rates = measured.get("rates") or {}
+    w = int(measured["workers"]) if measured.get("settled") else (max(rates, key=rates.get) if rates else None)
+    at = (measured.get("draws") or {}).get(w) or []
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if w is None or not at or not path.exists():
+        return False
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    kept = (data.get("host_measured") or {}).get("weight_read")
+    if kept and (kept.get("settled") or not measured.get("settled") or measured.get("start") is not None):
+        return False
+    data.setdefault("host_measured", {})["weight_read"] = {
+        "workers": int(w), "low_gbps": round(min(at) / 1e9, 3), "high_gbps": round(max(at) / 1e9, 3),
+        "rounds": len(at), "settled": bool(measured.get("settled")), "measured": _time.strftime("%Y-%m-%d %H:%M:%S %Z")}
+    _write_profile_atomically(path, data)
+    return True
+
+
 def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where: str, landed_bytes: int, seconds: float,
                      what: str) -> bool:
     """The engine's loader measured ITSELF at a real load (`GraphExecutor`'s loaders): `landed_bytes` of weights stored
