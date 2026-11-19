@@ -15,7 +15,6 @@ profile is ever substituted."""
 import subprocess
 
 import pytest
-import yaml
 
 from neurobrix.core.config.loader import CONFIG_ROOT, UnsupportedArchitectureError, get_vendor_config
 from neurobrix.core.prism import InputConfig, PrismSolver
@@ -76,7 +75,9 @@ def test_an_added_profile_says_it_is_documentation_sourced_and_cites_its_sources
     text = (NVIDIA / f"{arch}.yml").read_text()
     assert "DOCUMENTATION-SOURCED AND UNMEASURED" in text and "validation_status: hand_curated_from_docs" in text
     assert "https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html" in text
-    assert (yaml.safe_load(text) or {}).get("compute_capability")
+    # the capability is a library key since the NVIDIA files' split (nbxtensor backend/devices/nvidia/<arch>.yml): the
+    # engine reads it through its merged view of the two halves
+    assert get_vendor_config("nvidia", arch).get("compute_capability")
 
 
 def _plan(monkeypatch, arch, mode, serve):
@@ -112,16 +113,17 @@ def test_a_triton_plan_on_a_documentation_sourced_profile_is_refused_by_name(mon
 @pytest.mark.parametrize("cc,card", [("8.6", "NVIDIA A10 / RTX 3090"), ("8.7", "Jetson Orin")])
 def test_a_card_between_two_profiles_of_its_major_takes_the_one_below_on_both_sides(monkeypatch, cc, card):
     """With ada (8.9) beside ampere (8.0), an 8.6 or 8.7 card resolves to ampere, as before ada existed: the engine's
-    capability rule (core/config/loader.py) and the kernels' (nbxtensor ops/_configs.py, the shared-memory budget and
-    the active profile) name the same file, so one run never reads two profiles. Without the rule's "at or below" the
-    engine took ada, the first file of major 8 in name order."""
+    capability rule (core/config/loader.py) and the kernels' (nbxtensor ops/_configs.py, the active profile) name the
+    same file, so one run never reads two profiles. Without the rule's "at or below" the engine took ada, the first file
+    of major 8 in name order. The shared-memory budget is the library's key (the engine plans nothing with it): the
+    kernels read the figure NVIDIA documents for the capability itself (CUDA Programming Guide, Table 34, read
+    2026-11-19: 8.6 99 KB, 8.7 163 KB), not the 8.0 figure of the file."""
     import types
     from nbxtensor.backend import launcher
     from nbxtensor.ops import _configs
-    from neurobrix.core.config.loader import vendor_config_for_device, vendor_profile_for_device
+    from neurobrix.core.config.loader import vendor_profile_for_device
     assert vendor_profile_for_device("nvidia", "ampere", cc, model=card) == "ampere", card
-    engine_budget = vendor_config_for_device("nvidia", "ampere", cc, model=card)["memory"]["max_shared_memory_per_block"]
     monkeypatch.setattr(launcher, "target", lambda: types.SimpleNamespace(arch=int(cc.replace(".", "")), backend="cuda"))
     monkeypatch.setattr(_configs, "_ACTIVE_PROFILE", {})
-    assert _configs.arch_smem_budget() == engine_budget == 167936, card
+    assert _configs.arch_smem_budget() == {"8.6": 99 * 1024, "8.7": 163 * 1024}[cc], card
     assert _configs.active_vendor_profile().get("_profile") == "ampere", card

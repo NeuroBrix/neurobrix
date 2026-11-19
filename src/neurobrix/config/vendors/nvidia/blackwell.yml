@@ -27,25 +27,7 @@
 # The engine's device string for the CUDA platform (the PyTorch branch's `cuda`, the Triton launcher's CUDA backend).
 device_prefix: "cuda"
 
-# Identity. `architecture` is the name the detector gives compute capability 10.0
-# (core/prism/autodetect.py `_NVIDIA_ARCH_MAP` / `_NVIDIA_ARCH_REFINE`); the capability is how the kernels'
-# resolver finds this file (core/config/loader.py `vendor_config_for_device`).
-architecture: blackwell
-compute_capability: "10.0"
-
 memory:
-  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html, read 2026-11-17,
-  # Table 34 "Memory Information per Compute Capability", column 10.0: "Maximum amount of shared memory per
-  # thread block: 227 KB" (with explicit opt-in; the page states 1 KB = 1024 bytes). 227 x 1024 = 232448.
-  # (Per SM: 228 KB.)
-  max_shared_memory_per_block: 232448
-  # SOURCE: same table, "Maximum number of 32-bit registers per thread block: 64 K" (1 K = 1024).
-  max_registers_per_block: 65536
-  # SOURCE: same table, "Maximum number of 32-bit registers per thread: 255".
-  max_registers_per_thread: 255
-  # SOURCE: same page, Table 33 "Device and Streaming Multiprocessor (SM) Information per Compute Capability":
-  # "Warp size: 32".
-  warp_size: 32
   # A state page row is read in global-memory transactions of 32-byte segments of 128-byte lines.
   # SOURCE: https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html, read 2026-11-17, "Coalesced Access to Global Memory": "the number of required
   # transactions is equal to the number of required 128-byte aligned segments".
@@ -90,23 +72,6 @@ precision:
   # IEEE-754 binary64 in hardware. SOURCE: same page, Table 33, "Ratio of FP32 to FP64 Throughput": 2:1 at 10.0, 64:1 at 10.3
   # (a throughput ratio, so the unit exists; slow, not absent).
   supports_fp64: true
-  # The two lines below are not card values. kernels_carry_fp64 is a CAPABILITY of each branch's own kernels:
-  # ATen carries float64 wherever the device does; Triton lowers double on the CUDA backend. stores_fp64 is the
-  # DtypeEngine's POLICY (the Triton branch is fp32-max). Read by `config.device_supports_fp64`.
-  kernels_carry_fp64:
-    compiled: true
-    triton: true
   stores_fp64:
     compiled: true
     triton: false
-  # Attention operands that disagree in dtype take the narrowest: an engine POLICY (the half attention stays on the
-  # matrix unit), not a card value; read by `dtype.attention_operand_alignment`.
-  attention_operands: narrowest
-
-# NOT MEASURED on this architecture: the values that say so. The flash kernel at a power-of-two head dim >= 128
-# keeps its zero-pad detour (true only where the correctness oracle ran with the detour off on the arch).
-flash:
-  pow2_head_dim_correct: false
-# Convolution weights stay in the container's own order (KCRS) until KRSC is measured faster on the arch.
-conv:
-  weight_layout: KCRS
