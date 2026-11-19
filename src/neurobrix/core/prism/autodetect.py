@@ -294,7 +294,9 @@ def _complete_measured_fields(path: Path) -> None:
         return
     added = {}
     if "runtime_base_mb" not in cpu:
-        added["runtime_base_mb"] = _measure_runtime_base_mb()
+        # a machine fact: what a sibling generated profile measured holds for this card set too (other_card_models)
+        added["runtime_base_mb"] = other_card_models.base_from_siblings(path.parent, exclude=path) or \
+            _measure_runtime_base_mb()
     # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads), on every OS that
     # states them (macOS perflevels, Linux's hybrid PMU lists, Windows' efficiency classes); a CPU of one class: none
     if "performance_cores" not in cpu:
@@ -465,7 +467,8 @@ def detect_hardware() -> Dict[str, Any]:
     # --- CPU (always) ---
     cpu = _detect_cpu(os_type)
     # The runtime's own base, measured here per engine: the base of Prism's host estimate.
-    cpu["runtime_base_mb"] = _measure_runtime_base_mb()
+    # (taken from a sibling generated profile when one measured it: the same machine through another card set)
+    cpu["runtime_base_mb"] = other_card_models.base_from_siblings(HARDWARE_DIR) or _measure_runtime_base_mb()
     # No parallel-read count is measured here or kept: the weight reader measures itself on each load (core.workspace.
     # weight_reader, nbxtensor.io.reader) — a count measured ahead cost 130 s on a quiet store, and a busy one gave none
     # and owed it again at every launch (the launch-time cure, 2026-11-19).
@@ -2503,7 +2506,9 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     if not devices:
         return {}
     stamp, q = _time.strftime("%Y-%m-%d %H:%M:%S %Z"), FIRST_LAUNCH
-    added: Dict[str, Any] = {}
+    # class facts measured ONCE per card model and machine: what a sibling card set's profile (or an identical card of
+    # this one) measured is taken, never measured again (other_card_models.from_siblings)
+    added: Dict[str, Any] = dict(other_card_models.from_siblings(path, data, devices))
 
     def measured_of(d):
         return dict(d.get("measured") or _vendor_block(d, "measured") or {})

@@ -249,12 +249,18 @@ def complete_runtime_card_facts(devices, measure) -> dict:
     when the runtime cannot answer — and set on the device entry. A
     profile generated before, or at a moment the runtime could not answer, stayed without them for ever and every
     plan on it was refused by name, telling the user to delete the file (the two-card `default-*` profile of the rack,
-    2026-11-11). Returns {"runtime_card_facts": [device indices completed]} or {}."""
-    done = []
+    2026-11-11). Identical cards (one `model`) are measured once: the first card of a model answers for the others
+    (the launch-time cure, 2026-11-19). Returns {"runtime_card_facts": [device indices completed]} or {}."""
+    done, of_model = [], {}
     for device in devices:
         if device.get("unified_memory") or device.get("runtime_context_mb") is not None:
             continue
-        facts = measure(int(device.get("index", 0)))
+        model = device.get("model")
+        facts = of_model.get(model) if model is not None else None
+        if facts is None:
+            facts = measure(int(device.get("index", 0)))
+            if facts and model is not None:
+                of_model[model] = facts
         if facts:
             device.update(facts)
             done.append(int(device.get("index", 0)))
