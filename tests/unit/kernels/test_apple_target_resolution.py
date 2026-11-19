@@ -81,8 +81,11 @@ _BUDGETS_THAT_MUST_NOT_MOVE = {
     # Programming Guide, Table 34): their own profiles replaced Volta's and Ampere's larger budgets. Both cards were
     # refused by name before (no turing or ada profile), so no run that worked moves.
     75: 65536,          # T4, exact on "7.5" (nvidia/turing.yml)
-    80: 167936,         # A100, exact on "8.0"
-    86: 167936,         # 3090 / A10, resolved by major to ampere's 8.0, never to ada's 8.9: unchanged in 0.6.17
+    # 80 and 86 MOVED with nbxtensor's documented figures (1188, 2026-11-19; CUDA Programming Guide, Table 34): 8.0 reads
+    # the 163 KB NVIDIA documents (the file said 164 KB), and 8.6, still resolved by major to ampere's file, reads the
+    # 99 KB that file documents for 8.6 itself, never 8.0's.
+    80: 166912,         # A100, exact on "8.0"
+    86: 101376,         # 3090 / A10, ampere's file, its 8.6 entry
     89: 101376,         # RTX 4070, exact on "8.9" (nvidia/ada.yml)
     90: 232448,         # H100, exact on "9.0"
     "gfx908": 65536,    # CDNA1
