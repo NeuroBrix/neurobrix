@@ -280,27 +280,19 @@ def test_doctor_lists_only_the_gpus_this_process_sees(needs_device, tmp_path, mo
     assert text.startswith("NVIDIA GPU (0x1db5; 3 more on the host, not visible here)"), text
 
 
-def test_a_probe_child_reads_serially_when_its_launch_measured_no_read_rate(monkeypatch, capsys):
-    """A first launch on a busy storage measures no stable read rate and reads serially (`workspace.
-    declare_unmeasured_io_workers`); its reload probe child read the same profile, found no count and refused — the
-    whole first run ended in `RuntimeError: ... no I/O worker count` (a loaded rack, 2026-11-08). The parent hands its
-    word to the child, and the child reads serially too."""
-    import runpy
+def test_a_probe_child_reads_without_a_count_from_its_launch(monkeypatch):
+    """A first launch on a busy storage measured no stable read rate; its reload probe child read the same profile,
+    found no count and refused — the whole first run ended in `RuntimeError: ... no I/O worker count` (a loaded rack,
+    2026-11-08). No count exists any more: the child's loads build their own weight reader, which measures itself on
+    those loads (the launch-time cure, 2026-11-19), and the parent hands it nothing about reads."""
     import types
     from neurobrix.core import workspace as W
     from neurobrix.core.prism import arena_probe as AP
     seen = {}
-    monkeypatch.setattr(W, "_IO_UNMEASURED", "no stable read rate this time")
     monkeypatch.setattr(AP.subprocess, "run", lambda cmd, **k: seen.update(env=k["env"]) or
                         types.SimpleNamespace(returncode=0, stdout=AP.MARK + "{}", stderr=""))
     AP.child("/nowhere", "model", "default-x", "triton")
-    assert seen["env"][W.UNMEASURED_ENV] == "no stable read rate this time"
-    # the child's side: its entry declares it before anything reads the count
-    monkeypatch.setattr(W, "_IO_UNMEASURED", None)
-    monkeypatch.setattr(W, "_IO_WORKERS", None)
-    monkeypatch.setenv(W.UNMEASURED_ENV, "no stable read rate this time")
-    monkeypatch.setattr(sys, "argv", ["arena_probe", "/nowhere", "model", "default-x", "1"])
-    with pytest.raises(SystemExit):
-        runpy.run_module("neurobrix.core.prism.arena_probe", run_name="__main__")
-    capsys.readouterr()
-    assert W.io_workers() == W.UNMEASURED_IO_WORKERS
+    assert not any("IO_UNMEASURED" in k for k in seen["env"])
+    monkeypatch.setattr(W, "_LOAD_CEILING", None)
+    monkeypatch.setattr(W, "_READER", None)
+    assert W.weight_reader().ceiling == W.processors()

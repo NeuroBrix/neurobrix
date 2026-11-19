@@ -59,18 +59,18 @@ def test_the_weights_are_read_at_their_offset_without_preadv(monkeypatch, tmp_pa
     assert got.tobytes() == data[1000:301000]
 
 
-def test_a_measure_windows_cannot_make_is_declared_unmeasured(monkeypatch, engine_log):
-    from nbxtensor.io import read_rate as R
-    monkeypatch.setattr(R.sys, "platform", "win32")
+def test_a_run_on_windows_owes_no_read_rate_measure(monkeypatch):
+    """Windows offers no read past the page cache through Python, so the read-rate trial a launch once made there was
+    declared unmeasured at every run. The weight reader needs no trial: it measures itself on the load's own reads, on
+    any system (the launch-time cure, 2026-11-19)."""
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delattr(os, "posix_fadvise", raising=False)
-    with pytest.raises(RuntimeError, match="no uncached read-rate measure on this system"):
-        R.workers_for("/nonexistent", witness_dir="/nonexistent")
     from neurobrix.core import workspace as W
     from neurobrix.core.prism import autodetect as A
-    monkeypatch.setattr(W, "_IO_WORKERS", None)
-    monkeypatch.setattr(W, "_IO_UNMEASURED", None)
-    assert A._measure_io_workers() is None
-    assert "[Engine] io workers: 1 for this run — no uncached read-rate measure on this system" in engine_log()
+    monkeypatch.setattr(W, "_LOAD_CEILING", 2)
+    monkeypatch.setattr(W, "_READER", None)
+    assert not hasattr(A, "_measure_io_workers")
+    assert W.weight_reader().ceiling == 2
 
 
 def test_the_resident_term_is_the_working_set_on_windows(monkeypatch):

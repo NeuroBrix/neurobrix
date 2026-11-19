@@ -18,21 +18,25 @@ from nbxtensor.io.safetensors import split_across_workers
 
 @pytest.fixture(autouse=True)
 def _the_machine_s_profile(monkeypatch):
-    """The loader's reads in flight are the profile's measured cpu.io_workers, declared where a run loads its profile
-    (`core.prism.loader.load_profile`): loaded here as a run loads it, the previous declaration restored after. Without
-    it these cells reached the io pool undeclared and were refused since the count left system.yml (2026-10-30)."""
+    """The machine's profile loaded as a run loads it, and the loader's reads through the process's weight reader
+    (`core.workspace.weight_reader`, its ceiling the processors when no plan priced one), a fresh one per cell."""
     from neurobrix.core import workspace
     from neurobrix.core.prism.autodetect import load_default_profile
-    monkeypatch.setattr(workspace, "_IO_WORKERS", workspace._IO_WORKERS)
-    monkeypatch.setattr(W, "_IO_POOL", None)          # a pool built under another count is not this one
+    monkeypatch.setattr(workspace, "_LOAD_CEILING", None)
+    monkeypatch.setattr(workspace, "_READER", None)
     load_default_profile()
+
+
+def _io():
+    from neurobrix.core.workspace import weight_reader
+    return weight_reader().io
 
 
 def _stage(raw, shape, source, target, host_arena=None):
     """A host-held weight staged as the engine's loader stages it: nbxtensor's primitive, the loader's I/O pool."""
     from neurobrix.triton import weight_loader as W
     from nbxtensor.io import safetensors as SF
-    return SF.load_to_pinned_host(raw, shape, source, target, W._io_pool(), host_arena)
+    return SF.load_to_pinned_host(raw, shape, source, target, _io(), host_arena)
 
 
 
@@ -41,7 +45,7 @@ def test_the_parallel_widening_is_the_old_formula_bit_for_bit():
     bits = rng.integers(0, 2 ** 16, size=3_000_001, dtype=np.uint64).astype(np.uint16)   # every class: nan, inf, subnormal
     bits[:4] = [0x7F80, 0xFF80, 0x7FC0, 0x0001]
     old = (bits.astype(np.uint32) << 16).view(np.float32).astype(np.float16)
-    new = split_across_workers(bits, np.empty(bits.shape, dtype=np.float16), bf16_bits_to_f16, W._io_pool())
+    new = split_across_workers(bits, np.empty(bits.shape, dtype=np.float16), bf16_bits_to_f16, _io())
     assert new.dtype == np.float16
     assert np.array_equal(old.view(np.uint16), new.reshape(-1).view(np.uint16))
 

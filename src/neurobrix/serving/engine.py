@@ -267,6 +267,11 @@ class InferenceEngine:
 
         t_load = time.time() - t_start
         self._is_loaded = True
+        from neurobrix.core.workspace import weight_reader_said
+        from neurobrix.core.prism import launch_lines
+        _read = weight_reader_said()
+        if _read is not None:                # a cold-serving plan reads at its first request: said there by its loads
+            launch_lines.say("loaded", _read)
 
         _log.debug(f"[NeuroBrix] {self.model_name} | {self.hardware_id} | {self._plan.strategy} | Ready in {t_load:.2f}s")
 

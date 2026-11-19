@@ -15,9 +15,7 @@ CompiledSequence.get_op_blocks uses, so the partitioning is consistent
 across native and triton modes.
 """
 
-import os
 import re
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -28,7 +26,7 @@ from nbxtensor.dtype.itemsize import itemsize
 from nbxtensor.shape import numel
 from nbxtensor.io import safetensors as _sf
 # The loader's worker count — one figure for every loader and for Prism's host estimate (torch-free).
-from neurobrix.core.workspace import io_workers, apply_host_mmap_threshold, apply_host_huge_pages
+from neurobrix.core.workspace import weight_reader, apply_host_mmap_threshold, apply_host_huge_pages
 # The absent-weight rule lives beside the container format it guards (torch-free), one rule for
 # both engines' loaders and binds and for the validator.
 from neurobrix.nbx.weight_presence import (   # noqa: F401 — re-exported for this engine's callers
@@ -58,23 +56,13 @@ def is_block_key(key: str) -> bool:
     return bool(_BLOCK_RE.search(key))
 
 
-# One tensor at a time, read and cast by `io_workers()` threads: a shard read by one `f.read` and
-# cast by one numpy loop ran at 0.40 GB/s (cold) / 0.52 GB/s (warm) on Wan2.2-I2V-A14B's fp32
-# shards over the RDMA cache; split across 8 workers, 1.4-1.7 / 2.7 GB/s, the same bytes
-# (V100 rack, 2026-10-21). Both `os.preadv` and numpy's casting loop release the GIL. The tensor
-# in flight is still ONE, as Prism's triton host estimate prices it (`host_footprint`:
-# TRITON_COPIES_PER_TENSOR x the largest tensor) — the work on it is what is shared.
-_IO_POOL: Optional[tuple] = None      # (pid, workers, pool): a forked child builds its own
-
-
-def _io_pool():
-    """(workers, pool) of this process — read once from `io_workers()`."""
-    global _IO_POOL
-    if _IO_POOL is None or _IO_POOL[0] != os.getpid():
-        workers = io_workers()
-        _IO_POOL = (os.getpid(), workers,
-                    ThreadPoolExecutor(max_workers=workers, thread_name_prefix="nbx-weight-io"))
-    return _IO_POOL[1], _IO_POOL[2]
+# One tensor at a time, read and cast across the process's weight reader (`core.workspace.weight_reader`, nbxtensor's
+# `io.reader`): a shard read by one `f.read` and cast by one numpy loop ran at 0.40 GB/s (cold) / 0.52 GB/s (warm) on
+# Wan2.2-I2V-A14B's fp32 shards over the RDMA cache; split across 8 workers, 1.4-1.7 / 2.7 GB/s, the same bytes (V100
+# rack, 2026-10-21). The split's width now starts at one and grows by the reads' own measure on this load, up to the
+# ceiling the plan priced. Both `os.preadv` and numpy's casting loop release the GIL. The tensor in flight is still ONE,
+# as Prism's triton host estimate prices it (`host_footprint`: TRITON_COPIES_PER_TENSOR x the largest tensor) — the
+# work on it is what is shared.
 
 
 def _resolve_shard_device(shard_path: str, weight_device: Dict[str, int]):
@@ -341,6 +329,7 @@ def _load_shard_into_arenas(
     # Device for every weight in THIS shard file (weight_sharding); FGP
     # weight-name keys still override per weight in _weight_target_dev.
     shard_dev = _resolve_shard_device(path, weight_device)
+    reader = weight_reader()        # the process's: its width grows by this load's own reads
     with open(path, 'rb') as f:
         for key, info in header.items():
             if key == '__metadata__':
@@ -359,7 +348,7 @@ def _load_shard_into_arenas(
             np_dtype, nbx_dtype, elem_size = dtype_info
 
             # Read raw bytes from file
-            raw = _sf.read_bytes(f.fileno(), data_offset + start, end - start, _io_pool())
+            raw = reader.read_bytes(f.fileno(), data_offset + start, end - start)
 
             # Determine target dtype after remap — the one rule, `stored_dtype_in_compute`
             target_dtype = stored_dtype_in_compute(nbx_dtype, compute_dtype)
@@ -370,7 +359,7 @@ def _load_shard_into_arenas(
             # etc.) but the final NBXTensor is CPU-backed.
             if key in cpu_weights:
                 weights[key] = _sf.load_to_pinned_host(
-                    raw, shape, nbx_dtype, target_dtype, _io_pool(), memory.host)
+                    raw, shape, nbx_dtype, target_dtype, reader.io, memory.host)
                 continue
 
             target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
@@ -378,7 +367,7 @@ def _load_shard_into_arenas(
             _nbx_device.select(target_dev)
 
             weights[key] = _sf.place_in_arena(raw, shape, nbx_dtype, np_dtype, target_dtype,
-                                              bool(krsc) and key in krsc, arena, target_dev, _io_pool())
+                                              bool(krsc) and key in krsc, arena, target_dev, reader.io)
 
 def stored_dtype_in_compute(nbx_dtype, compute_dtype):
     """The dtype a stored weight takes in memory under a compute dtype — THE rule, in one place.

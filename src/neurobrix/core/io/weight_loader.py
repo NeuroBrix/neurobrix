@@ -24,7 +24,6 @@ import zipfile
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from typing import Set
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
 
 try:
@@ -51,10 +50,10 @@ WEIGHTS_INDEX_PATTERNS = [
     "weights/{component}/weights_index.json",
 ]
 
-# PARALLEL LOADING: Number of concurrent shard loads
-# safetensors loading is I/O-bound, threading helps significantly
+# PARALLEL LOADING: the shards are read by the process's weight reader (nbxtensor.io.reader via core.workspace), whose
+# parallel reads start at one and grow by their own measure on this load
 from neurobrix.core.workspace import (
-    io_workers as _io_workers, apply_host_mmap_threshold, apply_host_huge_pages,
+    weight_reader as _weight_reader, apply_host_mmap_threshold, apply_host_huge_pages,
     pinned_uploads_in_flight as _pinned_in_flight)
 #: Non-blocking uploads one loader worker keeps outstanding (`_load_with_pinned_dma`, system.yml
 #: io.pinned_uploads_in_flight): the pinned host bytes of a load are bounded by workers x this.
@@ -436,23 +435,10 @@ class WeightLoader:
 
         weights = {}
 
-        # PARALLEL LOADING: Load multiple shards concurrently
-        if len(weight_files) > 1 and _io_workers() > 1:
-            def load_shard(weight_file):
-                """Load a single shard (runs in thread)."""
-                shard_name = weight_file.split("/")[-1]
-                return shard_name, self._load_weight_file(weight_file, device, dtype)
-
-            with ThreadPoolExecutor(max_workers=_io_workers()) as executor:
-                futures = {executor.submit(load_shard, wf): wf for wf in weight_files}
-                for future in as_completed(futures):
-                    shard_name, block_weights = future.result()
-                    weights.update(block_weights)
-        else:
-            # Sequential fallback for single shard
-            for weight_file in weight_files:
-                block_weights = self._load_weight_file(weight_file, device, dtype)
-                weights.update(block_weights)
+        # The shards read by the process's weight reader: its parallel reads grow by their own measure on this load
+        for block_weights in _weight_reader().map(lambda wf: self._load_weight_file(wf, device, dtype),
+                                                  weight_files, self._stored_bytes):
+            weights.update(block_weights)
 
         # Batch sync: ensure all GPU transfers complete before returning
         if device.startswith("cuda") or device.startswith("hip"):
@@ -631,17 +617,9 @@ class WeightLoader:
 
             return results
 
-        num_workers = min(_io_workers(), len(weight_files))
-        if num_workers > 1:
-            with ThreadPoolExecutor(max_workers=num_workers) as executor:
-                futures = {executor.submit(_load_one_fgp_file, wf): wf for wf in sorted(weight_files)}
-                for future in as_completed(futures):
-                    for key, tensor in future.result():
-                        weights[key] = tensor
-        else:
-            for wf in sorted(weight_files):
-                for key, tensor in _load_one_fgp_file(wf):
-                    weights[key] = tensor
+        for pairs in _weight_reader().map(_load_one_fgp_file, sorted(weight_files), self._stored_bytes):
+            for key, tensor in pairs:
+                weights[key] = tensor
 
         gc.collect()
 
@@ -719,24 +697,10 @@ class WeightLoader:
             actual_path = self._resolve_shard_path(shard_path, component_name, file_list)
             shard_items.append((actual_path, device))
 
-        # === Read every file of the map, each onto its device ===
-        if len(shard_items) > 1 and _io_workers() > 1:
-            def load_shard(item):
-                """Load a single shard (runs in thread)."""
-                actual_path, device = item
-                shard_name = actual_path.split("/")[-1]
-                return shard_name, device, self._load_weight_file(actual_path, device, dtype)
-
-            with ThreadPoolExecutor(max_workers=_io_workers()) as executor:
-                futures = {executor.submit(load_shard, item): item for item in shard_items}
-                for future in as_completed(futures):
-                    shard_name, device, block_weights = future.result()
-                    weights.update(block_weights)
-        else:
-            # Sequential fallback for single shard
-            for actual_path, device in shard_items:
-                block_weights = self._load_weight_file(actual_path, device, dtype)
-                weights.update(block_weights)
+        # === Read every file of the map, each onto its device, by the process's weight reader ===
+        for block_weights in _weight_reader().map(lambda item: self._load_weight_file(item[0], item[1], dtype),
+                                                  shard_items, lambda item: self._stored_bytes(item[0])):
+            weights.update(block_weights)
 
         # Batch sync: ensure all GPU transfers complete before returning
         devices_used = set(d for _, d in shard_items)
@@ -809,6 +773,17 @@ class WeightLoader:
             f"\n  Similar files in container: {similar_files}\n"
             f"  Verify Prism shard_map matches NBX structure."
         )
+
+    def _stored_bytes(self, zip_path: str) -> int:
+        """The bytes the weight file `zip_path` holds, as stored (the cache's file, else the container's entry): what a
+        read of it reads, the measure the weight reader judges its width on."""
+        if self.use_cache and self._cache_path:
+            cache_file = self._cache_path / zip_path
+            if cache_file.exists():
+                return cache_file.stat().st_size
+        if self._zip is None:
+            self.open()
+        return self._zip.getinfo(zip_path).file_size
 
     def _load_weight_file(
         self,

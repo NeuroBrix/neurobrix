@@ -3,7 +3,8 @@
 The triton loader read each tensor with one `f.read` and cast it with one numpy loop: 0.40 GB/s on
 Wan2.2-I2V-A14B's fp32 shards over the RDMA cache, 4.7 min of a 2-step gate cell spent loading one
 expert (native: 68 s). `_read_bytes` splits the read into page-aligned spans and `_cast` the cast into
-element spans, across `io_workers()` threads. What this holds: the bytes are exactly the ones a single
+element spans, across the weight reader's threads (`core.workspace.weight_reader`, whose width grows by its own
+measure on the load: the cells below split at a fixed width of 8, the reader's own reads are checked too). What this holds: the bytes are exactly the ones a single
 read and a single `astype` give, at every split boundary (an empty tensor, under one page per worker,
 an odd tail); a short read is refused by name, never returned shorter; and the split really happens
 (more than one span) — a pool of one would pass every equality while sharing nothing.
@@ -16,15 +17,17 @@ import os
 import numpy as np
 import pytest
 
-from neurobrix.triton import weight_loader as W
-from nbxtensor.io import safetensors as SF   # the primitives (M2); the pool is the loader's
+from concurrent.futures import ThreadPoolExecutor
+
+from nbxtensor.io import safetensors as SF   # the primitives (M2); the split's width is the reader's
+
+_IO = (8, ThreadPoolExecutor(max_workers=8))  # these cells were written against 8 workers
 
 
-@pytest.fixture(autouse=True)
-def _io_workers_declared(monkeypatch):
-    """The count a loaded profile declares (cpu.io_workers); these cells were written against 8."""
-    from neurobrix.core import workspace
-    monkeypatch.setattr(workspace, "_IO_WORKERS", 8)
+class W:
+    @staticmethod
+    def _io_pool():
+        return _IO
 
 
 @pytest.fixture
@@ -78,3 +81,19 @@ def test_a_large_tensor_is_split_across_the_workers():
     assert all(a[1] == b[0] for a, b in zip(spans, spans[1:]))
     page_spans = SF.spans(10_000_000, 1, SF.PAGE, workers)
     assert all(a % SF.PAGE == 0 for a, _ in page_spans)
+
+
+def test_the_reader_reads_the_same_bytes_at_every_width(blob, monkeypatch):
+    """The loader's own reads (`weight_reader().read_bytes`) give the single-pass bytes while the width grows."""
+    from neurobrix.core import workspace
+    monkeypatch.setattr(workspace, "_LOAD_CEILING", 8)
+    monkeypatch.setattr(workspace, "_READER", None)
+    a = np.random.default_rng(5).standard_normal(3_000_001).astype(np.float32)
+    fd, off = blob(a)
+    try:
+        r = workspace.weight_reader()
+        for _ in range(6):
+            assert r.read_bytes(fd, off, a.nbytes).tobytes() == a.tobytes()
+    finally:
+        os.close(fd)
+    assert r.measured()["bytes"] == 6 * a.nbytes and 1 <= r.measured()["workers"] <= 8

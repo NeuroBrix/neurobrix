@@ -101,7 +101,6 @@ def _profile(monkeypatch, os_type="Linux", ram_mb=32 * 1024):
     cpu = {"model": "laptop CPU", "cores": 4, "threads": 8, "ram_mb": ram_mb, "architecture": "x86_64", "features": []}
     monkeypatch.setattr(autodetect, "_detect_cpu", lambda os_type: dict(cpu))
     monkeypatch.setattr(autodetect, "_measure_runtime_base_mb", lambda: {"compiled": 500, "triton": 90})
-    monkeypatch.setattr(autodetect, "_measure_io_workers", lambda: 4)
     monkeypatch.setattr(autodetect, "_detect_system_vendor", lambda os_type: "custom")
     return autodetect.detect_hardware()
 

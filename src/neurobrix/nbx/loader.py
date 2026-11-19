@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from typing import TYPE_CHECKING
 
@@ -29,7 +28,7 @@ if TYPE_CHECKING:  # R33: the ATen branch loads through torch; the Triton branch
 
 from .cache import ensure_extracted
 
-from neurobrix.core.workspace import io_workers as _io_workers
+from neurobrix.core.workspace import weight_reader as _weight_reader
 import logging
 _log = logging.getLogger(__name__)
 
@@ -180,25 +179,13 @@ class FastNBXLoader:
                 shard_weights = {k: v.to(dtype) for k, v in shard_weights.items()}
             return wf.name, shard_weights, shard_bytes
 
-        if len(weight_files) > 1:
-            # PARALLEL LOADING
+        # The shards read by the process's weight reader: parallel reads from one, grown by this load's own measure
+        for shard_name, shard_weights, shard_bytes in _weight_reader().map(load_shard, weight_files,
+                                                                           lambda wf: wf.stat().st_size):
+            all_weights.update(shard_weights)
+            total_bytes += shard_bytes
             if verbose:
-                _log.debug(f"[FastLoader] Parallel loading with {_io_workers()} workers...")
-
-            with ThreadPoolExecutor(max_workers=_io_workers()) as executor:
-                futures = {executor.submit(load_shard, wf): wf for wf in weight_files}
-                for future in as_completed(futures):
-                    shard_name, shard_weights, shard_bytes = future.result()
-                    all_weights.update(shard_weights)
-                    total_bytes += shard_bytes
-                    if verbose:
-                        _log.debug(f"[FastLoader] {shard_name}: {shard_bytes/1e9:.2f}GB")
-        else:
-            # Single shard - no parallelism needed
-            for wf in weight_files:
-                shard_name, shard_weights, shard_bytes = load_shard(wf)
-                all_weights.update(shard_weights)
-                total_bytes += shard_bytes
+                _log.debug(f"[FastLoader] {shard_name}: {shard_bytes/1e9:.2f}GB")
 
         self.stats.weights_time = time.time() - t0
         self.stats.weights_size_gb = total_bytes / 1e9

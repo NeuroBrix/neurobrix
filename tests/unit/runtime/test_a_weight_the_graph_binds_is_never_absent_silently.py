@@ -52,9 +52,10 @@ ARRAYS = {   # two shards, so a missing one leaves the other loadable
 
 @pytest.fixture(autouse=True)
 def _io_workers_declared(monkeypatch):
-    """The count a loaded profile declares (cpu.io_workers): these cells drive the loaders with no profile."""
+    """These cells drive the loaders with no plan: the weight reader's ceiling, as a plan would declare it."""
     from neurobrix.core import workspace
-    monkeypatch.setattr(workspace, "_IO_WORKERS", 2)
+    monkeypatch.setattr(workspace, "_LOAD_CEILING", 2)
+    monkeypatch.setattr(workspace, "_READER", None)
 
 
 def _write_shard(path: Path, arrays: dict) -> None:

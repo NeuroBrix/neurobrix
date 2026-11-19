@@ -21,7 +21,10 @@ LINES = {"detect": "First launch on this machine: detecting its hardware once...
          # a later launch that owes a reload rate: a stored dtype this machine never reloaded (another model), or one
          # whose reloads were not steady enough to keep last time — the line claims neither, it says what is done
          "reload": "Measuring this machine's weight reload rate: none is kept yet for this model's stored "
-                   "weights{what}..."}
+                   "weights{what}...",
+         # what the weight reader measured on this launch's own loads (core.workspace.weight_reader): no read count is
+         # measured ahead or kept, so the launch says what its loads found
+         "loaded": "Weights loaded: {what}."}
 SAID: set = set()
 
 

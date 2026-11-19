@@ -43,8 +43,8 @@ BOUND = 1e-4      # float32 convolutions over different time extents: the engine
 
 @pytest.fixture(autouse=True, scope="module")
 def _machine_profile():
-    """The machine's hardware profile in force, as the CLI declares it before a request: the loaders read its facts
-    (`cpu.io_workers`), the Triton hot loop its vendor file, and both refuse without them."""
+    """The machine's hardware profile in force, as the CLI declares it before a request: the Triton hot loop reads its
+    vendor file, and refuses without it."""
     from neurobrix.core.prism import load_profile
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
     from neurobrix.triton.dtype import declare_hardware_profile

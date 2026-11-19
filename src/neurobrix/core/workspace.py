@@ -24,41 +24,58 @@ SYSTEM_YML = Path(__file__).resolve().parent.parent / "config" / "system.yml"
 _root: Optional[Path] = None
 
 
-_IO_WORKERS: Optional[int] = None
-#: why this run's profile holds no measured count: its first-launch measure found no stable read rate (a busy storage)
-_IO_UNMEASURED: Optional[str] = None
-#: the parallel reads a run takes when its count could not be measured: one — the loaders read serially and Prism prices
-#: one shard in flight, the least host memory; the profile keeps no count and the next run measures again
-UNMEASURED_IO_WORKERS = 1
-#: the parent's "no stable read rate this time", handed to the probe child it spawns (`core/prism/arena_probe.child`)
-UNMEASURED_ENV = "NBX_IO_UNMEASURED"
+#: the reads in flight a weight load may grow to, as the plan in force priced host memory for them (`declare_load_ceiling`,
+#: Prism's host estimate); None: no plan priced them in this process
+_LOAD_CEILING: Optional[int] = None
+#: (pid, reader): the process's weight reader (`weight_reader`); a forked child builds its own
+_READER: Optional[tuple] = None
 
 
-def declare_unmeasured_io_workers(why: str) -> None:
-    """The first-launch measure found no stable read rate this time (`core.prism.autodetect._measure_io_workers`):
-    this run reads with `UNMEASURED_IO_WORKERS`, says so on its launch line, and the next run measures again."""
-    global _IO_UNMEASURED
-    _IO_UNMEASURED = why
-    _log.info(f"[Engine] io workers: {UNMEASURED_IO_WORKERS} for this run — {why}; measured again at the next run")
+def declare_load_ceiling(n: int) -> None:
+    """The reads in flight Prism's host estimate priced for the plan in force (`PrismSolver`, step 7.9): the ceiling the
+    weight reader may grow to (`weight_reader`)."""
+    global _LOAD_CEILING
+    if not isinstance(n, int) or n < 1:
+        raise ValueError(f"ZERO FALLBACK: a load ceiling is a count of reads >= 1, not {n!r}")
+    _LOAD_CEILING = n
 
 
-def declare_io_workers(n: Optional[int]) -> None:
-    """The profile's `cpu.io_workers`, declared where a profile is loaded (`core.prism.loader.load_profile`)."""
-    global _IO_WORKERS
-    _IO_WORKERS = n
+def processors() -> int:
+    """The processors this process may run on (its affinity where the system states one, else the machine's count): the
+    most reads and conversions that can work at once. Refused by name when the system states neither."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    n = os.cpu_count()
+    if not n:
+        raise RuntimeError("ZERO FALLBACK: the system states no processor count: no bound for parallel reads")
+    return n
 
 
-def io_workers() -> int:
-    """The shard reads the loaders keep in flight AND Prism's host estimate counts (a shard held per read): the
-    profile's measured `cpu.io_workers` (rule 1; until 2026-10-30 a hand-written 8 in system.yml), refused if absent."""
-    if not isinstance(_IO_WORKERS, int) or _IO_WORKERS < 1:
-        if _IO_UNMEASURED is not None:
-            return UNMEASURED_IO_WORKERS
-        raise RuntimeError(
-            f"ZERO FALLBACK: no I/O worker count: the hardware profile in force declares no cpu.io_workers "
-            f"(got {_IO_WORKERS!r}) — a profile made on this machine measures it at its first launch; an older one: "
-            f"`python tools/measure_io_workers.py --files '<cache>/<model>/components/*/weights/*.safetensors'`")
-    return _IO_WORKERS
+def load_ceiling() -> int:
+    """The most reads a weight load keeps in flight: what the plan in force priced host memory for
+    (`declare_load_ceiling`); with no plan in this process (a probe child, a tool), the processors it may run on — the
+    bound of what can work at once, and nothing is priced against it there."""
+    return _LOAD_CEILING if _LOAD_CEILING is not None else processors()
+
+
+def weight_reader():
+    """The process's weight reader (`nbxtensor.io.reader.Reader`): parallel reads that start at one and grow by their own
+    measure up to `load_ceiling()`. What it settles on holds for this process's later loads and is never written: there
+    is no stored worker count and no up-front trial (the launch-time cure, 2026-11-19). A new ceiling (another plan)
+    starts a new reader."""
+    global _READER
+    ceiling = load_ceiling()
+    if _READER is None or _READER[0] != os.getpid() or _READER[1].ceiling != ceiling:
+        from nbxtensor.io.reader import Reader
+        _READER = (os.getpid(), Reader(ceiling))
+    return _READER[1]
+
+
+def weight_reader_said() -> Optional[str]:
+    """What this process's weight loads measured, worded for the launch line; None when nothing was read here."""
+    if _READER is None or _READER[0] != os.getpid() or not _READER[1].bytes:
+        return None
+    return _READER[1].said()
 
 
 def pinned_uploads_in_flight() -> int:

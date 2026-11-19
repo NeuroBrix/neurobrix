@@ -332,7 +332,6 @@ def test_two_agents_are_two_devices_and_an_apu_profile_is_one_pool_with_the_host
            "features": []}
     monkeypatch.setattr(autodetect, "_detect_cpu", lambda os_type: dict(cpu))
     monkeypatch.setattr(autodetect, "_measure_runtime_base_mb", lambda: {})
-    monkeypatch.setattr(autodetect, "_measure_io_workers", lambda: None)
     monkeypatch.setattr(autodetect, "_detect_system_vendor", lambda os_type: "custom")
     monkeypatch.setattr(autodetect.platform, "system", lambda: "Linux")
     (dev,) = autodetect.detect_hardware()["devices"]
