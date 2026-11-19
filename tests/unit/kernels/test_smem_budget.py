@@ -230,10 +230,20 @@ _MAY_OMIT.update({f"matrix_unit.{k}": (
     for k in ("shape", "operand_dtype", "accumulator_dtype", "flash", "mm", "fp32_split.operands", "fp32_split.mm", "fp32_split.flash", "fp32_split.conv")})
 
 
+def _per_capability(value) -> bool:
+    """A map keyed by device capability ("8.6", "10.7": a minor and its own figures) is DATA, not schema: which minors
+    a vendor documents is a fact of that vendor's hardware, so neither the map nor its entries are keys every profile
+    must declare."""
+    import re
+    return isinstance(value, dict) and bool(value) and all(re.fullmatch(r"\d+\.\d+", str(k)) for k in value)
+
+
 def _flatten(d, prefix=""):
     out = {}
     for key, value in (d or {}).items():
         full = f"{prefix}{key}"
+        if _per_capability(value):
+            continue
         if isinstance(value, dict):
             out.update(_flatten(value, full + "."))
         else:
@@ -314,8 +324,9 @@ def test_capability_resolution_covers_more_than_three_cards(monkeypatch):
     # The capability comes from the launcher's target (engine data), never
     # from Triton's driver probe (R33, universal since 2026-09-05).
     # 7.5 and 8.9 resolve to their own profiles since 2026-11-17 (GitHub issue 6): before, a T4 took Volta's 96 KB
-    # and an RTX 4070 Ampere's 164 KB, budgets larger than the 64 KB and 99 KB NVIDIA documents for them. 8.6 keeps
-    # Ampere's, the profile its shipped hardware files plan and launch on (no 8.6 profile ships in 0.6.17).
+    # and an RTX 4070 Ampere's 164 KB, budgets larger than the 64 KB and 99 KB NVIDIA documents for them. 8.6 resolves
+    # to Ampere's file, the profile its shipped hardware files plan and launch on (no 8.6 profile ships), and reads the
+    # figure that file documents for 8.6 itself (its per-capability map, nbxtensor since 1188: 99 KB), not 8.0's.
     for sm, expect in ((70, "nvidia/volta"), (75, "nvidia/turing"),
                        (80, "nvidia/ampere"), (86, "nvidia/ampere"),
                        (89, "nvidia/ada"), (90, "nvidia/hopper"), (100, "nvidia/blackwell")):
@@ -323,9 +334,11 @@ def test_capability_resolution_covers_more_than_three_cards(monkeypatch):
                             lambda sm=sm: types.SimpleNamespace(arch=sm, backend="cuda"))
         got = _configs.arch_smem_budget()
         vendor, arch = expect.split("/")
-        assert got == _budget(vendor, arch), (
-            f"sm_{sm} resolved to {got}, expected {expect}'s "
-            f"{_budget(vendor, arch)}")
+        own = ((vendor_file(VENDORS / vendor / f"{arch}.yml").get("memory") or {}).get("by_capability") or {})
+        want = int((own.get(f"{sm // 10}.{sm % 10}") or {}).get("max_shared_memory_per_block") or _budget(vendor, arch))
+        assert got == want and _configs.active_vendor_profile().get("_profile") == arch, (
+            f"sm_{sm} resolved to {got} ({_configs.active_vendor_profile().get('_profile')}), expected {expect}'s "
+            f"{want}")
 
 
 def test_an_unknown_capability_still_declines_to_guess(monkeypatch):

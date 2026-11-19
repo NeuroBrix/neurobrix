@@ -22,7 +22,15 @@ import dataclasses
 import pytest
 
 from neurobrix.core.prism.served_prefill import solve_served as SP_solve_served
-from tests.unit.prism._pinned_machine import profile, V100_16GB
+from tests.unit.prism._pinned_machine import profile, V100_16GB, pin_dedicated_card
+
+@pytest.fixture(autouse=True)
+def _the_card_reads_as_the_profile_states(monkeypatch):
+    """The plans read the card through `_prepare_devices`: pinned to the V100-16GB profile's own runtime facts
+    (16151 MB, 306 MB of context), never the live card (card-less, the reading raised; on a card host it planned on
+    whatever the card held at that moment)."""
+    pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB, as the profile states it")
+
 from tests.unit.prism.test_the_generation_head_is_priced_at_its_one_row import _served
 
 

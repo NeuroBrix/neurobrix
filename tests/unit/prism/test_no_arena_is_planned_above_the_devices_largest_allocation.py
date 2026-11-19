@@ -44,7 +44,7 @@ from neurobrix.core.prism import PrismSolver
 from neurobrix.core.prism.solver import _graph_constant_bytes
 from neurobrix.core.prism.layer_partition import LayerPartitioner
 from neurobrix.nbx import NBXContainer
-from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, container_root, no_door, pin_host, profile
+from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, container_root, no_door, pin_dedicated_card, pin_host, profile
 from tests.unit.prism.test_layer_partition import _chain
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
@@ -96,7 +96,7 @@ def _changes(segments, parked_cap: float) -> int:
 
 # ─────────────────────────────── the facts ───────────────────────────────
 
-def test_the_profile_carries_the_bound_and_only_the_triton_engine_reads_it():
+def test_the_profile_carries_the_bound_and_only_the_triton_engine_reads_it(monkeypatch):
     assert profile(APPLE_CAPPED).devices[0].max_allocation_mb == MAX_ALLOCATION_MB
     # every Apple profile carries the device's own figure since 2026-11-08 (a silent one is refused by the loader)
     assert profile(APPLE_M4_PRO).devices[0].max_allocation_mb == 13639
@@ -107,6 +107,8 @@ def test_the_profile_carries_the_bound_and_only_the_triton_engine_reads_it():
     assert s._max_allocation_mb(capped) == MAX_ALLOCATION_MB and s._max_allocation_mb(plain) == 13639
     # the parked cap: a quarter of the unified device's memory (apple_silicon yml), none on a discrete card
     assert s._parked_cap_mb(plain, profile(APPLE_M4_PRO)) == 0.25 * 18186
+    # the discrete card's reading pinned to the profile's own runtime facts, never the live card
+    pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB, as the profile states it")
     v100 = s._prepare_devices(profile(V100_16GB))[0]
     assert s._max_allocation_mb(v100) is None and s._parked_cap_mb(v100, profile(V100_16GB)) is None
     s._mode = "compiled"   # one tensor per weight: no arena, no Triton pool
