@@ -2285,16 +2285,11 @@ class GraphExecutor:
 
     def _note_loader_rate(self, engine: str, nbx_path, component: str, where: str, landed: int,
                           seconds: float) -> None:
-        """The loader's own measurement of this load, handed to the active generated profile (`autodetect.
-        note_loader_rate`, S2): Prism's estimate reads it from the next plan on."""
-        from neurobrix.core.prism import autodetect as _ad
-        stored = _ad.stored_major(nbx_path, component)
-        if stored is not None:
-            _ad.note_loader_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, where, int(landed), float(seconds),
-                                 f"{Path(str(nbx_path)).name}:{component}")
-        # what the weight reader measured on this load, kept with its spread (row 167): the next launch starts there
-        from neurobrix.core.workspace import weight_reader_measured
-        _ad.note_read_width(_ad.ACTIVE_HARDWARE_ID, weight_reader_measured())
+        """The loader's own measurement of this load, handed to the active generated profile (`kept_launch_facts.
+        note_weight_load`: the loader's rate, S2, which Prism's estimate reads from the next plan on, and the width the
+        weight reader reached, row 167)."""
+        from neurobrix.core.prism import kept_launch_facts
+        kept_launch_facts.note_weight_load(engine, nbx_path, component, where, landed, seconds)
 
     def _load_weights_native(self, nbx_path, component, shard_map, only=None):
         """Load weights as torch.Tensor (native mode)."""

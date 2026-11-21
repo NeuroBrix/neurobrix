@@ -60,18 +60,18 @@ def load_ceiling() -> int:
 
 def weight_reader():
     """The process's weight reader (`nbxtensor.io.reader.Reader`): parallel reads that start at one and grow by their own
-    measure up to `load_ceiling()`, or at the width the machine kept from an earlier load (`autodetect.kept_read_width`,
-    written by `note_read_width` after a load). No up-front trial (the launch-time cure, 2026-11-19). A new ceiling
+    measure up to `load_ceiling()`, or at the width the machine kept from an earlier load (`kept_launch_facts.kept_read_width`,
+    written by `kept_launch_facts.note_read_width` after a load). No up-front trial (the launch-time cure, 2026-11-19). A new ceiling
     (another plan) starts a new reader, and the one it replaces is closed."""
     global _READER
     ceiling = load_ceiling()
     if _READER is None or _READER[0] != os.getpid() or _READER[1].ceiling != ceiling:
         from nbxtensor.io.reader import Reader
-        from neurobrix.core.prism import autodetect as _ad
+        from neurobrix.core.prism import autodetect as _ad, kept_launch_facts as _kept
         if _READER is not None and _READER[0] == os.getpid():
             _READER[1].close()               # the reader a new ceiling replaces ends its threads (a forked child owns none)
         # the width this machine kept from an earlier load (row 167: measured once, never paid twice), else one
-        _READER = (os.getpid(), Reader(ceiling, start=_ad.kept_read_width(_ad.ACTIVE_HARDWARE_ID)))
+        _READER = (os.getpid(), Reader(ceiling, start=_kept.kept_read_width(_ad.ACTIVE_HARDWARE_ID)))
     return _READER[1]
 
 

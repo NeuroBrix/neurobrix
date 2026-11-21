@@ -18,6 +18,7 @@ from pathlib import Path
 
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import facts_probe as P
+from neurobrix.core.prism import kept_launch_facts as K
 from tests.unit.prism.test_class_facts_are_measured_once_per_card_model import (  # noqa: F401 — the fixture
     C16, C32, CALLS, _read, _write, hw)
 
@@ -59,12 +60,12 @@ def test_the_reader_s_width_is_kept_and_the_next_launch_starts_there(hw, monkeyp
     _write(hw, "default-one", [dict(C16, index=0)])
     m = {"workers": 8, "settled": True, "start": None, "rates": {1: 1e9, 2: 2e9, 4: 3e9, 8: 3.5e9, 16: 3.4e9},
          "draws": {8: [3.5e9, 3.3e9]}, "spread": (3.3e9, 3.5e9)}
-    assert A.note_read_width("default-one", m)
+    assert K.note_read_width("default-one", m)
     kept = _read(hw, "default-one")["host_measured"]["weight_read"]
     assert (kept["workers"], kept["low_gbps"], kept["high_gbps"], kept["rounds"], kept["settled"]) == (8, 3.3, 3.5, 2, True)
     assert kept["measured"]
-    assert not A.note_read_width("default-one", dict(m, workers=16, draws={16: [9e9]}))   # never paid twice
-    assert A.kept_read_width("default-one") == 8
+    assert not K.note_read_width("default-one", dict(m, workers=16, draws={16: [9e9]}))   # never paid twice
+    assert K.kept_read_width("default-one") == 8
     from neurobrix.core import workspace as W
     monkeypatch.setattr(W, "_READER", None)
     monkeypatch.setattr(W, "_LOAD_CEILING", 32)
@@ -72,17 +73,17 @@ def test_the_reader_s_width_is_kept_and_the_next_launch_starts_there(hw, monkeyp
     r = W.weight_reader()
     assert r.width == 8 and r.measured()["start"] == 8
     src = (Path(A.__file__).parents[1] / "runtime" / "graph_executor.py").read_text()
-    assert "note_read_width(_ad.ACTIVE_HARDWARE_ID, weight_reader_measured())" in src
+    assert "kept_launch_facts.note_weight_load(engine, nbx_path, component, where, landed, seconds)" in src
 
 
 def test_an_unsettled_read_keeps_its_best_width_until_a_settled_search_replaces_it(hw):
     _write(hw, "default-one", [dict(C16, index=0)])
     grow = {"workers": 2, "settled": False, "start": None, "rates": {1: 1e9, 2: 2e9}, "draws": {1: [1e9], 2: [2e9]}}
-    assert A.note_read_width("default-one", grow)
+    assert K.note_read_width("default-one", grow)
     assert _read(hw, "default-one")["host_measured"]["weight_read"]["workers"] == 2
-    assert not A.note_read_width("default-one", {"workers": None, "settled": False, "rates": {}, "draws": {}})  # none measured
+    assert not K.note_read_width("default-one", {"workers": None, "settled": False, "rates": {}, "draws": {}})  # none measured
     started = {"workers": 2, "settled": True, "start": 2, "rates": {}, "draws": {2: [2.1e9]}}
-    assert not A.note_read_width("default-one", started)       # started from the kept figure: not a search
+    assert not K.note_read_width("default-one", started)       # started from the kept figure: not a search
     quiet = {"workers": 8, "settled": True, "start": None, "rates": {8: 4e9}, "draws": {8: [4e9, 3.9e9]}}
-    assert A.note_read_width("default-one", quiet)
+    assert K.note_read_width("default-one", quiet)
     assert _read(hw, "default-one")["host_measured"]["weight_read"]["workers"] == 8

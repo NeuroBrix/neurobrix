@@ -42,7 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # ============================================================================
 
 from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
-from neurobrix.core.prism import launch_lines, other_card_models
+from neurobrix.core.prism import kept_launch_facts as kept, launch_lines, other_card_models
 import logging
 from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
@@ -2484,46 +2484,6 @@ def stored_major(cache_path, component: str) -> Optional[str]:
 _STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
 
 
-def _set_chunk(block: dict, measured) -> None:
-    """A sweep's answer, (chunk, spread) as `facts_probe.vmm_chunk_bytes` gives it, into a device's measured block: an
-    unconcluded sweep's best candidate with its spread beside it (`vmm_chunk_spread`), never a 0 written as if measured
-    (row 167); 0 only for a device with no VMM."""
-    chunk, spread = measured
-    block["vmm_chunk_bytes"] = int(chunk or 0)
-    if spread is not None:
-        block["vmm_chunk_spread"] = dict(spread)
-    else:
-        block.pop("vmm_chunk_spread", None)
-
-
-def _sweep_chunks(devices, first, measured_of, q, replay) -> Dict[Any, Any]:
-    """{card model: its chunk sweep's answer} for every model of the profile whose block states no chunk: each swept
-    on ITS OWN first card (every replay child sees that card alone), the models SIDE BY SIDE, a thread each; identical
-    cards answer once. The rack's fresh 4-card home ran its 48 replay children one after another: 1024 s of its 1236 s
-    to ready (py-spy, 2026-11-19)."""
-    from concurrent.futures import ThreadPoolExecutor
-    from neurobrix.core.prism import facts_probe as P
-    todo: Dict[Any, int] = {}
-    for i, d in enumerate(devices):
-        own = first if d.get("model") == devices[0].get("model") else measured_of(d)
-        if "vmm_chunk_bytes" in own or d.get("model") in todo:
-            continue
-        if i and "index" not in d:
-            raise ValueError(f"profile {d.get('model')!r}: a device of this card model has no 'index' fact, so its "
-                             f"expandable-pool chunk cannot be measured on its own card; add 'index' to every device "
-                             f"of the profile's devices list")
-        todo[d.get("model")] = 0 if i == 0 else int(d["index"])
-    if not todo:
-        return {}
-
-    def sweep(item):
-        model, index = item
-        ahead = replay[0] if replay and model == devices[0].get("model") else None
-        return model, P.vmm_chunk_bytes(index, q["vmm_reps"], q["vmm_ks"], off_first=ahead)
-    with ThreadPoolExecutor(max_workers=len(todo)) as pool:
-        return dict(pool.map(sweep, todo.items()))
-
-
 def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, container_dir=None) -> dict:
     """Measure, ONCE, on a GENERATED profile (`default-*`), the device and host facts Prism's time estimate reads that
     neither the profile nor its architecture's tracked vendor file states (the quick probe), and write them with their
@@ -2595,11 +2555,11 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first.setdefault("gemv_gbps", {})[engine] = {t: P.gemv_gbps(t, engine, *q["gemv_kn"], q["gemv_reps"]) for t in dtypes}
         added["gemv_gbps"] = [engine]
-    # every card model's chunk swept at once, each on its own first card, side by side (`_sweep_chunks`)
-    chunks = _sweep_chunks(devices, first, measured_of, q, replay)
+    # every card model's chunk swept at once, each on its own first card, side by side (`kept.sweep_chunks`)
+    chunks = kept.sweep_chunks(devices, first, measured_of, q, replay)
     if "vmm_chunk_bytes" not in first:
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
-        _set_chunk(first, chunks[devices[0].get("model")])
+        kept.set_chunk(first, chunks[devices[0].get("model")])
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
     # the host's block over the vendor's, key by key (loader.load_profile): only what neither states is measured
     if "host_matmul_gflops" not in {**(_vendor_block(devices[0], "host_measured") or {}), **(data.get("host_measured") or {})}:
@@ -2705,73 +2665,18 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     devices = data.get("devices") or []
     host = data.get("host_measured")
     vendor = _vendor_block(devices[0], "host_measured") if devices else None
-    for block in (host, vendor):
-        if (((block or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) is None:
-            continue
-        unsteady = (((block or {}).get("weight_reload_spread") or {}).get(engine) or {}).get(st) is not None
-        if block is vendor or spread is not None or not unsteady:
-            return False                                  # kept: only a steady measure replaces an unsteady one
+    if not kept.reload_may_be_written(host, vendor, engine, st, spread):
+        return False
     host = data.setdefault("host_measured", {})           # over the vendor's block key by key (loader.load_profile)
     stamp = _time.strftime('%Y-%m-%d %H:%M:%S %Z')
     gbps = round(reloaded_bytes / seconds / 1e9, 3) if spread is None else round(float(min(spread)), 3)
-    host.setdefault("weight_reload_gbps", {}).setdefault(engine, {})[st] = gbps
-    spreads = host.setdefault("weight_reload_spread", {})
-    if spread is None:
-        (spreads.get(engine) or {}).pop(st, None)
-        if not spreads.get(engine):
-            spreads.pop(engine, None)
-        if not spreads:
-            host.pop("weight_reload_spread")
-        how = f"{gbps} GB/s"
-    else:
-        spreads.setdefault(engine, {})[st] = {"low": gbps, "high": round(float(max(spread)), 3), "measured": stamp}
-        how = (f"{gbps} GB/s, the LOW draw of an unsteady measure ({gbps}-{round(float(max(spread)), 3)} GB/s: the "
-               f"plan is priced at the slowest; a later steady measure replaces it)")
+    how = kept.put_reload(host, engine, st, gbps, spread, stamp)
     host.setdefault("weight_reload_source", []).append(
         f"{engine} {st}: {how} measured by the engine itself reloading streamed pieces at a real run "
         f"{stamp}, {what}, {reloaded_bytes / 1e9:.2f} GB reloaded")
     _write_profile_atomically(path, data)
     _log.debug(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s"
                f"{'' if spread is None else ' (unsteady: its low draw)'}, written into {path.name}")
-    return True
-
-
-def kept_read_width(hardware_id: Optional[str]) -> Optional[int]:
-    """The weight reader's width this machine KEPT (`note_read_width`), or None: the next load starts there, never from
-    one again (row 167)."""
-    if not hardware_id or not str(hardware_id).startswith("default"):
-        return None
-    path = HARDWARE_DIR / f"{hardware_id}.yml"
-    if not path.exists():
-        return None
-    kept = ((yaml.safe_load(path.read_text()) or {}).get("host_measured") or {}).get("weight_read") or {}
-    return int(kept["workers"]) if kept.get("workers") else None
-
-
-def note_read_width(hardware_id: Optional[str], measured: Optional[dict]) -> bool:
-    """What the weight reader measured on this process's loads (`nbxtensor.io.reader.Reader.measured()`), KEPT on a
-    generated profile as `host_measured.weight_read`: the width, the low and high rate of its rounds at that width and
-    their count, whether its growth settled, the date. The library measures; the engine keeps and reuses (row 167). A
-    growth that did not settle gives its best width so far (`measured["workers"]`, None when no width was measured: nothing
-    is kept) with that width's spread. Written when none is kept, or over an unsettled one by a reader that searched and
-    settled (the quiet measure replaces the unconcluded); never otherwise: a kept figure is never paid twice. True when
-    written."""
-    if not hardware_id or not str(hardware_id).startswith("default") or not measured:
-        return False
-    w = measured["workers"]
-    at = (measured.get("draws") or {}).get(w) or []
-    path = HARDWARE_DIR / f"{hardware_id}.yml"
-    if w is None or not at or not path.exists():
-        return False
-    import time as _time
-    data = yaml.safe_load(path.read_text()) or {}
-    kept = (data.get("host_measured") or {}).get("weight_read")
-    if kept and (kept.get("settled") or not measured.get("settled") or measured.get("start") is not None):
-        return False
-    data.setdefault("host_measured", {})["weight_read"] = {
-        "workers": int(w), "low_gbps": round(min(at) / 1e9, 3), "high_gbps": round(max(at) / 1e9, 3),
-        "rounds": len(at), "settled": bool(measured.get("settled")), "measured": _time.strftime("%Y-%m-%d %H:%M:%S %Z")}
-    _write_profile_atomically(path, data)
     return True
 
 
