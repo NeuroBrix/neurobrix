@@ -7,7 +7,7 @@ def measured_of_others(devices, measured_of, added, q, chunks=None) -> Dict[Any,
     """{model: its device facts} of every card model of the machine but card 0's: its own block (its vendor file's),
     with the expandable pool's chunk measured on its own first card (by its `index`, as the library reads it) where
     that block states none. A mixed machine's 32 GB cards were left without a chunk and every run placed there was
-    refused (2026-11-17). `chunks`: {model: its sweep's answer} already swept side by side (`autodetect.
+    refused (2026-11-17). `chunks`: {model: its sweep's (chunk, spread)} already swept side by side (`autodetect.
     _sweep_chunks`); a model not in it is swept here. An unconcluded sweep's spread is kept beside its chunk."""
     from neurobrix.core.prism import facts_probe as P
     others: Dict[Any, dict] = {}
@@ -18,11 +18,11 @@ def measured_of_others(devices, measured_of, added, q, chunks=None) -> Dict[Any,
                 raise ValueError(f"profile {d.get('model')!r}: a device of this card model has no 'index' fact, so its "
                                  f"expandable-pool chunk cannot be measured on its own card; add 'index' to every device "
                                  f"of the profile's devices list")
-            got = chunks[d.get("model")] if chunks and d.get("model") in chunks else \
+            chunk, spread = chunks[d.get("model")] if chunks and d.get("model") in chunks else \
                 P.vmm_chunk_bytes(int(d["index"]), q["vmm_reps"], q["vmm_ks"])
-            own["vmm_chunk_bytes"] = added.setdefault("vmm_chunk_bytes_of", {})[int(d["index"])] = int(got or 0)
-            if getattr(got, "spread", None) is not None:
-                own["vmm_chunk_spread"] = dict(got.spread)
+            own["vmm_chunk_bytes"] = added.setdefault("vmm_chunk_bytes_of", {})[int(d["index"])] = int(chunk or 0)
+            if spread is not None:
+                own["vmm_chunk_spread"] = dict(spread)
     return others
 
 

@@ -32,7 +32,7 @@ def hw(tmp_path, monkeypatch):
                         {"memory_gbps": 500.0, "h2d_gbps": 10.0, "d2h_gbps": 9.0, "h2d_pageable_gbps": 5.0})
     monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
     monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda d, *a, **k: CALLS.append(("vmm", d)) or (32 << 20) * (1 + d))
+    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda d, *a, **k: CALLS.append(("vmm", d)) or ((32 << 20) * (1 + d), None))
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda i: CALLS.append(("card", i)) or
                         {"runtime_total_mb": 16000 + i, "runtime_context_mb": 300})

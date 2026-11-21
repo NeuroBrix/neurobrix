@@ -157,7 +157,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     handed = []
     # the chunk probe's first replay, measured ahead: 1.0 s replayed, 2.0 s for its whole child here
     monkeypatch.setattr(P, "vmm_first_replay", lambda dev: (1.0, 2.0))
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda dev, reps, ks, off_first=None: handed.append(off_first) or 0)
+    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda dev, reps, ks, off_first=None: handed.append(off_first) or (0, None))
     probed = []
     monkeypatch.setattr(arena_probe, "child", lambda d, c, h, e: probed.append(Path(d).name) or
                         {"container": Path(d).name, "component": c, "draws": [(1, 1.0)]})

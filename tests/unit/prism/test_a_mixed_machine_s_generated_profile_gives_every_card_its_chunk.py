@@ -25,7 +25,7 @@ def hw(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "HARDWARE_DIR", tmp_path)
     probed = []
     monkeypatch.setattr(P, "vmm_first_replay", lambda dev: None)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda dev, *a, **k: probed.append(dev) or CHUNK[dev])
+    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda dev, *a, **k: probed.append(dev) or (CHUNK[dev], None))
     monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: 300.0)
     monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: 20.0)
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: {})

@@ -2485,11 +2485,13 @@ _STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
 
 
 def _set_chunk(block: dict, measured) -> None:
-    """A sweep's chunk into a device's measured block: an unconcluded sweep's best candidate with its spread beside it
-    (`vmm_chunk_spread`), never a 0 written as if measured (row 167); 0 only for a device with no VMM."""
-    block["vmm_chunk_bytes"] = int(measured or 0)
-    if getattr(measured, "spread", None) is not None:
-        block["vmm_chunk_spread"] = dict(measured.spread)
+    """A sweep's answer, (chunk, spread) as `facts_probe.vmm_chunk_bytes` gives it, into a device's measured block: an
+    unconcluded sweep's best candidate with its spread beside it (`vmm_chunk_spread`), never a 0 written as if measured
+    (row 167); 0 only for a device with no VMM."""
+    chunk, spread = measured
+    block["vmm_chunk_bytes"] = int(chunk or 0)
+    if spread is not None:
+        block["vmm_chunk_spread"] = dict(spread)
     else:
         block.pop("vmm_chunk_spread", None)
 

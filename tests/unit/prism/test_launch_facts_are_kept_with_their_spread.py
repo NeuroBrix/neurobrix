@@ -27,13 +27,13 @@ def test_an_unconcluded_sweep_keeps_its_best_candidate_with_its_spread(monkeypat
     times = {0: [2.0, 2.1, 2.2], 2 << 20: [9.0, 9.5], 32 << 20: [3.0, 3.1], 128 << 20: [3.0, 3.1]}
     monkeypatch.setattr(T, "vmm_granularity", lambda d: 2 << 20)
     monkeypatch.setattr(T, "chunk_by_replay", lambda *a, **k: (None, times))
-    got = P.vmm_chunk_bytes(0, 3, (1, 16, 64))
-    assert got == 128 << 20                                   # never 0; a median tie: the larger, the fewer maps
-    assert got.spread["concluded"] is False and got.spread["median_s"] == 3.05 and got.spread["bound_s"] == 2.2
+    chunk, spread = P.vmm_chunk_bytes(0, 3, (1, 16, 64))
+    assert chunk == 128 << 20                                 # never 0; a median tie: the larger, the fewer maps
+    assert spread["concluded"] is False and spread["median_s"] == 3.05 and spread["bound_s"] == 2.2
     monkeypatch.setattr(T, "chunk_by_replay", lambda *a, **k: (32 << 20, times))
-    assert P.vmm_chunk_bytes(0, 3, (1,)) == 32 << 20 and getattr(P.vmm_chunk_bytes(0, 3, (1,)), "spread", None) is None
+    assert P.vmm_chunk_bytes(0, 3, (1,)) == (32 << 20, None)  # concluded: its chunk, no spread
     monkeypatch.setattr(T, "vmm_granularity", lambda d: None)
-    assert P.vmm_chunk_bytes(0, 3, (1,)) is None              # no VMM: the one case the pool keeps segments (0)
+    assert P.vmm_chunk_bytes(0, 3, (1,)) == (None, None)            # no VMM: the one case the pool keeps segments (0)
 
 
 def test_the_classes_sweep_side_by_side_and_a_busy_sweep_keeps_its_spread(hw, monkeypatch):
@@ -43,10 +43,8 @@ def test_the_classes_sweep_side_by_side_and_a_busy_sweep_keeps_its_spread(hw, mo
         both.wait()                                           # both classes in flight at once, or this times out
         CALLS.append(("vmm", d))
         if d == 2:
-            out = P.UnconcludedChunk(64 << 20)
-            out.spread = {"concluded": False, "median_s": 5.0}
-            return out
-        return 32 << 20
+            return 64 << 20, {"concluded": False, "median_s": 5.0}
+        return 32 << 20, None
     monkeypatch.setattr(P, "vmm_chunk_bytes", sweep)
     _write(hw, "default-four", [dict(C16, index=0), dict(C16, index=1), dict(C32, index=2), dict(C32, index=3)])
     A.ensure_measured_facts("default-four")

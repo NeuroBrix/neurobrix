@@ -29,7 +29,7 @@ def hw(tmp_path, monkeypatch):
                         {"memory_gbps": 500.0, "h2d_gbps": 10.0, "d2h_gbps": 9.0, "h2d_pageable_gbps": 5.0})
     monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
     monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: CALLS.append(("vmm",)) or 2 << 20)
+    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: CALLS.append(("vmm",)) or (2 << 20, None))
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)      # no VMM: nothing replayed ahead
     # the runtime's total and own context on each card (255bc661d), read in a child on the real card: mocked like the
     # other probes, so the expected keys do not depend on whether this host has a card
