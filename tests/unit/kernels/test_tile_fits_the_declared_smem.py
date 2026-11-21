@@ -14,11 +14,11 @@ The cause, found 2026-09-10, in three places:
     native bf16, so it takes the branch written for sm_80 and gets BLOCK_M=128.
     The comment there reads "Ampere+ keeps 128" — but sm_80 declares 163 KB of
     shared memory per block and sm_86 declares 99.
-  * `kernels/ops/_configs.py::sdpa_block_ceiling` — the clamp that would have
+  * `nbxtensor/ops/_configs.py::sdpa_block_ceiling` — the clamp that would have
     caught it reads `sdpa_thresholds` from the vendor profile. The profile the
     engine generated for this unknown card has no such row, so the clamp
     returned `(None, None)` and clamped nothing.
-  * `kernels/ops/_configs.py::arch_smem_budget` — the budget itself is read
+  * `nbxtensor/ops/_configs.py::arch_smem_budget` — the budget itself is read
     from a YAML table keyed by compute capability, with a fallback to the
     capability MAJOR. Its own docstring names the victims: "a T4 (7.5), an A10
     or 3090 (8.6) and an L4 or 4090 (8.9) would resolve to no profile". sm_86

@@ -67,7 +67,7 @@ from nbxtensor.ops.autotune_certified import say_once as _say_once  # noqa: E402
 
 
 def record(tuned, key: tuple) -> None:
-    """Called where the launch-time key is formed (kernels/ops/_configs.run_with_notice)."""
+    """Called where the launch-time key is formed (nbxtensor/ops/_configs.py: run_with_notice)."""
     path = os.environ.get("NBX_KEY_RECORD")
     if not path:
         return
