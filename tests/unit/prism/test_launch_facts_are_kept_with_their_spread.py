@@ -77,9 +77,10 @@ def test_the_reader_s_width_is_kept_and_the_next_launch_starts_there(hw, monkeyp
 
 def test_an_unsettled_read_keeps_its_best_width_until_a_settled_search_replaces_it(hw):
     _write(hw, "default-one", [dict(C16, index=0)])
-    grow = {"workers": 4, "settled": False, "start": None, "rates": {1: 1e9, 2: 2e9}, "draws": {1: [1e9], 2: [2e9]}}
+    grow = {"workers": 2, "settled": False, "start": None, "rates": {1: 1e9, 2: 2e9}, "draws": {1: [1e9], 2: [2e9]}}
     assert A.note_read_width("default-one", grow)
     assert _read(hw, "default-one")["host_measured"]["weight_read"]["workers"] == 2
+    assert not A.note_read_width("default-one", {"workers": None, "settled": False, "rates": {}, "draws": {}})  # none measured
     started = {"workers": 2, "settled": True, "start": 2, "rates": {}, "draws": {2: [2.1e9]}}
     assert not A.note_read_width("default-one", started)       # started from the kept figure: not a search
     quiet = {"workers": 8, "settled": True, "start": None, "rates": {8: 4e9}, "draws": {8: [4e9, 3.9e9]}}

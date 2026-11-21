@@ -36,6 +36,19 @@ def test_the_reader_grows_up_to_the_plan_s_ceiling(W):
     assert W.weight_reader().ceiling == 5              # another plan, another ceiling: a new reader
 
 
+def test_a_replaced_reader_is_closed_and_a_forked_child_closes_none(W, monkeypatch):
+    W.declare_load_ceiling(2)
+    old, closed = W.weight_reader(), []
+    monkeypatch.setattr(type(old), "close", lambda self: closed.append(self))
+    W.declare_load_ceiling(3)
+    assert W.weight_reader().ceiling == 3 and closed == [old]          # its threads end with it, never leak
+    child_pid = os.getpid() + 1
+    monkeypatch.setattr(W.os, "getpid", lambda: child_pid)
+    W.declare_load_ceiling(4)
+    W.weight_reader()
+    assert closed == [old]                                             # the parent's reader is the parent's to close
+
+
 def test_no_plan_the_processors_bound_it(W):
     assert W.load_ceiling() == W.processors() >= 1
 

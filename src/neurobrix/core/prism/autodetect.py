@@ -2752,13 +2752,13 @@ def note_read_width(hardware_id: Optional[str], measured: Optional[dict]) -> boo
     """What the weight reader measured on this process's loads (`nbxtensor.io.reader.Reader.measured()`), KEPT on a
     generated profile as `host_measured.weight_read`: the width, the low and high rate of its rounds at that width and
     their count, whether its growth settled, the date. The library measures; the engine keeps and reuses (row 167). A
-    growth that did not settle keeps its best width so far with that width's spread. Written when none is kept, or over
-    an unsettled one by a reader that searched and settled (the quiet measure replaces the unconcluded); never
-    otherwise: a kept figure is never paid twice. True when written."""
+    growth that did not settle gives its best width so far (`measured["workers"]`, None when no width was measured: nothing
+    is kept) with that width's spread. Written when none is kept, or over an unsettled one by a reader that searched and
+    settled (the quiet measure replaces the unconcluded); never otherwise: a kept figure is never paid twice. True when
+    written."""
     if not hardware_id or not str(hardware_id).startswith("default") or not measured:
         return False
-    rates = measured.get("rates") or {}
-    w = int(measured["workers"]) if measured.get("settled") else (max(rates, key=rates.get) if rates else None)
+    w = measured["workers"]
     at = (measured.get("draws") or {}).get(w) or []
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if w is None or not at or not path.exists():
