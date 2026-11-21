@@ -940,6 +940,10 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         generated_ids: List[int] = []
         from .decoder_cache import DecodeSteps, open_decoder_cache
         _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
+        # The hidden rows of every position the LM has run, kept as each forward happens (the speech leg
+        # reads the whole tts span, and a cached step covers one position): the prefill's rows, then one
+        # row per cached step, in position order.
+        _kept_rows: list = []
         for step in range(max_tokens):
             S = context_embeds.shape[1]
             # A cached step hands the LM the one new token at its absolute position S - 1, no
@@ -967,12 +971,18 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 resolved[_key] = _value
                 resolved[f"global.{_key}"] = _value
 
+            _was_whole = not _steps.one_token
             _steps.before_run()
             self._execute_component(lm_name, "forward", None)
             _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break
+            if requests_speech(resolved.get("global.mode")):
+                if _was_whole:   # a run over the whole context covers every position: its rows replace
+                    _kept_rows = [output]
+                else:
+                    _kept_rows.append(output)
             logits = self._compute_logits(output, embed_weight,
                                           logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
@@ -999,8 +1009,9 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         # Activates on the request mode + the container's declared
         # contract; the condition_type key dispatches the leg VARIANT
         # (hidden_text_merge = additive last-hidden merge + token2wav
-        # CFM) — data only, no model names. `output` is the FINAL
-        # decode forward's last-hidden [1, S, H]: causal ⇒ row p equals
+        # CFM) — data only, no model names. `_kept_rows` are the
+        # hidden rows kept from each forward (prefill + one per cached
+        # step), concatenated to [1, S, H]: causal ⇒ row p equals
         # the vendor's per-step hidden for the token at p.
         if requests_speech(resolved.get("global.mode")):
             _sp_c = self.ctx.pkg.topology.get("flow", {}).get("speech")
@@ -1009,14 +1020,15 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                     "ZERO FALLBACK: --mode audio on a build without "
                     "topology.flow.speech (P-OMNI-GEN speech leg).")
             if str(_sp_c.get("condition_type") or "") == "hidden_text_merge":
-                if output is None:
+                if not _kept_rows:
                     raise RuntimeError(
                         "ZERO FALLBACK: no decode forward output to "
                         "condition the speech leg on.")
                 from .speech_cfm import SpeechCFMLeg
                 SpeechCFMLeg(self).run({
                     "full_ids": list(ids) + list(generated_ids),
-                    "lm_hidden": output,
+                    "lm_hidden": (_kept_rows[0] if len(_kept_rows) == 1
+                                  else torch.cat(_kept_rows, dim=1)),
                     "device": device,
                     "dtype": dtype,
                 })
