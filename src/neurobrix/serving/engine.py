@@ -159,6 +159,11 @@ class InferenceEngine:
                                      extra=[("the container's own VAE scale",
                                              _vsf(manifest, cached_defaults, _topo_components))])
 
+        # The temporal axis, from the container as a run reads it (`run.request_input_config`): absent is the answer
+        # for a model without one; a model that has one and declares none is refused at the plan, by name.
+        num_frames = _resolve_runtime("num_frames", container=cached_defaults, default=None)
+        temporal_compression = _resolve_runtime("temporal_compression_ratio", container=cached_defaults, default=None)
+
         self._hw_profile = hw_profile
         # the flow's per-component facts, as a run's plan reads them (`run.request_input_config`): the generation
         # head's one row, the generating model's prompt rows
@@ -171,6 +176,8 @@ class InferenceEngine:
             height=height,
             width=width,
             vae_scale=vae_scale,
+            num_frames=num_frames,
+            temporal_compression=temporal_compression,
             flow=(FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
                   if _topo_path.exists() else None),
         )
