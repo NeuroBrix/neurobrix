@@ -53,6 +53,77 @@ def sibling_profiles(directory, exclude=None):
     return out, skipped
 
 
+def _take_measured(d, i, mine, name, donor, took) -> None:
+    """Onto `mine` (the `measured` block of device `d`, the `i`-th of its profile) the facts of `donor`'s block it lacks
+    (a donor of the same model, from the profile or file `name`), with their source worded in `source`."""
+    theirs = donor.get("measured") or {}
+    missing = {k: v for k, v in theirs.items() if k not in mine and k != "source"}
+    if not missing:
+        return
+    src = theirs.get("source")
+    mine.update(missing)
+    mine["source"] = (f"{mine['source']}; " if mine.get("source") else "") + \
+        f"{sorted(missing)} of {d.get('model')} from {name}" + (f" ({src})" if src else "")
+    took.append(f"card {d.get('index', i)}: {sorted(missing)} from {name}")
+
+
+def _take_card_facts(d, i, donors, took) -> None:
+    """Onto device `d` (the `i`-th of its profile): the `measured` facts and the runtime's card facts it lacks, from the
+    donors of its own model (`from_siblings`)."""
+    mine = dict(d.get("measured") or {})
+    for name, donor in donors:
+        if donor is d or donor.get("model") != d.get("model"):
+            continue
+        _take_measured(d, i, mine, name, donor, took)
+        for k in RUNTIME_CARD_FACTS:
+            if d.get(k) is None and donor.get(k) is not None:
+                d[k] = donor[k]
+                took.append(f"card {d.get('index', i)}: {k} from {name}")
+    if mine != dict(d.get("measured") or {}):
+        d["measured"] = mine
+
+
+def _take_reload_rates(host, theirs, name, took) -> None:
+    """Into `host` (the profile's `host_measured`) the reload rates `theirs` (a sibling's `host_measured`) holds that it
+    lacks, per engine and stored dtype: a rate comes with its spread when the sibling kept it unsteady."""
+    for eng, by in (theirs.get("weight_reload_gbps") or {}).items():
+        for st, val in (by or {}).items():
+            if st in ((host.get("weight_reload_gbps") or {}).get(eng) or {}):
+                continue
+            host.setdefault("weight_reload_gbps", {}).setdefault(eng, {})[st] = val
+            spread = ((theirs.get("weight_reload_spread") or {}).get(eng) or {}).get(st)
+            if spread is not None:
+                host.setdefault("weight_reload_spread", {}).setdefault(eng, {})[st] = spread
+            took.append(f"host: weight_reload_gbps.{eng}.{st} from {name}")
+
+
+def _take_host_facts(data, name, sibling, took) -> None:
+    """Into the profile `data` the host's measured facts the `sibling` profile (the file `name`) holds that it lacks, key
+    by key; the reload rates per engine and stored dtype, each with its spread (`_take_reload_rates`)."""
+    theirs = sibling.get("host_measured") or {}
+    if not theirs:
+        return
+    host = data.setdefault("host_measured", {})
+    for k, v in theirs.items():
+        if k == "weight_reload_gbps" and isinstance(v, dict):
+            _take_reload_rates(host, theirs, name, took)
+        elif k == "weight_reload_source":
+            have = host.setdefault(k, [])
+            have.extend(x for x in (v or []) if x not in have)
+        elif k != "weight_reload_spread" and k not in host:
+            host[k] = v
+            took.append(f"host: {k} from {name}")
+
+
+def _take_runtime_base(data, name, sibling, took) -> None:
+    """Into the profile `data` the engine's base (`cpu.runtime_base_mb`) the `sibling` profile holds, when it has none."""
+    base = (sibling.get("cpu") or {}).get("runtime_base_mb")
+    cpu = data.get("cpu")
+    if base and isinstance(cpu, dict) and not cpu.get("runtime_base_mb"):
+        cpu["runtime_base_mb"] = dict(base)
+        took.append(f"cpu: runtime_base_mb from {name}")
+
+
 def from_siblings(path, data, devices) -> dict:
     """Class facts measured ONCE per card model and machine, reused by every card set (the launch-time cure,
     2026-11-19: a fresh home measured the same 16 GB class again for its 1-, 2- and 4-card profiles, 24 replay children
@@ -68,51 +139,10 @@ def from_siblings(path, data, devices) -> dict:
     donors = [(path.name if hasattr(path, "name") else str(path), d) for d in devices] + \
              [(p.name, d) for p, s in siblings for d in (s.get("devices") or [])]
     for i, d in enumerate(devices):
-        mine = dict(d.get("measured") or {})
-        for name, donor in donors:
-            if donor is d or donor.get("model") != d.get("model"):
-                continue
-            theirs = donor.get("measured") or {}
-            missing = {k: v for k, v in theirs.items() if k not in mine and k != "source"}
-            if missing:
-                src = theirs.get("source")
-                mine.update(missing)
-                mine["source"] = (f"{mine['source']}; " if mine.get("source") else "") + \
-                    f"{sorted(missing)} of {d.get('model')} from {name}" + (f" ({src})" if src else "")
-                took.append(f"card {d.get('index', i)}: {sorted(missing)} from {name}")
-            for k in RUNTIME_CARD_FACTS:
-                if d.get(k) is None and donor.get(k) is not None:
-                    d[k] = donor[k]
-                    took.append(f"card {d.get('index', i)}: {k} from {name}")
-        if mine != dict(d.get("measured") or {}):
-            d["measured"] = mine
+        _take_card_facts(d, i, donors, took)
     for p, s in siblings:
-        theirs = s.get("host_measured") or {}
-        if theirs:
-            host = data.setdefault("host_measured", {})
-            for k, v in theirs.items():
-                if k == "weight_reload_gbps" and isinstance(v, dict):
-                    # a rate this profile lacks comes with its spread when the sibling kept it unsteady
-                    for eng, by in v.items():
-                        for st, val in (by or {}).items():
-                            if st in ((host.get(k) or {}).get(eng) or {}):
-                                continue
-                            host.setdefault(k, {}).setdefault(eng, {})[st] = val
-                            spread = ((theirs.get("weight_reload_spread") or {}).get(eng) or {}).get(st)
-                            if spread is not None:
-                                host.setdefault("weight_reload_spread", {}).setdefault(eng, {})[st] = spread
-                            took.append(f"host: weight_reload_gbps.{eng}.{st} from {p.name}")
-                elif k == "weight_reload_source":
-                    have = host.setdefault(k, [])
-                    have.extend(x for x in (v or []) if x not in have)
-                elif k != "weight_reload_spread" and k not in host:
-                    host[k] = v
-                    took.append(f"host: {k} from {p.name}")
-        base = (s.get("cpu") or {}).get("runtime_base_mb")
-        cpu = data.get("cpu")
-        if base and isinstance(cpu, dict) and not cpu.get("runtime_base_mb"):
-            cpu["runtime_base_mb"] = dict(base)
-            took.append(f"cpu: runtime_base_mb from {p.name}")
+        _take_host_facts(data, p.name, s, took)
+        _take_runtime_base(data, p.name, s, took)
     return {"class_facts_from": took} if took else {}
 
 
