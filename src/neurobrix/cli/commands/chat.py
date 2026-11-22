@@ -18,6 +18,13 @@ import sys
 log = logging.getLogger(__name__)
 
 
+def banner(entry: str) -> str:
+    """The chat's first line: the served model's one name (its recorded hub name; neurobrix/nbx/names.py) and the
+    commands. `entry` is the cache entry the daemon's status names."""
+    from neurobrix.core.paths import cache_dir
+    from neurobrix.nbx.names import name_of
+    return f"{name_of(cache_dir(), entry)} — /new /context /status /quit"
+
 
 def cmd_chat(args):
     """Interactive chat REPL connected to serving daemon."""
@@ -61,7 +68,7 @@ def cmd_chat(args):
     if getattr(args, 'repetition_penalty', None) is not None:
         gen_kwargs["repetition_penalty"] = args.repetition_penalty
 
-    print(f"{model_name} — /new /context /status /quit")
+    print(banner(model_name))
 
     try:
         while True:
