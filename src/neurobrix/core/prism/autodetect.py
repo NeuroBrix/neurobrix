@@ -2541,31 +2541,9 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
             if mb is not None:
                 cpu["runtime_base_mb"] = {**base, engine: int(mb)}
                 added["runtime_base_mb"] = [engine]
-    probes = []                  # the reload probes this launch owes, decided first: what is said is what is done
-    if engine is not None:
-        from neurobrix.core.paths import cache_dir
-        held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
-        wanted = None if container_dir is None else {
-            stored_major(container_dir, c.name) for c in (Path(container_dir) / "components").glob("*")}
-        bound = int(devices[0].get("memory_mb") or 0) << 20
-        for name, st in _STORED.items():
-            if wanted is not None and name not in wanted:
-                continue
-            if any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
-                continue
-            # the asked model's own component first; the rate is the machine's: another's when none is large enough
-            for roots in ([Path(container_dir)] if container_dir is not None else [], list(Path(cache_dir()).glob("*"))):
-                comps = sorted((sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
-                               for root in roots for c in (root / "components").glob("*")
-                               if stored_major(c.parent.parent, c.name) == name)
-                comps = [x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= bound]
-                if comps:
-                    probes.append((*comps[0], st))
-                    break
     replay = P.vmm_first_replay(0) if "vmm_chunk_bytes" not in first else None    # made ahead: it prices the rest
-    if not first or probes or "vmm_chunk_bytes" not in first:
-        launch_lines.say("measure" if not first or "vmm_chunk_bytes" not in first else "reload", _work_said(probes, replay,
-                                                q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
+    if not first or "vmm_chunk_bytes" not in first:
+        launch_lines.say("measure", _work_said([], replay, q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
     if not first:
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick: one GEMM size, "
@@ -2595,19 +2573,6 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     added.update(P.complete_runtime_card_facts(devices, P.card_facts_in_a_child))
     if added:
         _write_first(path, data, devices, first, measured_of, added, q, chunks)
-    if engine is not None:
-        # the per-piece reload rate a streamed plan is priced with, per stored dtype of the requested model (of the
-        # cache without one) that neither block states (the supervisor 2026-11-03 22:50): until now only a streamed run
-        # measured it, and Prism refused to plan one without it. The `probes` chosen above, each reloaded in its own
-        # process (arena_probe.reloads).
-        from neurobrix.core.prism import arena_probe as A
-        for _bytes, root, comp, st in probes:
-            r = A.child(root, comp, hardware_id, engine)
-            _log.debug(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
-                       f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
-        data = yaml.safe_load(path.read_text()) or {}          # what the probe's process wrote
-        devices = data.get("devices") or []
-        first = {**measured_of(devices[0]), **first}
     # the Triton arena's factor is never measured at a user's first run (the supervisor 2026-11-07 12:00): its vendor
     # file or its family declares it (core/config/loader.declared_arena_factor); a probe on whatever the user imported
     # measured 1.4 to 28 and swept uncertified kernels for 40 minutes. The bounded probe (census shapes) is 0.6.2's.
@@ -2629,6 +2594,61 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     _write_first(path, data, devices, first, measured_of, added, q, chunks)
     _log.debug(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
+
+
+def measure_reload_rates(hardware_id: Optional[str], engine: str, container_dir=None) -> List[str]:
+    """The per-piece reload rate a STREAMED candidate is priced with (`time_estimate.reload_bps`), measured when Prism
+    prices one (`PrismSolver._measure_owed_facts`), never at every first launch — the orchestrator's ruling of
+    22/11/2026 17:43, line 4 (a model that fits its card owes none). Per stored dtype of the requested model (of the cache
+    without one) that neither the generated profile nor its vendor block states for `engine`: the smallest component
+    stored so, at least the loader-rate floor and at most the card, reloaded in its own process (`arena_probe.child`),
+    which writes the rate with its spread (`note_reload_rate`): measured once, kept. Returns the stored dtypes probed;
+    [] when none is owed, on a committed profile or under a census shadow."""
+    if not str(hardware_id).startswith("default"):
+        return []
+    try:
+        from neurobrix.kernels import census as _census
+        if _census.active():
+            return []
+    except Exception:  # noqa: BLE001 — no census module: a run
+        pass
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return []
+    from neurobrix.core.prism.loader import _vendor_block
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    if not devices:
+        return []
+    probes = []                  # the reload probes owed, decided first: what is said is what is done
+    from neurobrix.core.paths import cache_dir
+    held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
+    wanted = None if container_dir is None else {
+        stored_major(container_dir, c.name) for c in (Path(container_dir) / "components").glob("*")}
+    bound = int(devices[0].get("memory_mb") or 0) << 20
+    for name, st in _STORED.items():
+        if wanted is not None and name not in wanted:
+            continue
+        if any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
+            continue
+        # the asked model's own component first; the rate is the machine's: another's when none is large enough
+        for roots in ([Path(container_dir)] if container_dir is not None else [], list(Path(cache_dir()).glob("*"))):
+            comps = sorted((sum(f.stat().st_size for f in c.rglob("*.safetensors")), str(c.parent.parent), c.name)
+                           for root in roots for c in (root / "components").glob("*")
+                           if stored_major(c.parent.parent, c.name) == name)
+            comps = [x for x in comps if LOADER_RATE_MIN_BYTES <= x[0] <= bound]
+            if comps:
+                probes.append((*comps[0], st))
+                break
+    if not probes:
+        return []
+    launch_lines.say("reload", _work_said(probes, None, 0))
+    from neurobrix.core.prism import arena_probe as A
+    for _bytes, root, comp, st in probes:
+        r = A.child(root, comp, hardware_id, engine)
+        _log.debug(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "
+                   f"{[round(b / s / 1e9, 3) for b, s in r['draws']]} GB/s (written when three agree)")
+    return [st for *_x, st in probes]
 
 
 def _write_first(path, data, devices, first, measured_of, added, q, chunks=None) -> None:

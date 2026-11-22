@@ -36,6 +36,8 @@ def hw(tmp_path, monkeypatch):
     # other probes, so the expected keys do not depend on whether this host has a card
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: CALLS.append(("card", index)) or
                         {"runtime_total_mb": 16000, "runtime_context_mb": 300})
+    # the launched engine's runtime base (line 3 of the ruling of 22/11/2026 17:43): its own child, not this test's
+    monkeypatch.setattr(A, "_measure_runtime_base_mb", lambda engine: 800)
     return tmp_path
 
 
@@ -198,8 +200,9 @@ def _container(root, name, comp, dtype, nbytes):
         f.truncate(nbytes)                       # sparse: the size is what the probe reads
 
 
-def test_the_first_launch_reloads_the_smallest_component_of_each_unstated_stored_dtype(hw, tmp_path, monkeypatch):
-    """The supervisor 2026-11-03 22:50: the per-piece reload rate is measured by the engine at the first launch, per
+def test_a_streamed_pricing_reloads_the_smallest_component_of_each_unstated_stored_dtype(hw, tmp_path, monkeypatch):
+    """The supervisor 2026-11-03 22:50: the per-piece reload rate is measured by the engine (since the ruling of
+    22/11/2026 17:43, line 4: when Prism prices a streamed candidate, not at the first launch), per
     stored dtype of the cache neither block states, on the smallest component stored so (at least the loader-rate floor)
     — before, only a streamed run measured it and Prism refused to plan one without it. What this would do if the code
     were wrong: no probe (the fact never measured), a component under the floor or not the smallest, or a stated rate
@@ -220,6 +223,10 @@ def test_the_first_launch_reloads_the_smallest_component_of_each_unstated_stored
                         {"container": d, "component": c, "draws": []})
     _profile(hw, "default-abc", {**DEV, "memory_mb": 16384})
     A.ensure_measured_facts("default-abc", "compiled")
+    # line 4 of the ruling of 22/11/2026 17:43: the first launch owes no reload; Prism asks for it when it prices a
+    # streamed candidate (`PrismSolver._measure_owed_facts` -> `measure_reload_rates`)
+    assert probed == [], "reloaded at the first launch, before any streamed candidate was priced"
+    A.measure_reload_rates("default-abc", "compiled")
     assert sorted(probed) == [("f32", "net", "compiled"), ("small", "lm", "compiled")], probed
     data = yaml.safe_load((hw / "default-abc.yml").read_text())
     data["host_measured"]["weight_reload_gbps"] = {"compiled": {"BF16": 2.0, "F32": 1.0}}
@@ -227,7 +234,7 @@ def test_the_first_launch_reloads_the_smallest_component_of_each_unstated_stored
     data["host_measured"]["weight_reload_under"] = card_key()
     (hw / "default-abc.yml").write_text(yaml.safe_dump(data))
     probed.clear()
-    A.ensure_measured_facts("default-abc", "compiled")
+    A.measure_reload_rates("default-abc", "compiled")
     assert probed == [], "a stated rate is not measured again"
 
 
@@ -276,4 +283,5 @@ def test_a_probe_in_a_child_reads_the_facts_measured_before_it(hw, monkeypatch, 
     monkeypatch.setattr(AP, "child", child)
     _profile(hw, "default-abc", {**DEV, "memory_mb": 16384})
     A.ensure_measured_facts("default-abc", "compiled")
+    A.measure_reload_rates("default-abc", "compiled")        # asked by Prism when it prices a streamed candidate
     assert seen and all(m.get("vmm_chunk_bytes") == 2 << 20 for m in seen), seen

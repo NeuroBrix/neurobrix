@@ -8025,6 +8025,7 @@ class PrismSolver:
         from neurobrix.core.prism.work import component_work
         if not any(getattr(d, "measured", None) for d in profile.devices):
             return {}
+        self._measure_owed_facts(ranked, container, profile)
         plan_devices = devices          # the planner's device objects (the residency's), before the facts below
         devices = {}
         for d in profile.devices:
@@ -8122,6 +8123,23 @@ class PrismSolver:
             except (TE.MissingFact, RuntimeError) as exc:
                 out[name] = f"not estimated: {exc}"
         return out
+
+    def _measure_owed_facts(self, ranked, container, profile) -> None:
+        """The facts a candidate in the running is priced with that this machine has not measured yet, measured NOW,
+        once, and kept in the generated profile — never at every first launch (the orchestrator's ruling of 22/11/2026
+        17:43): the per-piece reload rate when a STREAMED candidate (reloaded at every use from the container, not
+        host-held) is ranked (`autodetect.measure_reload_rates`). Each is said in one line where it is measured; what
+        was written is read back into `profile`, under the keys the estimate reads. A fact a plan needs is never a
+        default: one that cannot be measured here leaves the candidate not estimated, said by name."""
+        from neurobrix.core.prism import autodetect
+        from neurobrix.core.prism import time_estimate as TE
+        hw, engine = autodetect.ACTIVE_HARDWARE_ID, engine_of(getattr(self, "_mode", "compiled"))
+        measured = False
+        if any(n in TE.STREAM_EVERY_USE and n not in TE.HOST_HELD for _s, n, _a, _d in ranked):
+            measured |= bool(autodetect.measure_reload_rates(hw, engine, getattr(container, "cache_path", None)))
+        if measured:
+            from neurobrix.core.prism.loader import load_profile
+            profile.host_measured = load_profile(hw).host_measured
 
     def _residency_priced(self, container, strategy: str, allocs, component_memory, devices, profile) -> Dict[str, float]:
         """{component: MB of its weights the card keeps resident} for each component the candidate streams from host
