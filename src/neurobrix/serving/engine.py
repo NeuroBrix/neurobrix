@@ -252,18 +252,7 @@ class InferenceEngine:
         self._executor.setup()
 
         # 7. Pre-warm weights for warm strategies (load into VRAM now, not on R1)
-        # Only LLM family benefits from a tiny text warmup. Other families
-        # (tts, stt, audio_llm, vlm, multimodal, image, upscaler, video) need
-        # real-modality inputs (audio, image, etc.) or have multi-step paths
-        # that don't respond to "warmup" + max_tokens=1 — skip warmup for them.
-        from neurobrix.core.runtime.output_dispatch import family_uses_text_warmup
-        if self._warm_serving and family_uses_text_warmup(self._family or ""):
-            warmup_inputs = {
-                "global.prompt": "warmup",
-                "global.max_tokens": 1,
-                "global.chat_mode": True,
-            }
-            self._executor.execute(warmup_inputs)
+        self._prewarm()
 
         t_load = time.time() - t_start
         self._is_loaded = True
@@ -277,6 +266,21 @@ class InferenceEngine:
 
         if not self._warm_serving:
             _log.debug(f"[NeuroBrix] Cold serving — weights reload per request, setup/context persists")
+
+    def _prewarm(self) -> None:
+        """Step 7 of `load`: a warm strategy loads its weights into VRAM now, not on the first request."""
+        # Only LLM family benefits from a tiny text warmup. Other families
+        # (tts, stt, audio_llm, vlm, multimodal, image, upscaler, video) need
+        # real-modality inputs (audio, image, etc.) or have multi-step paths
+        # that don't respond to "warmup" + max_tokens=1 — skip warmup for them.
+        from neurobrix.core.runtime.output_dispatch import family_uses_text_warmup
+        if self._warm_serving and family_uses_text_warmup(self._family or ""):
+            warmup_inputs = {
+                "global.prompt": "warmup",
+                "global.max_tokens": 1,
+                "global.chat_mode": True,
+            }
+            self._executor.execute(warmup_inputs)
 
     def generate(self, prompt: str = "", **kwargs) -> Dict[str, Any]:
         """
