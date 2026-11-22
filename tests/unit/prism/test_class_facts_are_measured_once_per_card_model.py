@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from neurobrix.core.prism import autodetect as A
+from neurobrix.core.prism import owed_facts as OF
 from neurobrix.core.prism import kept_launch_facts as K
 from neurobrix.core.prism import facts_probe as P
 
@@ -52,7 +53,7 @@ def test_a_card_set_of_a_measured_model_measures_nothing(hw):
     _write(hw, "default-four", [dict(C16, index=0), dict(C16, index=1), dict(C32, index=2), dict(C32, index=3)])
     A.ensure_measured_facts("default-four")
     assert ("vmm", 0) in CALLS and ("vmm", 2) in CALLS
-    A.measure_host_facts("default-four")          # a host-held plan priced there (line 5 of the ruling of 22/11/2026)
+    OF.measure_host_facts("default-four")          # a host-held plan priced there (line 5 of the ruling of 22/11/2026)
     four = _read(hw, "default-four")
     CALLS.clear()
     _write(hw, "default-one32", [dict(C32, index=0)])           # a 32 GB card alone: its own set, its own index

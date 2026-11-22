@@ -13,9 +13,9 @@ import pytest
 import yaml
 
 from neurobrix.core.prism import autodetect as A
+from neurobrix.core.prism import owed_facts as OF
 from neurobrix.core.prism import facts_probe as P
 from neurobrix.core.prism import time_estimate as T
-from neurobrix.core.prism.solver import PrismSolver
 from neurobrix.core.prism.work import Work
 
 DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch", "supports_dtypes": ["float16"],
@@ -54,12 +54,12 @@ def test_the_host_is_measured_when_a_host_placed_candidate_is_priced_once(home):
     d, calls = home
     profile = NS(host_measured=None)
     solver = NS(_mode="compiled")
-    PrismSolver._measure_owed_facts(solver, [(0.0, "single_gpu", {"lm": "cuda:0"}, None)], NS(cache_path=None), profile)
+    OF.measure_owed(solver._mode, [(0.0, "single_gpu", {"lm": "cuda:0"}, None)], NS(cache_path=None), profile)
     assert calls == [] and profile.host_measured is None
-    PrismSolver._measure_owed_facts(solver, [(0.0, "lazy_sequential", {"lm": "cuda:0", "vae": "cpu"}, None)],
+    OF.measure_owed(solver._mode, [(0.0, "lazy_sequential", {"lm": "cuda:0", "vae": "cpu"}, None)],
                                     NS(cache_path=None), profile)
     assert calls == ["gemm", "copy"] and _host(d)["host_memory_gbps"] == 20 == profile.host_measured["host_memory_gbps"]
-    PrismSolver._measure_owed_facts(solver, [(0.0, "lazy_sequential", {"vae": "cpu"}, None)], NS(cache_path=None), profile)
+    OF.measure_owed(solver._mode, [(0.0, "lazy_sequential", {"vae": "cpu"}, None)], NS(cache_path=None), profile)
     assert calls == ["gemm", "copy"], "measured again"
 
 

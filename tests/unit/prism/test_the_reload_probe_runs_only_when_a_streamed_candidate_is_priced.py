@@ -14,8 +14,8 @@ import pytest
 import yaml
 
 from neurobrix.core.prism import autodetect as A
+from neurobrix.core.prism import owed_facts as OF
 from neurobrix.core.prism import facts_probe as P
-from neurobrix.core.prism.solver import PrismSolver
 
 DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch", "supports_dtypes": ["float16"],
        "memory_mb": 16384, "runtime_total_mb": 16000, "runtime_context_mb": 300,
@@ -63,7 +63,7 @@ def test_the_probe_runs_when_a_streamed_candidate_is_priced(home, monkeypatch, r
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")
     monkeypatch.setattr(L, "load_profile", lambda hw: NS(host_measured={"weight_reload_gbps": {"compiled": {"BF16": 1.0}}}))
     profile = NS(host_measured=None)
-    PrismSolver._measure_owed_facts(NS(_mode="compiled"), [(0.0, n, a, None) for n, a in ranked],
+    OF.measure_owed("compiled", [(0.0, n, a, None) for n, a in ranked],
                                     NS(cache_path=str(container)), profile)
     assert probed == ([("lm", "default-abc", "compiled")] if owed else [])
     assert (profile.host_measured is not None) == owed, "the written rate is read back into the profile priced"

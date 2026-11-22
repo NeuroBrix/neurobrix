@@ -129,6 +129,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     import logging
     import yaml
     from neurobrix.core.prism import autodetect as A
+    from neurobrix.core.prism import owed_facts as OF
     from neurobrix.core.prism import arena_probe
 
     def container(name, comps):
@@ -176,7 +177,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     assert m and (int(m.group(1)) * (60 if m.group(2) == "min" else 1)) >= 46, said[0]
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
-        A.measure_reload_rates("default-t", "triton", asked)
+        OF.measure_reload_rates("default-t", "triton", asked)
     assert probed == ["asked"], f"probed {probed}: the reload rate of models nobody asked for"
     # A LATER launch: the profile is measured (the chunk included) and only the reload rate is still owed — the child's
     # reloads of the launch before were not steady, so nothing was written. It is said as what it is: not "First
@@ -187,7 +188,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     probed.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
-        A.measure_reload_rates("default-t", "triton", asked)
+        OF.measure_reload_rates("default-t", "triton", asked)
     assert probed == ["asked"], "the rate is still owed: measured again"
     said = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     assert len(said) == 1 and said[0].startswith("Measuring this machine's weight reload rate: none is kept yet"), said
@@ -203,7 +204,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     probed.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
-        A.measure_reload_rates("default-t", "triton", asked)
+        OF.measure_reload_rates("default-t", "triton", asked)
     assert probed == [] and not [r for r in caplog.records if r.levelno == logging.INFO]
     assert handed == [1.0], "the replay made ahead is one of the probe's own, never made twice"
 

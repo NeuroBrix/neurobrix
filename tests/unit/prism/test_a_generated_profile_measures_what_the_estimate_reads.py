@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from neurobrix.core.prism import autodetect as A
+from neurobrix.core.prism import owed_facts as OF
 from neurobrix.core.prism import facts_probe as P
 from neurobrix.core.prism.kept_launch_facts import card_key
 
@@ -59,7 +60,7 @@ def test_a_generated_profile_without_facts_is_probed_once_and_written(hw):
         assert "first launch" in d["measured"]["source"] and "weight_load_gbps" not in d["measured"]
         assert d["measured"]["vmm_chunk_bytes"] == 2 << 20
     assert "host_measured" not in data and not any(c[0] in ("hmm", "hmem") for c in CALLS)
-    assert A.measure_host_facts("default-abc") == ["host_matmul_gflops", "host_memory_gbps"]
+    assert OF.measure_host_facts("default-abc") == ["host_matmul_gflops", "host_memory_gbps"]
     assert yaml.safe_load((hw / "default-abc.yml").read_text())["host_measured"]["host_memory_gbps"] == 20
     CALLS.clear()
     assert A.ensure_measured_facts("default-abc") == {} and CALLS == []
@@ -227,9 +228,9 @@ def test_a_streamed_pricing_reloads_the_smallest_component_of_each_unstated_stor
     _profile(hw, "default-abc", {**DEV, "memory_mb": 16384})
     A.ensure_measured_facts("default-abc", "compiled")
     # line 4 of the ruling of 22/11/2026 17:43: the first launch owes no reload; Prism asks for it when it prices a
-    # streamed candidate (`PrismSolver._measure_owed_facts` -> `measure_reload_rates`)
+    # streamed candidate (`owed_facts.measure_owed` -> `measure_reload_rates`)
     assert probed == [], "reloaded at the first launch, before any streamed candidate was priced"
-    A.measure_reload_rates("default-abc", "compiled")
+    OF.measure_reload_rates("default-abc", "compiled")
     assert sorted(probed) == [("f32", "net", "compiled"), ("small", "lm", "compiled")], probed
     data = yaml.safe_load((hw / "default-abc.yml").read_text())
     data.setdefault("host_measured", {})["weight_reload_gbps"] = {"compiled": {"BF16": 2.0, "F32": 1.0}}
@@ -237,7 +238,7 @@ def test_a_streamed_pricing_reloads_the_smallest_component_of_each_unstated_stor
     data["host_measured"]["weight_reload_under"] = card_key()
     (hw / "default-abc.yml").write_text(yaml.safe_dump(data))
     probed.clear()
-    A.measure_reload_rates("default-abc", "compiled")
+    OF.measure_reload_rates("default-abc", "compiled")
     assert probed == [], "a stated rate is not measured again"
 
 
@@ -286,5 +287,5 @@ def test_a_probe_in_a_child_reads_the_facts_measured_before_it(hw, monkeypatch, 
     monkeypatch.setattr(AP, "child", child)
     _profile(hw, "default-abc", {**DEV, "memory_mb": 16384})
     A.ensure_measured_facts("default-abc", "compiled")
-    A.measure_reload_rates("default-abc", "compiled")        # asked by Prism when it prices a streamed candidate
+    OF.measure_reload_rates("default-abc", "compiled")        # asked by Prism when it prices a streamed candidate
     assert seen and all(m.get("vmm_chunk_bytes") == 2 << 20 for m in seen), seen

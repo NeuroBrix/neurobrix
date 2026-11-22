@@ -15,20 +15,21 @@ from types import SimpleNamespace as NS
 import pytest
 
 from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism.solver import STRATEGY_RANK, PrismSolver
+from neurobrix.core.prism import owed_facts as OF
+from neurobrix.core.prism.solver import STRATEGY_RANK
 
 
 @pytest.fixture
 def asked(monkeypatch):
     calls = []
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")
-    monkeypatch.setattr(A, "measure_reload_rates", lambda hw, e, c: calls.append("reload") or [])
-    monkeypatch.setattr(A, "measure_host_facts", lambda hw: calls.append("host") or [])
+    monkeypatch.setattr(OF, "measure_reload_rates", lambda hw, e, c: calls.append("reload") or [])
+    monkeypatch.setattr(OF, "measure_host_facts", lambda hw: calls.append("host") or [])
     return calls
 
 
 def _owed(ranked):
-    PrismSolver._measure_owed_facts(NS(_mode="compiled"), [(0.0, n, a, None) for n, a in ranked],
+    OF.measure_owed("compiled", [(0.0, n, a, None) for n, a in ranked],
                                     NS(cache_path="/x"), NS(host_measured=None))
 
 
