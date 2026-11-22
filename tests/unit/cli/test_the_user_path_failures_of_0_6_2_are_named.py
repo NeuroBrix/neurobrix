@@ -158,6 +158,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     # the chunk probe's first replay, measured ahead: 1.0 s replayed, 2.0 s for its whole child here
     monkeypatch.setattr(P, "vmm_first_replay", lambda dev: (1.0, 2.0))
     monkeypatch.setattr(P, "vmm_chunk_bytes", lambda dev, reps, ks, off_first=None: handed.append(off_first) or (0, None))
+    monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: {})   # the card's runtime facts: not this test's
     probed = []
     monkeypatch.setattr(arena_probe, "child", lambda d, c, h, e: probed.append(Path(d).name) or
                         {"container": Path(d).name, "component": c, "draws": [(1, 1.0)]})
@@ -165,12 +166,18 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     launch_lines.SAID.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
-    assert probed == ["asked"], f"probed {probed}: the reload rate of models nobody asked for"
+    # the ruling of 22/11/2026 17:43, line 4: the first launch reloads nothing; the reload rate is asked by Prism when it
+    # prices a streamed candidate (`measure_reload_rates`), for the requested model's stored dtypes only
+    assert probed == [], f"probed {probed} at the first launch, before any streamed candidate was priced"
     said = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     assert len(said) == 1 and said[0].startswith("First launch on this machine"), said
-    # priced from what was measured: the 23 other replays at 2.0 s each (46 s) and the reload probe — at least 48 s
+    # priced from what was measured: the 23 other replays at 2.0 s each — at least 46 s
     m = re.search(r"up to about (\d+) (s|min)", said[0])
-    assert m and (int(m.group(1)) * (60 if m.group(2) == "min" else 1)) >= 48, said[0]
+    assert m and (int(m.group(1)) * (60 if m.group(2) == "min" else 1)) >= 46, said[0]
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="neurobrix"):
+        A.measure_reload_rates("default-t", "triton", asked)
+    assert probed == ["asked"], f"probed {probed}: the reload rate of models nobody asked for"
     # A LATER launch: the profile is measured (the chunk included) and only the reload rate is still owed — the child's
     # reloads of the launch before were not steady, so nothing was written. It is said as what it is: not "First
     # launch", not "once" (seen 2026-11-11 on a Mac that was not quiet: the first launch's line at launches 2 and 3).
@@ -180,6 +187,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     probed.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
+        A.measure_reload_rates("default-t", "triton", asked)
     assert probed == ["asked"], "the rate is still owed: measured again"
     said = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
     assert len(said) == 1 and said[0].startswith("Measuring this machine's weight reload rate: none is kept yet"), said
@@ -195,6 +203,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     probed.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
+        A.measure_reload_rates("default-t", "triton", asked)
     assert probed == [] and not [r for r in caplog.records if r.levelno == logging.INFO]
     assert handed == [1.0], "the replay made ahead is one of the probe's own, never made twice"
 
