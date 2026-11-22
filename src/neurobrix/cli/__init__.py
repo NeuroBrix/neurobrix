@@ -147,6 +147,19 @@ def _add_processor_parser(subparsers) -> None:
     processor_sub.add_parser('list', help='the sub-components in the cache')
 
 
+#: the help of `autotune certify`'s two re-prove flags, kept beside the parser that reads them
+_REPROVE_GENERATOR_HELP = ('skip only the shapes certified for this card\'s class UNDER THE RUNNING code generator '
+                           '(the Triton version and the backend hash); a proof made under another one is re-proven by this '
+                           'pass — until then the RUNTIME DOES NOT SERVE IT (a configuration is a property of the compiler '
+                           'that produced it: the shape sweeps at runtime and lands in the local replay cache; '
+                           'NBX_AUTOTUNE_ANY_GENERATOR=1 serves it anyway, at the caller\'s risk)')
+_REPROVE_EPOCH_HELP = ('re-prove, into the draft tree --out (required, apart from this one), every key whose '
+                       'certification for this card\'s class in CERTIFIED_TREE carries another bits epoch than '
+                       'the library\'s: the stored configuration alone, by the oracle and one timing; a key '
+                       'that does not re-prove is not swept but listed in the draft\'s reprove_epoch_ledger.tsv '
+                       '(tools/certified_epoch_stamp.py replaces a shipped file from the draft)')
+
+
 def create_parser(show_dev: bool = False):
     """Create the main argument parser with subcommands. `show_dev`: the developer commands are listed in the help."""
     from neurobrix.cli.utils import REGISTRY_URL, IMPORT_EXAMPLES     # not at import: it resolves the paths
@@ -228,18 +241,8 @@ def create_parser(show_dev: bool = False):
     certify_p.add_argument('--reprove-unclocked', action='store_true',
                            help='skip only the shapes certified for this card\'s class AT A RECORDED CLOCK; a proof that '
                                 'does not say its clock is re-proven at the protocol clock')
-    certify_p.add_argument('--reprove-generator', action='store_true',
-                           help='skip only the shapes certified for this card\'s class UNDER THE RUNNING code generator '
-                                '(the Triton version and the backend hash); a proof made under another one is re-proven by this '
-                                'pass — until then the RUNTIME DOES NOT SERVE IT (a configuration is a property of the compiler '
-                                'that produced it: the shape sweeps at runtime and lands in the local replay cache; '
-                                'NBX_AUTOTUNE_ANY_GENERATOR=1 serves it anyway, at the caller\'s risk)')
-    certify_p.add_argument('--reprove-epoch-from', default=None, metavar='CERTIFIED_TREE',
-                           help='re-prove, into the draft tree --out (required, apart from this one), every key whose '
-                                'certification for this card\'s class in CERTIFIED_TREE carries another bits epoch than '
-                                'the library\'s: the stored configuration alone, by the oracle and one timing; a key '
-                                'that does not re-prove is not swept but listed in the draft\'s reprove_epoch_ledger.tsv '
-                                '(tools/certified_epoch_stamp.py replaces a shipped file from the draft)')
+    certify_p.add_argument('--reprove-generator', action='store_true', help=_REPROVE_GENERATOR_HELP)
+    certify_p.add_argument('--reprove-epoch-from', default=None, metavar='CERTIFIED_TREE', help=_REPROVE_EPOCH_HELP)
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')

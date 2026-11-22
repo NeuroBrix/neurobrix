@@ -24,6 +24,7 @@ proof or whose proof does not re-read.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import json
 import os
 import warnings
@@ -1618,21 +1619,10 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     DRAFT tree `out`, which must be another directory: the shipped tree is only read. A key whose stored
     configuration does not re-prove is not swept: it is written to the draft's ledger (`ReproveLedger`) for the full
     recertification. A draft key already held for this class is skipped (a resumed re-prove)."""
-    if log is None:
-        def log(*a):                      # a run of hours, read while it runs: never buffered
-            print(*a, flush=True)
+    log = log or _say
     if reprove_epoch_from is not None:
-        # The draft-tree rule, before anything is measured: the shipped tree is never written by a re-prove.
-        if not out:
-            raise RuntimeError("--reprove-epoch-from needs --out: the re-proofs go into a draft tree, never into the "
-                               "certified tree they are read from")
-        src, dst = Path(reprove_epoch_from).resolve(), Path(out).resolve()
-        if dst == src or src in dst.parents or dst in src.parents:
-            raise RuntimeError(f"--out {out} is (or holds, or lies inside) the tree re-proven from "
-                               f"({reprove_epoch_from}): a re-prove writes a draft tree apart from the shipped one")
-        if census_path or models or keys_path or only_missing or reprove_unclocked or reprove_generator:
-            raise RuntimeError("--reprove-epoch-from re-proves the keys the certified tree holds; it takes no other "
-                               "key source and no other coverage flag")
+        _refuse_reprove_args(reprove_epoch_from, out, census_path or models or keys_path or only_missing
+                             or reprove_unclocked or reprove_generator)
     # The entry condition, before anything is timed. It lives HERE and not in the
     # CLI because this is the narrowest point: the door then holds for every
     # caller, not only for the one that types the documented command.
@@ -1674,29 +1664,10 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     if census_path:
         raise RuntimeError(f"--census {census_path}: REFUSED — the certifier certifies the committed census table of "
                            f"the profile and the card's memory class, and nothing else (the owner's method, 2026-09-28)")
-    if models:
-        from neurobrix.kernels import census_table as _T
-        _known = {r.get("model") for r in _T.read(_T.table_path(vendor, profile, certifying_class))}
-        _unknown = sorted(set(models) - _known)
-        if _unknown:
-            raise RuntimeError(f"--models {', '.join(_unknown)}: no row of the census table names it — a filter that "
-                               f"matched nothing would certify nothing and report success")
-    reprove_from = ledger = None
-    if reprove_epoch_from is not None:
-        shapes, reprove_from, unreadable = stored_epoch_keys(vendor, profile, reprove_epoch_from, certifying_class)
-        ledger = ReproveLedger(Path(out) / REPROVE_LEDGER)
-        for fname, ktext, why in unreadable:
-            ledger.note(fname, ktext, certifying_class, "failed", 0.0, why)
-        log(f"[certify] re-prove of bits epoch {C.BITS_EPOCH} from {reprove_epoch_from} into the draft {out}: "
-            f"{len(reprove_from)} stored key(s) of class {certifying_class} GB, {len(unreadable)} unreadable; "
-            f"ledger {ledger.path}")
-    else:
-        shapes = keys_file(keys_path) if keys_path else census(vendor, profile, certifying_class, models)
+    _refuse_unknown_models(vendor, profile, certifying_class, models)
+    shapes, reprove_from, ledger = _key_source(vendor, profile, certifying_class, models, keys_path,
+                                               reprove_epoch_from, out, log)
     tuners = census_tuners(shapes)
-    source = (f"stored tree {reprove_epoch_from}" if reprove_epoch_from is not None
-              else f"key list {keys_path}" if keys_path else f"census table {vendor}/{profile}")
-    log(f"[certify] {source} {certifying_class} GB: "
-        f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
     if kernels:
         want = set(kernels)
         shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
@@ -1704,8 +1675,6 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     summary: Dict[str, Any] = {"vendor": vendor, "profile": profile, "directory": str(root), "kernels": {},
                                "certified": 0, "skipped": 0, "failed": 0, "unreachable": 0,
                                "excluded_configs": 0, "started": time.time()}
-    done = 0
-    attempts = 0                                  # `limit` bounds the shapes TRIED, failures included
     # Certifications reach their file at a BOUNDED SHARE of the pass (`_BoundedWriter`); every
     # pending one is written before this function returns, on every path.
     writer = _BoundedWriter(vendor, profile)
@@ -1758,6 +1727,128 @@ class _BoundedWriter:
             self.flush(path)
 
 
+def _say(*a):
+    """The certifier's default log: a run of hours, read while it runs — never buffered."""
+    print(*a, flush=True)
+
+
+def _refuse_reprove_args(reprove_epoch_from: str, out: Optional[str], other_source) -> None:
+    """The draft-tree rule of `--reprove-epoch-from`, before anything is measured: the shipped tree is never written by
+    a re-prove (`out` is a draft apart from it), and it takes no other key source or coverage flag (`other_source`)."""
+    if not out:
+        raise RuntimeError("--reprove-epoch-from needs --out: the re-proofs go into a draft tree, never into the "
+                           "certified tree they are read from")
+    src, dst = Path(reprove_epoch_from).resolve(), Path(out).resolve()
+    if dst == src or src in dst.parents or dst in src.parents:
+        raise RuntimeError(f"--out {out} is (or holds, or lies inside) the tree re-proven from "
+                           f"({reprove_epoch_from}): a re-prove writes a draft tree apart from the shipped one")
+    if other_source:
+        raise RuntimeError("--reprove-epoch-from re-proves the keys the certified tree holds; it takes no other "
+                           "key source and no other coverage flag")
+
+
+def _refuse_unknown_models(vendor: str, profile: str, certifying_class, models) -> None:
+    """`--models` names rows of the census table: a filter that matched nothing would certify nothing and succeed."""
+    if not models:
+        return
+    from neurobrix.kernels import census_table as _T
+    unknown = sorted(set(models) - {r.get("model") for r in _T.read(_T.table_path(vendor, profile, certifying_class))})
+    if unknown:
+        raise RuntimeError(f"--models {', '.join(unknown)}: no row of the census table names it — a filter that "
+                           f"matched nothing would certify nothing and report success")
+
+
+def _key_source(vendor, profile, certifying_class, models, keys_path, reprove_epoch_from, out, log):
+    """(shapes, reprove_from, ledger) of a certification: the stored tree's keys of another bits epoch (an epoch
+    re-prove, its ledger opened in the draft `out` with the unreadable keys noted), a key list, or the census table of
+    the profile and the card's class — said in one line."""
+    reprove_from = ledger = None
+    if reprove_epoch_from is not None:
+        shapes, reprove_from, unreadable = stored_epoch_keys(vendor, profile, reprove_epoch_from, certifying_class)
+        ledger = ReproveLedger(Path(out) / REPROVE_LEDGER)
+        for fname, ktext, why in unreadable:
+            ledger.note(fname, ktext, certifying_class, "failed", 0.0, why)
+        log(f"[certify] re-prove of bits epoch {C.BITS_EPOCH} from {reprove_epoch_from} into the draft {out}: "
+            f"{len(reprove_from)} stored key(s) of class {certifying_class} GB, {len(unreadable)} unreadable; "
+            f"ledger {ledger.path}")
+    else:
+        shapes = keys_file(keys_path) if keys_path else census(vendor, profile, certifying_class, models)
+    source = (f"stored tree {reprove_epoch_from}" if reprove_epoch_from is not None
+              else f"key list {keys_path}" if keys_path else f"census table {vendor}/{profile}")
+    log(f"[certify] {source} {certifying_class} GB: "
+        f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
+    return shapes, reprove_from, ledger
+
+
+def _ledger_note(ledger, root, certifying_class, path, ktext, outcome, t0, reason="") -> None:
+    """One key tried by an epoch re-prove, into its ledger under its file's vendor/profile/name (None: no re-prove)."""
+    if ledger is not None:
+        rel = path.relative_to(root) if Path(root) in path.parents else Path(path.name)
+        ledger.note(str(rel), ktext, certifying_class, outcome, time.time() - t0, reason)
+
+
+def _stored_head(qual, ktext, entries, reprove_from, reprove_generator, certifying_class):
+    """(the stored class head a key is re-proven from, its label) — of the stored tree for an epoch re-prove (labelled by
+    its bits epochs), of this class's entry under another generator for `--reprove-generator` — or (…, None)."""
+    if reprove_from is not None:
+        stored = reprove_from.get((qual, ktext))
+        label = (f"bits epoch " + ", ".join(sorted("none" if e is None else str(e) for e in {
+            p.get("bits_epoch") for c in C.class_certifications(stored) for p in C.certification_proofs(c)}))
+            + f" ({C.reproof_source(stored, None) or 'no generator named'})") if stored else None
+        return stored, label
+    stored = C.entry_for_memory_gb(entries.get(ktext), certifying_class) if reprove_generator else None
+    return stored, C.reproof_source(stored, C.proof_backend({"backend": _backend()}))
+
+
+def _reprove_epoch(qual, tuner, key, tol, rng, stored, stored_label, common, summary):
+    """The epoch re-prove of one key: the stored configuration alone, its unit tile kept; a failure, or a configuration
+    or tile that is not the stored one, is raised to the loop's handlers and noted for the full recertification —
+    never swept here."""
+    entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
+                        reproven_from=stored_label, keep_unit=unit_tile(stored), **common)
+    if entry.get("config") != stored["config"]:
+        raise RuntimeError(f"the re-proven configuration {entry.get('config')} is not the stored one {stored['config']}")
+    if unit_tile(entry) != unit_tile(stored):
+        raise RuntimeError(f"the re-proven unit tile {unit_tile(entry)} is not the stored one {unit_tile(stored)}")
+    summary["reproven"] = summary.get("reproven", 0) + 1
+    return entry
+
+
+def _reprove_or_sweep(qual, tuner, key, tol, rng, stored, stored_label, common, summary, log, dtype):
+    """RE-PROVE, NOT RE-SWEEP (the owner, 2026-09-29 01:37) under the running generator: the stored configuration
+    proven again by the oracle and one timing; swept only where it fails the oracle (a drift or a refusal by size is
+    raised for the retry pass, never swept)."""
+    try:
+        entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"], reproven_from=stored_label, **common)
+        summary["reproven"] = summary.get("reproven", 0) + 1
+        return entry
+    except (UnreachableCensusKey, H.KeyTooLargeForClass, WitnessDrift):
+        raise
+    except Exception as exc:          # the stored configuration fails the oracle under the running generator
+        log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: the stored "
+            f"configuration does not re-prove under the running generator ({exc}); swept")
+    entry = certify_key(qual, tuner, key, tol, rng, **common)
+    summary["swept"] = summary.get("swept", 0) + 1
+    why = summary.setdefault("swept_why", {})
+    why["stored configuration failed the oracle"] = why.get("stored configuration failed the oracle", 0) + 1
+    return entry
+
+
+def _count_certified(summary, qual, entry, tuner, key, dtype, tol, t0, log) -> None:
+    """A key filed: counted in the summary and its kernel's row, and said with its proof's figures."""
+    summary["certified"] += 1
+    summary["excluded_configs"] += len(entry["excluded"])
+    k = summary["kernels"].setdefault(qual, {"certified": 0, "excluded_configs": 0})
+    k["certified"] += 1; k["excluded_configs"] += len(entry["excluded"])
+    p = entry["proof"]
+    log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: {entry['config']['kwargs']} "
+        f"warps={entry['config']['num_warps']} stages={entry['config']['num_stages']} — deviation {p['deviation']:.2e} "
+        f"(tol {tol:g}), {p['best_ms']:.4f} ms, {p['accepted']}/{p['candidates']} accepted, "
+        f"{len(entry['excluded'])} excluded, {time.time() - t0:.1f} s "
+        f"(oracle {p['seconds']['oracle']}, runs {p['seconds']['runs']}, bench {p['seconds']['bench']}; "
+        f"{_alloc_state()})")
+
+
 def _read_skip_keys(path: Optional[str]):
     """{(kernel qualname, key repr)} from a file of `<qualname> <key repr>` lines — the keys a resumed sweep has done
     (when a re-proof since has re-dated every entry, a date cannot tell them apart). None without a file; a missing file
@@ -1782,11 +1873,7 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                   reprove_from=None, ledger=None):
     # `reprove_from`, {(qual, key text): the stored class head} (`stored_epoch_keys`): the epoch re-prove — each
     # stored configuration proven again alone, into the draft tree `root`; every key tried is noted in `ledger`
-    def note(path, ktext, outcome, t0, reason=""):
-        if ledger is not None:
-            rel = path.relative_to(root) if Path(root) in path.parents else Path(path.name)
-            ledger.note(str(rel), ktext, certifying_class, outcome, time.time() - t0, reason)
-    done = 0
+    note = functools.partial(_ledger_note, ledger, root, certifying_class)
     attempts = 0
     # keys this class refused by size: a pass that only fills what is missing does not draw them again while the
     # bound they were refused at holds (Sana 4K's two 16g rms keys were retried, and failed, at every pass)
@@ -1838,14 +1925,7 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             # timing under the witness. A sweep only where that configuration fails the oracle, or where
             # there is no entry at all; the summary says how many of each and why.
             # The class head's configuration is re-proven; its proof is ADDED beside the other generators' (`file_certification`).
-            if reprove_from is not None:
-                stored = reprove_from.get((qual, ktext))
-                stored_label = (f"bits epoch " + ", ".join(sorted("none" if e is None else str(e) for e in {
-                    p.get("bits_epoch") for c in C.class_certifications(stored) for p in C.certification_proofs(c)}))
-                    + f" ({C.reproof_source(stored, None) or 'no generator named'})") if stored else None
-            else:
-                stored = C.entry_for_memory_gb(entries.get(ktext), certifying_class) if reprove_generator else None
-                stored_label = C.reproof_source(stored, C.proof_backend({"backend": _backend()}))
+            stored, stored_label = _stored_head(qual, ktext, entries, reprove_from, reprove_generator, certifying_class)
             reprove = stored_label is not None
             attempts += 1
             t0 = time.time()
@@ -1865,33 +1945,11 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                                                       f"{owed.get('proof', {}).get('date', '?')}", **common)
                     summary["unit_owed"] = summary.get("unit_owed", 0) + 1
                 elif reprove and reprove_from is not None:
-                    # the epoch re-prove: the stored configuration alone; a failure is raised to the handlers below
-                    # and noted for the full recertification — never swept here
-                    entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
-                                        reproven_from=stored_label, keep_unit=unit_tile(stored), **common)
-                    if entry.get("config") != stored["config"]:
-                        raise RuntimeError(f"the re-proven configuration {entry.get('config')} is not the stored one "
-                                           f"{stored['config']}")
-                    if unit_tile(entry) != unit_tile(stored):
-                        raise RuntimeError(f"the re-proven unit tile {unit_tile(entry)} is not the stored one "
-                                           f"{unit_tile(stored)}")
-                    summary["reproven"] = summary.get("reproven", 0) + 1
+                    entry = _reprove_epoch(qual, tuner, key, tol, rng, stored, stored_label, common, summary)
                 elif reprove_from is not None:
                     continue                  # no stored head for this class: nothing to re-prove
                 elif reprove:
-                    try:
-                        entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
-                                            reproven_from=stored_label, **common)
-                        summary["reproven"] = summary.get("reproven", 0) + 1
-                    except (UnreachableCensusKey, H.KeyTooLargeForClass, WitnessDrift):
-                        raise                         # a drift is a refusal for the retry pass, never a sweep
-                    except Exception as exc:          # the stored configuration fails the oracle under
-                        log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: the stored "
-                            f"configuration does not re-prove under the running generator ({exc}); swept")
-                        entry = certify_key(qual, tuner, key, tol, rng, **common)
-                        summary["swept"] = summary.get("swept", 0) + 1
-                        summary.setdefault("swept_why", {}).setdefault("stored configuration failed the oracle", 0)
-                        summary["swept_why"]["stored configuration failed the oracle"] += 1
+                    entry = _reprove_or_sweep(qual, tuner, key, tol, rng, stored, stored_label, common, summary, log, dtype)
                 else:
                     entry = certify_key(qual, tuner, key, tol, rng, **common)
                     if reprove_generator:
@@ -1927,17 +1985,6 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                 continue
             writer.add(path, qual, dtype, entries, ktext, entry)
             note(path, ktext, "reproven", t0)
-            done += 1
-            summary["certified"] += 1
-            summary["excluded_configs"] += len(entry["excluded"])
-            k = summary["kernels"].setdefault(qual, {"certified": 0, "excluded_configs": 0})
-            k["certified"] += 1; k["excluded_configs"] += len(entry["excluded"])
-            p = entry["proof"]
-            log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: {entry['config']['kwargs']} "
-                f"warps={entry['config']['num_warps']} stages={entry['config']['num_stages']} — deviation {p['deviation']:.2e} "
-                f"(tol {tol:g}), {p['best_ms']:.4f} ms, {p['accepted']}/{p['candidates']} accepted, "
-                f"{len(entry['excluded'])} excluded, {time.time() - t0:.1f} s "
-                f"(oracle {p['seconds']['oracle']}, runs {p['seconds']['runs']}, bench {p['seconds']['bench']}; "
-                f"{_alloc_state()})")
+            _count_certified(summary, qual, entry, tuner, key, dtype, tol, t0, log)
     summary["seconds"] = round(time.time() - summary["started"], 1)
     return summary
