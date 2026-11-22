@@ -5,7 +5,8 @@ recertification list; one table row per file.
 
 What would this file do if the code were wrong? A file with a key not yet tried replaced -> the first test RED; a
 draft configuration that differs counted re-proven -> the second RED; a failed key dropped silently, not listed, or a
-replacement holding an epoch-less proof, or no table row -> the third RED.
+replacement holding an epoch-less proof, or no table row -> the third RED; a re-chosen unit tile counted re-proven ->
+the unit test RED; a stop during the replacement losing a failed key or truncating the file -> the stop test RED.
 """
 import csv
 import json
@@ -29,9 +30,11 @@ def _cfg(b):
     return {"kwargs": {"BLOCK": b}, "num_warps": 4, "num_stages": 2, "num_ctas": 1, "maxnreg": None}
 
 
-def _proof(epoch=None):
+def _proof(epoch=None, n=1):
+    """A proof of the key (n, 'fp32'): the library's gate refuses a proof whose shape is not its entry's key, and a
+    draft refused for that is never refused for the reason a test means (qa 1227-3: the configuration test was)."""
     p = {"date": "2026-11-01T00:00:00+00:00", "engine_version": "0", "backend": {"triton": "3.8.0", "name": "cuda"},
-         "shape": [1, "fp32"], "deviation": 0.0, "tolerance": 1e-4, "oracle": "fp64",
+         "shape": [n, "fp32"], "deviation": 0.0, "tolerance": 1e-4, "oracle": "fp64",
          "machine": {"device": {"memory_mb": 16384}, "clocks_mhz": {"0": {"graphics": 1290}}},
          "built": {"gpu": True}}
     if epoch is not None:
@@ -58,7 +61,7 @@ def _ledger(draft, rows):
 
 def _setup(tmp_path, draft_entries, ledger_rows):
     shipped = _write(tmp_path / "shipped", {K1: {"config": _cfg(1), "proof": _proof()},
-                                            K2: {"config": _cfg(2), "proof": _proof()}})
+                                            K2: {"config": _cfg(2), "proof": _proof(n=2)}})
     _write(tmp_path / "draft", draft_entries)
     _ledger(tmp_path / "draft", ledger_rows)
     return shipped
@@ -78,10 +81,14 @@ def test_a_file_with_a_key_not_yet_tried_is_not_replaced(tmp_path):
 
 def test_a_draft_configuration_that_differs_is_not_a_reproof(tmp_path):
     shipped = _setup(tmp_path, {K1: {"config": _cfg(9), "proof": _proof(C.BITS_EPOCH)},
-                                K2: {"config": _cfg(2), "proof": _proof(C.BITS_EPOCH)}},
+                                K2: {"config": _cfg(2), "proof": _proof(C.BITS_EPOCH, n=2)}},
                      [(K1, "reproven"), (K2, "reproven")])
     before = shipped.read_bytes()
     assert _run(tmp_path)["replaced"] == [] and shipped.read_bytes() == before
+    # the same draft with the shipped configuration IS a re-proof: the refusal above is the configuration's alone
+    _write(tmp_path / "draft", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)},
+                                K2: {"config": _cfg(2), "proof": _proof(C.BITS_EPOCH, n=2)}})
+    assert _run(tmp_path)["replaced"] == ["nvidia/volta/toy_kernel.fp32.json"]
 
 
 def test_a_draft_unit_tile_that_differs_is_not_a_reproof(tmp_path):

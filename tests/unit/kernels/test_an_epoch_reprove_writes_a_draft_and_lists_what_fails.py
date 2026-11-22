@@ -6,7 +6,8 @@ dropped silently but written to the draft's ledger, for the full recertification
 What would this file do if the code were wrong? A draft at (or inside) the shipped tree accepted -> the first test
 RED; a key already of the epoch, or of the other class, re-proven -> the second RED; a failed key swept (a call with no
 `only_config`) or left out of the ledger, the shipped file written, a draft proof with no epoch, a key the draft holds
-tried again -> the third RED.
+tried again, a re-prove at another tolerance than the profile's -> the third RED; a re-proof that comes back
+with another configuration filed -> the fourth RED.
 """
 import json
 from types import SimpleNamespace
@@ -75,10 +76,11 @@ def test_a_failed_reprove_is_listed_never_swept_and_the_shipped_file_is_not_writ
     monkeypatch.setattr(CF, "_tolerance", lambda *a: 1e-3)
     monkeypatch.setattr(CF, "_num_stages_space", lambda *a: [1])
     monkeypatch.setattr(CF, "_backend", lambda: {"triton": "3.8.0", "name": "cuda"})
-    calls = []
+    calls, tols = [], []
 
     def fake_certify_key(qual, tuner, key, tol, rng, only_config=None, reproven_from=None, **kw):
         calls.append((key, only_config))
+        tols.append(tol)
         if key == (2, "fp32"):
             raise RuntimeError("the stored configuration exceeds the oracle's tolerance")
         p = {**_proof(16384), "deviation": 0.0, "best_ms": 1.0, "accepted": 1, "candidates": 1,
@@ -101,6 +103,7 @@ def test_a_failed_reprove_is_listed_never_swept_and_the_shipped_file_is_not_writ
     loop()
     assert spath.read_bytes() == before                                  # the shipped tree is only read
     assert all(oc is not None for _, oc in calls) and len(calls) == 2    # never a sweep
+    assert tols == [1e-3, 1e-3]                                          # at the profile's tolerance (qa N1)
     doc = json.loads((draft / "nvidia" / "volta" / "toy_kernel.fp32.json").read_text())
     assert list(doc["entries"]) == [C.key_repr((1, "fp32"))]              # the failed key is not filed
     e = doc["entries"][C.key_repr((1, "fp32"))]
@@ -114,3 +117,36 @@ def test_a_failed_reprove_is_listed_never_swept_and_the_shipped_file_is_not_writ
     calls.clear()
     loop()                                                               # resumed: the draft's key is not tried again
     assert [k for k, _ in calls] == [(2, "fp32")]
+
+
+def test_a_reproof_that_comes_back_with_another_configuration_is_failed_never_filed(tmp_path, monkeypatch):
+    """qa 1227-3 (N2): the loop itself checks the re-proven configuration is the stored one."""
+    shipped = tmp_path / "shipped"
+    draft = tmp_path / "draft"
+    _shipped(shipped, {"(1, 'fp32')": {"config": _cfg(1), "proof": _proof(16384)},
+                       "(2, 'fp32')": {"config": _cfg(2), "proof": _proof(16384)}})
+    monkeypatch.setattr(C, "output_dtype", lambda tuner, key: "fp32")
+    monkeypatch.setattr(C, "describe_key", lambda tuner, key: str(key))
+    monkeypatch.setattr(CF, "_tolerance", lambda *a: 1e-3)
+    monkeypatch.setattr(CF, "_num_stages_space", lambda *a: [1])
+    monkeypatch.setattr(CF, "_backend", lambda: {"triton": "3.8.0", "name": "cuda"})
+
+    def fake_certify_key(qual, tuner, key, tol, rng, only_config=None, reproven_from=None, **kw):
+        p = {**_proof(16384), "deviation": 0.0, "best_ms": 1.0, "accepted": 1, "candidates": 1,
+             "seconds": {"oracle": 0, "runs": 0, "bench": 0}, "reproven_from": reproven_from}
+        return {"config": _cfg(7) if key == (2, "fp32") else dict(only_config), "proof": p, "excluded": []}
+    monkeypatch.setattr(CF, "certify_key", fake_certify_key)
+    shapes, stored, _ = CF.stored_epoch_keys("nvidia", "volta", shipped, 16)
+    summary = {"unreachable": 0, "skipped": 0, "failed": 0, "certified": 0, "excluded_configs": 0,
+               "kernels": {}, "started": 0.0}
+    writer = CF._BoundedWriter("nvidia", "volta")
+    try:
+        CF._certify_loop(shapes, {QUAL: SimpleNamespace()}, "nvidia", "volta", draft, None, False, False, False,
+                         {"memory_mb": 16384, "unified": False}, 16, None, 0, None, summary, lambda *a: None,
+                         writer, None, reprove_from=stored, ledger=CF.ReproveLedger(draft / CF.REPROVE_LEDGER))
+    finally:
+        writer.flush_all()
+    doc = json.loads((draft / "nvidia" / "volta" / "toy_kernel.fp32.json").read_text())
+    assert list(doc["entries"]) == [C.key_repr((1, "fp32"))]
+    rows = {r.split("\t")[1]: r.split("\t") for r in (draft / CF.REPROVE_LEDGER).read_text().splitlines()[1:]}
+    assert rows[C.key_repr((2, "fp32"))][3] == "failed" and "not the stored one" in rows[C.key_repr((2, "fp32"))][5]
