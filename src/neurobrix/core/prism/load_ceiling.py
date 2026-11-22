@@ -74,9 +74,9 @@ def _most_that_fits(top: int, fits: Callable) -> int:
 
 def settle(plan, profile, price: Callable, unified_pool_mb: Callable, less_the_system_share: Callable) -> None:
     """Prices `plan`'s host footprint at the ceiling of its reads: `plan.load_ceiling` is `ceiling(...)`, `plan.
-    host_footprint` is `price` at it, and the loaders are told the ceiling (`core.workspace.declare_load_ceiling`), so
-    the reader never grows past what the plan priced."""
-    from neurobrix.core.workspace import declare_load_ceiling
+    host_footprint` is `price` at it. The loaders are told the ceiling only when a plan is ADOPTED (the executor that
+    runs it, at its start and at a re-plan: `core.workspace.adopt_load_ceiling`), never when one is solved: a solve
+    whose plan nothing runs (a serve daemon's probe, a candidate rung) left its ceiling to the next load (1215: the
+    kept width was 16 after a serve and 64 after a run of the same model)."""
     plan.load_ceiling = ceiling(profile, price, unified_pool_mb, less_the_system_share)
     plan.host_footprint = price(plan.load_ceiling)
-    declare_load_ceiling(plan.load_ceiling)

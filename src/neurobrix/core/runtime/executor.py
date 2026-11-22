@@ -81,6 +81,8 @@ class RuntimeExecutor:
         """
         self.pkg = runtime_package
         self.plan = execution_plan
+        from neurobrix.core.workspace import adopt_load_ceiling
+        adopt_load_ceiling(self.plan)          # the loads read at the ceiling of the plan this executor runs
         self.mode = mode
         self.executors: Dict[str, Any] = {}
         self.modules: Dict[str, Any] = {}
@@ -1256,6 +1258,8 @@ class RuntimeExecutor:
             raise RuntimeError(f"{said}; re-planned with it, Prism moves {', '.join(c for c in changed if c in held)}, "
                                f"which holds state between its calls: not rebuilt mid-run — the next run plans with it")
         old_strategy, self.plan, self._strategy_name = self.plan.strategy, new_plan, new_plan.strategy
+        from neurobrix.core.workspace import adopt_load_ceiling
+        adopt_load_ceiling(self.plan)          # the loads again under the new plan read at its ceiling
         for c in changed:
             self.executors[c] = self._build_executor(c)
             self.__dict__.get("_stream_runtime", {}).pop(c, None)      # its stream pieces borrowed the old executor

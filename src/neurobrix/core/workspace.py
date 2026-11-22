@@ -40,6 +40,18 @@ def declare_load_ceiling(n: int) -> None:
     _LOAD_CEILING = n
 
 
+def adopt_load_ceiling(plan) -> None:
+    """The plan an executor runs is the plan in force: its priced reads (`plan.load_ceiling`, Prism step 7.9) become
+    the ceiling the weight reader may grow to. A plan that priced none (0: built before step 7.9) leaves no ceiling,
+    so the reader is bounded by the processors (`load_ceiling`), not by another plan's figure."""
+    global _LOAD_CEILING
+    n = getattr(plan, "load_ceiling", 0)
+    if n:
+        declare_load_ceiling(n)
+    else:
+        _LOAD_CEILING = None
+
+
 def processors() -> int:
     """The processors this process may run on (its affinity where the system states one, else the machine's count): the
     most reads and conversions that can work at once. Refused by name when the system states neither."""
