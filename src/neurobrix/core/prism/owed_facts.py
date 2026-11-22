@@ -53,16 +53,8 @@ def measure_host_facts(hardware_id: Optional[str]) -> List[str]:
     what neither states is measured, once, and kept in the generated profile. Returns the keys written; [] when none is
     owed, on a committed profile or under a census shadow."""
     from neurobrix.core.prism import autodetect as A
-    if not str(hardware_id).startswith("default"):
-        return []
-    try:
-        from neurobrix.kernels import census as _census
-        if _census.active():
-            return []
-    except Exception:  # noqa: BLE001 — no census module: a run
-        pass
-    path = A.HARDWARE_DIR / f"{hardware_id}.yml"
-    if not path.exists():
+    path = A.generated_profile(hardware_id)
+    if path is None:
         return []
     from neurobrix.core.prism.loader import vendor_block
     from neurobrix.core.prism import facts_probe as P
@@ -92,16 +84,8 @@ def measure_reload_rates(hardware_id: Optional[str], engine: str, container_dir=
     which writes the rate with its spread (`note_reload_rate`): measured once, kept. Returns the stored dtypes probed;
     [] when none is owed, on a committed profile or under a census shadow."""
     from neurobrix.core.prism import autodetect as A
-    if not str(hardware_id).startswith("default"):
-        return []
-    try:
-        from neurobrix.kernels import census as _census
-        if _census.active():
-            return []
-    except Exception:  # noqa: BLE001 — no census module: a run
-        pass
-    path = A.HARDWARE_DIR / f"{hardware_id}.yml"
-    if not path.exists():
+    path = A.generated_profile(hardware_id)
+    if path is None:
         return []
     from neurobrix.core.prism.loader import vendor_block
     data = yaml.safe_load(path.read_text()) or {}

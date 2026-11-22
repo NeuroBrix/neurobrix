@@ -2493,6 +2493,22 @@ def stored_major(cache_path, component: str) -> Optional[str]:
 STORED_DTYPES = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
 
 
+def generated_profile(hardware_id: Optional[str]) -> Optional[Path]:
+    """The generated profile (`default-*`) of `hardware_id` that a first-launch or owed measure writes, or None: a
+    committed profile is never written, a census shadow (no card) measures nothing, and no file has nothing to complete
+    — the one guard of `ensure_measured_facts` and of `owed_facts`' measures."""
+    if not str(hardware_id).startswith("default"):
+        return None
+    try:
+        from neurobrix.kernels import census as _census
+        if _census.active():
+            return None
+    except Exception:  # noqa: BLE001 — no census module: a run
+        pass
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    return path if path.exists() else None
+
+
 def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, container_dir=None) -> dict:
     """Measure, ONCE, on a GENERATED profile (`default-*`), the device and host facts Prism's time estimate reads that
     neither the profile nor its architecture's tracked vendor file states (the quick probe), and write them with their
@@ -2500,16 +2516,8 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     (`note_loader_rate`) — until then Prism ranks without an estimate and says so (the supervisor's decision S2,
     2026-10-27 23:00). A committed profile is never written; a census shadow (no card) measures nothing. Returns what
     was added; with `container_dir` (the requested model's), only the reload rates of its own stored dtypes."""
-    if not str(hardware_id).startswith("default"):
-        return {}
-    try:
-        from neurobrix.kernels import census as _census
-        if _census.active():
-            return {}
-    except Exception:  # noqa: BLE001 — no census module: a run
-        pass
-    path = HARDWARE_DIR / f"{hardware_id}.yml"
-    if not path.exists():
+    path = generated_profile(hardware_id)
+    if path is None:
         return {}
     from neurobrix.core.prism.loader import vendor_block
     from neurobrix.core.prism import facts_probe as P

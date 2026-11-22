@@ -2941,10 +2941,7 @@ class PrismSolver:
         ranked = order_candidates(candidates, {})
         self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str,
                                                     component_memory=component_memory, devices=devices)
-        if self._time_estimates:
-            ranked = order_candidates(candidates, self._time_estimates)
-        else:
-            ranked = order_candidates(candidates, {})
+        ranked = order_candidates(candidates, self._time_estimates)
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
         self._rejected = []
         self._state_policy = None
