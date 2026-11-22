@@ -331,6 +331,17 @@ class WeightLoader:
             return str(self._cache_path / rel_path)
         return f"{self.nbx_path}!{rel_path}"
 
+    def _read_source(self, rel_path: Optional[str]) -> Optional[Path]:
+        """The file on disk a read of the container file `rel_path` reads: the extracted cache's file, else the
+        archive itself; None for no file. What the weight reader keys its kept width on (`kept_launch_facts.read_key`
+        stats it): a container-relative name resolves against no directory (every first launch ended rc 1 on
+        `os.stat('components/model/weights/shard_000.safetensors')` in its reload probe, 2026-11-22)."""
+        if rel_path is None:
+            return None
+        if self.use_cache and self._cache_path:
+            return self._cache_path / rel_path
+        return self.nbx_path
+
     def _weights_prefix(self, component_name: str) -> str:
         """The container directory holding this component's shards — where they are, else
         where the index's shards are expected (`components/<c>/weights/`)."""
@@ -436,7 +447,7 @@ class WeightLoader:
         weights = {}
 
         # The shards read by the process's weight reader: its parallel reads grow by their own measure on this load
-        for block_weights in _weight_reader(weight_files[0] if weight_files else None).map(
+        for block_weights in _weight_reader(self._read_source(weight_files[0] if weight_files else None)).map(
                 lambda wf: self._load_weight_file(wf, device, dtype),
                                                   weight_files, self._stored_bytes):
             weights.update(block_weights)
@@ -618,7 +629,7 @@ class WeightLoader:
 
             return results
 
-        for pairs in _weight_reader(min(weight_files) if weight_files else None).map(
+        for pairs in _weight_reader(self._read_source(min(weight_files) if weight_files else None)).map(
                 _load_one_fgp_file, sorted(weight_files), self._stored_bytes):
             for key, tensor in pairs:
                 weights[key] = tensor
@@ -700,7 +711,7 @@ class WeightLoader:
             shard_items.append((actual_path, device))
 
         # === Read every file of the map, each onto its device, by the process's weight reader ===
-        for block_weights in _weight_reader(shard_items[0][0] if shard_items else None).map(
+        for block_weights in _weight_reader(self._read_source(shard_items[0][0] if shard_items else None)).map(
                 lambda item: self._load_weight_file(item[0], item[1], dtype),
                                                   shard_items, lambda item: self._stored_bytes(item[0])):
             weights.update(block_weights)
