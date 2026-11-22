@@ -984,6 +984,27 @@ def _phase(label: str) -> None:
     _log.debug(f"[phase] {_t.strftime('%H:%M:%S')} {label}: rss_now={now/2**20:.0f}MiB peak_rss={peak/2**20:.0f}MiB")
 
 
+def keep_ruled_unit(state: Dict[str, Any], runs: list, units: list, fma_ms: float, what: str) -> None:
+    """The matrix unit's tile an entry names, BY THE RULE (library `autotune_certified.ruled_unit_tile`): which unit
+    runs a launch is never a timing. `runs` (`H.unit_runs`) is not empty exactly where the rule gives the launch to
+    the unit (`launch_keys.matrix_unit_operands` at the drawn rows), one run per tile the profile declares; `units`
+    are those proven against the oracle, timed ((tile, deviation, ms), `sweep_units`). The entry then names the
+    fastest proven tile — the timing chooses only among the declared tiles — so the runtime serves it and refuses
+    nothing. A ruled launch none of whose tiles proves is refused: an entry naming the FMA kernel would be refused at
+    run time. `config` (the FMA sweep) stays in the entry: the directory's format requires it
+    (`autotune_certified` files `cert["config"]`), and the rows of the same key the rule leaves to the FMA kernel (a
+    bucket the unit takes only from its tile's rows up) run it."""
+    if not runs:
+        return
+    if not units:
+        raise RuntimeError(f"{what}: the rule gives this launch to the matrix unit, and none of the profile's "
+                           f"{len(runs)} unit tile(s) proved against the oracle (excluded or unrun: see the entry)")
+    utile, udev, ums = min(units, key=lambda t: t[2])
+    state["unit_measured"] = {"tiles": [{"tile": t, "deviation": d, "ms": m} for t, d, m in units],
+                              "fma_best_ms": fma_ms, "chosen": "unit", "by": "rule"}
+    state["unit"] = {"tile": utile, "deviation": udev, "best_ms": ums, "fma_best_ms": fma_ms}
+
+
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                 card_bytes: Optional[int] = None, unified: bool = False,
                 num_stages: Optional[Tuple[int, ...]] = None, budget_bytes: Optional[int] = None,
@@ -1132,16 +1153,11 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                            key=lambda t: t[2])
         state["t_bench"] = round(time.time() - t_bench, 3)
         best, dev, ms = timed[0]
-        # THE MATRIX UNIT, a candidate beside the FMA configurations (the list of what remains 1.8, the owner's rule
-        # 2026-11-03 17:48): a GEMM the unit can take is run at each of the profile's unit tiles, proven against the
-        # same oracle and timed with the same bench; the faster route is the one the runtime serves.
-        units = launch.sweep_units(H.unit_runs(tuner, args, kwargs), oracle, tolerance, bench, excluded, unrun)
-        if units:
-            utile, udev, ums = min(units, key=lambda t: t[2])
-            state["unit_measured"] = {"tiles": [{"tile": t, "deviation": d, "ms": m} for t, d, m in units],
-                                      "fma_best_ms": ms, "chosen": "unit" if ums < ms else "fma"}
-            if ums < ms:
-                state["unit"] = {"tile": utile, "deviation": udev, "best_ms": ums, "fma_best_ms": ms}
+        # THE MATRIX UNIT, BY THE RULE (`keep_ruled_unit`): a launch the rule gives to the unit names the fastest of
+        # the profile's declared unit tiles proven here, whatever the FMA configurations time.
+        runs = H.unit_runs(tuner, args, kwargs)
+        keep_ruled_unit(state, runs, launch.sweep_units(runs, oracle, tolerance, bench, excluded, unrun), ms,
+                        f"{qual} at {key!r}")
         state.update({"config": H.config_dict(best), "deviation": dev, "best_ms": ms,
                       "second_ms": timed[1][2] if len(timed) > 1 else None,
                       "candidates": len(configs), "accepted": len(results), "benched": len(contenders),
