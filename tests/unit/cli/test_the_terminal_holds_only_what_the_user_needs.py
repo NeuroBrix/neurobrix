@@ -228,9 +228,15 @@ def _one_card() -> bool:
         return False
 
 
-def _installed(model: str) -> bool:
+def _installed(entry: str):
+    """The name a user calls the installed cache entry `entry` by — its recorded hub name (name.json), else its
+    directory name (installed before 0.6.3) — or None when it is not installed. Since f59229add a recorded entry asked
+    by its directory name is refused, so the run is launched by the name the engine itself reads (`names.name_of`)."""
     from neurobrix.core.paths import cache_dir
-    return (cache_dir() / model / "manifest.json").exists()
+    from neurobrix.nbx.names import name_of
+    if not (cache_dir() / entry / "manifest.json").exists():
+        return None
+    return name_of(cache_dir(), entry)
 
 
 card = pytest.mark.skipif(not _one_card(), reason="needs exactly one visible card (CUDA_VISIBLE_DEVICES=<n>)")
@@ -248,9 +254,9 @@ def _status_only(err, where):
 @card
 @pytest.mark.parametrize("engine", ENGINES)
 def test_an_llm_run_prints_its_text_only(engine):
-    model = "TinyLlama-1.1B-Chat-v1.0"
-    if not _installed(model):
-        pytest.skip(f"{model} is not installed")
+    model = _installed("TinyLlama-1.1B-Chat-v1.0")
+    if model is None:
+        pytest.skip("TinyLlama-1.1B-Chat-v1.0 is not installed")
     p, out, err = _neurobrix("run", "--model", model, "--prompt", "What is the capital of France?",
                              "--max-tokens", "32", *engine)
     assert p.returncode == 0, err[-20:]
@@ -262,9 +268,9 @@ def test_an_llm_run_prints_its_text_only(engine):
 @card
 @pytest.mark.parametrize("engine", ENGINES)
 def test_an_image_run_prints_its_saved_path_only(engine, tmp_path):
-    model = "Sana_1600M_1024px_MultiLing"
-    if not _installed(model):
-        pytest.skip(f"{model} is not installed")
+    model = _installed("Sana_1600M_1024px_MultiLing")
+    if model is None:
+        pytest.skip("Sana_1600M_1024px_MultiLing is not installed")
     dest = tmp_path / "apple.png"
     p, out, err = _neurobrix("run", "--model", model, "--prompt", "a red apple on a wooden table", "--steps", "8",
                              "--height", "512", "--width", "512", "--seed", "42", "--output", str(dest), *engine)
@@ -276,9 +282,9 @@ def test_an_image_run_prints_its_saved_path_only(engine, tmp_path):
 @card
 @pytest.mark.parametrize("engine", ENGINES)
 def test_a_transcription_prints_its_text_only(engine):
-    model = "whisper-large-v3-turbo"
-    if not _installed(model):
-        pytest.skip(f"{model} is not installed")
+    model = _installed("whisper-large-v3-turbo")
+    if model is None:
+        pytest.skip("whisper-large-v3-turbo is not installed")
     p, out, err = _neurobrix("run", "--model", model, "--audio", str(ASSET_WAV), *engine)
     assert p.returncode == 0, err[-20:]
     assert len(out) == 1 and "slushy country roads" in out[0], out
@@ -287,9 +293,9 @@ def test_a_transcription_prints_its_text_only(engine):
 
 @card
 def test_the_plan_as_json_is_one_line_and_nothing_else():
-    model = "TinyLlama-1.1B-Chat-v1.0"
-    if not _installed(model):
-        pytest.skip(f"{model} is not installed")
+    model = _installed("TinyLlama-1.1B-Chat-v1.0")
+    if model is None:
+        pytest.skip("TinyLlama-1.1B-Chat-v1.0 is not installed")
     p, out, err = _neurobrix("run", "--model", model, "--prompt", "What is the capital of France?",
                              "--max-tokens", "32", "--explain-plan", "--json")
     assert p.returncode == 0, err[-20:]
@@ -300,9 +306,9 @@ def test_the_plan_as_json_is_one_line_and_nothing_else():
 
 @card
 def test_verbose_restores_the_developer_lines_the_gate_reads():
-    model = "TinyLlama-1.1B-Chat-v1.0"
-    if not _installed(model):
-        pytest.skip(f"{model} is not installed")
+    model = _installed("TinyLlama-1.1B-Chat-v1.0")
+    if model is None:
+        pytest.skip("TinyLlama-1.1B-Chat-v1.0 is not installed")
     p, out, err = _neurobrix("run", "--model", model, "--prompt", "What is the capital of France?",
                              "--max-tokens", "8", "--triton", env=_env(NBX_LOG="debug"))
     assert p.returncode == 0, err[-20:]
@@ -325,9 +331,9 @@ def test_doctor_says_the_engines_and_the_verdict():
 
 @card
 def test_serve_chat_and_stop_say_one_line_each(tmp_path):
-    model = "TinyLlama-1.1B-Chat-v1.0"
-    if not _installed(model):
-        pytest.skip(f"{model} is not installed")
+    model = _installed("TinyLlama-1.1B-Chat-v1.0")
+    if model is None:
+        pytest.skip("TinyLlama-1.1B-Chat-v1.0 is not installed")
     from neurobrix.core.paths import cache_dir, engine_home
     home = tmp_path / "home"
     (home / "hardware").mkdir(parents=True)

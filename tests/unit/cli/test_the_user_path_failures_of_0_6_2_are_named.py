@@ -88,12 +88,14 @@ main()
 def test_a_missing_c_compiler_is_one_line_with_its_remedy(tmp_path):
     pytest.importorskip("torch")
     from neurobrix.core.paths import cache_dir
-    model = "TinyLlama-1.1B-Chat-v1.0"
-    if not (cache_dir() / model / "manifest.json").exists():
-        pytest.skip(f"{model} is not installed")
+    from neurobrix.nbx.names import name_of
+    entry = "TinyLlama-1.1B-Chat-v1.0"
+    if not (cache_dir() / entry / "manifest.json").exists():
+        pytest.skip(f"{entry} is not installed")
+    model = name_of(cache_dir(), entry)     # the name the user calls it by: a recorded entry refuses its directory name
     driver = tmp_path / "no_cc_run.py"
     driver.write_text(_NO_CC_RUN)
-    p = subprocess.run([PY, str(driver), model, str(cache_dir() / model)], capture_output=True, text=True,
+    p = subprocess.run([PY, str(driver), model, str(cache_dir() / entry)], capture_output=True, text=True,
                        env=_env(), timeout=900, cwd=str(tmp_path))
     err = p.stderr.splitlines()
     assert p.returncode == 1 and not p.stdout.strip(), (p.stdout[-2000:], p.stderr[-2000:])
