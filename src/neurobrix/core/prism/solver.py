@@ -8136,6 +8136,11 @@ class PrismSolver:
         from neurobrix.core.prism import autodetect
         from neurobrix.core.prism import time_estimate as TE
         hw, engine = autodetect.ACTIVE_HARDWARE_ID, engine_of(getattr(self, "_mode", "compiled"))
+        # only the candidates the estimate can decide between: the best physical rank present (`order_candidates`
+        # orders by rank first, the time only inside a rank) — a streamed or host-placed candidate behind a plan of a
+        # better rank is never chosen by its time, and owes no measure (every LLM that fits its card is also streamable)
+        best = min((STRATEGY_RANK.get(n, 9) for _s, n, _a, _d in ranked), default=None)
+        ranked = [c for c in ranked if STRATEGY_RANK.get(c[1], 9) == best]
         measured = False
         if any(n in TE.STREAM_EVERY_USE and n not in TE.HOST_HELD for _s, n, _a, _d in ranked):
             measured |= bool(autodetect.measure_reload_rates(hw, engine, getattr(container, "cache_path", None)))

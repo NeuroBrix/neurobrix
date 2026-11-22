@@ -54,7 +54,9 @@ def test_the_first_launch_reloads_nothing(home):
 
 
 @pytest.mark.parametrize("ranked, owed", [((("lazy_sequential", {}),), False), ((("single_gpu", {}),), False),
-                                          ((("single_gpu", {}), ("layer_streaming", {})), True)])
+                                          # a streamed candidate the time decides (its rank is the best present;
+                                          # behind a resident plan it owes nothing: test_a_measure_is_owed_only_...)
+                                          ((("lazy_sequential", {}), ("layer_streaming", {})), True)])
 def test_the_probe_runs_when_a_streamed_candidate_is_priced(home, monkeypatch, ranked, owed):
     container, probed = home
     import neurobrix.core.prism.loader as L
