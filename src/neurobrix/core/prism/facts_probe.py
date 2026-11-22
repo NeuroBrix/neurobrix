@@ -257,6 +257,20 @@ def card_facts_in_a_child(index: int) -> dict:
     return json.loads(said[-1]) if out.returncode == 0 and said else {}
 
 
+def card_facts_reader(devices):
+    """The reader of the runtime's card facts at a first launch (reset 22/11 point 1: a read, never a measure): THIS
+    process's own reading (`autodetect.runtime_card_facts`) when it sees ONE card and the profile names one — its launch
+    opens its context there whatever the plan names, so the read costs no child and no second context — else `card_facts_in_a_child`, one short
+    process per card model that sees that card alone (no context on a card the plan may not name)."""
+    from nbxtensor import device as _dev
+    from neurobrix.core.prism import autodetect as A
+    try:
+        one = _dev.count() == 1 and len(devices) == 1
+    except _dev.NoGpuRuntime:   # no runtime here: the child answers {} as before, the shadow refuses by name
+        one = False
+    return A.runtime_card_facts if one else card_facts_in_a_child
+
+
 def complete_runtime_card_facts(devices, measure) -> dict:
     """The runtime's total and its own context on each card of a GENERATED profile that states neither
     (written at generation since 2026-10-27): measured now by `measure(index)` — `card_facts_in_a_child`: autodetect's own reading in its own process, {}

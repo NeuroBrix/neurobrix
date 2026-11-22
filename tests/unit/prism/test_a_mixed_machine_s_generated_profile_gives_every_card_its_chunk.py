@@ -32,6 +32,7 @@ def hw(tmp_path, monkeypatch):
     monkeypatch.setattr(H, "host_matmul_gflops", lambda *a, **k: 300.0)
     monkeypatch.setattr(H, "host_memory_gbps", lambda *a, **k: 20.0)
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: {})
+    monkeypatch.setattr("nbxtensor.device.count", lambda: 2)   # several cards seen: the child reads them
     return tmp_path, probed
 
 

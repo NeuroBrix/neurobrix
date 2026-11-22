@@ -2572,7 +2572,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
     # written BEFORE any child probe reads the profile: on a clean machine the first child refused the vmm_chunk_bytes
     # measured above and not yet written (the stable's install test, 2026-11-05)
-    added.update(P.complete_runtime_card_facts(devices, P.card_facts_in_a_child))
+    added.update(P.complete_runtime_card_facts(devices, P.card_facts_reader(devices)))
     # another card model's chunk swept here is written too, when nothing else was measured (it rode on the host
     # facts' write until those left the first launch)
     if added or chunks:

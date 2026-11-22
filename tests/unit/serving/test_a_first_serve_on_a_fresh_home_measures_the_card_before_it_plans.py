@@ -36,6 +36,7 @@ def fresh_home(tmp_path, monkeypatch):
     monkeypatch.setattr(L, "GENERATED_DIR", hw)
     read = []
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: read.append(index) or dict(DELL))
+    monkeypatch.setattr("nbxtensor.device.count", lambda: 2)   # several cards seen: the child reads them
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
     measured = {"source": "measured at generation", "matmul_tflops": {"float16": 100.0}, "h2d_gbps": 12.0,
                 "d2h_gbps": 12.0, "d2d_gbps": 800.0, "vmm_chunk_bytes": 2 << 20,
