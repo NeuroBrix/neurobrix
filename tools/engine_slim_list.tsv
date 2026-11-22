@@ -4,7 +4,7 @@
 # the test prints the current count against it and never fails on it.
 # nbxtensor: 0.1.11
 # engine_lines: 83402
-# findings: 168
+# findings: 167
 kind	path	symbol	why it stays
 dead	src/neurobrix/cli/commands/registry.py	installing_path	a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else
 dead	src/neurobrix/core/module/autoregressive/generator.py	AutoregressiveGenerator.num_generated	a test seam: read by tests/unit/serving/test_both_engines_read_the_stop_at_their_token_seam.py, nothing else
@@ -44,7 +44,6 @@ duplicate	src/neurobrix/triton/scheduler/unipc_multistep.py	_init_step_index	the
 fact	src/neurobrix/core/dtype/config.py	parse_dtype	the PyTorch branch's reader: it hands a torch.dtype (the library hands NBXDtype, never torch) and applies the engine's half remap under the compute dtype Prism chose — the remap is the engine's decision
 fact	src/neurobrix/core/dtype/engine.py	storage_dtype	the DtypeEngine's torch.dtype face of the library's rule (`nbxtensor.dtype.itemsize.storage_dtype`), with the device's fp64 fact this engine holds: the rule is the library's, the torch dtype is the PyTorch branch's
 fact	src/neurobrix/core/memory/manager.py	release_flow_memory	the compiled engine's own release: torch's device sync and cache flush (device_utils) on the flow's device; nbxtensor's syncs and empties the DeviceAllocator pool (no torch, R33) — the same discipline, two allocators
-fact	src/neurobrix/core/prism/facts_probe.py	vmm_chunk_bytes	the first-launch chunk sweep, kept until the engine reads nbxtensor.memory.chunk_rule instead (release item: first launch read, not measured; the fact page comes before the code)
 fact	src/neurobrix/core/prism/plan_advice.py	what_would_have_fit	a name collision: the plan's advice over its component verdicts, where the library's answers an allocator refusal — two facts, one name
 fact	src/neurobrix/core/prism/runtime_widths.py	_aligned	a name collision: whether an op's operands are dtype-aligned as its wrapper launches them, where the library's rounds a byte count to an alignment
 fact	src/neurobrix/core/prism/structure.py	memory_gb	a name collision: a profile device's raw memory in GB, where the library's is the rounded memory class a certified entry is keyed by
