@@ -76,3 +76,14 @@ def test_one_child_of_the_asked_engine_alone(monkeypatch):
     assert A._measure_runtime_base_mb("triton") == 90
     (argv,), = [run]
     assert A._BASE_PROBES["triton"] in argv[-1] and "import torch" not in argv[-1]
+
+
+def test_a_second_sibling_s_measure_is_taken_when_the_first_lacks_this_engine(hw):
+    """The siblings are read in order (`other_card_models.sibling_profiles`): the first measured the other engine only,
+    the second this one — the second's is taken, and no child runs (qa 1231-3)."""
+    d, measured = hw
+    _profile(d, "default-a", {"model": "x", "runtime_base_mb": {"triton": 91}})
+    _profile(d, "default-b", {"model": "x", "runtime_base_mb": {"compiled": 777}})
+    _profile(d, "default-z", {"model": "x"})
+    A.ensure_measured_facts("default-z", "compiled")
+    assert measured == [] and _base(d, "default-z")["compiled"] == 777
