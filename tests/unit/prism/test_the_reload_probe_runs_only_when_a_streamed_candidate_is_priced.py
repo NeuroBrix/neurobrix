@@ -62,7 +62,7 @@ def test_the_probe_runs_when_a_streamed_candidate_is_priced(home, monkeypatch, r
     import neurobrix.core.prism.loader as L
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")
     monkeypatch.setattr(L, "load_profile", lambda hw: NS(host_measured={"weight_reload_gbps": {"compiled": {"BF16": 1.0}}}))
-    profile = NS(host_measured=None)
+    profile = NS(host_measured=None, devices=[NS(measured={"memory_gbps": 900.0})])   # the facts a timed plan has
     OF.measure_owed("compiled", [(0.0, n, a, None) for n, a in ranked],
                                     NS(cache_path=str(container)), profile)
     assert probed == ([("lm", "default-abc", "compiled")] if owed else [])

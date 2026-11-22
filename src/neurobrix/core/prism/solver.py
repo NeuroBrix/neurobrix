@@ -2938,9 +2938,12 @@ class PrismSolver:
 
         # Sort candidates by rank (the physical order), then by the measured time inside the rank (the estimate,
         # when the profile carries measured facts), then by score — docs/design/prism-fastest-plan-that-fits.md §2b.
-        ranked = order_candidates(candidates, {})
-        self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str,
-                                                    component_memory=component_memory, devices=devices)
+        def _priced(group):
+            """`group` timed (`_estimate_times`), once what its best rank owes is measured (`owed_facts.measure_owed`)."""
+            OF.measure_owed(getattr(self, "_mode", "compiled"), group, container, profile)
+            return self._estimate_times(group, container, input_config, profile, target_dtype_str,
+                                        component_memory=component_memory, devices=devices)
+        self._time_estimates = _priced(order_candidates(candidates, {}))
         ranked = order_candidates(candidates, self._time_estimates)
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
         self._rejected = []
@@ -2954,7 +2957,8 @@ class PrismSolver:
         kv_cache_plan = None
         chosen_devices = None
 
-        for best in ranked:
+        # a rank reached once every better candidate is turned down is measured and timed before it is ordered
+        for best in OF.each_rank_priced(ranked, _priced, self._time_estimates):
             score, strat_name, strat_allocs, strat_devices = best
             _kv_only, self._kv_card_left, kv_growth_reserve = None, None, 0
 
@@ -8023,7 +8027,6 @@ class PrismSolver:
         from neurobrix.core.prism.work import component_work
         if not any(getattr(d, "measured", None) for d in profile.devices):
             return {}
-        OF.measure_owed(getattr(self, "_mode", "compiled"), ranked, container, profile)
         plan_devices = devices          # the planner's device objects (the residency's), before the facts below
         devices = {}
         for d in profile.devices:

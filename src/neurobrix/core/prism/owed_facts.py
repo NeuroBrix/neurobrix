@@ -30,6 +30,8 @@ def measure_owed(mode, ranked, container, profile) -> None:
     from neurobrix.core.prism.host_footprint import engine_of
     from neurobrix.core.prism.solver import STRATEGY_RANK
     from neurobrix.core.prism import time_estimate as TE
+    if not any(getattr(d, "measured", None) for d in profile.devices):
+        return                  # no measured device facts: no candidate is timed, none owes a measure
     hw, engine = autodetect.ACTIVE_HARDWARE_ID, engine_of(mode)
     # only the candidates the estimate can decide between: the best physical rank present (`order_candidates`
     # orders by rank first, the time only inside a rank) — a streamed or host-placed candidate behind a plan of a
@@ -44,6 +46,22 @@ def measure_owed(mode, ranked, container, profile) -> None:
     if measured:
         from neurobrix.core.prism.loader import load_profile
         profile.host_measured = load_profile(hw).host_measured
+
+
+def each_rank_priced(ranked, priced, estimates):
+    """`ranked` (rank by rank, `order_candidates`) yielded in order, except that a rank the selection reaches after the
+    best one is priced before it is ordered: what that rank owes is measured and its candidates timed (`priced(group)`,
+    taken into `estimates`). The best rank was measured before the first estimate (`measure_owed` measures the best
+    rank present only); when the selection turns every candidate of it down (its host side declined, the arena door, a
+    KV cache that does not fit), the streamed or host-placed plan that wins is ordered by its measured time, never by
+    the figure taken before its facts existed (qa 1231-2). A rank never reached is never measured."""
+    from neurobrix.core.prism.solver import STRATEGY_RANK, order_candidates
+    for i, rank in enumerate(dict.fromkeys(STRATEGY_RANK.get(c[1], 9) for c in ranked)):
+        group = [c for c in ranked if STRATEGY_RANK.get(c[1], 9) == rank]
+        if i:
+            estimates.update(priced(group))
+            group = order_candidates(group, estimates)
+        yield from group
 
 
 def measure_host_facts(hardware_id: Optional[str]) -> List[str]:

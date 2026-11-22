@@ -52,7 +52,7 @@ def test_the_first_launch_measures_no_host_fact(home):
 
 def test_the_host_is_measured_when_a_host_placed_candidate_is_priced_once(home):
     d, calls = home
-    profile = NS(host_measured=None)
+    profile = NS(host_measured=None, devices=[NS(measured={"memory_gbps": 900.0})])   # the facts a timed plan has
     solver = NS(_mode="compiled")
     OF.measure_owed(solver._mode, [(0.0, "single_gpu", {"lm": "cuda:0"}, None)], NS(cache_path=None), profile)
     assert calls == [] and profile.host_measured is None

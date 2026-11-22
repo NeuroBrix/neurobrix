@@ -30,7 +30,7 @@ def asked(monkeypatch):
 
 def _owed(ranked):
     OF.measure_owed("compiled", [(0.0, n, a, None) for n, a in ranked],
-                                    NS(cache_path="/x"), NS(host_measured=None))
+                                    NS(cache_path="/x"), NS(host_measured=None, devices=[NS(measured={"memory_gbps": 900.0})]))
 
 
 def test_a_streamed_or_host_placed_candidate_behind_a_better_rank_owes_nothing(asked):
