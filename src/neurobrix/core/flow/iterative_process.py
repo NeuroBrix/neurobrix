@@ -396,7 +396,14 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         driver = self.ctx.modules[driver_name]
 
         # Get control variables
-        num_steps = self.ctx.variable_resolver.get("global.num_inference_steps")
+        try:
+            num_steps = self.ctx.variable_resolver.get("global.num_inference_steps")
+        except KeyError:
+            from neurobrix.core.runtime_values import MissingRuntimeValue
+            raise MissingRuntimeValue(
+                f"'num_inference_steps' is required to run this model and nothing declares it: container "
+                f"{self.ctx.pkg.manifest.get('model_name') or '?'!r} has none in runtime/defaults.json and the "
+                f"request names none. Declare it in the container, or pass it with the request.") from None
 
         # Get state variable key from topology
         loop_def = self.ctx.pkg.topology.get("flow", {}).get("loop", {})

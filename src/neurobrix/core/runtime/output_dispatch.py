@@ -475,7 +475,16 @@ def save_video(
     output_range = pkg.defaults.get("output_range", output_cfg.get("output_range", [-1.0, 1.0]))
     batch_axis = output_cfg.get("batch_axis", 0)
     layout = output_cfg.get("layout", "CTHW")
-    fps = pkg.defaults.get("fps", output_cfg.get("fps", 24))
+    # The frame rate is the model's: the request's (`--fps`), else the container's; the family file holds none, and a
+    # container that declares none is refused by name here, where the file is written.
+    from neurobrix.core.runtime_values import resolve as _resolve_runtime
+    _asked_fps = (executor.variable_resolver.resolved.get("global.fps")
+                  if getattr(executor, "variable_resolver", None) is not None else None)
+    fps = _resolve_runtime(
+        "fps", container=pkg.defaults,
+        extra=[("request --fps", _asked_fps)],
+        why=f"It sets the frame rate of the {family} video written for container "
+            f"{pkg.manifest.get('model_name') or '?'!r}.")
 
     processor = OutputProcessor.from_package(pkg)
     tensor = final_as_array(final, batch_axis)

@@ -8,11 +8,10 @@ output_processing:
   batch_axis: 0              # Batch at dimension 0
   valid_channels: [3]        # RGB video (no alpha typically)
   bit_depth: 8               # 8-bit output per channel
-  fps: 24                    # Default frame rate
   output_range: [-1.0, 1.0]  # Model output range
   output_format: "mp4"       # Default output file format
 
-# Model values (frame count, steps, guidance scale) are the CONTAINER's: the build embeds them in
+# Model values (frame count, steps, guidance scale, frame rate) are the CONTAINER's: the build embeds them in
 # runtime/defaults.json. The family never supplies one (a family default planned 16 frames for a
 # container that declared none).
 defaults:
@@ -20,7 +19,7 @@ defaults:
 
 # Values a video container MUST declare: the run refuses by name when the request and the container
 # both leave one out (`request_input_config`), instead of planning on an invented one.
-required_container_values: ["num_frames"]
+required_container_values: ["num_frames", "num_inference_steps", "guidance_scale", "fps"]
 
 execution:
   flow_type: "iterative_process"

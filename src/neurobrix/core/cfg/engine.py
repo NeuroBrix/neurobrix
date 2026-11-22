@@ -122,7 +122,12 @@ class CFGEngine(CFGSteps):
         guidance_scale, cfg_threshold = guidance_cascade(
             family, ctx.pkg.topology, ctx.pkg.defaults, {"global.guidance_scale": cli})
         if guidance_scale is None:
-            raise KeyError("guidance_scale")
+            from neurobrix.core.runtime_values import MissingRuntimeValue
+            raise MissingRuntimeValue(
+                f"'guidance_scale' is required to run this model and nothing declares it: container "
+                f"{ctx.pkg.manifest.get('model_name') or '?'!r} (family {family!r}) has none in runtime/defaults.json, "
+                f"the topology's extracted values or the request. Declare it in the container, or pass it with "
+                f"the request.")
 
         do_cfg = guidance_scale > cfg_threshold
 

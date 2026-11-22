@@ -36,6 +36,10 @@ def _rt(name, args, container, family, **kw):
                             family=family, **kw)
 
 
+# The request flag that carries a container value, where the flag is not spelled as the value
+# (`--steps` for `num_inference_steps`, `--cfg` for `guidance_scale`).
+_REQUEST_FLAG = {"num_inference_steps": "steps", "guidance_scale": "cfg"}
+
 log = logging.getLogger(__name__)      # INFO: the engine and the time; DEBUG: the plan, the gate's lines; result: stdout
 
 
@@ -344,14 +348,20 @@ def request_input_config(args, manifest: dict, family, cache_path):
     vae_scale = _rt("vae_scale_factor", args, cached_defaults, _fam_defaults,
                     extra=[("the container's own VAE scale", _vsf(manifest, cached_defaults, _topo_components))],
                     default=None)
-    # The frame count is a MODEL value: the request or the container, never the family file. A family that lists it
-    # under `required_container_values` (video) refuses by name when neither declares it; any other family has no
-    # temporal axis, and absent is its answer.
+    # A MODEL value is the request's or the container's, never the family file. Every key a family lists under
+    # `required_container_values` (video: the frame count, the steps, the guidance scale, the frame rate) is resolved
+    # here: the run refuses by name, the container named, when neither the request nor the container declares it.
+    # Any other family has no temporal axis, and absent is its answer for the frame count.
     from neurobrix.core.config import get_family_config as _get_family_config
     _required = (_get_family_config(family).get("required_container_values") or []) if family else []
-    num_frames = _rt("num_frames", args, cached_defaults, None,
-                     **({"why": f"The {family} family requires its container to declare the frame count."}
-                        if "num_frames" in _required else {"default": None}))
+    _container_name = (manifest or {}).get("model_name") or cache_path.name
+    for _key in _required:
+        _flag = _REQUEST_FLAG.get(_key, _key)
+        _rt(_key, args, cached_defaults, None,
+            extra=[(f"request.{_flag}", getattr(args, _flag, None))] if _flag != _key else (),
+            why=(f"The {family} family requires its container to declare it (required_container_values), and the "
+                 f"container {_container_name!r} ({cache_path}) does not."))
+    num_frames = _rt("num_frames", args, cached_defaults, None, default=None)
     temporal_compression = _rt("temporal_compression_ratio", args, cached_defaults,
                                _fam_defaults, default=None)
 
