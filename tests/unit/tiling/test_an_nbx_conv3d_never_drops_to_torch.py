@@ -3,7 +3,13 @@ there is raised, never answered by the torch path below it (`tiling_engine.conv3
 fell through to F.conv3d on the NBXTensor — a silent fallback, and torch on the Triton branch).
 
 What this test would do if the code were wrong: the ImportError swallowed — the torch path runs (or fails with a
-torch error) instead of the import error (red). No card: the NBXTensor stays on the host."""
+torch error) instead of the import error (red). The NBXTensors are allocated on the device (`from_numpy`): with no card
+the test is a skip (tests/_no_device.py).
+
+The import is blocked in BOTH places `from nbxtensor.ops import conv_wrappers` reads: the module table AND the package
+attribute. Python takes the attribute first when it exists, so a None in sys.modules alone did not block the import
+once an earlier test of the battery had imported the module, and the test passed alone and failed in the battery
+(`DID NOT RAISE ImportError`, the 2026-11-22 unit run)."""
 import sys
 
 import numpy as np
@@ -15,6 +21,8 @@ def test_a_failing_triton_import_is_raised_not_answered_by_torch(monkeypatch):
     from neurobrix.core.module import tiling_engine as TE
     x = NBXTensor.from_numpy(np.zeros((1, 2, 3, 4, 4), dtype=np.float32))
     w = NBXTensor.from_numpy(np.zeros((2, 2, 1, 1, 1), dtype=np.float32))
-    monkeypatch.setitem(sys.modules, "nbxtensor.ops.conv_wrappers", None)      # its import now fails
+    import nbxtensor.ops
+    monkeypatch.setitem(sys.modules, "nbxtensor.ops.conv_wrappers", None)      # its import now fails ...
+    monkeypatch.delattr(nbxtensor.ops, "conv_wrappers", raising=False)        # ... whatever was imported before
     with pytest.raises(ImportError):
         TE.conv3d_chunked(x, w)
