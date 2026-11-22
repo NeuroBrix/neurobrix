@@ -107,6 +107,16 @@ def _take_host_facts(data, name, sibling, took) -> None:
     for k, v in theirs.items():
         if k == "weight_reload_gbps" and isinstance(v, dict):
             _take_reload_rates(host, theirs, name, took)
+        elif k == "weight_read":
+            if not isinstance(v, dict) or "workers" in v:
+                continue             # a width kept with no key (before 1215's cure) is no fact to take
+            # the reader's widths, each under its key (library, storage, kernel): a key this profile lacks is taken
+            mine = host.get("weight_read") if isinstance(host.get("weight_read"), dict) else {}
+            mine = {} if "workers" in mine else mine
+            for key in (key for key in v if key not in mine):
+                mine[key] = v[key]
+                took.append(f"host: weight_read [{key}] from {name}")
+            host["weight_read"] = mine
         elif k == "weight_reload_source":
             have = host.setdefault(k, [])
             have.extend(x for x in (v or []) if x not in have)

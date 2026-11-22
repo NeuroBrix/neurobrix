@@ -180,7 +180,8 @@ class FastNBXLoader:
             return wf.name, shard_weights, shard_bytes
 
         # The shards read by the process's weight reader: parallel reads from one, grown by this load's own measure
-        for shard_name, shard_weights, shard_bytes in _weight_reader().map(load_shard, weight_files,
+        for shard_name, shard_weights, shard_bytes in _weight_reader(weight_files[0] if weight_files else None).map(
+                load_shard, weight_files,
                                                                            lambda wf: wf.stat().st_size):
             all_weights.update(shard_weights)
             total_bytes += shard_bytes

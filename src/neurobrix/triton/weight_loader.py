@@ -329,7 +329,7 @@ def _load_shard_into_arenas(
     # Device for every weight in THIS shard file (weight_sharding); FGP
     # weight-name keys still override per weight in _weight_target_dev.
     shard_dev = _resolve_shard_device(path, weight_device)
-    reader = weight_reader()        # the process's: its width grows by this load's own reads
+    reader = weight_reader(path)    # the process's: its width grows by this load's own reads
     with open(path, 'rb') as f:
         for key, info in header.items():
             if key == '__metadata__':

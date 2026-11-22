@@ -10,15 +10,15 @@ agree (`reload_may_be_written`, `put_reload`). The profile's file, its directory
 """
 from __future__ import annotations
 
+import functools
+import os
+import platform
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-
-
-def _stamp() -> str:
-    return time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 def set_chunk(block: dict, measured) -> None:
@@ -68,6 +68,84 @@ def sweep_chunks(devices, first, measured_of, q, replay) -> Dict[Any, Any]:
         return dict(pool.map(sweep, todo.items()))
 
 
+@functools.lru_cache(maxsize=None)
+def library_key() -> str:
+    """The nbxtensor a fact was measured with: its version, and its commit when it is imported from a source tree (a
+    dev install, whose version string does not move between commits: the reader's growth rule changed five times in
+    one week under 0.1.11). A source tree whose commit cannot be read keys this process only: nothing kept under it is
+    reused by another process."""
+    import nbxtensor
+    version = str(nbxtensor.__version__)
+    here = Path(nbxtensor.__file__).resolve().parent
+    for up in (here, *here.parents):
+        if (up / ".git").exists():
+            r = subprocess.run(["git", "-C", str(up), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30)
+            return f"{version}+{r.stdout.strip()}" if r.returncode == 0 and r.stdout.strip() else \
+                f"{version}+unread commit, process {os.getpid()}"
+    return version
+
+
+@functools.lru_cache(maxsize=None)
+def driver_key() -> str:
+    """The GPU drivers the OS states it runs, read from the OS and never from a device runtime: where the OS lists its
+    PCI devices (`/sys/bus/pci`), the kernel module bound to each display-class device (class 0x03) with the version
+    that module states; elsewhere the OS's own release and build, which ship or name its drivers."""
+    root = Path("/sys/bus/pci/devices")
+    found = set()
+    if root.is_dir():
+        for dev in root.iterdir():
+            try:
+                if not (dev / "class").read_text().strip().startswith("0x03") or not (dev / "driver").exists():
+                    continue
+                module = (dev / "driver" / "module").resolve().name
+                stated = Path("/sys/module") / module / "version"
+                found.add(f"{module} {stated.read_text().strip() if stated.exists() else '(no version stated)'}")
+            except OSError:
+                continue
+    return ", ".join(sorted(found)) if found else f"{platform.system()} {platform.release()} {platform.version()}"
+
+
+def card_key() -> Dict[str, str]:
+    """What a card fact (the expandable pool's chunk) and a reload rate were measured under: the driver and the
+    library. A fact kept under another is measured again (`drop_stale`)."""
+    return {"driver": driver_key(), "library": library_key()}
+
+
+def storage_key(source) -> str:
+    """The storage a weight file is read from: its device number, the mount the OS states for it (source and type: an
+    NFS export names its server) and the block device's model where the OS states one."""
+    st = os.stat(source)
+    if not hasattr(os, "major"):
+        return f"device {st.st_dev}"
+    major, minor = os.major(st.st_dev), os.minor(st.st_dev)
+    where = f"device {major}:{minor}"
+    try:
+        with open("/proc/self/mountinfo") as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) > 2 and fields[2] == f"{major}:{minor}" and "-" in fields:
+                    sep = fields.index("-")
+                    where += f", {fields[sep + 2]} {fields[sep + 1]}"
+                    break
+    except OSError:
+        pass
+    block = Path(f"/sys/dev/block/{major}:{minor}")
+    if block.exists():
+        for model in (block.resolve() / "device" / "model", block.resolve().parent / "device" / "model"):
+            if model.exists():
+                where += f", {model.read_text().strip()}"
+                break
+    return where
+
+
+def read_key(source) -> str:
+    """The key the weight reader's width is kept under: the library that measured it, the storage the weights were read
+    from (`source`, a weight file or its directory) and the OS kernel. A width is a fact of the three, not of the GPU
+    set: a width kept under another key is never reused, the reader starts at one and keeps the new key."""
+    return (f"library {library_key()}; storage {storage_key(source)}; "
+            f"kernel {platform.system()} {platform.release()}")
+
+
 def _profile_path(hardware_id: Optional[str]) -> Optional[Path]:
     """The generated profile's file of `hardware_id`, or None for a hardware that is not a generated profile or has no
     file: the only profiles the engine keeps measured facts on."""
@@ -78,37 +156,49 @@ def _profile_path(hardware_id: Optional[str]) -> Optional[Path]:
     return path if path.exists() else None
 
 
-def kept_read_width(hardware_id: Optional[str]) -> Optional[int]:
-    """The weight reader's width this machine KEPT (`note_read_width`), or None: the next load starts there, never from
-    one again (row 167)."""
+def _kept_widths(data: dict) -> Dict[str, dict]:
+    """{key: kept width} of a profile's `host_measured.weight_read`; a width kept with no key (before the key, 1215)
+    is none."""
+    kept = (data.get("host_measured") or {}).get("weight_read") or {}
+    return {} if "workers" in kept else {k: v for k, v in kept.items() if isinstance(v, dict)}
+
+
+def kept_read_width(hardware_id: Optional[str], source=None) -> Optional[int]:
+    """The weight reader's width this machine KEPT (`note_read_width`) under the key of the weights at `source`
+    (`read_key`: the library, the storage, the kernel), or None — no source, no width kept, or one kept under another
+    key: the reader then starts at one and measures (qa on 1215: a width settled under one library or disk was reused
+    under another as if measured today)."""
     path = _profile_path(hardware_id)
-    if path is None:
+    if path is None or source is None:
         return None
-    kept = ((yaml.safe_load(path.read_text()) or {}).get("host_measured") or {}).get("weight_read") or {}
+    kept = _kept_widths(yaml.safe_load(path.read_text()) or {}).get(read_key(source)) or {}
     return int(kept["workers"]) if kept.get("workers") else None
 
 
-def note_read_width(hardware_id: Optional[str], measured: Optional[dict]) -> bool:
+def note_read_width(hardware_id: Optional[str], measured: Optional[dict], source=None) -> bool:
     """What the weight reader measured on this process's loads (`nbxtensor.io.reader.Reader.measured()`), KEPT on a
     generated profile as `host_measured.weight_read`: the width, the low and high rate of its rounds at that width and
     their count, whether its growth settled, the date. The library measures; the engine keeps and reuses (row 167). A
     growth that did not settle gives its best width so far (`measured["workers"]`, None when no width was measured:
     nothing is kept) with that width's spread. Written when none is kept, or over an unsettled one by a reader that
     searched and settled (the quiet measure replaces the unconcluded); never otherwise: a kept figure is never paid
-    twice. True when written."""
+    twice. Kept under the key of the weights read (`read_key(source)`), beside the widths of other keys; nothing is
+    kept without a source. True when written."""
     path = _profile_path(hardware_id)
-    if path is None or not measured or measured.get("workers") is None:
+    if path is None or source is None or not measured or measured.get("workers") is None:
         return False
     from neurobrix.core.prism import autodetect as A
     width = int(measured["workers"])
     at = (measured.get("draws") or {}).get(width) or []
     data = yaml.safe_load(path.read_text()) or {}
-    kept = (data.get("host_measured") or {}).get("weight_read")
+    key, widths = read_key(source), _kept_widths(data)
+    kept = widths.get(key)
     if not at or (kept and (kept.get("settled") or not measured.get("settled") or measured.get("start") is not None)):
         return False
-    data.setdefault("host_measured", {})["weight_read"] = {
+    widths[key] = {
         "workers": width, "low_gbps": round(min(at) / 1e9, 3), "high_gbps": round(max(at) / 1e9, 3),
-        "rounds": len(at), "settled": bool(measured.get("settled")), "measured": _stamp()}
+        "rounds": len(at), "settled": bool(measured.get("settled")), "measured": time.strftime("%Y-%m-%d %H:%M:%S %Z")}
+    data.setdefault("host_measured", {})["weight_read"] = widths
     A._write_profile_atomically(path, data)
     return True
 
@@ -123,7 +213,7 @@ def note_weight_load(engine: str, nbx_path, component: str, where: str, landed: 
     if stored is not None:
         A.note_loader_rate(A.ACTIVE_HARDWARE_ID, engine, stored, where, int(landed), float(seconds),
                            f"{Path(str(nbx_path)).name}:{component}")
-    note_read_width(A.ACTIVE_HARDWARE_ID, weight_reader_measured())
+    note_read_width(A.ACTIVE_HARDWARE_ID, weight_reader_measured(), nbx_path)
 
 
 def reload_may_be_written(host, vendor, engine: str, stored: str, spread) -> bool:

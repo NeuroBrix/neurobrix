@@ -436,7 +436,8 @@ class WeightLoader:
         weights = {}
 
         # The shards read by the process's weight reader: its parallel reads grow by their own measure on this load
-        for block_weights in _weight_reader().map(lambda wf: self._load_weight_file(wf, device, dtype),
+        for block_weights in _weight_reader(weight_files[0] if weight_files else None).map(
+                lambda wf: self._load_weight_file(wf, device, dtype),
                                                   weight_files, self._stored_bytes):
             weights.update(block_weights)
 
@@ -617,7 +618,8 @@ class WeightLoader:
 
             return results
 
-        for pairs in _weight_reader().map(_load_one_fgp_file, sorted(weight_files), self._stored_bytes):
+        for pairs in _weight_reader(min(weight_files) if weight_files else None).map(
+                _load_one_fgp_file, sorted(weight_files), self._stored_bytes):
             for key, tensor in pairs:
                 weights[key] = tensor
 
@@ -698,7 +700,8 @@ class WeightLoader:
             shard_items.append((actual_path, device))
 
         # === Read every file of the map, each onto its device, by the process's weight reader ===
-        for block_weights in _weight_reader().map(lambda item: self._load_weight_file(item[0], item[1], dtype),
+        for block_weights in _weight_reader(shard_items[0][0] if shard_items else None).map(
+                lambda item: self._load_weight_file(item[0], item[1], dtype),
                                                   shard_items, lambda item: self._stored_bytes(item[0])):
             weights.update(block_weights)
 
