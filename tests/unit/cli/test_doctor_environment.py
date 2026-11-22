@@ -128,12 +128,14 @@ def test_no_engine_that_can_run_is_a_blocking_problem(monkeypatch):
 
 def test_a_gpu_without_its_runtime_library_is_named(monkeypatch):
     """The driver sees a card but nbxtensor opens no CUDA runtime: on a clean machine the engine read the card as
-    CPU-only and told the user to build triton-cpu (2026-11-05)."""
+    CPU-only and told the user to build triton-cpu (2026-11-05). Since a04a688a3 (2026-11-06) what to install is
+    the library's own refusal (nbxtensor.backend.install_help), and doctor says it after `GPU runtime not usable:`,
+    never as a CPU-only machine."""
     import nbxtensor.backend.runtime as RT
     monkeypatch.setattr(RT, "gpu_backend", lambda: (_ for _ in ()).throw(RuntimeError("No GPU runtime found")))
     monkeypatch.setattr(doctor, "_nvidia_smi_gpus", lambda: [("Tesla V100-SXM2-16GB", "7.0")])
     ready, says = doctor._triton_engine()
-    assert not ready and "the driver sees a GPU" in says and "No GPU runtime found" in says
+    assert not ready and says == "GPU runtime not usable: No GPU runtime found", says
 
 
 def test_volta_is_sent_to_the_served_stack():
