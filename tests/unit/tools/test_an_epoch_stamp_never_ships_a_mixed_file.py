@@ -117,7 +117,7 @@ def test_the_failed_keys_leave_the_file_and_join_the_recert_list(tmp_path):
     assert rec[0]["reason"] == "oracle: too far"
     table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
     assert table == [{"file": "nvidia/volta/toy_kernel.fp32.json", "keys": "2", "re_proven": "1", "failed": "1",
-                      "seconds": "5.0"}]
+                      "seconds": "5.0", "generators_dropped": "0"}]
 
 
 def test_a_stop_during_the_replacement_loses_no_failed_key_and_truncates_nothing(tmp_path, monkeypatch):
@@ -152,3 +152,18 @@ def test_a_stop_during_the_replacement_loses_no_failed_key_and_truncates_nothing
     assert list(json.loads(shipped.read_text())["entries"]) == [K1]
     assert len(list(csv.DictReader(open(tmp_path / "recert.tsv"), delimiter="\t"))) == 1
     assert sorted(p.name for p in shipped.parent.iterdir()) == ["toy_kernel.fp32.json"]   # no tmp left
+
+
+def test_the_proofs_of_other_generators_that_leave_are_counted_and_listed(tmp_path):
+    """qa 1227-4: the re-prove runs under one generator; a shipped head also proven under another (`also_proven`)
+    loses that proof with the replacement — counted in the table, listed by generator, never dropped silently."""
+    other = {**_proof(), "backend": {"triton": "3.7.0", "name": "cuda"}}
+    shipped = _write(tmp_path / "shipped", {K1: {"config": _cfg(1), "proof": _proof(), "also_proven": [other]}})
+    _write(tmp_path / "draft", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}})
+    _ledger(tmp_path / "draft", [(K1, "reproven")])
+    assert _run(tmp_path)["replaced"] == ["nvidia/volta/toy_kernel.fp32.json"]
+    rec = list(csv.DictReader(open(tmp_path / "recert.tsv"), delimiter="\t"))
+    assert [(r["key"], r["memory_class"], r["generator"]) for r in rec] == [(K1, "16g", C.proof_backend(other))]
+    assert C.proof_backend(_proof()) in rec[0]["reason"]
+    table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
+    assert (table[0]["re_proven"], table[0]["generators_dropped"]) == ("1", "1")

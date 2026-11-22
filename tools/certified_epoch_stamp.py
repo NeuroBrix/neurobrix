@@ -14,11 +14,13 @@ A file is REPLACED (`--apply`) only when nothing is pending: every certification
 the draft file passes the library's own gate (`validate`: the epoch, the format, every proof). The replacement is the
 draft file as it stands: it holds the re-proven certifications only, and is never mixed. THE FAILED CERTIFICATIONS
 LEAVE THE FILE until their full recertification: each one is appended to `--recert-list` (file, key, memory_class,
-reason) — never dropped silently, never retuned here. A file with every certification failed is not replaced (its
+reason) — never dropped silently, never retuned here. The re-prove runs under one code generator: a re-proven
+certification's proofs under OTHER generators (`also_proven`, alternates) leave with the replacement too, and each is
+appended to `--recert-list` with its `generator`, to be re-proven under it. A file with every certification failed is not replaced (its
 replacement would be empty): it is said, and left for a ruling.
 
 One row per file reached (a draft file or a ledger line) is written to `--table` (file, keys, re_proven, failed,
-seconds), replacing that file's earlier row. A file's recert rows and table row are written BEFORE it is replaced, and
+seconds, generators_dropped), replacing that file's earlier row. A file's recert rows and table row are written BEFORE it is replaced, and
 the replacement is whole or nothing (a copy beside it, renamed over it): a stop at any point loses no failed key. Run with the frozen library's python: the library reads the files.
 """
 import argparse
@@ -33,8 +35,8 @@ from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels.autotune_certify import unit_tile
 
 LEDGER = "reprove_epoch_ledger.tsv"
-TABLE_COLS = ["file", "keys", "re_proven", "failed", "seconds"]
-RECERT_COLS = ["file", "key", "memory_class", "reason"]
+TABLE_COLS = ["file", "keys", "re_proven", "failed", "seconds", "generators_dropped"]
+RECERT_COLS = ["file", "key", "memory_class", "reason", "generator"]
 
 
 def _norm(ktext):
@@ -57,6 +59,12 @@ def read_ledger(path):
     return out
 
 
+def _generators(head):
+    """The code generators (`C.proof_backend`) one memory class's certifications are proven under: every proof of its
+    head and of its alternates (`also_proven` included)."""
+    return {C.proof_backend(p) for c in C.class_certifications(head) for p in C.certification_proofs(c)}
+
+
 def owed_heads(entries):
     """[(key text, memory class GB, the shipped head)] of every certification not at the library's bits epoch."""
     out = []
@@ -77,6 +85,7 @@ def judge(shipped_path, draft_path, ledger, rel):
     draft = {_norm(k): e for k, e in ((draft_doc or {}).get("entries") or {}).items()}
     fname = str(rel)
     v = {"keys": len(owed), "re_proven": 0, "failed": [], "pending": [], "seconds": 0.0, "problems": [],
+         "generators_dropped": [],
          "reached": draft_doc is not None or any(k[0] == fname for k in ledger)}
     owed_ids = set()
     for ktext, cls, head in owed:
@@ -96,6 +105,10 @@ def judge(shipped_path, draft_path, ledger, rel):
                                                  f"{unit_tile(head)}"))
             else:
                 v["re_proven"] += 1
+                # the re-prove ran under ONE generator: the shipped proofs of the others (`also_proven`, alternates)
+                # leave with the replacement — each is said, never dropped silently (qa 1227-4)
+                for gen in sorted(_generators(head) - _generators(got), key=str):
+                    v["generators_dropped"].append((ktext, cls, gen, ", ".join(sorted(map(str, _generators(got))))))
         elif line is not None and line.get("outcome") == "failed":
             v["failed"].append((ktext, cls, line.get("reason") or "failed"))
         else:
@@ -150,7 +163,7 @@ def run(shipped, draft, table, recert_list, apply=False, say=print):
         if not v["keys"] or not v["reached"]:
             continue
         row = {"file": str(rel), "keys": v["keys"], "re_proven": v["re_proven"], "failed": len(v["failed"]),
-               "seconds": f"{v['seconds']:.1f}"}
+               "seconds": f"{v['seconds']:.1f}", "generators_dropped": len(v["generators_dropped"])}
         rows.append(row)
         ready = not v["pending"] and not v["problems"] and v["re_proven"] > 0
         state = ("READY" if ready else "ALL FAILED: not replaced, left for a ruling" if not v["pending"]
@@ -165,11 +178,18 @@ def run(shipped, draft, table, recert_list, apply=False, say=print):
             for ktext, cls, why in v["failed"]:
                 mine.append({"file": str(rel), "key": ktext, "memory_class": f"{cls}g", "reason": why})
                 say(f"  LEAVES the file until its full recertification: {ktext} {cls}g ({why})")
+            for ktext, cls, gen, ran in v["generators_dropped"]:
+                mine.append({"file": str(rel), "key": ktext, "memory_class": f"{cls}g", "generator": gen,
+                             "reason": f"re-proven under {ran} only: its proof under {gen} leaves with the replacement"})
+            if v["generators_dropped"]:
+                say(f"  {len(v['generators_dropped'])} proof(s) of other generators leave with the replacement "
+                    f"(on the recert list, by generator)")
             recert.extend(mine)
         # THIS FILE's rows are on disk BEFORE its replacement: a stop after it must not leave a failed key that has
         # left the shipped file and joined no list (qa 1227-2) — a re-run finds the replaced file owing nothing
         if mine:
-            _upsert(recert_list, RECERT_COLS, mine, key=lambda r: (r["file"], r["key"], r["memory_class"]))
+            _upsert(recert_list, RECERT_COLS, mine,
+                    key=lambda r: (r["file"], r["key"], r["memory_class"], r.get("generator") or ""))
         _upsert(table, TABLE_COLS, [row], key=lambda r: r["file"])
         if ready and apply:
             _replace(draft / rel, path)
