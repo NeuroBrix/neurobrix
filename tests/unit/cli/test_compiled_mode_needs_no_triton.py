@@ -47,8 +47,23 @@ def without_triton():
     table alone left `commands.run` (the fresh module) and `sys.modules[...run]` (the old one) two
     objects. A later test patched one and the code read the other: the calibrate test passed alone
     and failed after any earlier import of `run` (2026-09-29, the merge-queue-14 battery).
+
+    What each package attribute WAS is saved before the deletion and put back as it was, not
+    rebound to the module of the same name: a package attribute may legitimately be another
+    object than its submodule — `triton.runtime.driver` is the DriverConfig instance, not the
+    `triton.runtime.driver` module — and rebinding it to the module broke every later Triton
+    launch of the session (`module 'triton.runtime.driver' has no attribute 'active'`, the
+    spilled K/V decode test, 2026-11-22 unit run). Read through the module's own dict, so a
+    module-level `__getattr__` is not called.
     """
     saved = dict(sys.modules)
+    missing = object()
+    saved_attrs = {}
+    for name in saved:
+        parent, _, child = name.rpartition(".")
+        attrs = getattr(saved.get(parent), "__dict__", None) if parent else None
+        if attrs is not None:
+            saved_attrs[(parent, child)] = attrs.get(child, missing)
     for k in [k for k in sys.modules
               if k == "triton" or k.startswith("triton.")]:
         del sys.modules[k]
@@ -60,13 +75,18 @@ def without_triton():
         sys.meta_path.remove(finder)
         # Drop anything imported during the block, then restore what was here.
         for k in [k for k in sys.modules if k not in saved]:
-            del sys.modules[k]
+            dropped = sys.modules.pop(k)
+            parent, _, child = k.rpartition(".")
+            attrs = getattr(saved.get(parent), "__dict__", None) if parent else None
+            if attrs is not None and attrs.get(child, missing) is dropped:
+                attrs.pop(child)                    # a package attribute the block bound
         sys.modules.update(saved)
-        for name, mod in saved.items():
-            parent, _, child = name.rpartition(".")
-            holder = sys.modules.get(parent) if parent else None
-            if holder is not None and hasattr(holder, child) and getattr(holder, child) is not mod:
-                setattr(holder, child, mod)
+        for (parent, child), was in saved_attrs.items():
+            attrs = saved[parent].__dict__
+            if was is missing:
+                attrs.pop(child, None)
+            elif attrs.get(child, missing) is not was:
+                attrs[child] = was
 
 
 def _fresh(module: str):
