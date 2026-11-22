@@ -150,3 +150,11 @@ def test_a_reproof_that_comes_back_with_another_configuration_is_failed_never_fi
     assert list(doc["entries"]) == [C.key_repr((1, "fp32"))]
     rows = {r.split("\t")[1]: r.split("\t") for r in (draft / CF.REPROVE_LEDGER).read_text().splitlines()[1:]}
     assert rows[C.key_repr((2, "fp32"))][3] == "failed" and "not the stored one" in rows[C.key_repr((2, "fp32"))][5]
+
+
+def test_an_unreadable_key_is_named_by_its_vendor_profile_file(tmp_path):
+    """qa 1227-5: the ledger line of a key the library cannot read names its file as every other line does
+    (vendor/profile/name), or the stamp never matches it and hides the reason."""
+    _shipped(tmp_path, {"not a key": {"config": _cfg(1), "proof": _proof(16384)}})
+    _, _, unreadable = CF.stored_epoch_keys("nvidia", "volta", tmp_path, 16)
+    assert [u[:2] for u in unreadable] == [("nvidia/volta/toy_kernel.fp32.json", "not a key")]

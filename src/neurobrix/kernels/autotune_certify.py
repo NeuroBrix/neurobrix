@@ -1528,7 +1528,7 @@ def stored_epoch_keys(vendor: str, profile: str, shipped_root, memory_class: int
     """What `--reprove-epoch-from` re-proves: every key whose certification for THIS memory class, in the certified
     tree `shipped_root` (walked, no file named), carries a proof of another bits epoch than the library's
     (`C.BITS_EPOCH`; none, before the epoch existed). Returns ({kernel qual: [key, ...]}, {(qual, key text): the
-    class head}, [(file name, key text, reason)] for a key the library cannot read). The head's configuration is
+    class head}, [(file vendor/profile/name, key text, reason)] for a key the library cannot read). The head's configuration is
     re-proven as it stands (`certify_key(only_config=...)`); its alternates, if any, are not."""
     shapes: Dict[str, List[tuple]] = {}
     stored: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -1547,7 +1547,9 @@ def stored_epoch_keys(vendor: str, profile: str, shipped_root, memory_class: int
                 continue                          # already of the library's epoch: nothing owed
             key = C.parse_key(ktext)
             if key is None:
-                unreadable.append((path.name, ktext, "the key does not parse under this library"))
+                # named vendor/profile/name, as the loop's ledger lines are: the stamp matches it to its file
+                unreadable.append((str(path.relative_to(Path(shipped_root))), ktext,
+                                   "the key does not parse under this library"))
                 continue
             shapes.setdefault(qual, []).append(key)
             stored[(qual, C.key_repr(key))] = head
