@@ -5,7 +5,7 @@ Before (the Dell chats of 2026-11-22, deepseek-moe-16b-chat and DeepSeek-Coder-V
 generation prompt with `Assistant:` and writes `'Assistant: ' + content` for a past turn, so the model's first token
 carries the space (`ĠHello`); the reply decoded alone was `' Hello...'`, stored verbatim, the history then read
 `Assistant:  Hello` (two spaces), and the third turn answered with two spaces. One shared function
-(`serving/reply_boundary`) reads the gap from the template by rendering one history turn with a sentinel content, and
+(`core/runtime/reply_boundary`) reads the gap from the template by rendering one history turn with a sentinel content, and
 removes only the part of it the reply starts with: the display, the stored history, the API's content and the
 streamer's first delta come out the same.
 
@@ -23,7 +23,7 @@ pytest.importorskip("jinja2")
 from types import SimpleNamespace as NS  # noqa: E402
 
 from neurobrix.core.module.tokenizer.sp_tokenizer import HFTokenizer  # noqa: E402
-from neurobrix.serving.reply_boundary import reply_gap, without_reply_gap  # noqa: E402
+from neurobrix.core.runtime.reply_boundary import reply_gap, without_reply_gap  # noqa: E402
 from neurobrix.serving.text_stream import TextDeltaDecoder  # noqa: E402
 
 # deepseek-moe-16b-chat, modules/tokenizer/tokenizer_config.json: chat_template, bos_token, eos_token (verbatim)

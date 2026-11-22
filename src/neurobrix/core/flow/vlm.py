@@ -76,6 +76,35 @@ def _maybe_log_topk(logits, step: int) -> None:
         f.write("\n")
 
 
+def _keep_hidden_tap(rows, resolved, lm_name, was_whole) -> None:
+    """Keep this forward's hidden_tap rows for the speech leg, when the request asks for speech."""
+    if not requests_speech(resolved.get("global.mode")):
+        return
+    tap = resolved.get(f"{lm_name}.hidden_tap")
+    if tap is None:
+        raise RuntimeError(
+            "ZERO FALLBACK: the LM graph exposes no hidden_tap "
+            "output — rebuild the container with the speech contract (R15 "
+            "registry-driven tap).")
+    rows.keep(tap, was_whole)
+
+
+def _joined_tap(rows, cat):
+    """The kept tap rows, concatenated; refuses when no forward exposed one."""
+    if not rows:
+        raise RuntimeError(
+            "ZERO FALLBACK: the LM graph exposes no hidden_tap "
+            "output — rebuild the container with the speech contract (R15 "
+            "registry-driven tap).")
+    return rows.joined(cat)
+
+
+def _keep_forward_rows(rows, resolved, output, was_whole) -> None:
+    """Keep this forward's hidden rows for the speech leg, when the request asks for speech."""
+    if requests_speech(resolved.get("global.mode")):
+        rows.keep(output, was_whole)
+
+
 @register_flow("vlm")
 class VLMEngine(VLMSteps, ComponentFlowHandler):
     """Vision-conditioned LLM: encode image → merge embeds → decode text.
@@ -556,14 +585,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             output = self._get_component_output(lm_name)
             if output is None:
                 break
-            if requests_speech(resolved.get("global.mode")):
-                _tap_now = resolved.get(f"{lm_name}.hidden_tap")
-                if _tap_now is None:
-                    raise RuntimeError(
-                        "ZERO FALLBACK: the LM graph exposes no hidden_tap "
-                        "output — rebuild the container with the speech contract (R15 "
-                        "registry-driven tap).")
-                _tap_rows.keep(_tap_now, _was_whole)
+            _keep_hidden_tap(_tap_rows, resolved, lm_name, _was_whole)
 
             logits = self._compute_logits(output, embed_weight, logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
@@ -607,12 +629,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 raise RuntimeError(
                     "ZERO FALLBACK: --mode audio on a build without "
                     "topology.flow.speech (P-OMNI-GEN speech leg).")
-            if not _tap_rows:
-                raise RuntimeError(
-                    "ZERO FALLBACK: the LM graph exposes no hidden_tap "
-                    "output — rebuild the container with the speech contract (R15 "
-                    "registry-driven tap).")
-            _tap = _tap_rows.joined(torch.cat)
+            _tap = _joined_tap(_tap_rows, torch.cat)
             from .speech import SpeechLeg
             SpeechLeg(self).run({
                 "input_ids": (list(prefix_ids)
@@ -638,6 +655,33 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     # ─── staged-splice contract (MiniCPM-o class) ────────────────────────
+
+    def _run_cfm_speech_leg(self, kept_rows, ids, generated_ids, **extra) -> None:
+        """The CFM-class speech leg, when the request asks for speech: refuses a build without the speech contract
+        or a condition_type this splice class has no leg for; else conditions the leg on the kept hidden rows."""
+        resolved = self.ctx.variable_resolver.resolved
+        if not requests_speech(resolved.get("global.mode")):
+            return
+        _sp_c = self.ctx.pkg.topology.get("flow", {}).get("speech")
+        if not _sp_c:
+            raise RuntimeError(
+                "ZERO FALLBACK: --mode audio on a build without "
+                "topology.flow.speech (P-OMNI-GEN speech leg).")
+        if str(_sp_c.get("condition_type") or "") != "hidden_text_merge":
+            raise RuntimeError(
+                "ZERO FALLBACK: this splice class has no leg for "
+                f"condition_type={_sp_c.get('condition_type')!r} — "
+                "the tap+chatml class rides the M-RoPE branch.")
+        if not kept_rows:
+            raise RuntimeError(
+                "ZERO FALLBACK: no decode forward output to "
+                "condition the speech leg on.")
+        from .speech_cfm import SpeechCFMLeg
+        SpeechCFMLeg(self).run({
+            "full_ids": list(ids) + list(generated_ids),
+            "lm_hidden": kept_rows.joined(torch.cat),
+            **extra,
+        })
 
     def _execute_staged_splice(self, vlm: Dict[str, Any]) -> Dict[str, Any]:
         """Staged VLM contract: vision tower → projection chain, audio
@@ -991,8 +1035,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             output = self._get_component_output(lm_name)
             if output is None:
                 break
-            if requests_speech(resolved.get("global.mode")):
-                _kept_rows.keep(output, _was_whole)
+            _keep_forward_rows(_kept_rows, resolved, output, _was_whole)
             logits = self._compute_logits(output, embed_weight,
                                           logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
@@ -1023,29 +1066,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         # hidden rows kept from each forward (prefill + one per cached
         # step), concatenated to [1, S, H]: causal ⇒ row p equals
         # the vendor's per-step hidden for the token at p.
-        if requests_speech(resolved.get("global.mode")):
-            _sp_c = self.ctx.pkg.topology.get("flow", {}).get("speech")
-            if not _sp_c:
-                raise RuntimeError(
-                    "ZERO FALLBACK: --mode audio on a build without "
-                    "topology.flow.speech (P-OMNI-GEN speech leg).")
-            if str(_sp_c.get("condition_type") or "") == "hidden_text_merge":
-                if not _kept_rows:
-                    raise RuntimeError(
-                        "ZERO FALLBACK: no decode forward output to "
-                        "condition the speech leg on.")
-                from .speech_cfm import SpeechCFMLeg
-                SpeechCFMLeg(self).run({
-                    "full_ids": list(ids) + list(generated_ids),
-                    "lm_hidden": _kept_rows.joined(torch.cat),
-                    "device": device,
-                    "dtype": dtype,
-                })
-            else:
-                raise RuntimeError(
-                    "ZERO FALLBACK: this splice class has no leg for "
-                    f"condition_type={_sp_c.get('condition_type')!r} — "
-                    "the tap+chatml class rides the M-RoPE branch.")
+        self._run_cfm_speech_leg(_kept_rows, ids, generated_ids, device=device, dtype=dtype)
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)

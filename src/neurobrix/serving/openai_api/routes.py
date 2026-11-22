@@ -335,6 +335,13 @@ def model_record(door) -> Dict[str, Any]:
             "neurobrix": {"family": engine.family, "warm_serving": bool(getattr(engine, "_warm_serving", False))}}
 
 
+def _turn_reader(tokenizer, parser, reasoning, opens) -> TurnReader:
+    """The reader of one chat turn, told the gap the template writes before a reply (core/runtime/reply_boundary)."""
+    from neurobrix.core.runtime.reply_boundary import reply_gap
+    return TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens,
+                      gap=reply_gap(tokenizer))
+
+
 def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
     _check_keys(body, _CHAT_KEYS, "/v1/chat/completions")
     model = _model(door, body)
@@ -382,9 +389,7 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             kwargs = {"tools": tools} if tools else {}
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
             opens = prompt.rstrip().endswith(reasoning[0])
-        from neurobrix.serving.reply_boundary import reply_gap
-        reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens,
-                            gap=reply_gap(tokenizer))
+        reader = _turn_reader(tokenizer, parser, reasoning, opens)
         grammar = _constrained(body, tokenizer, forced, tools, parser, named, reasoning if opens else None)
         extra = {"grammar": grammar} if grammar is not None else {}
         from neurobrix.core.runtime.prompt_length import ContextLengthExceeded

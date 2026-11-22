@@ -91,6 +91,18 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
     )
 
 
+def _required_num_steps(ctx):
+    """The step count the request or the container declares; refuses by name, the container named, when neither does."""
+    try:
+        return ctx.variable_resolver.get("global.num_inference_steps")
+    except KeyError:
+        from neurobrix.core.runtime_values import MissingRuntimeValue
+        raise MissingRuntimeValue(
+            f"'num_inference_steps' is required to run this model and nothing declares it: container "
+            f"{ctx.pkg.manifest.get('model_name') or '?'!r} has none in runtime/defaults.json and the "
+            f"request names none. Declare it in the container, or pass it with the request.") from None
+
+
 @register_flow("iterative_process")
 class IterativeProcessHandler(IterativeSteps, FlowHandler):
     """
@@ -396,14 +408,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         driver = self.ctx.modules[driver_name]
 
         # Get control variables
-        try:
-            num_steps = self.ctx.variable_resolver.get("global.num_inference_steps")
-        except KeyError:
-            from neurobrix.core.runtime_values import MissingRuntimeValue
-            raise MissingRuntimeValue(
-                f"'num_inference_steps' is required to run this model and nothing declares it: container "
-                f"{self.ctx.pkg.manifest.get('model_name') or '?'!r} has none in runtime/defaults.json and the "
-                f"request names none. Declare it in the container, or pass it with the request.") from None
+        num_steps = _required_num_steps(self.ctx)
 
         # Get state variable key from topology
         loop_def = self.ctx.pkg.topology.get("flow", {}).get("loop", {})

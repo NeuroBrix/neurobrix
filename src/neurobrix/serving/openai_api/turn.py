@@ -24,7 +24,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from neurobrix.serving.reply_boundary import render_one_turn
+from neurobrix.core.runtime.reply_boundary import render_one_turn
 from neurobrix.serving.text_stream import MarkerDecoder
 
 #: The thinking-marker pairs a chat template may declare. A template that writes both markers of a pair is a

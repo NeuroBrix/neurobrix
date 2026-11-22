@@ -77,6 +77,31 @@ class _ReadKeys(dict):
             raise ValueError(f"params key {unread[0]!r} is not read by this engine; it reads: {reads}")
 
 
+def _container_extent(manifest, cached_defaults, topo_components):
+    """The container's own output height, width and VAE scale: the cascade's refusal by name, the container's
+    own value as the fallback it reads (`run.request_input_config`)."""
+    from neurobrix.core.runtime_values import resolve as _resolve_runtime
+    from neurobrix.core.runtime.resolution.container_size import container_output_size
+    from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
+    _cos = container_output_size(manifest, cached_defaults, topo_components)
+    height = _resolve_runtime("height", container=cached_defaults, default=None,
+                              extra=[("the container's own output height", _cos[0] if _cos else None)])
+    width = _resolve_runtime("width", container=cached_defaults, default=None,
+                             extra=[("the container's own output width", _cos[1] if _cos else None)])
+    vae_scale = _resolve_runtime("vae_scale_factor", container=cached_defaults, default=None,
+                                 extra=[("the container's own VAE scale",
+                                         _vsf(manifest, cached_defaults, topo_components))])
+    return height, width, vae_scale
+
+
+def _temporal_axis(cached_defaults):
+    """The temporal axis, from the container as a run reads it (`run.request_input_config`): absent is the answer
+    for a model without one; a model that has one and declares none is refused at the plan, by name."""
+    from neurobrix.core.runtime_values import resolve as _resolve_runtime
+    return (_resolve_runtime("num_frames", container=cached_defaults, default=None),
+            _resolve_runtime("temporal_compression_ratio", container=cached_defaults, default=None))
+
+
 class InferenceEngine:
     """
     Persistent inference engine — load once, serve many.
@@ -144,25 +169,11 @@ class InferenceEngine:
         # Same cascade as the CLI, same refusal. 1024/1024/8 stood here and made
         # the serving path plan for a request nobody sent — and it is the SAME
         # InputConfig the CLI now fills from the request.
-        from neurobrix.core.runtime_values import resolve as _resolve_runtime
-        from neurobrix.core.runtime.resolution.container_size import container_output_size
         # The container's own output size, as the executor renders it (one authority).
         _topo_path = cache_path / "topology.json"
         _topo_components = (json.load(open(_topo_path)).get("components") or {}) if _topo_path.exists() else {}
-        _cos = container_output_size(manifest, cached_defaults, _topo_components)
-        height = _resolve_runtime("height", container=cached_defaults, default=None,
-                                  extra=[("the container's own output height", _cos[0] if _cos else None)])
-        width = _resolve_runtime("width", container=cached_defaults, default=None,
-                                 extra=[("the container's own output width", _cos[1] if _cos else None)])
-        from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
-        vae_scale = _resolve_runtime("vae_scale_factor", container=cached_defaults, default=None,
-                                     extra=[("the container's own VAE scale",
-                                             _vsf(manifest, cached_defaults, _topo_components))])
-
-        # The temporal axis, from the container as a run reads it (`run.request_input_config`): absent is the answer
-        # for a model without one; a model that has one and declares none is refused at the plan, by name.
-        num_frames = _resolve_runtime("num_frames", container=cached_defaults, default=None)
-        temporal_compression = _resolve_runtime("temporal_compression_ratio", container=cached_defaults, default=None)
+        height, width, vae_scale = _container_extent(manifest, cached_defaults, _topo_components)
+        num_frames, temporal_compression = _temporal_axis(cached_defaults)
 
         self._hw_profile = hw_profile
         # the flow's per-component facts, as a run's plan reads them (`run.request_input_config`): the generation
@@ -586,7 +597,7 @@ class InferenceEngine:
         from neurobrix.serving.text_stream import MarkerDecoder
         parser = select_parser(self.chat_template_text())
         keep = list(parser.kept_markers()) if parser is not None else []
-        from neurobrix.serving.reply_boundary import reply_gap
+        from neurobrix.core.runtime.reply_boundary import reply_gap
         text = (MarkerDecoder(tokenizer, keep, gap=reply_gap(tokenizer)).decode(generated) if keep
                 else result.get("text", ""))
         turn = self._agent_kv.last_turn or {}
@@ -594,9 +605,9 @@ class InferenceEngine:
                 "cached_tokens": int(turn.get("matched", 0)), "max_tokens": max_tokens}
 
     def reply_gap(self, chat_mode=None) -> str:
-        """The template's gap before a reply (serving/reply_boundary) for a request that runs in chat mode: the
+        """The template's gap before a reply (core/runtime/reply_boundary) for a request that runs in chat mode: the
         request's own flag, else the container's. '' for a request that is not rendered by the template."""
-        from neurobrix.serving.reply_boundary import reply_gap
+        from neurobrix.core.runtime.reply_boundary import reply_gap
         asked = chat_mode if chat_mode is not None else (self._pkg.defaults or {}).get("chat_mode", False)
         tokenizer = self._executor.modules.get("tokenizer") if self._executor else None
         return reply_gap(tokenizer) if asked else ""
@@ -748,7 +759,7 @@ class InferenceEngine:
 
         tokenizer = self._executor.modules.get("tokenizer")
         if tokenizer is not None and hasattr(tokenizer, 'decode'):
-            from neurobrix.serving.reply_boundary import reply_gap, without_reply_gap
+            from neurobrix.core.runtime.reply_boundary import reply_gap, without_reply_gap
             text = without_reply_gap(tokenizer.decode(token_ids, skip_special_tokens=True), reply_gap(tokenizer))
 
         return {

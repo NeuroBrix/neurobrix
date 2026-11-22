@@ -255,6 +255,22 @@ def scoring_request(args) -> bool:
     return False
 
 
+def _require_container_values(args, manifest: dict, family, cache_path, cached_defaults: dict):
+    """Resolve every key the family lists under `required_container_values`: the run refuses by name, the container
+    named, when neither the request nor the container declares it. Returns the frame count (a family with no temporal
+    axis lists none, and absent is its answer)."""
+    from neurobrix.core.config import get_family_config as _get_family_config
+    _required = (_get_family_config(family).get("required_container_values") or []) if family else []
+    _container_name = (manifest or {}).get("model_name") or cache_path.name
+    for _key in _required:
+        _flag = _REQUEST_FLAG.get(_key, _key)
+        _rt(_key, args, cached_defaults, None,
+            extra=[(f"request.{_flag}", getattr(args, _flag, None))] if _flag != _key else (),
+            why=(f"The {family} family requires its container to declare it (required_container_values), and the "
+                 f"container {_container_name!r} ({cache_path}) does not."))
+    return _rt("num_frames", args, cached_defaults, None, default=None)
+
+
 def request_input_config(args, manifest: dict, family, cache_path):
     """The InputConfig Prism plans a request with: the request's own facts (--height, --width,
     the input image's size, the prompt as a batch of one, guidance doubling the batch), then the
@@ -352,16 +368,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # `required_container_values` (video: the frame count, the steps, the guidance scale, the frame rate) is resolved
     # here: the run refuses by name, the container named, when neither the request nor the container declares it.
     # Any other family has no temporal axis, and absent is its answer for the frame count.
-    from neurobrix.core.config import get_family_config as _get_family_config
-    _required = (_get_family_config(family).get("required_container_values") or []) if family else []
-    _container_name = (manifest or {}).get("model_name") or cache_path.name
-    for _key in _required:
-        _flag = _REQUEST_FLAG.get(_key, _key)
-        _rt(_key, args, cached_defaults, None,
-            extra=[(f"request.{_flag}", getattr(args, _flag, None))] if _flag != _key else (),
-            why=(f"The {family} family requires its container to declare it (required_container_values), and the "
-                 f"container {_container_name!r} ({cache_path}) does not."))
-    num_frames = _rt("num_frames", args, cached_defaults, None, default=None)
+    num_frames = _require_container_values(args, manifest, family, cache_path, cached_defaults)
     temporal_compression = _rt("temporal_compression_ratio", args, cached_defaults,
                                _fam_defaults, default=None)
 

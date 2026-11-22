@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from neurobrix.serving.reply_boundary import without_reply_gap
+from neurobrix.core.runtime.reply_boundary import without_reply_gap
 
 _INCOMPLETE = "�"
 
@@ -37,7 +37,7 @@ class TextDeltaDecoder:
         if not hasattr(tokenizer, "decode"):
             raise TypeError("TextDeltaDecoder needs a tokenizer with `decode`")
         self._tokenizer = tokenizer
-        self._gap = gap          # the template's reply gap (serving/reply_boundary): the reply's own copy is dropped
+        self._gap = gap          # the template's reply gap (core/runtime/reply_boundary): the reply's own copy is dropped
         self._ids: List[int] = []
         self._emitted = ""
 
@@ -78,7 +78,7 @@ class MarkerDecoder:
         if not hasattr(tokenizer, "decode"):
             raise TypeError("MarkerDecoder needs a tokenizer with `decode`")
         self._tokenizer = tokenizer
-        self._gap = gap          # the template's reply gap (serving/reply_boundary), dropped once from the reply's start
+        self._gap = gap          # the template's reply gap (core/runtime/reply_boundary), dropped once from the reply's start
         self._keep = frozenset(k for k in keep if k)
         self._kept: Dict[int, Any] = {}
 
