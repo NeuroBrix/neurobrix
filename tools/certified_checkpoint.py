@@ -30,8 +30,8 @@ certifier:
   does). A file the gate refuses is NAMED and left uncommitted; the others are
   committed. Nothing is ever restamped or rewritten here — the certifier is
   the only writer of those files.
-* The commit carries the counts measured AFTER the add (entries added and
-  changed per file against HEAD), never a number written before the
+* The commit carries the counts measured AFTER the add (entries added,
+  changed and dropped per file against HEAD), never a number written before the
   measurement. Only the directory's files are committed (`git commit --
   <paths>`); anything else in the tree stays where it is.
 * Each remote is pushed and then READ BACK (`git ls-remote`) — a push that
@@ -286,8 +286,9 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
         return result
     deltas = {f: entry_delta(repo, f, snap[f]) for f in to_commit}   # measured on the committed bytes
     added = sum(d["added"] for d in deltas.values()); changed = sum(d["changed"] for d in deltas.values())
+    dropped = sum(d["removed"] for d in deltas.values())   # said in the headline: a filing that drops 3 904 entries
     lines = [f"certified: checkpoint{(' ' + label) if label else ''} — {added} entries added, {changed} changed, "
-             f"{len(to_commit)} file(s), written while the certifier runs", ""]
+             f"{dropped} dropped, {len(to_commit)} file(s), written while the certifier runs", ""]
     for f, d in deltas.items():
         lines.append(f"- {Path(f).name}: +{d['added']} ~{d['changed']} -{d['removed']}")
     if refused_rel:
@@ -315,7 +316,7 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
         why = push_and_verify(repo, remote, branch)
         result["remotes"][remote] = why
         status.append(f"{remote} {'ok' if not why else 'FAILED (' + why + ')'}")
-    _record(record, f"== checkpoint {sha} {stamp}: {len(to_commit)} file(s), +{added} entries, ~{changed} changed; "
+    _record(record, f"== checkpoint {sha} {stamp}: {len(to_commit)} file(s), +{added} entries, ~{changed} changed, -{dropped} dropped; "
                     + "; ".join(status)
                     + (f"; REFUSED by the gate, not committed: {', '.join(refused_rel)}" if refused_rel else ""), say)
     _feed_kernel_times(repo, rel_dir, say)
