@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from neurobrix.serving.reply_boundary import without_reply_gap
+
 _INCOMPLETE = "�"
 
 
@@ -31,10 +33,11 @@ class TextDeltaDecoder:
     """Feeds token ids in order, returns the text to append and how many
     already-emitted characters to take back first."""
 
-    def __init__(self, tokenizer: Any) -> None:
+    def __init__(self, tokenizer: Any, gap: str = "") -> None:
         if not hasattr(tokenizer, "decode"):
             raise TypeError("TextDeltaDecoder needs a tokenizer with `decode`")
         self._tokenizer = tokenizer
+        self._gap = gap          # the template's reply gap (serving/reply_boundary): the reply's own copy is dropped
         self._ids: List[int] = []
         self._emitted = ""
 
@@ -49,6 +52,7 @@ class TextDeltaDecoder:
         if full.endswith(_INCOMPLETE):
             # A multi-byte character is still open: nothing stable to add yet.
             return {"text": "", "rewind": 0}
+        full = without_reply_gap(full, self._gap)
         common = 0
         for a, b in zip(self._emitted, full):
             if a != b:
@@ -70,10 +74,11 @@ class MarkerDecoder:
     decodes to nothing when skipped and to its text when not), never from a list.
     """
 
-    def __init__(self, tokenizer: Any, keep) -> None:
+    def __init__(self, tokenizer: Any, keep, gap: str = "") -> None:
         if not hasattr(tokenizer, "decode"):
             raise TypeError("MarkerDecoder needs a tokenizer with `decode`")
         self._tokenizer = tokenizer
+        self._gap = gap          # the template's reply gap (serving/reply_boundary), dropped once from the reply's start
         self._keep = frozenset(k for k in keep if k)
         self._kept: Dict[int, Any] = {}
 
@@ -88,6 +93,9 @@ class MarkerDecoder:
         return self._kept[token_id]
 
     def decode(self, ids: List[int]) -> str:
+        return without_reply_gap(self._decode(ids), self._gap)
+
+    def _decode(self, ids: List[int]) -> str:
         if not self._keep:
             return self._tokenizer.decode(list(ids), skip_special_tokens=True)
         out: List[str] = []

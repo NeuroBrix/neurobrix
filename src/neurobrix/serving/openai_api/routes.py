@@ -382,7 +382,9 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
             kwargs = {"tools": tools} if tools else {}
             prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, **kwargs)
             opens = prompt.rstrip().endswith(reasoning[0])
-        reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens)
+        from neurobrix.serving.reply_boundary import reply_gap
+        reader = TurnReader(tokenizer, parser=parser, reasoning=reasoning, opens_in_reasoning=opens,
+                            gap=reply_gap(tokenizer))
         grammar = _constrained(body, tokenizer, forced, tools, parser, named, reasoning if opens else None)
         extra = {"grammar": grammar} if grammar is not None else {}
         from neurobrix.core.runtime.prompt_length import ContextLengthExceeded

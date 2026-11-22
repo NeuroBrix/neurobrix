@@ -675,7 +675,17 @@ def _extract_text(outputs: Dict[str, Any], executor) -> Optional[str]:
         tokenizer = executor.modules["tokenizer"]
         if hasattr(tokenizer, "decode"):
             ids = tokens if isinstance(tokens, list) else tokens.flatten().tolist()
-            return tokenizer.decode(ids, skip_special_tokens=True)
+            text = tokenizer.decode(ids, skip_special_tokens=True)
+            # A reply to a prompt the chat template rendered starts after the template's own gap
+            # (serving/reply_boundary): the request's chat mode, else the container's, as the processor reads it.
+            resolver = getattr(executor, "variable_resolver", None)
+            chat = resolver.resolved.get("global.chat_mode") if resolver is not None else None
+            if chat is None:
+                chat = (getattr(getattr(executor, "pkg", None), "defaults", None) or {}).get("chat_mode", False)
+            if chat:
+                from neurobrix.serving.reply_boundary import reply_gap, without_reply_gap
+                text = without_reply_gap(text, reply_gap(tokenizer))
+            return text
 
     return str(tokens if isinstance(tokens, list) else tokens.flatten().tolist())
 

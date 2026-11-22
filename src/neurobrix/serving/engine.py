@@ -586,10 +586,20 @@ class InferenceEngine:
         from neurobrix.serving.text_stream import MarkerDecoder
         parser = select_parser(self.chat_template_text())
         keep = list(parser.kept_markers()) if parser is not None else []
-        text = MarkerDecoder(tokenizer, keep).decode(generated) if keep else result.get("text", "")
+        from neurobrix.serving.reply_boundary import reply_gap
+        text = (MarkerDecoder(tokenizer, keep, gap=reply_gap(tokenizer)).decode(generated) if keep
+                else result.get("text", ""))
         turn = self._agent_kv.last_turn or {}
         return {"text": text, "token_ids": list(generated), "prompt_tokens": len(token_ids),
                 "cached_tokens": int(turn.get("matched", 0)), "max_tokens": max_tokens}
+
+    def reply_gap(self, chat_mode=None) -> str:
+        """The template's gap before a reply (serving/reply_boundary) for a request that runs in chat mode: the
+        request's own flag, else the container's. '' for a request that is not rendered by the template."""
+        from neurobrix.serving.reply_boundary import reply_gap
+        asked = chat_mode if chat_mode is not None else (self._pkg.defaults or {}).get("chat_mode", False)
+        tokenizer = self._executor.modules.get("tokenizer") if self._executor else None
+        return reply_gap(tokenizer) if asked else ""
 
     def chat_template_text(self) -> str:
         """The embedded chat template's text ('' when absent)."""
@@ -738,7 +748,8 @@ class InferenceEngine:
 
         tokenizer = self._executor.modules.get("tokenizer")
         if tokenizer is not None and hasattr(tokenizer, 'decode'):
-            text = tokenizer.decode(token_ids, skip_special_tokens=True)
+            from neurobrix.serving.reply_boundary import reply_gap, without_reply_gap
+            text = without_reply_gap(tokenizer.decode(token_ids, skip_special_tokens=True), reply_gap(tokenizer))
 
         return {
             "text": text,

@@ -83,7 +83,7 @@ WORK_METHODS = ("generate", "chat", "complete")
 
 
 def stream_listener(conn: socket.socket, engine, op_id: Optional[str] = None,
-                    on_send_failure=None) -> "decode_progress.TokenListener":
+                    on_send_failure=None, chat_mode=None) -> "decode_progress.TokenListener":
     """The per-token listener of one streaming request. Every event carries
     `step`, `n`, `token`, `done` (and `op_id` when the request is an
     operation); for a family whose answer is text, it also carries the decoded
@@ -102,7 +102,7 @@ def stream_listener(conn: socket.socket, engine, op_id: Optional[str] = None,
         tokenizer = engine.tokenizer
         if tokenizer is not None:
             from neurobrix.serving.text_stream import TextDeltaDecoder
-            decoder = TextDeltaDecoder(tokenizer)
+            decoder = TextDeltaDecoder(tokenizer, gap=engine.reply_gap(chat_mode) if hasattr(engine, "reply_gap") else "")
     gone = []
 
     def _on_token(step: int, n: int, token_id: int, done: bool) -> None:
@@ -657,7 +657,8 @@ class ServingDaemon:
             return make_response(error=f"refused: {e}")
         if stream:
             deliver = stream_listener(conn, self._engine, op.op_id,
-                                      on_send_failure=lambda e: self._orphan(op, e))
+                                      on_send_failure=lambda e: self._orphan(op, e),
+                                      chat_mode=params.get("chat_mode"))
         watcher = threading.Thread(target=self._watch_client, args=(conn, op),
                                    name=f"nbx-watch-{op.op_id}", daemon=True)
         watcher.start()

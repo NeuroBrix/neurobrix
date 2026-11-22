@@ -400,9 +400,11 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
 
 
 def _parse_llm_text(stdout: str) -> str | None:
-    """A text run's stdout IS its generated text (nbxtensor/terminal.py: every other line is on stderr)."""
-    text = stdout.strip()
-    return text or None
+    """A text run's stdout IS its generated text (nbxtensor/terminal.py: every other line is on stderr), plus the one
+    newline `print` ends it with. Exact: a space the text starts or ends with is part of what the run said, and a
+    comparison that strips it cannot see the engine write one."""
+    text = stdout[:-1] if stdout.endswith("\n") else stdout
+    return text if text.strip() else None
 
 
 def _golden_path(model: str, mode: str) -> Path:
@@ -514,7 +516,8 @@ def test_model_runs(model_meta: Dict[str, str | int], mode: str) -> None:
                 f"{gp.relative_to(REPO)} — re-run to compare")
         return
 
-    expected = gp.read_text(encoding="utf-8").rstrip("\n")
+    expected = gp.read_text(encoding="utf-8")
+    expected = expected[:-1] if expected.endswith("\n") else expected       # the one newline the capture adds
     assert text == expected, (
         f"{name} / {mode}: output drift.\n"
         f"  expected: {expected!r}\n"

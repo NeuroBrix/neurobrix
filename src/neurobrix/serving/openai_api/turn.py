@@ -24,6 +24,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from neurobrix.serving.reply_boundary import render_one_turn
 from neurobrix.serving.text_stream import MarkerDecoder
 
 #: The thinking-marker pairs a chat template may declare. A template that writes both markers of a pair is a
@@ -46,9 +47,7 @@ def reasoning_gap(tokenizer: Any, reasoning: Tuple[str, str]) -> Optional[str]:
     one past turn rendered with a reasoning and an answer ("\\n\\n" for Qwen3's templates, nothing for GLM-4.7-Flash's).
     None when the template does not show that turn's reasoning before its answer (nothing to read)."""
     said, answered = "reasoning-0f3b", "answer-0f3b"
-    messages = [{"role": "user", "content": "u"},
-                {"role": "assistant", "reasoning_content": said, "content": answered}]
-    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+    text = render_one_turn(tokenizer, {"role": "assistant", "reasoning_content": said, "content": answered})
     end = text.find(reasoning[1], text.find(said))
     at = text.find(answered, end) if end >= 0 and said in text else -1
     return text[end + len(reasoning[1]):at] if at >= 0 else None
@@ -83,7 +82,7 @@ class TurnReader:
     """Feed token ids with `push`; read the released deltas; `finish` releases the rest and returns the Turn."""
 
     def __init__(self, tokenizer: Any, parser=None, reasoning: Optional[Tuple[str, str]] = None,
-                 opens_in_reasoning: bool = False) -> None:
+                 opens_in_reasoning: bool = False, gap: str = "") -> None:
         self._parser = parser
         self._reasoning = reasoning
         keep = []
@@ -91,7 +90,7 @@ class TurnReader:
             keep += list(parser.kept_markers())
         if reasoning is not None:
             keep += list(reasoning)
-        self._decoder = MarkerDecoder(tokenizer, keep)
+        self._decoder = MarkerDecoder(tokenizer, keep, gap=gap)
         self._ids: List[int] = []
         self._previous = ""
         self._released = 0          # characters of the decoded text already consumed by the state machine
