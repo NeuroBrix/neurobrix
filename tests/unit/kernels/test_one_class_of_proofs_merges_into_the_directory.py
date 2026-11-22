@@ -14,13 +14,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from nbxtensor.ops.autotune_certified import BITS_EPOCH
+
 TOOL = Path(__file__).resolve().parents[3] / "tools" / "merge_certified_class.py"
 
 
 def _entry(cls, ver, config="A"):
     return {"config": {"BLOCK_M": config},
             "proof": {"backend": {"triton": ver, "name": "cuda"},
-                      "machine": {"device": {"memory_mb": cls * 1024}}},
+                      "machine": {"device": {"memory_mb": cls * 1024}}, "bits_epoch": BITS_EPOCH},
             "excluded": []}
 
 

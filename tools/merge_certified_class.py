@@ -17,6 +17,13 @@ destination is untouched.
     python tools/merge_certified_class.py --from <dir> --into <dir> --class 32 [--apply]
 
 Without `--apply` it says what it would do and writes nothing.
+
+Bits epoch. The library refuses a file whole when one proof in it is not of its
+`BITS_EPOCH` (`epoch_refusal`), and its own filing (`file_certification`) stamps
+only what it just proved. This tool proves nothing, so it stamps nothing: a
+source certification of another epoch (or of none) is REFUSED and counted
+(`refused_other_bits_epoch`), never carried, and a destination file the merge
+would leave mixed is not written: its row names the library's reason.
 """
 from __future__ import annotations
 
@@ -56,16 +63,24 @@ def destination_proof_for(d_entry: dict, cls: int, slot: str):
     return ((d_entry.get("variants") or {}).get(slot) or {}).get("proof")
 
 
+def of_this_epoch(cert: dict) -> bool:
+    """Every proof `cert` carries (head, also proven, alternates, variants) names the library's bits epoch."""
+    return C.entry_epochs(cert) == {C.BITS_EPOCH}
+
+
 def merge_file(src: Path, dst: Path, cls: int, apply: bool) -> dict:
     s = json.loads(src.read_text(encoding="utf-8"))
     d = json.loads(dst.read_text(encoding="utf-8")) if dst.exists() else dict(s, entries={})
     s_entries, d_entries = s.get("entries") or {}, d.get("entries") or {}
     slot = C._variant_slot(cls)
-    moved = added = skipped = kept_newer = 0
+    moved = added = skipped = kept_newer = other_epoch = 0
     for key, s_entry in s_entries.items():
         cert = class_proof(s_entry, cls)
         if cert is None:
             skipped += 1
+            continue
+        if not of_this_epoch(cert if key in d_entries else s_entry):
+            other_epoch += 1               # proven under another bits epoch: carried, it would make the file refused
             continue
         if key not in d_entries:
             d_entries[key] = json.loads(json.dumps(s_entry))
@@ -88,13 +103,17 @@ def merge_file(src: Path, dst: Path, cls: int, apply: bool) -> dict:
             d_entry.setdefault("variants", {})[slot] = cert
         moved += 1
     d["entries"] = d_entries
-    if apply:
+    refused = C.epoch_refusal(d_entries)
+    if apply and refused is None:
         tmp = dst.with_suffix(dst.suffix + ".tmp")
         tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
         tmp.replace(dst)
-    return {"file": dst.name, "moved": moved, "added": added,
-            "kept_newer_in_destination": kept_newer,
-            "source_without_that_class": skipped, "entries_after": len(d_entries)}
+    row = {"file": dst.name, "moved": moved, "added": added,
+           "kept_newer_in_destination": kept_newer, "refused_other_bits_epoch": other_epoch,
+           "source_without_that_class": skipped, "entries_after": len(d_entries)}
+    if refused is not None:
+        row["not_written"] = refused   # the destination would stay mixed: the library would refuse the file whole
+    return row
 
 
 def refuse_a_destination_that_holds_no_kernel_files(src: Path, dst: Path) -> None:
@@ -136,7 +155,7 @@ def main() -> int:
     refuse_a_destination_that_holds_no_kernel_files(src, dst)
     rows = [merge_file(p, dst / p.name, a.cls, a.apply) for p in sorted(src.glob("*.json"))]
     print(json.dumps({"class_gb": a.cls, "applied": a.apply, "files": rows}, indent=1))
-    return 0
+    return 1 if any("not_written" in r for r in rows) else 0
 
 
 if __name__ == "__main__":
