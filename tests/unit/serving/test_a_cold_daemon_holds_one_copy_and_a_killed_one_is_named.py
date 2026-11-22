@@ -46,7 +46,9 @@ def test_stop_names_a_daemon_that_was_killed(tmp_path):
     (home / "daemon.pid").write_text(str(dead.pid))
     repo = Path(__file__).resolve().parents[3]
     env = {**os.environ, "NEUROBRIX_HOME": str(home), "CUDA_VISIBLE_DEVICES": "", "PYTHONNOUSERSITE": "1",
-           "PYTHONPATH": str(repo / "src")}
+           "PYTHONPATH": os.pathsep.join([str(repo / "src"), *filter(None, [os.environ.get("PYTHONPATH")])])}
+    # the engine's tree first, and the path the run already has after it: nbxtensor is the installed release, and where
+    # it is reached through PYTHONPATH rather than installed, the child must still find it
     env.pop("NBX_SOCKET_PATH", None)
     p = subprocess.run([sys.executable, "-m", "neurobrix", "stop"], capture_output=True, text=True, env=env, timeout=120)
     assert p.returncode == 0, p.stderr
