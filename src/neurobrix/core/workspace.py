@@ -12,6 +12,7 @@ snapshot on the NAS — on a local disk that had reached 0 MB the same day.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -27,7 +28,8 @@ _root: Optional[Path] = None
 #: the reads in flight a weight load may grow to, as the plan in force priced host memory for them (`declare_load_ceiling`,
 #: Prism's host estimate); None: no plan priced them in this process
 _LOAD_CEILING: Optional[int] = None
-#: (pid, reader): the process's weight reader (`weight_reader`); a forked child builds its own
+#: (pid, thread, reader): the process's weight reader (`weight_reader`) and the thread that made it; a forked child
+#: builds its own
 _READER: Optional[tuple] = None
 
 
@@ -74,33 +76,38 @@ def weight_reader(source=None):
     """The process's weight reader (`nbxtensor.io.reader.Reader`): parallel reads that start at one and grow by their own
     measure up to `load_ceiling()`, or at the width the machine kept from an earlier load (`kept_launch_facts.kept_read_width`,
     written by `kept_launch_facts.note_read_width` after a load). No up-front trial (the launch-time cure, 2026-11-19). A new ceiling
-    (another plan) starts a new reader, and the one it replaces is closed. `source` (a weight file the load reads):
+    (another plan) starts a new reader, and the one it replaces is closed when this thread made
+    it (another thread's load may still read through it). `source` (a weight file the load reads):
     the kept width is the one kept for its storage, the library and the kernel (`kept_launch_facts.read_key`); a
     reader made without one starts at one."""
     global _READER
     ceiling = load_ceiling()
-    if _READER is None or _READER[0] != os.getpid() or _READER[1].ceiling != ceiling:
+    if _READER is None or _READER[0] != os.getpid() or _READER[2].ceiling != ceiling:
         from nbxtensor.io.reader import Reader
         from neurobrix.core.prism import autodetect as _ad, kept_launch_facts as _kept
-        if _READER is not None and _READER[0] == os.getpid():
-            _READER[1].close()               # the reader a new ceiling replaces ends its threads (a forked child owns none)
+        if _READER is not None and _READER[:2] == (os.getpid(), threading.get_ident()):
+            # the reader a new ceiling replaces ends its threads when this thread made it: a load of another thread
+            # (a daemon holding two models) may still read through it, and its pool is not shut under it; a forked
+            # child owns none
+            _READER[2].close()
         # the width this machine kept from an earlier load (row 167: measured once, never paid twice), else one
-        _READER = (os.getpid(), Reader(ceiling, start=_kept.kept_read_width(_ad.ACTIVE_HARDWARE_ID, source)))
-    return _READER[1]
+        _READER = (os.getpid(), threading.get_ident(),
+                   Reader(ceiling, start=_kept.kept_read_width(_ad.ACTIVE_HARDWARE_ID, source)))
+    return _READER[2]
 
 
 def weight_reader_measured() -> Optional[dict]:
     """What this process's weight reader measured (`Reader.measured()`), for the engine to keep; None before any read."""
-    if _READER is None or _READER[0] != os.getpid() or not _READER[1].bytes:
+    if _READER is None or _READER[0] != os.getpid() or not _READER[2].bytes:
         return None
-    return _READER[1].measured()
+    return _READER[2].measured()
 
 
 def weight_reader_said() -> Optional[str]:
     """What this process's weight loads measured, worded for the launch line; None when nothing was read here."""
-    if _READER is None or _READER[0] != os.getpid() or not _READER[1].bytes:
+    if _READER is None or _READER[0] != os.getpid() or not _READER[2].bytes:
         return None
-    return _READER[1].said()
+    return _READER[2].said()
 
 
 def pinned_uploads_in_flight() -> int:
