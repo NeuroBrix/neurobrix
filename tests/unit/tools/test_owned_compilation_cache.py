@@ -74,8 +74,13 @@ def test_the_replay_cache_is_one_of_the_layers():
     assert "NEUROBRIX_REPLAY_CACHE" in owned_cache_env(Path("/tmp/x"))
 
 
-def test_the_refusal_names_the_remedy_and_the_remedy_exists():
-    """A refusal that points at a flag which does not exist is vacuous."""
+def test_the_refusal_names_the_remedy_and_the_remedy_exists(monkeypatch):
+    """A refusal that points at a flag which does not exist is vacuous.
+
+    The test sets the environment it refuses (neither cache variable set) instead of reading the ambient one: a
+    harness that owns its cache — both variables set to a private path — made it not raise (the 2026-11-22 unit run)."""
+    for var in _CACHE_VARS:
+        monkeypatch.delenv(var, raising=False)
     with pytest.raises(RuntimeError) as exc:
         enforce_owned_cache("a test")
     assert "--cache-env" in str(exc.value)
