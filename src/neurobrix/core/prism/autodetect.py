@@ -2499,12 +2499,11 @@ def generated_profile(hardware_id: Optional[str]) -> Optional[Path]:
     — the one guard of `ensure_measured_facts` and of `owed_facts`' measures."""
     if not str(hardware_id).startswith("default"):
         return None
-    try:
-        from neurobrix.kernels import census as _census
-        if _census.active():
-            return None
-    except Exception:  # noqa: BLE001 — no census module: a run
-        pass
+    # the census module ships with the engine: one that cannot be imported or read is a broken install, raised by its
+    # own name — never taken for "no census", which would let a census shadow measure (qa 1231-n1)
+    from neurobrix.kernels import census as _census
+    if _census.active():
+        return None
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     return path if path.exists() else None
 
