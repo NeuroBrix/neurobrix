@@ -232,7 +232,7 @@ def _parse_interconnect(data: dict) -> InterconnectTopology:
     )
 
 
-def _vendor_block(d_data: dict, block: str) -> Optional[dict]:
+def vendor_block(d_data: dict, block: str) -> Optional[dict]:
     """A device's `measured:` / the machine's `host_measured:` block read from the TRACKED vendor file of its
     architecture (config/vendors/<brand>/<architecture>.yml) when the hardware profile carries none — a machine whose
     profile is auto-generated (the Mac's `auto-apple-m4-pro-18g`, untracked) keeps its measured facts with their
@@ -336,7 +336,7 @@ def load_profile(hardware_id: str) -> PrismProfile:
             max_allocation_mb=d_data.get("max_allocation_mb"),
             runtime_total_mb=d_data.get("runtime_total_mb"),
             runtime_context_mb=d_data.get("runtime_context_mb"),
-            measured=d_data.get("measured") or _vendor_block(d_data, "measured"),
+            measured=d_data.get("measured") or vendor_block(d_data, "measured"),
         ))
         _refuse_unified_without_largest_allocation(devices[-1], path)
 
@@ -367,8 +367,8 @@ def load_profile(hardware_id: str) -> PrismProfile:
         preferred_dtype=data.get("preferred_dtype", None),
         # the vendor's block (the architecture's facts) under the profile's (this machine's, measured by the engine), key by
         # key, into its tables (weight_reload_gbps: {engine: {stored}}) — the Dell's 1.12 rule, 2026-11-03 22:54
-        host_measured=_over(next((_vendor_block(d, "host_measured") for d in data.get("devices", [])
-                                  if _vendor_block(d, "host_measured")), None), data.get("host_measured")) or None,
+        host_measured=_over(next((vendor_block(d, "host_measured") for d in data.get("devices", [])
+                                  if vendor_block(d, "host_measured")), None), data.get("host_measured")) or None,
         nodes=nodes,
         node_links=node_links,
         refused_devices=list(data.get("refused_devices") or []),

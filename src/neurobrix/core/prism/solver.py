@@ -8144,7 +8144,7 @@ class PrismSolver:
         measured = False
         if any(n in TE.STREAM_EVERY_USE and n not in TE.HOST_HELD for _s, n, _a, _d in ranked):
             measured |= bool(autodetect.measure_reload_rates(hw, engine, getattr(container, "cache_path", None)))
-        if any(str(TE._device_of(a)).startswith("cpu") for _s, _n, allocs, _d in ranked for a in (allocs or {}).values()):
+        if any(TE.on_host(a) for _s, _n, allocs, _d in ranked for a in (allocs or {}).values()):
             measured |= bool(autodetect.measure_host_facts(hw))
         if measured:
             from neurobrix.core.prism.loader import load_profile

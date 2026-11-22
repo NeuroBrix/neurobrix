@@ -41,16 +41,16 @@ def test_the_chip_file_is_read_before_the_family_file(tmp_path, monkeypatch):
     (root / "apple_m4_pro.yml").write_text(yaml.safe_dump({
         "measured": {"source": "test", "matmul_tflops": {"float16": 6.0}, "memory_gbps": 224, "h2d_gbps": 58}}))
     monkeypatch.setattr(CL, "CONFIG_ROOT", tmp_path)
-    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism.loader import vendor_block
     dev = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "apple-m4-pro"}
-    assert (_vendor_block(dev, "measured") or {}).get("memory_gbps") == 224
+    assert (vendor_block(dev, "measured") or {}).get("memory_gbps") == 224
     family = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "apple-m9"}
-    assert _vendor_block(family, "measured") is None                       # the family file carries none: nothing invented
+    assert vendor_block(family, "measured") is None                       # the family file carries none: nothing invented
     # The Mac's GENERATED profile (default-9f169c79, 17:37): autodetect writes compute_capability "0.0" for every
     # non-NVIDIA device; the chip file is found by the arch string of the model name ("Apple M4 Pro" -> "apple-m4-pro",
     # the Metal backend's own rule). Seen red 2026-10-25 (None: no estimate on 0 of 98 Metal plans).
     generated = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "0.0", "model": "Apple M4 Pro"}
-    assert (_vendor_block(generated, "measured") or {}).get("memory_gbps") == 224
+    assert (vendor_block(generated, "measured") or {}).get("memory_gbps") == 224
     assert CL.device_arch_string("Apple M4 Pro") == "apple-m4-pro"
 
 

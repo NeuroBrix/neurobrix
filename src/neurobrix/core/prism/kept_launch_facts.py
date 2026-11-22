@@ -230,7 +230,7 @@ def note_read_width(hardware_id: Optional[str], measured: Optional[dict], source
         "workers": width, "low_gbps": round(min(at) / 1e9, 3), "high_gbps": round(max(at) / 1e9, 3),
         "rounds": len(at), "settled": bool(measured.get("settled")), "measured": time.strftime("%Y-%m-%d %H:%M:%S %Z")}
     data.setdefault("host_measured", {})["weight_read"] = widths
-    A._write_profile_atomically(path, data)
+    A.write_profile_atomically(path, data)
     return True
 
 

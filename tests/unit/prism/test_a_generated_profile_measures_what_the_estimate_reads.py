@@ -150,7 +150,7 @@ def test_an_unsteady_reload_is_kept_at_its_low_draw_until_a_steady_one(hw, monke
     assert written() is not None and abs(written() - 0.98) < 0.03, written()
     assert "weight_reload_spread" not in host()
     # the launch's check finds it kept: no reload probe owed for this engine and stored dtype
-    assert A._STORED["bfloat16"] in host()["weight_reload_gbps"]["compiled"]
+    assert A.STORED_DTYPES["bfloat16"] in host()["weight_reload_gbps"]["compiled"]
 
 
 def _decide(reload_gbps):
@@ -276,7 +276,7 @@ def test_a_probe_in_a_child_reads_the_facts_measured_before_it(hw, monkeypatch, 
     comp.mkdir(parents=True)
     (comp / "w.safetensors").write_bytes(b"\0" * (A.LOADER_RATE_MIN_BYTES + 1))
     monkeypatch.setattr(paths, "cache_dir", lambda: cache)
-    monkeypatch.setattr(A, "stored_major", lambda root, name: next(iter(A._STORED)))
+    monkeypatch.setattr(A, "stored_major", lambda root, name: next(iter(A.STORED_DTYPES)))
     monkeypatch.setattr(P, "gemv_gbps", lambda *a, **k: 100.0)
     seen = []
 

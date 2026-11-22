@@ -186,6 +186,11 @@ def _device_of(alloc: Any) -> str:
     return dev.split(",")[0].strip()
 
 
+def on_host(alloc: Any) -> bool:
+    """Whether an allocation places its component on the host: the branch of the estimate that reads the host's facts."""
+    return _device_of(alloc).startswith("cpu")
+
+
 def _devices_of(alloc: Any) -> list:
     """Every device string an allocation spans, in order (a `fgp:`/`tp:` list, a shard map's devices, or one device)."""
     out = []

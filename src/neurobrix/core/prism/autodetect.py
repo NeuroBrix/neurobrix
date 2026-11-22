@@ -214,7 +214,7 @@ def _visible_set_tag() -> Optional[str]:
     return hashlib.sha1("|".join(models).encode()).hexdigest()[:8]
 
 
-def _write_profile_atomically(path: Path, profile_data: dict) -> None:
+def write_profile_atomically(path: Path, profile_data: dict) -> None:
     """Whole file or nothing: a reader in another process never sees a torn
     profile (two pinned processes re-detecting at once tore default.yml on
     2026-09-05 — `devices: [null]` at load)."""
@@ -306,11 +306,11 @@ def _complete_measured_fields(path: Path) -> None:
     if not added:
         return
     cpu.update(added)
-    _write_profile_atomically(path, data)
+    write_profile_atomically(path, data)
     _log.debug(f"   [Auto-detect] Completed {path.name}: {added}")
 
 
-def _work_said(probes, replay, replays: int) -> str:
+def work_said(probes, replay, replays: int) -> str:
     """The time this launch expects, from what this machine measured: `replays` more chunk-probe children at what the
     first cost (`replay`: replay s, child s), each reload probe at that cost plus its five loads at this storage's rate."""
     from nbxtensor.io.read_rate import read_seconds
@@ -343,7 +343,7 @@ def get_or_create_default_profile() -> str:
             return "default"
         launch_lines.say("detect")
         profile_data = detect_hardware()
-        _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
+        write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
         _log.debug(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
         return "default"
 
@@ -359,7 +359,7 @@ def get_or_create_default_profile() -> str:
     launch_lines.say("detect")
     _log.debug("   [Auto-detect] No --hardware specified, detecting system hardware...")
     profile_data = detect_hardware()
-    _write_profile_atomically(path, profile_data)
+    write_profile_atomically(path, profile_data)
     if _describes_the_whole_machine(profile_data):
         # The shared default.yml is the MACHINE's latest detection, so only a
         # process that sees the whole machine may write it. The condition used
@@ -368,7 +368,7 @@ def get_or_create_default_profile() -> str:
         # host for every reader (2026-09-13) — and left the privilege with
         # every other one. A process pinned to two of four cards then wrote a
         # 2x16GB machine over a 2x16GB+2x32GB rack (2026-09-17).
-        _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
+        write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
     _log.debug(f"   [Auto-detect] Created profile: {path}")
     return hardware_id
 
@@ -2487,10 +2487,10 @@ def stored_major(cache_path, component: str) -> Optional[str]:
     by: Dict[str, int] = {}
     for v in (_json.loads(index.read_text()).get("tensors") or {}).values():
         d = str(v.get("dtype", "")) if isinstance(v, dict) else ""
-        if d in _STORED:
+        if d in STORED_DTYPES:
             by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
     return max(by, key=by.get) if by else None
-_STORED = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
+STORED_DTYPES = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
 
 
 def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, container_dir=None) -> dict:
@@ -2511,7 +2511,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if not path.exists():
         return {}
-    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism.loader import vendor_block
     from neurobrix.core.prism import facts_probe as P
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
@@ -2525,7 +2525,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     added: Dict[str, Any] = dict(other_card_models.from_siblings(path, data, devices))
 
     def measured_of(d):
-        return dict(d.get("measured") or _vendor_block(d, "measured") or {})
+        return dict(d.get("measured") or vendor_block(d, "measured") or {})
 
     first = measured_of(devices[0])
     cpu = data.get("cpu")
@@ -2543,7 +2543,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
                 added["runtime_base_mb"] = [engine]
     replay = P.vmm_first_replay(0) if "vmm_chunk_bytes" not in first else None    # made ahead: it prices the rest
     if not first or "vmm_chunk_bytes" not in first:
-        launch_lines.say("measure", _work_said([], replay, q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
+        launch_lines.say("measure", work_said([], replay, q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
     if not first:
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick: one GEMM size, "
@@ -2609,12 +2609,12 @@ def measure_host_facts(hardware_id: Optional[str]) -> List[str]:
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if not path.exists():
         return []
-    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism.loader import vendor_block
     from neurobrix.core.prism import facts_probe as P
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
-    stated = {**((_vendor_block(devices[0], "host_measured") if devices else None) or {}), **(data.get("host_measured") or {})}
+    stated = {**((vendor_block(devices[0], "host_measured") if devices else None) or {}), **(data.get("host_measured") or {})}
     if "host_matmul_gflops" in stated:
         return []
     launch_lines.say("host")
@@ -2624,7 +2624,7 @@ def measure_host_facts(hardware_id: Optional[str]) -> List[str]:
                   f"machine (autodetect, quick)",
         "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
         "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))})
-    _write_profile_atomically(path, data)
+    write_profile_atomically(path, data)
     return ["host_matmul_gflops", "host_memory_gbps"]
 
 
@@ -2647,18 +2647,18 @@ def measure_reload_rates(hardware_id: Optional[str], engine: str, container_dir=
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if not path.exists():
         return []
-    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism.loader import vendor_block
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
     if not devices:
         return []
     probes = []                  # the reload probes owed, decided first: what is said is what is done
     from neurobrix.core.paths import cache_dir
-    held = (data.get("host_measured"), _vendor_block(devices[0], "host_measured"))
+    held = (data.get("host_measured"), vendor_block(devices[0], "host_measured"))
     wanted = None if container_dir is None else {
         stored_major(container_dir, c.name) for c in (Path(container_dir) / "components").glob("*")}
     bound = int(devices[0].get("memory_mb") or 0) << 20
-    for name, st in _STORED.items():
+    for name, st in STORED_DTYPES.items():
         if wanted is not None and name not in wanted:
             continue
         if any((((b or {}).get("weight_reload_gbps") or {}).get(engine) or {}).get(st) for b in held):
@@ -2674,7 +2674,7 @@ def measure_reload_rates(hardware_id: Optional[str], engine: str, container_dir=
                 break
     if not probes:
         return []
-    launch_lines.say("reload", _work_said(probes, None, 0))
+    launch_lines.say("reload", work_said(probes, None, 0))
     from neurobrix.core.prism import arena_probe as A
     for _bytes, root, comp, st in probes:
         r = A.child(root, comp, hardware_id, engine)
@@ -2687,7 +2687,7 @@ def _write_first(path, data, devices, first, measured_of, added, q, chunks=None)
     """The first launch's device facts onto every card of card 0's model (they share what card 0 measured), and each
     other model's own facts onto its cards (`other_card_models`: a second write finds their chunk in the blocks and measures nothing), written."""
     other_card_models.place(devices, first, other_card_models.measured_of_others(devices, measured_of, added, q, chunks))
-    _write_profile_atomically(path, data)
+    write_profile_atomically(path, data)
 
 
 def _measure_arena_factor(hardware_id: str, device: dict) -> float:
@@ -2730,17 +2730,17 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
             or reloaded_bytes < LOADER_RATE_MIN_BYTES:
         return False
-    st = _STORED.get(str(stored), str(stored))
+    st = STORED_DTYPES.get(str(stored), str(stored))
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if not path.exists():
         return False
-    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism.loader import vendor_block
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
     kept.drop_stale(data)          # rates of another driver or library are no rates to keep beside (qa on 1215)
     host = data.get("host_measured")
-    vendor = _vendor_block(devices[0], "host_measured") if devices else None
+    vendor = vendor_block(devices[0], "host_measured") if devices else None
     if not kept.reload_may_be_written(host, vendor, engine, st, spread):
         return False
     host = data.setdefault("host_measured", {})           # over the vendor's block key by key (loader.load_profile)
@@ -2750,7 +2750,7 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     host.setdefault("weight_reload_source", []).append(
         f"{engine} {st}: {how} measured by the engine itself reloading streamed pieces at a real run "
         f"{stamp}, {what}, {reloaded_bytes / 1e9:.2f} GB reloaded")
-    _write_profile_atomically(path, data)
+    write_profile_atomically(path, data)
     _log.debug(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s"
                f"{'' if spread is None else ' (unsteady: its low draw)'}, written into {path.name}")
     return True
@@ -2765,17 +2765,17 @@ def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where
     if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
             or landed_bytes < LOADER_RATE_MIN_BYTES:
         return False
-    st = _STORED.get(str(stored), str(stored))
+    st = STORED_DTYPES.get(str(stored), str(stored))
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if not path.exists():
         return False
-    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism.loader import vendor_block
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
     if not devices:
         return False
-    measured = dict(devices[0].get("measured") or _vendor_block(devices[0], "measured") or {})
+    measured = dict(devices[0].get("measured") or vendor_block(devices[0], "measured") or {})
     rates = ((measured.get("weight_load_gbps") or {}).get(engine) or {}).get(st, {}).get(where) or {}
     state = "cold" if "cold" not in rates else ("warm" if "warm" not in rates else None)
     if state is None:
@@ -2790,7 +2790,7 @@ def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where
     for d in devices:
         if d.get("model") == same:
             d["measured"] = dict(measured)
-    _write_profile_atomically(path, data)
+    write_profile_atomically(path, data)
     _log.debug(f"   [Auto-detect] the {engine} loader measured itself: {st} to the {where} ({state}) {gbps} GB/s, "
                f"written into {path.name}")
     return True
