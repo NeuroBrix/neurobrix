@@ -9,9 +9,12 @@ replacement holding an epoch-less proof, or no table row -> the third RED.
 """
 import csv
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
+import pytest
 from nbxtensor.ops import autotune_certified as C
 
 TOOLS = Path(__file__).resolve().parents[3] / "tools"
@@ -108,3 +111,37 @@ def test_the_failed_keys_leave_the_file_and_join_the_recert_list(tmp_path):
     table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
     assert table == [{"file": "nvidia/volta/toy_kernel.fp32.json", "keys": "2", "re_proven": "1", "failed": "1",
                       "seconds": "5.0"}]
+
+
+def test_a_stop_during_the_replacement_loses_no_failed_key_and_truncates_nothing(tmp_path, monkeypatch):
+    """qa 1227-2: the failed key leaves the shipped file with the replacement, so its recert row must be on disk
+    first; and a stop mid-copy must leave the shipped file whole."""
+    shipped = _setup(tmp_path, {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}},
+                     [(K1, "reproven"), (K2, "failed")])
+    before = shipped.read_bytes()
+    copy, rename = shutil.copyfile, os.replace
+
+    def stopped_copy(src, dst, *a, **kw):
+        if Path(dst) == shipped:                       # killed mid-copy: half the bytes written in place
+            Path(dst).write_bytes(Path(src).read_bytes()[:20])
+            raise KeyboardInterrupt
+        return copy(src, dst, *a, **kw)
+
+    def stopped_rename(src, dst):
+        if Path(dst) == shipped:
+            raise KeyboardInterrupt
+        return rename(src, dst)
+    monkeypatch.setattr(shutil, "copyfile", stopped_copy)
+    monkeypatch.setattr(os, "replace", stopped_rename)
+    with pytest.raises(KeyboardInterrupt):
+        _run(tmp_path)
+    assert shipped.read_bytes() == before                                         # whole, as it was
+    rec = list(csv.DictReader(open(tmp_path / "recert.tsv"), delimiter="\t"))
+    assert [(r["key"], r["memory_class"]) for r in rec] == [(K2, "16g")]           # listed before the replacement
+    assert [r["file"] for r in csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t")] == [
+        "nvidia/volta/toy_kernel.fp32.json"]
+    monkeypatch.undo()
+    assert _run(tmp_path)["replaced"] == ["nvidia/volta/toy_kernel.fp32.json"]
+    assert list(json.loads(shipped.read_text())["entries"]) == [K1]
+    assert len(list(csv.DictReader(open(tmp_path / "recert.tsv"), delimiter="\t"))) == 1
+    assert sorted(p.name for p in shipped.parent.iterdir()) == ["toy_kernel.fp32.json"]   # no tmp left

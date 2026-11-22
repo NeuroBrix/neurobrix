@@ -18,11 +18,13 @@ reason) — never dropped silently, never retuned here. A file with every certif
 replacement would be empty): it is said, and left for a ruling.
 
 One row per file reached (a draft file or a ledger line) is written to `--table` (file, keys, re_proven, failed,
-seconds), replacing that file's earlier row. Run with the frozen library's python: the library reads the files.
+seconds), replacing that file's earlier row. A file's recert rows and table row are written BEFORE it is replaced, and
+the replacement is whole or nothing (a copy beside it, renamed over it): a stop at any point loses no failed key. Run with the frozen library's python: the library reads the files.
 """
 import argparse
 import csv
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -126,6 +128,18 @@ def _upsert(path, cols, rows, key):
     tmp.replace(path)
 
 
+def _replace(src, dst):
+    """`dst` becomes a copy of `src` whole or stays as it was: copied beside it, then renamed over it (a stop
+    mid-copy leaves the shipped file untouched, never truncated)."""
+    dst = Path(dst)
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
+    try:
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def run(shipped, draft, table, recert_list, apply=False, say=print):
     shipped, draft = Path(shipped), Path(draft)
     ledger = read_ledger(draft / LEDGER)
@@ -135,8 +149,9 @@ def run(shipped, draft, table, recert_list, apply=False, say=print):
         v = judge(path, draft / rel, ledger, rel)
         if not v["keys"] or not v["reached"]:
             continue
-        rows.append({"file": str(rel), "keys": v["keys"], "re_proven": v["re_proven"], "failed": len(v["failed"]),
-                     "seconds": f"{v['seconds']:.1f}"})
+        row = {"file": str(rel), "keys": v["keys"], "re_proven": v["re_proven"], "failed": len(v["failed"]),
+               "seconds": f"{v['seconds']:.1f}"}
+        rows.append(row)
         ready = not v["pending"] and not v["problems"] and v["re_proven"] > 0
         state = ("READY" if ready else "ALL FAILED: not replaced, left for a ruling" if not v["pending"]
                  and not v["re_proven"] else f"NOT READY: {len(v['pending'])} pending"
@@ -145,17 +160,21 @@ def run(shipped, draft, table, recert_list, apply=False, say=print):
             f"{v['seconds']:.1f} s — {state}")
         for ktext, cls, why in v["pending"][:3]:
             say(f"  pending {ktext} {cls}g: {why}")
+        mine = []
         if ready:
             for ktext, cls, why in v["failed"]:
-                recert.append({"file": str(rel), "key": ktext, "memory_class": f"{cls}g", "reason": why})
+                mine.append({"file": str(rel), "key": ktext, "memory_class": f"{cls}g", "reason": why})
                 say(f"  LEAVES the file until its full recertification: {ktext} {cls}g ({why})")
-            if apply:
-                shutil.copyfile(draft / rel, path)
-                replaced.append(str(rel))
-                say(f"  replaced {path} by its draft")
-    _upsert(table, TABLE_COLS, rows, key=lambda r: r["file"])
-    if recert:
-        _upsert(recert_list, RECERT_COLS, recert, key=lambda r: (r["file"], r["key"], r["memory_class"]))
+            recert.extend(mine)
+        # THIS FILE's rows are on disk BEFORE its replacement: a stop after it must not leave a failed key that has
+        # left the shipped file and joined no list (qa 1227-2) — a re-run finds the replaced file owing nothing
+        if mine:
+            _upsert(recert_list, RECERT_COLS, mine, key=lambda r: (r["file"], r["key"], r["memory_class"]))
+        _upsert(table, TABLE_COLS, [row], key=lambda r: r["file"])
+        if ready and apply:
+            _replace(draft / rel, path)
+            replaced.append(str(rel))
+            say(f"  replaced {path} by its draft")
     return {"rows": rows, "recert": recert, "replaced": replaced}
 
 
