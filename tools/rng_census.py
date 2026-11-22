@@ -13,7 +13,7 @@ tomorrow with a draw is in the guard the day it lands.
 
 `request_reaching(topology, component)` says, from the container's own
 topology, which request exercises the component: `"default"` when it is in
-the flow's order or its audio stages, `"speech"` when it belongs to a speech
+the flow's order, the stages of an iterative process (pre_loop, loop, post_loop) or its audio stages, `"speech"` when it belongs to a speech
 leg (`flow.speech.components`), which the CLI reaches with `--mode audio`. A
 component none of those name is `None` — the guard refuses to claim it ran.
 """
@@ -24,6 +24,8 @@ import json
 import sys
 from pathlib import Path
 from typing import Dict, Optional
+
+from neurobrix.core.flow.residency import _stages as _iterative_stages  # the engine's own reader of pre_loop / loop / post_loop
 
 RNG_OPS = {"aten::rand", "aten::randn", "aten::rand_like", "aten::randn_like", "aten::normal",
            "aten::bernoulli", "aten::poisson", "aten::exponential", "aten::uniform"}
@@ -65,6 +67,9 @@ def request_reaching(topology: dict, component: str) -> Optional[str]:
     """'default' | 'speech' | None — read from the topology, never from a name."""
     flow = topology.get("flow") or {}
     if component in (flow.get("order") or []):
+        return "default"
+    stages = _iterative_stages(topology)  # an `iterative_process` flow: every request runs pre_loop, loop, post_loop
+    if stages is not None and component in [c for stage in stages for c in stage]:
         return "default"
     audio = flow.get("audio") or {}
     if component in [s.get("component") for s in (audio.get("stages") or [])]:
