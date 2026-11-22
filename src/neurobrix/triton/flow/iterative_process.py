@@ -19,7 +19,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.memory_pool import release_flow_memory
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
-from neurobrix.core.flow.iterative_steps import IterativeSteps, _dump_final_latent   # the steps both branches share
+from neurobrix.core.flow.iterative_steps import IterativeSteps, _dump_final_latent, required_num_steps   # the steps both branches share
 from neurobrix.triton.cfg import TritonCFGEngine
 from neurobrix.triton import i2v_conditioning
 from neurobrix.triton import vace_control_conditioning
@@ -106,18 +106,6 @@ def _vram_probe(tag: str) -> None:
                    f"total={total_b / 1e9:.2f}GB nbx_alloc={_nbx_memory.memory_allocated() / 1e9:.2f}GB")
     except Exception as _e:
         _log.debug(f"[VRAM_PROBE {tag}] failed: {_e}")
-
-
-def _required_num_steps(ctx):
-    """The step count the request or the container declares; refuses by name, the container named, when neither does."""
-    try:
-        return ctx.variable_resolver.get("global.num_inference_steps")
-    except KeyError:
-        from neurobrix.core.runtime_values import MissingRuntimeValue
-        raise MissingRuntimeValue(
-            f"'num_inference_steps' is required to run this model and nothing declares it: container "
-            f"{ctx.pkg.manifest.get('model_name') or '?'!r} has none in runtime/defaults.json and the "
-            f"request names none. Declare it in the container, or pass it with the request.") from None
 
 
 class TritonIterativeProcessHandler(IterativeSteps):
@@ -468,7 +456,7 @@ class TritonIterativeProcessHandler(IterativeSteps):
         self._active_driver = driver
 
         # Get control variables
-        num_steps = _required_num_steps(self.ctx)
+        num_steps = required_num_steps(self.ctx)
 
         # Get state variable key from topology
         loop_def = self.ctx.pkg.topology.get("flow", {}).get("loop", {})

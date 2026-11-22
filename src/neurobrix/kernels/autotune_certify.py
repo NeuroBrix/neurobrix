@@ -1619,7 +1619,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     DRAFT tree `out`, which must be another directory: the shipped tree is only read. A key whose stored
     configuration does not re-prove is not swept: it is written to the draft's ledger (`ReproveLedger`) for the full
     recertification. A draft key already held for this class is skipped (a resumed re-prove)."""
-    log = log or _say
+    log = log or functools.partial(print, flush=True)   # a run of hours, read while it runs: never buffered
     if reprove_epoch_from is not None:
         _refuse_reprove_args(reprove_epoch_from, out, census_path or models or keys_path or only_missing
                              or reprove_unclocked or reprove_generator)
@@ -1725,11 +1725,6 @@ class _BoundedWriter:
     def flush_all(self) -> None:
         for path in list(self.pending):
             self.flush(path)
-
-
-def _say(*a):
-    """The certifier's default log: a run of hours, read while it runs — never buffered."""
-    print(*a, flush=True)
 
 
 def _refuse_reprove_args(reprove_epoch_from: str, out: Optional[str], other_source) -> None:

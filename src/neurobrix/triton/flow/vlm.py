@@ -53,7 +53,7 @@ from neurobrix.core.module.sampling_contract import enforce_sampling_support, SA
 from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import requests_speech
-from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
+from neurobrix.core.flow.shared_steps import VLMSteps, keep_hidden_tap   # the steps both branches share
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
 from nbxtensor import device as _nbx_device
@@ -139,19 +139,6 @@ def tokenize_around_span(tokenizer, prompt: str, span_token_id: int,
             f"ZERO FALLBACK: {content_type} placeholder span is not "
             "contiguous — concat-merge equivalence does not hold.")
     return ids[:first], ids[last + 1:]
-
-
-def _keep_hidden_tap(rows, resolved, lm_name, was_whole) -> None:
-    """Keep this forward's hidden_tap rows for the speech leg, when the request asks for speech."""
-    if not requests_speech(resolved.get("global.mode")):
-        return
-    tap = resolved.get(f"{lm_name}.hidden_tap")
-    if tap is None:
-        raise RuntimeError(
-            "ZERO FALLBACK: the LM graph exposes no hidden_tap "
-            "output — rebuild the container with the speech contract (R15 "
-            "registry-driven tap).")
-    rows.keep(tap, was_whole)
 
 
 def _joined_tap(rows, cat):
@@ -634,7 +621,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             output = self._get_component_output(lm_name)
             if output is None:
                 break
-            _keep_hidden_tap(_tap_rows, resolved, lm_name, _was_whole)
+            keep_hidden_tap(_tap_rows, resolved, lm_name, _was_whole)
 
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)

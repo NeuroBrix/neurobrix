@@ -406,3 +406,17 @@ def float32_host(value):
     if isinstance(value, np.ndarray):
         return value
     return value.detach().cpu().numpy() if hasattr(value, "detach") else np.array(value)
+
+
+def keep_hidden_tap(rows, resolved, lm_name, was_whole) -> None:
+    """Keep this forward's hidden_tap rows for the speech leg, when the request asks for speech."""
+    from neurobrix.core.flow.base import requests_speech
+    if not requests_speech(resolved.get("global.mode")):
+        return
+    tap = resolved.get(f"{lm_name}.hidden_tap")
+    if tap is None:
+        raise RuntimeError(
+            "ZERO FALLBACK: the LM graph exposes no hidden_tap "
+            "output — rebuild the container with the speech contract (R15 "
+            "registry-driven tap).")
+    rows.keep(tap, was_whole)

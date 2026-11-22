@@ -22,7 +22,7 @@ from neurobrix.core.runtime.resolution import flux_video_conditioning
 from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.runtime.progress import StepProgress
 from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
-from neurobrix.core.flow.iterative_steps import IterativeSteps, _dump_final_latent   # the steps both branches share
+from neurobrix.core.flow.iterative_steps import IterativeSteps, _dump_final_latent, required_num_steps   # the steps both branches share
 import logging
 _log = logging.getLogger(__name__)
 
@@ -89,18 +89,6 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
         f"continue to a corrupt output. Set NBX_TRACE_NAN=1 to localise "
         f"the first offending op."
     )
-
-
-def _required_num_steps(ctx):
-    """The step count the request or the container declares; refuses by name, the container named, when neither does."""
-    try:
-        return ctx.variable_resolver.get("global.num_inference_steps")
-    except KeyError:
-        from neurobrix.core.runtime_values import MissingRuntimeValue
-        raise MissingRuntimeValue(
-            f"'num_inference_steps' is required to run this model and nothing declares it: container "
-            f"{ctx.pkg.manifest.get('model_name') or '?'!r} has none in runtime/defaults.json and the "
-            f"request names none. Declare it in the container, or pass it with the request.") from None
 
 
 @register_flow("iterative_process")
@@ -408,7 +396,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         driver = self.ctx.modules[driver_name]
 
         # Get control variables
-        num_steps = _required_num_steps(self.ctx)
+        num_steps = required_num_steps(self.ctx)
 
         # Get state variable key from topology
         loop_def = self.ctx.pkg.topology.get("flow", {}).get("loop", {})

@@ -44,7 +44,7 @@ from .base import ComponentFlowHandler, register_flow, requests_speech
 from .table_gather import gather_rows
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.memory.manager import release_flow_memory
-from neurobrix.core.flow.shared_steps import VLMSteps   # the steps both branches share
+from neurobrix.core.flow.shared_steps import VLMSteps, keep_hidden_tap   # the steps both branches share
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 import logging
 _log = logging.getLogger(__name__)
@@ -74,19 +74,6 @@ def _maybe_log_topk(logits, step: int) -> None:
     with open(path, "a") as f:
         _json.dump(rec, f)
         f.write("\n")
-
-
-def _keep_hidden_tap(rows, resolved, lm_name, was_whole) -> None:
-    """Keep this forward's hidden_tap rows for the speech leg, when the request asks for speech."""
-    if not requests_speech(resolved.get("global.mode")):
-        return
-    tap = resolved.get(f"{lm_name}.hidden_tap")
-    if tap is None:
-        raise RuntimeError(
-            "ZERO FALLBACK: the LM graph exposes no hidden_tap "
-            "output — rebuild the container with the speech contract (R15 "
-            "registry-driven tap).")
-    rows.keep(tap, was_whole)
 
 
 def _joined_tap(rows, cat):
@@ -585,7 +572,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
             output = self._get_component_output(lm_name)
             if output is None:
                 break
-            _keep_hidden_tap(_tap_rows, resolved, lm_name, _was_whole)
+            keep_hidden_tap(_tap_rows, resolved, lm_name, _was_whole)
 
             logits = self._compute_logits(output, embed_weight, logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))

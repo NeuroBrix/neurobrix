@@ -230,3 +230,15 @@ class IterativeSteps:
 
         except Exception as e:
             raise RuntimeError(f"Tokenization failed: {e}") from e
+
+
+def required_num_steps(ctx):
+    """The step count the request or the container declares; refuses by name, the container named, when neither does."""
+    try:
+        return ctx.variable_resolver.get("global.num_inference_steps")
+    except KeyError:
+        from neurobrix.core.runtime_values import MissingRuntimeValue
+        raise MissingRuntimeValue(
+            f"'num_inference_steps' is required to run this model and nothing declares it: container "
+            f"{ctx.pkg.manifest.get('model_name') or '?'!r} has none in runtime/defaults.json and the "
+            f"request names none. Declare it in the container, or pass it with the request.") from None
