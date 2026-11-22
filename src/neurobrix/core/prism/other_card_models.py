@@ -21,6 +21,8 @@ def measured_of_others(devices, measured_of, added, q, chunks=None) -> Dict[Any,
             chunk, spread = chunks[d.get("model")] if chunks and d.get("model") in chunks else \
                 P.vmm_chunk_bytes(int(d["index"]), q["vmm_reps"], q["vmm_ks"])
             own["vmm_chunk_bytes"] = added.setdefault("vmm_chunk_bytes_of", {})[int(d["index"])] = int(chunk or 0)
+            from neurobrix.core.prism.kept_launch_facts import card_key
+            own["vmm_chunk_under"] = card_key()
             if spread is not None:
                 own["vmm_chunk_spread"] = dict(spread)
     return others
@@ -141,10 +143,14 @@ def from_siblings(path, data, devices) -> dict:
     `measured` facts and the runtime's card facts of a device of the SAME model — earlier in this profile or in a
     sibling generated profile (`sibling_profiles`); onto the profile: the host's measured facts (`host_measured`, key by
     key, the reload rates per engine and stored dtype) and the engine's base (`cpu.runtime_base_mb`) a sibling holds.
-    Identical cards are never measured again; a fact no sibling holds is left for the launch to measure. Returns
+    Identical cards are never measured again; a fact no sibling holds is left for the launch to measure; a sibling's
+    fact measured under another driver or library (`kept_launch_facts.drop_stale`) is not taken. Returns
     {"class_facts_from": [what came from where]} or {}."""
     from pathlib import Path
+    from neurobrix.core.prism.kept_launch_facts import drop_stale
     siblings, _skipped = sibling_profiles(Path(path).parent, exclude=path)
+    for _p, s in siblings:
+        drop_stale(s)            # a sibling's fact of another driver or library is no fact to take (read, never written)
     took = []
     donors = [(path.name if hasattr(path, "name") else str(path), d) for d in devices] + \
              [(p.name, d) for p, s in siblings for d in (s.get("devices") or [])]

@@ -27,6 +27,7 @@ def set_chunk(block: dict, measured) -> None:
     (row 167); 0 only for a device with no VMM."""
     chunk, spread = measured
     block["vmm_chunk_bytes"] = int(chunk or 0)
+    block["vmm_chunk_under"] = card_key()          # what it was measured under: another driver or library measures again
     if spread is not None:
         block["vmm_chunk_spread"] = dict(spread)
     else:
@@ -146,6 +147,36 @@ def read_key(source) -> str:
             f"kernel {platform.system()} {platform.release()}")
 
 
+#: the facts `drop_stale` drops with a stale key, per block
+_CHUNK_FACTS = ("vmm_chunk_bytes", "vmm_chunk_spread", "vmm_chunk_under")
+_RELOAD_FACTS = ("weight_reload_gbps", "weight_reload_spread", "weight_reload_source", "weight_reload_under")
+
+
+def drop_stale(data: dict) -> list:
+    """Drops from a generated profile's content `data` the kept facts measured under another driver or library than
+    this process's (`card_key`), so the launch measures them again (qa on 1215, the orchestrator's decision: the chunk
+    and the reload rates were kept by card model alone and copied into every sibling profile): each device's chunk
+    (`vmm_chunk_bytes` with its spread, keyed by `vmm_chunk_under`), the host's reload rates (keyed by
+    `weight_reload_under`), and a reader width kept with no key. A fact with no key is stale. Returns what was dropped,
+    worded for the launch's account."""
+    key, dropped = card_key(), []
+    for i, d in enumerate(data.get("devices") or []):
+        m = d.get("measured") or {}
+        if "vmm_chunk_bytes" in m and m.get("vmm_chunk_under") != key:
+            dropped.append(f"card {d.get('index', i)}: vmm_chunk_bytes measured under {m.get('vmm_chunk_under') or 'no key'}")
+            for k in _CHUNK_FACTS:
+                m.pop(k, None)
+    host = data.get("host_measured") or {}
+    if host.get("weight_reload_gbps") and host.get("weight_reload_under") != key:
+        dropped.append(f"host: weight_reload_gbps measured under {host.get('weight_reload_under') or 'no key'}")
+        for k in _RELOAD_FACTS:
+            host.pop(k, None)
+    if isinstance(host.get("weight_read"), dict) and "workers" in host["weight_read"]:
+        dropped.append("host: weight_read kept with no key")
+        host.pop("weight_read")
+    return dropped
+
+
 def _profile_path(hardware_id: Optional[str]) -> Optional[Path]:
     """The generated profile's file of `hardware_id`, or None for a hardware that is not a generated profile or has no
     file: the only profiles the engine keeps measured facts on."""
@@ -234,6 +265,7 @@ def put_reload(host: dict, engine: str, stored: str, gbps: float, spread, stamp:
     `weight_reload_spread` when its draws were unsteady (`spread`: (low, high) GB/s), the spread dropped when they were
     steady. Returns how the rate came, worded for `weight_reload_source`."""
     host.setdefault("weight_reload_gbps", {}).setdefault(engine, {})[stored] = gbps
+    host["weight_reload_under"] = card_key()       # every rate kept is of this driver and library (`drop_stale`)
     spreads = host.setdefault("weight_reload_spread", {})
     if spread is None:
         (spreads.get(engine) or {}).pop(stored, None)

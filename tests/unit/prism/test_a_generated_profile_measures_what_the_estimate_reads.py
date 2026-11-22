@@ -16,6 +16,7 @@ import yaml
 
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import facts_probe as P
+from neurobrix.core.prism.kept_launch_facts import card_key
 
 CALLS = []
 
@@ -222,6 +223,8 @@ def test_the_first_launch_reloads_the_smallest_component_of_each_unstated_stored
     assert sorted(probed) == [("f32", "net", "compiled"), ("small", "lm", "compiled")], probed
     data = yaml.safe_load((hw / "default-abc.yml").read_text())
     data["host_measured"]["weight_reload_gbps"] = {"compiled": {"BF16": 2.0, "F32": 1.0}}
+    # kept under this driver and library (an unkeyed rate is of an older launch and measured again: drop_stale)
+    data["host_measured"]["weight_reload_under"] = card_key()
     (hw / "default-abc.yml").write_text(yaml.safe_dump(data))
     probed.clear()
     A.ensure_measured_facts("default-abc", "compiled")

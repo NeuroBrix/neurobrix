@@ -13,6 +13,7 @@ import yaml
 
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import facts_probe as P
+from neurobrix.core.prism.kept_launch_facts import card_key
 
 SMALL = {"brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "architecture": "volta", "compute_capability": "7.0",
          "memory_mb": 16384, "supports_dtypes": ["float16", "float32"], "runtime_context_mb": 300}
@@ -49,7 +50,7 @@ def test_every_card_of_a_mixed_machine_gets_its_own_model_s_chunk(hw):
 
 def test_a_profile_written_before_without_the_other_model_s_chunk_is_completed(hw):
     root, probed = hw
-    measured = {"vmm_chunk_bytes": 32 << 20, "matmul_tflops": {"float16": 100.0}}
+    measured = {"vmm_chunk_bytes": 32 << 20, "vmm_chunk_under": card_key(), "matmul_tflops": {"float16": 100.0}}
     _write(root / "default-mix.yml", [dict(SMALL, index=0, measured=measured), dict(LARGE, index=1)])
     A.ensure_measured_facts("default-mix")
     devices = yaml.safe_load((root / "default-mix.yml").read_text())["devices"]

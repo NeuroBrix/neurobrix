@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from neurobrix.core.prism import autodetect as A
+from neurobrix.core.prism import kept_launch_facts as K
 from neurobrix.core.prism import facts_probe as P
 
 CALLS = []
@@ -87,7 +88,8 @@ def test_a_kept_reload_rate_and_its_spread_come_along(hw):
     _write(hw, "default-four", [dict(C16, index=0)],
            host_measured={"host_matmul_gflops": 300, "host_memory_gbps": 20,
                           "weight_reload_gbps": {"triton": {"BF16": 0.2, "F32": 0.19}},
-                          "weight_reload_spread": {"triton": {"BF16": spread}}})
+                          "weight_reload_spread": {"triton": {"BF16": spread}},
+                          "weight_reload_under": K.card_key()})       # measured under this driver and library (1215)
     A.ensure_measured_facts("default-four")
     _write(hw, "default-one", [dict(C16, index=0)])
     A.ensure_measured_facts("default-one")

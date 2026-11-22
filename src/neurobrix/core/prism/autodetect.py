@@ -2512,7 +2512,11 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     stamp, q = _time.strftime("%Y-%m-%d %H:%M:%S %Z"), FIRST_LAUNCH
     # class facts measured ONCE per card model and machine: what a sibling card set's profile (or an identical card of
     # this one) measured is taken, never measured again (other_card_models.from_siblings)
+    # a kept fact of another driver or library is measured again, never reused (qa on 1215): dropped first
+    stale = kept.drop_stale(data)
     added: Dict[str, Any] = dict(other_card_models.from_siblings(path, data, devices))
+    if stale:
+        added["stale_dropped"] = stale
 
     def measured_of(d):
         return dict(d.get("measured") or _vendor_block(d, "measured") or {})
@@ -2663,6 +2667,7 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
+    kept.drop_stale(data)          # rates of another driver or library are no rates to keep beside (qa on 1215)
     host = data.get("host_measured")
     vendor = _vendor_block(devices[0], "host_measured") if devices else None
     if not kept.reload_may_be_written(host, vendor, engine, st, spread):
