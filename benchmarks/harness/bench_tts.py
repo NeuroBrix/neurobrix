@@ -16,7 +16,7 @@ Usage:
     --probe-phrase benchmarks/assets/tts_probe_phrase.txt \
     --reps 5 --gpu 2 --out <dir> \
     --arm nbxt ARM_ENGINE= --arm nbxc ARM_ENGINE=compiled \
-    [--arm kokoro ARM_ENGINE=kokoro_pip,KOKORO_PYTHON=...]
+    [--arm kokoro ARM_ENGINE=kokoro_pip,KOKORO_PYTHON=... --snapshot <vendor snapshot dir>]
 """
 from __future__ import annotations
 
@@ -62,13 +62,23 @@ def run_once_nbx(args, arm_env, tag, outdir):
             "gpu_after": gpu_state(args.gpu)}
 
 
+# The vendor arm reads the snapshot it is given, never the hub: kokoro's KPipeline takes no local path
+# (kokoro 0.9.4 pipeline.py:63, `def __init__(self, lang_code, repo_id=None, model=True, ...)`, builds
+# `KModel(repo_id=repo_id)`, which hf_hub_download's config.json and the weights), so the KModel is built here from the
+# snapshot's config.json and its one .pth and handed in, and the voice is the snapshot's .pt file (load_single_voice
+# reads a path ending in .pt). The repo id given is the snapshot directory, not a hub id, and the arm runs with
+# HF_HUB_OFFLINE=1: a fetch anywhere below is refused, never made.
 _KOKORO_SCRIPT = r'''
-import json, sys, time, soundfile as sf
-from kokoro import KPipeline
-text, out = sys.argv[1:3]
-p = KPipeline(lang_code="a")
+import glob, json, os, sys, time, soundfile as sf
+from kokoro import KModel, KPipeline
+text, out, snap = sys.argv[1:4]
+weights = sorted(glob.glob(os.path.join(snap, "*.pth")))
+if len(weights) != 1:
+    raise SystemExit(f"{snap}: one .pth weight file expected, found {weights}")
+m = KModel(repo_id=snap, config=os.path.join(snap, "config.json"), model=weights[0]).to("cuda").eval()
+p = KPipeline(lang_code="a", repo_id=snap, model=m)
 t0 = time.time()
-chunks = [a for (_, _, a) in p(text, voice="af_heart")]
+chunks = [a for (_, _, a) in p(text, voice=os.path.join(snap, "voices", "af_heart.pt"))]
 dt = time.time() - t0
 import numpy as np
 audio = np.concatenate(chunks)
@@ -90,14 +100,14 @@ print("TTS_RESULT " + json.dumps({"gen_s": dt}))
 '''
 
 
-def _run_pip_arm(args, arm_env, tag, outdir, py, script):
+def _run_pip_arm(args, arm_env, tag, outdir, py, script, extra_argv=(), extra_env=None):
     wav = outdir / f"tts_{tag}.wav"
-    env = dict(os.environ); env.update(arm_env)
+    env = dict(os.environ); env.update(arm_env); env.update(extra_env or {})
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     env["NBX_LOG"] = "debug"          # the run's developer lines in its log (nbxtensor/terminal.py)
     t0 = time.time()
     r = _locked(args, lambda: subprocess.run(
-        [py, "-c", script, args.sentence_text, str(wav)],
+        [py, "-c", script, args.sentence_text, str(wav), *extra_argv],
         env=env, capture_output=True, text=True, timeout=1800))
     wall = time.time() - t0
     res = {}
@@ -119,7 +129,10 @@ def _run_pip_arm(args, arm_env, tag, outdir, py, script):
 def run_once_kokoro(args, arm_env, tag, outdir):
     py = arm_env.get("KOKORO_PYTHON",
                      str(_atelier.root("venvs") / "kokoro" / "bin" / "python"))
-    return _run_pip_arm(args, arm_env, tag, outdir, py, _KOKORO_SCRIPT)
+    if not args.snapshot or not Path(args.snapshot).is_dir():
+        raise SystemExit(f"the kokoro arm reads the vendor snapshot given by --snapshot; got {args.snapshot!r}")
+    return _run_pip_arm(args, arm_env, tag, outdir, py, _KOKORO_SCRIPT,
+                        extra_argv=(str(args.snapshot),), extra_env={"HF_HUB_OFFLINE": "1"})
 
 
 def run_once_chatterbox(args, arm_env, tag, outdir):
@@ -164,6 +177,8 @@ def main() -> int:
     ap.add_argument("--arm", nargs=2, action="append", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--lock-clock", type=int, default=1290)
+    ap.add_argument("--snapshot", default=None,
+                    help="the vendor snapshot directory the kokoro arm reads (config.json, its .pth, voices/)")
     args = ap.parse_args()
     args.sentence_text = Path(args.sentence).read_text().strip()
 
