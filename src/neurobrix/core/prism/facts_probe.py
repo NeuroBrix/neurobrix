@@ -251,15 +251,20 @@ def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int],
 
 
 def card_facts_in_a_child(index: int) -> dict:
-    """`autodetect.runtime_card_facts(index)` taken in its OWN short process: reading what the runtime takes on a card
-    means initialising it, and a launch holds a context only on the cards its plan names — the launching process must
-    not keep one on every card of the profile for having completed it. {} when the child cannot answer."""
+    """`autodetect.runtime_card_facts` taken in its OWN short process that sees the card ALONE (the backend's
+    `visible_env`, `nbxtensor.backend.install_help.one_device_env`, as the chunk probe's replay child): it reads the card
+    as its device 0 and opens no context on any other. Reading what the runtime takes on a card means initialising it,
+    and a launch holds a context only on the cards its plan names — neither the launching process nor this child may
+    open one on every card of the profile for having completed it. The facts are written to the generated profile
+    (`complete_runtime_card_facts`) and READ from it at every later launch. {} when the child cannot answer; a backend
+    that cannot show one card alone is refused by name (`one_device_env`)."""
     import json
     import subprocess
     import sys
+    from nbxtensor.backend.install_help import one_device_env
     code = ("import json; from neurobrix.core.prism import autodetect as A; "
-            f"print('CARD_FACTS ' + json.dumps(A.runtime_card_facts({int(index)})))")
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+            "print('CARD_FACTS ' + json.dumps(A.runtime_card_facts(0)))")
+    env = dict(one_device_env(int(index)), PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300, env=env)
     said = [line[len("CARD_FACTS "):] for line in out.stdout.splitlines() if line.startswith("CARD_FACTS ")]
     return json.loads(said[-1]) if out.returncode == 0 and said else {}

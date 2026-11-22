@@ -2390,15 +2390,20 @@ def _board_of(index: int, rows: Dict[int, Dict[str, Any]]) -> "Optional[int]":
 
 
 def runtime_card_facts(index: int) -> dict:
-    """{runtime_total_mb, runtime_context_mb} of a dedicated card as the engine's runtime sees it — the total its
-    allocator reports (cudaMemGetInfo) and this process's own context on it (`device_sharing`) — or {} when the runtime
-    cannot answer (the census shadow then refuses the card by name). Read through the engine's allocator, never torch."""
+    """{runtime_total_mb, runtime_context_mb} of a dedicated card as the engine's runtime sees it, READ through the
+    library: the total its allocator reports (cudaMemGetInfo, `nbxtensor.memory.device_total_bytes`) and this process's
+    own context on it as the driver attributes it (`nbxtensor.backend.process_memory.process_device_bytes`) — two
+    reads, no allocation and no timing — or {} when the runtime cannot answer (the census shadow then refuses the card
+    by name). Never torch, never the engine's own query of the driver's tool."""
+    from nbxtensor.backend.process_memory import process_device_bytes
     try:
         total = _nbx_memory.device_total_bytes(index)
-        facts = device_sharing(index)
-        if total is None or total <= 0 or not facts or facts.get("own_context_mb") is None:
+        if total is None or total <= 0:
             return {}
-        return {"runtime_total_mb": int(total // (1024 * 1024)), "runtime_context_mb": int(round(facts["own_context_mb"]))}
+        own = process_device_bytes(index)        # the context the total's read opened: 0 or None is no reading
+        if not own:
+            return {}
+        return {"runtime_total_mb": int(total // (1024 * 1024)), "runtime_context_mb": int(round(own / (1024 * 1024)))}
     except _nbx_device.NoGpuRuntime:  # no runtime here: the facts are absent, said by the shadow's refusal
         return {}
 

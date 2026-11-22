@@ -41,20 +41,25 @@ def test_a_launch_on_a_generated_profile_calls_the_completion():
 
 def test_a_card_is_read_in_its_own_process(monkeypatch):
     """Reading what the runtime takes on a card initialises it: the launching process must hold no context there
-    (a launch holds its plan's cards only). The reading is a child's; red if it is taken in-process."""
+    (a launch holds its plan's cards only). The reading is a child's, shown that card alone as its device 0 (the
+    ruling of 22/11 17:43, line 1); red if it is taken in-process."""
     import subprocess
     import sys
     from types import SimpleNamespace as NS
     from neurobrix.core.prism import autodetect as A
+    from nbxtensor.backend import runtime as RT
     monkeypatch.setattr(A, "runtime_card_facts", lambda index: (_ for _ in ()).throw(AssertionError("read in-process")))
+    monkeypatch.setattr(RT, "backend_table", lambda: {"visible_env": ("CUDA_VISIBLE_DEVICES",)})
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1,2,3")
     seen = []
 
     def run(cmd, **kw):
         seen.append(cmd)
+        assert kw["env"]["CUDA_VISIBLE_DEVICES"] == "3"
         return NS(returncode=0, stdout='noise\nCARD_FACTS {"runtime_total_mb": 32501, "runtime_context_mb": 306}\n')
     monkeypatch.setattr(subprocess, "run", run)
     assert P.card_facts_in_a_child(3) == {"runtime_total_mb": 32501, "runtime_context_mb": 306}
-    assert seen[0][0] == sys.executable and "runtime_card_facts(3)" in seen[0][2]
+    assert seen[0][0] == sys.executable and "runtime_card_facts(0)" in seen[0][2]
     monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: NS(returncode=1, stdout=""))
     assert P.card_facts_in_a_child(3) == {}
 
