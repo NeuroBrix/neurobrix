@@ -138,7 +138,8 @@ def cmd_autotune(args) -> int:
                               models=[m for m in (getattr(args, "models", None) or "").split(",") if m] or None,
                               skip_proven_since=getattr(args, "skip_proven_since", None),
                               skip_keys=getattr(args, "skip_keys", None),
-                              keys_path=getattr(args, "keys", None))
+                              keys_path=getattr(args, "keys", None),
+                              reprove_epoch_from=getattr(args, "reprove_epoch_from", None))
         except RuntimeError as exc:
             print(f"ERROR: {exc}")
             return 1

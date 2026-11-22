@@ -234,6 +234,12 @@ def create_parser(show_dev: bool = False):
                                 'pass — until then the RUNTIME DOES NOT SERVE IT (a configuration is a property of the compiler '
                                 'that produced it: the shape sweeps at runtime and lands in the local replay cache; '
                                 'NBX_AUTOTUNE_ANY_GENERATOR=1 serves it anyway, at the caller\'s risk)')
+    certify_p.add_argument('--reprove-epoch-from', default=None, metavar='CERTIFIED_TREE',
+                           help='re-prove, into the draft tree --out (required, apart from this one), every key whose '
+                                'certification for this card\'s class in CERTIFIED_TREE carries another bits epoch than '
+                                'the library\'s: the stored configuration alone, by the oracle and one timing; a key '
+                                'that does not re-prove is not swept but listed in the draft\'s reprove_epoch_ledger.tsv '
+                                '(tools/certified_epoch_stamp.py replaces a shipped file from the draft)')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')
