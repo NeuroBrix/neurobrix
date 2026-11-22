@@ -187,6 +187,8 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     # and a launch that owes nothing says nothing
     data = yaml.safe_load((hw / "default-t.yml").read_text())
     data["host_measured"]["weight_reload_gbps"] = {"triton": {"BF16": 2.0}}
+    from neurobrix.core.prism.kept_launch_facts import card_key
+    data["host_measured"]["weight_reload_under"] = card_key()   # a rate kept is of this driver and library (drop_stale)
     (hw / "default-t.yml").write_text(yaml.safe_dump(data))
     launch_lines.SAID.clear()
     caplog.clear()
