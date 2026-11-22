@@ -144,10 +144,12 @@ def from_siblings(path, data, devices) -> dict:
     sibling generated profile (`sibling_profiles`); onto the profile: the host's measured facts (`host_measured`, key by
     key, the reload rates per engine and stored dtype) and the engine's base (`cpu.runtime_base_mb`) a sibling holds.
     Identical cards are never measured again; a fact no sibling holds is left for the launch to measure; a sibling's
-    fact measured under another driver or library (`kept_launch_facts.drop_stale`) is not taken. Returns
-    {"class_facts_from": [what came from where]} or {}."""
+    fact measured under another driver or library (`kept_launch_facts.drop_stale`) is not taken, and this profile's own
+    such facts are dropped first, for the launch to measure again. Returns {"class_facts_from": [what came from where],
+    "stale_dropped": [what was dropped]}, each only when not empty."""
     from pathlib import Path
     from neurobrix.core.prism.kept_launch_facts import drop_stale
+    stale = drop_stale(data)             # this profile's facts of another driver or library: measured again
     siblings, _skipped = sibling_profiles(Path(path).parent, exclude=path)
     for _p, s in siblings:
         drop_stale(s)            # a sibling's fact of another driver or library is no fact to take (read, never written)
@@ -159,7 +161,7 @@ def from_siblings(path, data, devices) -> dict:
     for p, s in siblings:
         _take_host_facts(data, p.name, s, took)
         _take_runtime_base(data, p.name, s, took)
-    return {"class_facts_from": took} if took else {}
+    return {k: v for k, v in (("class_facts_from", took), ("stale_dropped", stale)) if v}
 
 
 def base_from_siblings(directory, exclude=None) -> dict:
