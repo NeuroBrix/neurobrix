@@ -6,9 +6,9 @@ ledger (`<draft>/reprove_epoch_ledger.tsv`) of every key it tried. This tool wal
 file named) and, per file, counts each certification owed (one key in one memory class, the unit a card re-proves):
 
   re-proven  the draft holds it for that class, every proof of it at the library's epoch, the configuration
-             byte-identical to the shipped one;
+             byte-identical to the shipped one, and the same matrix-unit tile (or none on both);
   failed     the ledger's last line for it says failed (its re-prove raised, or it could not be filed);
-  pending    neither — not yet tried, or tried by no ledger line, or a draft configuration that differs.
+  pending    neither — not yet tried, or tried by no ledger line, or a draft configuration or unit tile that differs.
 
 A file is REPLACED (`--apply`) only when nothing is pending: every certification it owes is re-proven or failed, and
 the draft file passes the library's own gate (`validate`: the epoch, the format, every proof). The replacement is the
@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 from nbxtensor.ops import autotune_certified as C
+from neurobrix.kernels.autotune_certify import unit_tile
 
 LEDGER = "reprove_epoch_ledger.tsv"
 TABLE_COLS = ["file", "keys", "re_proven", "failed", "seconds"]
@@ -88,6 +89,9 @@ def judge(shipped_path, draft_path, ledger, rel):
             elif got.get("config") != head.get("config"):
                 v["pending"].append((ktext, cls, f"the draft's configuration {got.get('config')} is not the shipped "
                                                  f"{head.get('config')}"))
+            elif unit_tile(got) != unit_tile(head):
+                v["pending"].append((ktext, cls, f"the draft's unit tile {unit_tile(got)} is not the shipped "
+                                                 f"{unit_tile(head)}"))
             else:
                 v["re_proven"] += 1
         elif line is not None and line.get("outcome") == "failed":

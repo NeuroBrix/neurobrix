@@ -81,6 +81,20 @@ def test_a_draft_configuration_that_differs_is_not_a_reproof(tmp_path):
     assert _run(tmp_path)["replaced"] == [] and shipped.read_bytes() == before
 
 
+def test_a_draft_unit_tile_that_differs_is_not_a_reproof(tmp_path):
+    """qa 1227-1: the library serves a unit-bearing launch with `unit.tile`; a re-chosen tile is a re-tuning."""
+    unit = lambda m: {"unit": {"tile": {"block_m": m, "block_n": 64, "block_k": 32, "warps_m": 2, "warps_n": 2,
+                                        "group_m": 8}, "deviation": 0.0, "best_ms": 1.0}}
+    shipped = _write(tmp_path / "shipped", {K1: {"config": _cfg(1), "proof": _proof(), **unit(64)}})
+    _write(tmp_path / "draft", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH), **unit(128)}})
+    _ledger(tmp_path / "draft", [(K1, "reproven")])
+    before = shipped.read_bytes()
+    out = _run(tmp_path)
+    assert out["replaced"] == [] and shipped.read_bytes() == before
+    _write(tmp_path / "draft", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH), **unit(64)}})
+    assert _run(tmp_path)["replaced"] == ["nvidia/volta/toy_kernel.fp32.json"]
+
+
 def test_the_failed_keys_leave_the_file_and_join_the_recert_list(tmp_path):
     shipped = _setup(tmp_path, {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}},
                      [(K1, "reproven"), (K2, "failed")])

@@ -1005,11 +1005,43 @@ def keep_ruled_unit(state: Dict[str, Any], runs: list, units: list, fma_ms: floa
     state["unit"] = {"tile": utile, "deviation": udev, "best_ms": ums, "fma_best_ms": fma_ms}
 
 
+#: `certify_key(keep_unit=...)` left out: the matrix unit's tile is chosen among the profile's declared tiles
+_CHOOSE_UNIT = object()
+
+
+def unit_tile(cert: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The matrix-unit tile a certification names (`unit.tile`, the tile the library serves the launch with), in its
+    JSON form; None when it names none."""
+    unit = (cert or {}).get("unit")
+    tile = unit.get("tile") if isinstance(unit, dict) else None
+    return None if tile is None else json.loads(json.dumps(tile, sort_keys=True))
+
+
+def shipped_unit_runs(runs: list, shipped: Optional[Dict[str, Any]], what: str) -> list:
+    """The unit runs (`H.unit_runs`) a RE-PROOF may time: the shipped tile's alone — the re-proof proves the tile as
+    shipped and makes no new choice among the declared tiles. Raises when the shipped certification and the rule
+    disagree (a shipped tile and no unit run, a unit run and no shipped tile, a shipped tile the profile no longer
+    declares): that is not a re-proof, and the key goes to the full recertification."""
+    if shipped is None:
+        if runs:
+            raise RuntimeError(f"{what}: the rule gives this launch to the matrix unit and the shipped certification "
+                               f"names no unit tile — a re-proof would choose one; not re-proven")
+        return []
+    if not runs:
+        raise RuntimeError(f"{what}: the shipped certification names the unit tile {shipped} and the rule gives this "
+                           f"launch no unit run; not re-proven")
+    same = [(t, r) for t, r in runs if json.loads(json.dumps(t, sort_keys=True)) == shipped]
+    if not same:
+        raise RuntimeError(f"{what}: the shipped unit tile {shipped} is not one of the profile's "
+                           f"{len(runs)} declared tile(s); not re-proven")
+    return same[:1]
+
+
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                 card_bytes: Optional[int] = None, unified: bool = False,
                 num_stages: Optional[Tuple[int, ...]] = None, budget_bytes: Optional[int] = None,
                 floor_bytes: int = 0, only_config: Optional[Dict[str, Any]] = None,
-                reproven_from: Optional[str] = None) -> Dict[str, Any]:
+                reproven_from: Optional[str] = None, keep_unit: Any = _CHOOSE_UNIT) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
     proof, excluded) for the directory. Raises when nothing survives.
@@ -1018,7 +1050,10 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
     candidates are THAT one configuration: the oracle and one timing under the
     witness — a certificate made under a retired code generator is re-PROVEN, not
     re-swept (the owner, 2026-09-29 01:37, release-decisions); the proof then
-    carries `reproven_from`, the generator label it was first proven under."""
+    carries `reproven_from`, the generator label it was first proven under.
+
+    With `keep_unit` (the shipped matrix-unit tile, `unit_tile`, or None for a certification naming none) the unit is
+    proven as shipped (`shipped_unit_runs`): that tile alone, never a new choice by timing."""
     from nbxtensor.ops import autotune_cache as atc
     made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes, unified=unified,
                       budget_bytes=budget_bytes, floor_bytes=floor_bytes)
@@ -1156,6 +1191,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         # THE MATRIX UNIT, BY THE RULE (`keep_ruled_unit`): a launch the rule gives to the unit names the fastest of
         # the profile's declared unit tiles proven here, whatever the FMA configurations time.
         runs = H.unit_runs(tuner, args, kwargs)
+        if keep_unit is not _CHOOSE_UNIT:
+            runs = shipped_unit_runs(runs, keep_unit, f"{qual} at {key!r}")
         keep_ruled_unit(state, runs, launch.sweep_units(runs, oracle, tolerance, bench, excluded, unrun), ms,
                         f"{qual} at {key!r}")
         state.update({"config": H.config_dict(best), "deviation": dev, "best_ms": ms,
@@ -1829,10 +1866,13 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                     # the epoch re-prove: the stored configuration alone; a failure is raised to the handlers below
                     # and noted for the full recertification — never swept here
                     entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
-                                        reproven_from=stored_label, **common)
+                                        reproven_from=stored_label, keep_unit=unit_tile(stored), **common)
                     if entry.get("config") != stored["config"]:
                         raise RuntimeError(f"the re-proven configuration {entry.get('config')} is not the stored one "
                                            f"{stored['config']}")
+                    if unit_tile(entry) != unit_tile(stored):
+                        raise RuntimeError(f"the re-proven unit tile {unit_tile(entry)} is not the stored one "
+                                           f"{unit_tile(stored)}")
                     summary["reproven"] = summary.get("reproven", 0) + 1
                 elif reprove_from is not None:
                     continue                  # no stored head for this class: nothing to re-prove
