@@ -1519,7 +1519,7 @@ def stored_epoch_keys(vendor: str, profile: str, shipped_root, memory_class: int
 
 class ReproveLedger:
     """The per-key record of an epoch re-prove (`--reprove-epoch-from`), one TSV line appended per key tried:
-    file, key, memory_class, outcome (reproven | failed), seconds, reason, date. A failed key is NOT swept and NOT
+    file (vendor/profile/name, relative to the draft tree: two profiles hold files of one name), key, memory_class, outcome (reproven | failed), seconds, reason, date. A failed key is NOT swept and NOT
     dropped silently: its line is what lists it for the full recertification (`tools/certified_epoch_stamp.py`
     reads it). Two certifiers (one per memory class) may append to one ledger: each line is one locked write."""
     COLS = ("file", "key", "memory_class", "outcome", "seconds", "reason", "date")
@@ -1745,7 +1745,8 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
     # stored configuration proven again alone, into the draft tree `root`; every key tried is noted in `ledger`
     def note(path, ktext, outcome, t0, reason=""):
         if ledger is not None:
-            ledger.note(path.name, ktext, certifying_class, outcome, time.time() - t0, reason)
+            rel = path.relative_to(root) if Path(root) in path.parents else Path(path.name)
+            ledger.note(str(rel), ktext, certifying_class, outcome, time.time() - t0, reason)
     done = 0
     attempts = 0
     # keys this class refused by size: a pass that only fills what is missing does not draw them again while the

@@ -107,6 +107,7 @@ def test_a_failed_reprove_is_listed_never_swept_and_the_shipped_file_is_not_writ
     assert e["config"] == _cfg(1) and e["proof"]["bits_epoch"] == C.BITS_EPOCH
     rows = [l.split("\t") for l in (draft / CF.REPROVE_LEDGER).read_text().splitlines()]
     assert rows[0] == list(CF.ReproveLedger.COLS)
+    assert {r[0] for r in rows[1:]} == {"nvidia/volta/toy_kernel.fp32.json"}   # the profile's file, not a bare name
     got = {(r[1], r[2], r[3]) for r in rows[1:]}
     assert got == {(C.key_repr((1, "fp32")), "16g", "reproven"), (C.key_repr((2, "fp32")), "16g", "failed")}
     assert "tolerance" in [r for r in rows[1:] if r[3] == "failed"][0][5]

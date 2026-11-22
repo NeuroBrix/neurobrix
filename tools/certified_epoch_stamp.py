@@ -44,7 +44,7 @@ def _class_epochs(head):
 
 
 def read_ledger(path):
-    """{(file, key text, memory class GB): its LAST line} — a key tried again keeps only its latest outcome."""
+    """{(file relative to the tree, key text, memory class GB): its LAST line} — a key tried again keeps only its latest outcome."""
     out = {}
     if not Path(path).exists():
         return out
@@ -65,14 +65,14 @@ def owed_heads(entries):
     return out
 
 
-def judge(shipped_path, draft_path, ledger):
+def judge(shipped_path, draft_path, ledger, rel):
     """The file's verdict: {'keys', 're_proven', 'failed' [(key, class, reason)], 'pending' [(key, class, why)],
     'seconds', 'problems' (the draft's gate), 'reached'}."""
     doc = json.loads(Path(shipped_path).read_text(encoding="utf-8"))
     owed = owed_heads(doc.get("entries") or {})
     draft_doc = json.loads(Path(draft_path).read_text(encoding="utf-8")) if Path(draft_path).exists() else None
     draft = {_norm(k): e for k, e in ((draft_doc or {}).get("entries") or {}).items()}
-    fname = Path(shipped_path).name
+    fname = str(rel)
     v = {"keys": len(owed), "re_proven": 0, "failed": [], "pending": [], "seconds": 0.0, "problems": [],
          "reached": draft_doc is not None or any(k[0] == fname for k in ledger)}
     owed_ids = set()
@@ -128,7 +128,7 @@ def run(shipped, draft, table, recert_list, apply=False, say=print):
     rows, recert, replaced = [], [], []
     for path in C.files(shipped):
         rel = path.relative_to(shipped)
-        v = judge(path, draft / rel, ledger)
+        v = judge(path, draft / rel, ledger, rel)
         if not v["keys"] or not v["reached"]:
             continue
         rows.append({"file": str(rel), "keys": v["keys"], "re_proven": v["re_proven"], "failed": len(v["failed"]),

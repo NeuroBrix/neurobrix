@@ -49,7 +49,7 @@ def _ledger(draft, rows):
     with open(draft / S.LEDGER, "w") as fh:
         fh.write("file\tkey\tmemory_class\toutcome\tseconds\treason\tdate\n")
         for k, outcome in rows:
-            fh.write(f"toy_kernel.fp32.json\t{k}\t16g\t{outcome}\t2.5\t{'oracle: too far' if outcome == 'failed' else ''}"
+            fh.write(f"nvidia/volta/toy_kernel.fp32.json\t{k}\t16g\t{outcome}\t2.5\t{'oracle: too far' if outcome == 'failed' else ''}"
                      f"\t2026-11-22T00:00:00+00:00\n")
 
 
