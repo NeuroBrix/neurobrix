@@ -344,7 +344,14 @@ def request_input_config(args, manifest: dict, family, cache_path):
     vae_scale = _rt("vae_scale_factor", args, cached_defaults, _fam_defaults,
                     extra=[("the container's own VAE scale", _vsf(manifest, cached_defaults, _topo_components))],
                     default=None)
-    num_frames = _rt("num_frames", args, cached_defaults, _fam_defaults, default=None)
+    # The frame count is a MODEL value: the request or the container, never the family file. A family that lists it
+    # under `required_container_values` (video) refuses by name when neither declares it; any other family has no
+    # temporal axis, and absent is its answer.
+    from neurobrix.core.config import get_family_config as _get_family_config
+    _required = (_get_family_config(family).get("required_container_values") or []) if family else []
+    num_frames = _rt("num_frames", args, cached_defaults, None,
+                     **({"why": f"The {family} family requires its container to declare the frame count."}
+                        if "num_frames" in _required else {"default": None}))
     temporal_compression = _rt("temporal_compression_ratio", args, cached_defaults,
                                _fam_defaults, default=None)
 

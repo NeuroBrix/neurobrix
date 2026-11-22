@@ -12,11 +12,15 @@ output_processing:
   output_range: [-1.0, 1.0]  # Model output range
   output_format: "mp4"       # Default output file format
 
+# Model values (frame count, steps, guidance scale) are the CONTAINER's: the build embeds them in
+# runtime/defaults.json. The family never supplies one (a family default planned 16 frames for a
+# container that declared none).
 defaults:
-  num_inference_steps: 50    # Video models balance quality/speed
-  guidance_scale: 7.5        # Similar to image
-  num_frames: 16             # Default number of frames
   negative_prompt: ""        # Empty is allowed
+
+# Values a video container MUST declare: the run refuses by name when the request and the container
+# both leave one out (`request_input_config`), instead of planning on an invented one.
+required_container_values: ["num_frames"]
 
 execution:
   flow_type: "iterative_process"
