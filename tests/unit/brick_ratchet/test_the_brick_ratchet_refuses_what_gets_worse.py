@@ -13,7 +13,9 @@ What this file does if the tool is wrong:
    the tensor-mechanism count itself: one hit per pattern kind, none for a comment, a string, or a call of torch (the
    PyTorch engine's own library) — red otherwise;
 3. the repository itself: anything worse than `tools/brick_ratchet.baseline.json`, or a baseline entry already
-   resolved, is red — this is the ratchet a lot meets before it lands.
+   resolved, is red — this is the ratchet a lot meets before it lands; and a package's measured 95th percentile above
+   its limit, or a limit raised above its ceiling (`CEILING`), is red — a new function over the limit or a rising
+   percentile; a falling one forces no chase, and the functions already over the limit are held by their entries.
 
 No card. Run: python -m pytest tests/unit/brick_ratchet
 """
@@ -223,11 +225,81 @@ def test_the_repository_holds_its_baseline():
     assert not refusals, "\n".join(refusals[:40])
 
 
-def test_the_limits_are_not_above_the_percentile_they_were_drawn_from():
-    """The limits are data drawn from the code's own 95th percentile: lowered when it falls, never raised above it."""
-    config = json.loads(B.CONFIG.read_text())
-    for name, st in B.measure(REPO, config).items():
-        lengths = [n for n, _, kernel in st["functions"].values() if not kernel]
-        depths = [d for _, d, _ in st["functions"].values()]
+# The ceiling of each package's limits: its 95th percentile measured on 2026-11-22 at 1834306d4 (code lines 62,
+# depth 4; the supervisor's ruling of 23:00). Lowering a limit in tools/brick_ratchet.json is free; raising one above
+# this needs this line changed, in a reviewed commit.
+CEILING = {"neurobrix": {"max_code_lines": 62, "max_depth": 4}}
+
+
+def _percentile_refusals(state, config, ceiling):
+    """What the limits guard, by name: a package's measured 95th percentile ABOVE its limit (the code got longer or
+    deeper than the figure the limit was drawn from), and a limit raised above its ceiling. A percentile that falls
+    is no refusal: the limit may be lowered after it, never must be (no chase). The functions already over a limit
+    are not judged here: each is held by its own baseline entry, down only (`B.check`)."""
+    out = []
+    for name, st in state.items():
         lim = config["packages"][name]
-        assert lim["max_code_lines"] <= B._percentile(lengths, .95) and lim["max_depth"] <= B._percentile(depths, .95), name
+        for key, values in (("max_code_lines", [n for n, _, kernel in st["functions"].values() if not kernel]),
+                            ("max_depth", [d for _, d, _ in st["functions"].values()])):
+            p95 = B._percentile(values, .95)
+            if p95 > lim[key]:
+                out.append(f"{name} {key}: the measured 95th percentile {p95} is above the limit {lim[key]}")
+            if lim[key] > ceiling.get(name, {}).get(key, lim[key]):
+                out.append(f"{name} {key}: the limit {lim[key]} is raised above its ceiling {ceiling[name][key]}")
+    return out
+
+
+def _measured(lengths, depth=4):
+    """A synthetic measure of one package: one function per length, none a kernel."""
+    return {"pkg": {"functions": {f"pkg/m.py::f{i}": (n, depth, False) for i, n in enumerate(lengths)}}}
+
+
+def _limits(lines, depth=4):
+    return {"packages": {"pkg": {"max_code_lines": lines, "max_depth": depth}}}
+
+
+def _body(name, lines):
+    return f"def {name}(x):\n" + "".join(f"    x += {i}\n" for i in range(lines - 2)) + "    return x\n"
+
+
+def test_a_new_function_of_63_lines_is_refused_under_the_repository_limit(tmp_path):
+    """(a) The engine's limit holds a NEW function of 63 code lines out: it is refused, by name."""
+    engine = json.loads(B.CONFIG.read_text())["packages"]["neurobrix"]["max_code_lines"]
+    cfg = CONFIG | {"packages": {"pkg": CONFIG["packages"]["pkg"] | {"max_code_lines": engine}}, "max_module_code_lines": 1500}
+    _write(tmp_path, CLEAN)
+    baseline = B.offenders(B.measure(tmp_path, cfg), cfg)
+    _write(tmp_path, {"pkg/core/c.py": '"""Does c."""\n\n\n' + _body("fresh", 63)})
+    out = B.check(B.offenders(B.measure(tmp_path, cfg), cfg), baseline)
+    assert any("pkg/core/c.py::fresh is new and over the limit ([63, 0]" in r for r in out), out
+
+
+def test_a_95th_percentile_that_rises_above_the_limit_is_refused():
+    """(b) A package whose 95th percentile rises to 63 against a limit of 62 is refused; at 62 it passes."""
+    assert _percentile_refusals(_measured([10] * 95 + [62] * 5), _limits(62), {}) == []
+    out = _percentile_refusals(_measured([10] * 95 + [63] * 5), _limits(62), {})
+    assert out and "63" in out[0], out
+
+
+def test_a_95th_percentile_that_falls_forces_no_chase():
+    """A falling 95th percentile is no refusal: the limit may be lowered after it, never must be."""
+    assert _percentile_refusals(_measured([10] * 95 + [50] * 5), _limits(62), {}) == []
+
+
+def test_a_listed_function_at_its_size_is_not_refused(tmp_path):
+    """(c) A function already over the limit and held by its baseline entry at its size passes; one line more is red."""
+    cfg = CONFIG | {"packages": {"pkg": CONFIG["packages"]["pkg"] | {"max_code_lines": 62}}, "max_module_code_lines": 1500}
+    _write(tmp_path, CLEAN | {"pkg/core/c.py": '"""Does c."""\n\n\n' + _body("held", 70)})
+    baseline = B.offenders(B.measure(tmp_path, cfg), cfg)
+    assert baseline["pkg"]["functions"]["pkg/core/c.py::held"] == [70, 0]
+    assert B.check(B.offenders(B.measure(tmp_path, cfg), cfg), baseline) == []
+    _write(tmp_path, {"pkg/core/c.py": '"""Does c."""\n\n\n' + _body("held", 71)})
+    out = B.check(B.offenders(B.measure(tmp_path, cfg), cfg), baseline)
+    assert out == ["pkg function: pkg/core/c.py::held grew ([70, 0] -> [71, 0] code lines, depth): a listed offender "
+                   "only shrinks"], out
+
+
+def test_the_limits_hold_the_measured_percentile():
+    """The repository's 95th percentiles are not above their package's limits, and no limit is above its ceiling."""
+    config = json.loads(B.CONFIG.read_text())
+    refusals = _percentile_refusals(B.measure(REPO, config), config, CEILING)
+    assert not refusals, "\n".join(refusals)
