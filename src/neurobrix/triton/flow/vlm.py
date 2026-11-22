@@ -543,7 +543,12 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     np.zeros((0, _h_ds), dtype=np.float32)).to(dtype)
                 for _ in ds_input_names]
         from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+        from neurobrix.core.flow.decoder_cache import KeptRows
         _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
+        # The tap rows of every position the LM has run, kept as each forward happens (the speech leg reads
+        # the whole context, and a cached step covers one position): the prefill's rows, then one row per
+        # cached step, in position order.
+        _tap_rows = KeptRows()
         for _step in range(max_tokens):
             n_gen = len(generated_ids)
             if n_gen:
@@ -593,12 +598,21 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                     resolved[f"deepstack_visual_embeds.{_i}"] = _t
                     resolved[f"global.deepstack_visual_embeds.{_i}"] = _t
 
+            _was_whole = not _steps.one_token
             _steps.before_run()
             self._execute_component(lm_name, "forward", None)
             _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break
+            if requests_speech(resolved.get("global.mode")):
+                _tap_now = resolved.get(f"{lm_name}.hidden_tap")
+                if _tap_now is None:
+                    raise RuntimeError(
+                        "ZERO FALLBACK: the LM graph exposes no hidden_tap "
+                        "output — rebuild the container with the speech contract (R15 "
+                        "registry-driven tap).")
+                _tap_rows.keep(_tap_now, _was_whole)
 
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
@@ -643,18 +657,18 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         # Activates on the request mode + the container's declared
         # contract (topology.flow.speech) — data only, no model names.
         # Runs BEFORE the LM unload: the leg reads the thinker embed
-        # weight and the final forward's hidden_tap output.
+        # weight and the hidden_tap rows kept from each forward.
         if requests_speech(resolved.get("global.mode")):
             if not self.ctx.pkg.topology.get("flow", {}).get("speech"):
                 raise RuntimeError(
                     "ZERO FALLBACK: --mode audio on a build without "
                     "topology.flow.speech (P-OMNI-GEN speech leg).")
-            _tap = resolved.get(f"{lm_name}.hidden_tap")
-            if _tap is None:
+            if not _tap_rows:
                 raise RuntimeError(
                     "ZERO FALLBACK: the LM graph exposes no hidden_tap "
                     "output — rebuild the container with the speech contract (R15 "
                     "registry-driven tap).")
+            _tap = _tap_rows.joined(NBXTensor.cat)
             from neurobrix.triton.flow.speech import SpeechLeg
             SpeechLeg(self).run({
                 "input_ids": (list(prefix_ids)
@@ -970,11 +984,12 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
         start = time.perf_counter()
         generated_ids: List[int] = []
         from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+        from neurobrix.core.flow.decoder_cache import KeptRows
         _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         # The hidden rows of every position the LM has run, kept as each forward happens (the speech leg
         # reads the whole tts span, and a cached step covers one position): the prefill's rows, then one
         # row per cached step, in position order.
-        _kept_rows: list = []
+        _kept_rows = KeptRows()
         for _step in range(max_tokens):
             S = int(context_embeds.shape[1])
             # A cached step hands the LM the one new token at its absolute position S - 1, no
@@ -1010,10 +1025,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
             if output is None:
                 break
             if requests_speech(resolved.get("global.mode")):
-                if _was_whole:   # a run over the whole context covers every position: its rows replace
-                    _kept_rows = [output]
-                else:
-                    _kept_rows.append(output)
+                _kept_rows.keep(output, _was_whole)
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
             _maybe_log_topk(logits, len(generated_ids))
@@ -1059,8 +1071,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                 from neurobrix.triton.flow.speech_cfm import SpeechCFMLeg
                 SpeechCFMLeg(self).run({
                     "full_ids": list(ids) + list(generated_ids),
-                    "lm_hidden": (_kept_rows[0] if len(_kept_rows) == 1
-                                  else NBXTensor.cat(_kept_rows, dim=1)),
+                    "lm_hidden": _kept_rows.joined(NBXTensor.cat),
                 })
             else:
                 raise RuntimeError(

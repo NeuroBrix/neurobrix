@@ -8,6 +8,10 @@ and refused: "the final decode forward covers 1 positions but the tts span ends 
 
 The decode loop of the flow runs for real, with the real step protocol (`DecodeSteps`) over a fake cache; the LM
 is a fake whose row for position p is the number p, so the rows the leg receives say which positions they cover.
+
+Both decodes are run: on the cache (the prefill's rows, then one row per cached step), and without it (the recompute
+oracle: every forward covers the whole context, so each one's rows REPLACE what was kept; keeping them all would
+hand the leg the same positions several times).
 """
 from __future__ import annotations
 
@@ -93,7 +97,11 @@ def _check(received):
     assert received[0]["full_ids"] == PROMPT_IDS + [TTS_BOS] + GENERATED
 
 
-def test_the_pytorch_branch_hands_the_speech_leg_the_rows_of_every_position(tmp_path, monkeypatch):
+CACHE_OR_NOT = pytest.mark.parametrize("cached", [True, False], ids=["on_the_cache", "recomputing_the_whole_context"])
+
+
+@CACHE_OR_NOT
+def test_the_pytorch_branch_hands_the_speech_leg_the_rows_of_every_position(cached, tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     import neurobrix.core.flow.decoder_cache as decoder_cache
     import neurobrix.core.flow.speech_cfm as speech_cfm
@@ -109,7 +117,7 @@ def test_the_pytorch_branch_hands_the_speech_leg_the_rows_of_every_position(tmp_
     _sampled(monkeypatch, samplers)
     monkeypatch.setattr(cvlm, "_effective_sampling", lambda ctx, defaults: ({}, set()))
     monkeypatch.setattr(cvlm, "gather_rows", lambda w, ids, device, dtype: torch.zeros(1, len(ids[0]), HIDDEN))
-    monkeypatch.setattr(decoder_cache, "open_decoder_cache", lambda *a: _Cache())
+    monkeypatch.setattr(decoder_cache, "open_decoder_cache", lambda *a: _Cache() if cached else None)
 
     engine = object.__new__(cvlm.VLMEngine)
     engine.ctx = _ctx(tmp_path)
@@ -143,7 +151,8 @@ class _T:   # the slice of NBXTensor the staged decode loop touches, over numpy
         return _T(np.concatenate([t.data for t in tensors], axis=dim))
 
 
-def test_the_triton_branch_hands_the_speech_leg_the_rows_of_every_position(tmp_path, monkeypatch):
+@CACHE_OR_NOT
+def test_the_triton_branch_hands_the_speech_leg_the_rows_of_every_position(cached, tmp_path, monkeypatch):
     import neurobrix.triton.flow.decoder_cache as decoder_cache
     import neurobrix.triton.flow.speech_cfm as speech_cfm
     import neurobrix.triton.flow.vlm as tvlm
@@ -156,7 +165,7 @@ def test_the_triton_branch_hands_the_speech_leg_the_rows_of_every_position(tmp_p
     monkeypatch.setattr(tvlm, "enforce_sampling_support", lambda *a, **k: None)
     monkeypatch.setattr(tvlm, "NBXTensor", _T)
     _sampled(monkeypatch, tvlm)
-    monkeypatch.setattr(decoder_cache, "open_decoder_cache", lambda *a: _Cache())
+    monkeypatch.setattr(decoder_cache, "open_decoder_cache", lambda *a: _Cache() if cached else None)
 
     engine = object.__new__(tvlm.TritonVLMEngine)
     engine.ctx = _ctx(tmp_path)

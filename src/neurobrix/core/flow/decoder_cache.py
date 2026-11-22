@@ -149,3 +149,25 @@ class DecodeSteps:
         self.runs += 1
         if self.wrapper is not None and self.runs == 1:
             self.wrapper.set_decode_mode(actual_seq_len=1)
+
+
+class KeptRows:
+    """The hidden rows of every position a decode has run, kept as each forward happens: a speech leg reads the whole
+    span, and a cached step covers one position. A run over the whole context covers every position, so its rows
+    REPLACE what was kept; a cached step's one row is APPENDED; `joined(cat)` hands them in position order."""
+
+    def __init__(self):
+        self.rows: list = []
+
+    def keep(self, rows, whole: bool) -> None:
+        if whole:
+            self.rows = [rows]
+        else:
+            self.rows.append(rows)
+
+    def __bool__(self) -> bool:
+        return bool(self.rows)
+
+    def joined(self, cat):
+        """`cat(rows, dim=1)` of the kept rows (the one run's own tensor when only one was kept)."""
+        return self.rows[0] if len(self.rows) == 1 else cat(self.rows, dim=1)
