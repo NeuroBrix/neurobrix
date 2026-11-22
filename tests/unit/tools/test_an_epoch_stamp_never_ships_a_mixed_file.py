@@ -167,3 +167,18 @@ def test_the_proofs_of_other_generators_that_leave_are_counted_and_listed(tmp_pa
     assert C.proof_backend(_proof()) in rec[0]["reason"]
     table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
     assert (table[0]["re_proven"], table[0]["generators_dropped"]) == ("1", "1")
+
+
+def test_a_shipped_certification_already_at_the_epoch_is_not_lost_by_the_replacement(tmp_path):
+    """qa 1227-6: the check runs both ways — a shipped certification not owed (already of the library's epoch) that
+    the draft does not hold keeps the file from being replaced; the draft holding it as shipped lets it through."""
+    K3 = C.key_repr((3, "fp32"))
+    at_epoch = {"config": _cfg(3), "proof": _proof(C.BITS_EPOCH, n=3)}
+    shipped = _write(tmp_path / "shipped", {K1: {"config": _cfg(1), "proof": _proof()}, K3: at_epoch})
+    _write(tmp_path / "draft", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}})
+    _ledger(tmp_path / "draft", [(K1, "reproven")])
+    before = shipped.read_bytes()
+    assert _run(tmp_path)["replaced"] == [] and shipped.read_bytes() == before
+    _write(tmp_path / "draft", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}, K3: at_epoch})
+    assert _run(tmp_path)["replaced"] == ["nvidia/volta/toy_kernel.fp32.json"]
+    assert sorted(json.loads(shipped.read_text())["entries"]) == sorted([K1, K3])

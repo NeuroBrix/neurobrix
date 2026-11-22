@@ -8,7 +8,9 @@ file named) and, per file, counts each certification owed (one key in one memory
   re-proven  the draft holds it for that class, every proof of it at the library's epoch, the configuration
              byte-identical to the shipped one, and the same matrix-unit tile (or none on both);
   failed     the ledger's last line for it says failed (its re-prove raised, or it could not be filed);
-  pending    neither — not yet tried, or tried by no ledger line, or a draft configuration or unit tile that differs.
+  pending    neither — not yet tried, or tried by no ledger line, or a draft configuration or unit tile that differs;
+             and, both ways, a draft certification the file did not owe or a shipped one already of the
+             library's epoch that the draft does not hold as it stands.
 
 A file is REPLACED (`--apply`) only when nothing is pending: every certification it owes is re-proven or failed, and
 the draft file passes the library's own gate (`validate`: the epoch, the format, every proof). The replacement is the
@@ -113,10 +115,20 @@ def judge(shipped_path, draft_path, ledger, rel):
             v["failed"].append((ktext, cls, line.get("reason") or "failed"))
         else:
             v["pending"].append((ktext, cls, "not re-proven yet"))
-    for ktext, e in draft.items():                 # the draft holds nothing the shipped file did not owe
+    # BOTH WAYS (qa 1227-6): the draft holds nothing the shipped file did not owe, and every shipped certification not
+    # owed (already of the library's epoch) is in the draft as it stands — the replacement loses nothing unsaid
+    shipped_entries = {_norm(k): e for k, e in (doc.get("entries") or {}).items()}
+    for ktext, e in draft.items():
         for cls in C.covered_memory_gbs(e):
-            if (ktext, cls) not in owed_ids:
+            if (ktext, cls) not in owed_ids and (C.entry_for_memory_gb(e, cls)
+                                                 != C.entry_for_memory_gb(shipped_entries.get(ktext), cls)):
                 v["pending"].append((ktext, cls, "in the draft, not owed by the shipped file"))
+    for ktext, e in shipped_entries.items():
+        for cls in C.covered_memory_gbs(e):
+            if (ktext, cls) not in owed_ids and (C.entry_for_memory_gb(draft.get(ktext), cls)
+                                                 != C.entry_for_memory_gb(e, cls)):
+                v["pending"].append((ktext, cls, "of the library's epoch in the shipped file and not in the draft as "
+                                                 "it stands: the replacement would lose it"))
     if draft_doc is not None:
         v["problems"] = C.validate(draft_doc, Path(draft_path))
     return v
