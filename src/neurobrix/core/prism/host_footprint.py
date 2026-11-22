@@ -335,3 +335,24 @@ def summary(hf: Mapping) -> str:
             f" + loading {hf['transient_bytes'] / 2**20:.0f} MB + output {hf.get('output_bytes', 0) / 2**20:.0f} MB"
             + (f" + device plan {hf['device_bytes'] / 2**20:.0f} MB (unified)" if hf.get("device_bytes") else "")
             + (f"  [held: {held}]" if held else ""))
+
+
+def streamed_loads(plan, partitions, components) -> Dict:
+    """The host estimate's view of what a plan loads at a time: each streamed component's segments as weight-key sets
+    (only the partitions this plan WON, `plan.layer_stream_plan`, out of `partitions` {component: its partition}), and the
+    loader's pinned uploads in flight (core.workspace, the loader's own source) — for every plan, as a load the loader
+    does not pin for is per tensor whether streamed or not. Its reads in flight are `load_ceiling`'s. `components` are the
+    neural components: a parameter the graph EMBEDS (`constant: True`, its bytes in graph.json — HAT's RGB `mean`) is
+    loaded with the graph by every executor, never from a shard: a segment reading only that is no load (the footprint
+    refused it as reading "another key space", 2026-10-22). The partition keeps pricing it as it did: its cuts do not
+    move."""
+    from neurobrix.core.workspace import pinned_uploads_in_flight
+    parts = partitions or {}
+    graphs = {getattr(c, "name", None): getattr(c, "graph", None) or {} for c in (components or [])}
+
+    def embedded(name):
+        return {t.get("weight_name") or tid for tid, t in (graphs.get(name, {}).get("tensors") or {}).items()
+                if t.get("is_parameter") and t.get("constant")}
+    return {"streamed_loads": {name: [set(seg.weight_names) - embedded(name) for seg in parts[name].segments]
+                               for name in (plan.layer_stream_plan or ())},
+            "pinned_in_flight": pinned_uploads_in_flight()}

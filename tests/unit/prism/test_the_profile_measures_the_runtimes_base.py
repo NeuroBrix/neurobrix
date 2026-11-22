@@ -27,7 +27,7 @@ def test_the_profile_carries_it_and_an_old_profile_reads_as_unmeasured():
 def test_the_solver_prices_the_profiles_base():
     src = (A.__file__.replace("autodetect.py", "solver.py"))
     text = open(src).read()
-    assert 'getattr(profile.cpu, "runtime_base_mb", None)' in text and "plan.host_footprint = host_footprint(" in text
+    assert 'getattr(profile.cpu, "runtime_base_mb", None)' in text and "host_footprint(*_args, **_kw, load_workers=k)" in text
 
 
 def test_a_probe_started_by_a_large_process_measures_itself_not_its_parent():

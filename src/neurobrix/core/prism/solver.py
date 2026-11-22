@@ -25,7 +25,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
-from neurobrix.core.prism.host_footprint import engine_of
+from neurobrix.core.prism.host_footprint import engine_of, streamed_loads
+from neurobrix.core.prism import load_ceiling
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
 from neurobrix.core.prism.structure import names_accelerator
 from nbxtensor.backend.host_memory import MemoryState, memory_state
@@ -577,7 +578,7 @@ class ExecutionPlan:
     # it, a measured peak judges it.
     host_footprint: Dict = field(default_factory=dict)
     # The reads in flight a weight load may grow to under this plan (the weight reader's ceiling, core.workspace): the
-    # count `host_footprint` priced, the most that fits the host (`PrismSolver._load_ceiling`); 0 before Step 7.9.
+    # count `host_footprint` priced, the most that fits the host (`load_ceiling.ceiling`); 0 before Step 7.9.
     load_ceiling: int = 0
     # On a device that draws on host memory: [(rung MB, strategy, host side MB)] per rung solve() tried.
     unified_rungs_tried: List = field(default_factory=list)
@@ -3510,23 +3511,7 @@ class PrismSolver:
         # runtime's own rules (host_footprint.py): what this process holds now (the parsed container
         # included) + what the engine adds, this machine's measured value carried by the hardware profile
         # (or absent and said to be) + what the plan holds and loads.
-        from neurobrix.core.prism.host_footprint import host_footprint, process_footprint_now
-        from neurobrix.triton.weight_loader import is_block_key   # torch-free
-        _engine = engine_of(self._mode)
-        _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
-        _args = (plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
-                 _base, _itemsize.itemsize_table(), is_block_key, self._stored_dtypes_by_component(container))
-        _kw = dict(resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
-                   device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan, devices)),
-                   file_backed=self._file_backed_experts(plan, profile),
-                   device_weight_bytes=self._peak_loaded_weight_bytes(container, plan, profile),
-                   **self._streamed_loads(plan))
-        # the weight reader's ceiling (its parallel reads grow by their own measure up to it, core.workspace): the most
-        # reads in flight whose host bytes this plan can hold, priced here as the loader would hold them
-        plan.load_ceiling = self._load_ceiling(profile, lambda k: host_footprint(*_args, **_kw, load_workers=k))
-        plan.host_footprint = host_footprint(*_args, **_kw, load_workers=plan.load_ceiling)
-        from neurobrix.core.workspace import declare_load_ceiling
-        declare_load_ceiling(plan.load_ceiling)
+        self._price_host_footprint(plan, profile, container, devices)
 
         # Step 7.10: the routed working set, STATED beside the plan's figures (expert_topology.py) —
         # the dense part, the experts a token reads, an expert cache on the profile's standard rung.
@@ -3578,66 +3563,30 @@ class PrismSolver:
             out[name] = names
         return out
 
+    def _price_host_footprint(self, plan, profile, container, devices) -> None:
+        """Step 7.9 of `_solve_at_rung`: the plan's host footprint on its engine, and the weight reader's ceiling it was
+        priced at (`plan.load_ceiling`, declared to the loaders)."""
+        from neurobrix.core.prism.host_footprint import host_footprint, process_footprint_now
+        from neurobrix.triton.weight_loader import is_block_key   # torch-free
+        _engine = engine_of(self._mode)
+        _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
+        _args = (plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
+                 _base, _itemsize.itemsize_table(), is_block_key, self._stored_dtypes_by_component(container))
+        _kw = dict(resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
+                   device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan, devices)),
+                   file_backed=self._file_backed_experts(plan, profile),
+                   device_weight_bytes=self._peak_loaded_weight_bytes(container, plan, profile),
+                   **self._streamed_loads(plan))
+        # the weight reader's ceiling (its parallel reads grow by their own measure up to it, core.workspace): the most
+        # reads in flight whose host bytes this plan can hold, priced here as the loader would hold them
+        load_ceiling.settle(plan, profile, lambda k: host_footprint(*_args, **_kw, load_workers=k),
+                            self._unified_host_pool_mb, self._less_the_system_share)
+
     def _streamed_loads(self, plan) -> Dict:
-        """The host estimate's view of what a plan loads at a time: each streamed component's segments as
-        weight-key sets (only the partitions this plan WON — `plan.layer_stream_plan`), and the loader's pinned
-        uploads in flight (core.workspace, the loader's own source) — for every plan, as a load the loader does not
-        pin for is per tensor whether streamed or not. Its reads in flight are `_load_ceiling`'s."""
-        from neurobrix.core.workspace import pinned_uploads_in_flight
-        parts = getattr(self, "_layer_stream_partitions", None) or {}
-        # A parameter the graph EMBEDS (`constant: True`, its bytes in graph.json — HAT's RGB `mean`) is loaded with the
-        # graph by every executor, never from a shard: a segment reading only that is no load (the footprint refused it as
-        # reading "another key space", 2026-10-22). The partition keeps pricing it as it did: its cuts do not move.
-        comps = {getattr(c, "name", None): c for c in (getattr(self, "_neural_components", None) or [])}
-
-        def embedded(name):
-            g = getattr(comps.get(name), "graph", None) or {}
-            return {t.get("weight_name") or tid for tid, t in (g.get("tensors") or {}).items()
-                    if t.get("is_parameter") and t.get("constant")}
-        return {"streamed_loads": {name: [set(seg.weight_names) - embedded(name) for seg in parts[name].segments]
-                                   for name in (plan.layer_stream_plan or ())},
-                "pinned_in_flight": pinned_uploads_in_flight()}
-
-    def _load_ceiling(self, profile, price) -> int:
-        """The weight reader's ceiling under this plan: the machine's threads as its profile states them (`cpu.threads`,
-        the most reads and conversions that can work at once; the profile's, so a plan is the profile's and never the
-        planning host's — `core.workspace.processors` only when the profile states no CPU), or fewer: the most whose
-        host price (`price(k)`, the footprint at k reads in flight) still fits the host's fact — on a unified device the
-        pool a plan may fill (`_unified_host_pool_mb`, against the footprint less the engine base, as the pool's loop
-        judges it) and the execution door's reading of the memory free now (`solve`), else the installed RAM less the
-        system's measured share. One read when not even one fits (the plan's own doors then say it). A price that does
-        not move with the count (nothing loaded per tensor) takes the threads. No count is stored: the reader measures
-        itself on each load up to this (the launch-time cure, 2026-11-19)."""
-        from neurobrix.core.workspace import processors
-        cpu = getattr(profile, "cpu", None)
-        top = int(cpu.threads) if cpu is not None and getattr(cpu, "threads", None) else processors()
-        at_top = price(top)
-        if top == 1 or price(1).get("total_bytes") == at_top.get("total_bytes"):
-            return top
-        mb = 1 << 20
-        if any(getattr(d, "has_unified_memory", False) for d in profile.devices):
-            # the pool's loop and the execution door both judge a unified plan (`solve`): the ceiling fits both
-            pool, host = self._unified_host_pool_mb(profile) * mb, memory_state()
-            free = float(host.available_mb) * mb if host.measured else None
-            room = 0
-            need = lambda fp: max(int(fp.get("total_bytes", 0)) - int(fp.get("base_bytes", 0)) - pool,
-                                  (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0)) - free)
-                                  if free is not None else -1)
-        else:
-            installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
-            if installed <= 0:
-                return top               # no host fact to price against: the processors bound it, the price says it
-            room = self._less_the_system_share(profile, installed) * mb
-            need = lambda fp: int(fp.get("total_bytes", 0))
-        if need(at_top) <= room:
-            return top
-        lo, hi = 1, top                  # need(price(lo)) <= room < need(price(hi)), or lo cannot fit at all
-        if need(price(lo)) > room:
-            return lo
-        while hi - lo > 1:
-            mid = (lo + hi) // 2
-            lo, hi = (mid, hi) if need(price(mid)) <= room else (lo, mid)
-        return lo
+        """The host estimate's view of what a plan loads at a time (`host_footprint.streamed_loads`), from the
+        partitions this plan won and the neural components whose graphs say which parameters they embed."""
+        return streamed_loads(plan, getattr(self, "_layer_stream_partitions", None),
+                              getattr(self, "_neural_components", None))
 
     def _standalone_conv_tiles(self, graph, overflow_ops, pair_convs, card_bytes) -> Dict[str, int]:
         """{conv uid: band factor} of the 2-D convolutions op-level tiling runs band by band on a card of `card_bytes`:
