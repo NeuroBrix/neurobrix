@@ -15,19 +15,21 @@ def _stale(tmp_path, monkeypatch, cpu):
     monkeypatch.setattr(autodetect, "_visible_set_tag", lambda: "abcd1234")
     calls = []
     monkeypatch.setattr(autodetect, "_measure_runtime_base_mb",
-                        lambda: calls.append(1) or {"compiled": 803, "triton": 206})
+                        lambda *engine: calls.append(1) or 803)
     monkeypatch.setattr(autodetect, "detect_hardware", lambda: (_ for _ in ()).throw(AssertionError("re-detected")))
     path = tmp_path / "default-abcd1234.yml"
     path.write_text(yaml.safe_dump({"id": "auto-x", "cpu": cpu, "devices": [{"model": "kept"}]}))
     return path, calls
 
 
-def test_a_profile_without_the_base_gets_it_measured_and_keeps_the_rest(tmp_path, monkeypatch):
+def test_a_profile_without_the_base_waits_for_its_engine_s_first_launch_and_keeps_the_rest(tmp_path, monkeypatch):
+    """Since the ruling of 22/11/2026 17:43 (line 3) the base is measured per engine at that engine's first launch
+    (`ensure_measured_facts`), never for both when the profile is resolved: completion measures none of it."""
     path, calls = _stale(tmp_path, monkeypatch, {"model": "xeon", "cores": 40})
     assert autodetect.get_or_create_default_profile() == "default-abcd1234"
     data = yaml.safe_load(path.read_text())
-    assert data["cpu"] == {"model": "xeon", "cores": 40, "runtime_base_mb": {"compiled": 803, "triton": 206}}
-    assert data["devices"] == [{"model": "kept"}] and calls == [1]
+    assert "runtime_base_mb" not in data["cpu"] and data["cpu"]["model"] == "xeon" and data["cpu"]["cores"] == 40
+    assert data["devices"] == [{"model": "kept"}] and calls == []
 
 
 def test_a_profile_that_has_the_base_is_not_measured_again(tmp_path, monkeypatch):

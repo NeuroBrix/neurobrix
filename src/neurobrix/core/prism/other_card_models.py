@@ -164,11 +164,12 @@ def from_siblings(path, data, devices) -> dict:
     return {k: v for k, v in (("class_facts_from", took), ("stale_dropped", stale)) if v}
 
 
-def base_from_siblings(directory, exclude=None) -> dict:
-    """The engine's base (`cpu.runtime_base_mb`) a generated profile of `directory` (but `exclude`) measured, or {}: a
-    machine fact, the same whatever card set the profile sees."""
+def base_from_siblings(directory, exclude=None, engine=None) -> dict:
+    """The engine's base (`cpu.runtime_base_mb`) a generated profile of `directory` (but `exclude`) measured — with
+    `engine`, the first that measured that engine's — or {}: a machine fact, the same whatever card set the profile
+    sees."""
     for _p, s in sibling_profiles(directory, exclude)[0]:
         base = (s.get("cpu") or {}).get("runtime_base_mb")
-        if base:
+        if base and (engine is None or engine in base):
             return dict(base)
     return {}

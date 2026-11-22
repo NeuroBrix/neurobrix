@@ -6,14 +6,15 @@ The base is not a constant of the code (the owner's rule, 2026-09-27 14:27: ever
 carried by the container and the hardware profiles). On this rack, from the planning state (the CLI
 imported, 33 MB), the compiled engine adds about 800 MB (torch, a CUDA context, cuBLAS, cuDNN, SDPA) and
 the Triton engine about 360 MB (a kernel compiled and launched). Before this branch the profile has no
-`runtime_base_mb` and autodetect measures nothing: these fail.
+`runtime_base_mb` and autodetect measures nothing: these fail. Since the ruling of 22/11/2026 17:43 (line 3) each
+engine's base is measured by its own child at that engine's first launch (`_measure_runtime_base_mb(engine)`).
 """
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism.cpu_config import CPUConfig
 
 
 def test_both_engines_are_measured_here(needs_device):     # the Triton engine's base is a kernel launched on a card
-    base = A._measure_runtime_base_mb()
+    base = {e: A._measure_runtime_base_mb(e) for e in A._BASE_PROBES}
     assert set(base) == {"compiled", "triton"} and all(isinstance(v, int) and v > 0 for v in base.values())
 
 
@@ -38,6 +39,6 @@ def test_a_probe_started_by_a_large_process_measures_itself_not_its_parent():
     held = bytearray(1536 << 20)
     for i in range(0, len(held), 4096):
         held[i] = 1
-    base = A._measure_runtime_base_mb()
-    assert all(0 < v < 1536 for v in base.values()), base
+    base = {e: A._measure_runtime_base_mb(e) for e in A._BASE_PROBES}
+    assert all(v is not None and 0 < v < 1536 for v in base.values()), base
     assert H.process_footprint_now() >= 1536 << 20

@@ -294,9 +294,11 @@ def _complete_measured_fields(path: Path) -> None:
         return
     added = {}
     if "runtime_base_mb" not in cpu:
-        # a machine fact: what a sibling generated profile measured holds for this card set too (other_card_models)
-        added["runtime_base_mb"] = other_card_models.base_from_siblings(path.parent, exclude=path) or \
-            _measure_runtime_base_mb()
+        # a machine fact: what a sibling generated profile measured holds for this card set too (other_card_models);
+        # an engine no sibling measured is measured at its own first launch (`ensure_measured_facts`), not here
+        base = other_card_models.base_from_siblings(path.parent, exclude=path)
+        if base:
+            added["runtime_base_mb"] = base
     # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads), on every OS that
     # states them (macOS perflevels, Linux's hybrid PMU lists, Windows' efficiency classes); a CPU of one class: none
     if "performance_cores" not in cpu:
@@ -434,22 +436,23 @@ _BASE_PROBES = {
 _PEAK_MB = "print(_mb('peak'))\n"
 
 
-def _measure_runtime_base_mb() -> Dict[str, int]:
-    """{engine: MB} — what the engine's device work adds to a process at the planning state, measured on
-    this machine. An engine whose probe cannot run here is left out, and a plan on this profile says its
-    base is unmeasured: a number is never written that was not measured."""
+def _measure_runtime_base_mb(engine: str) -> Optional[int]:
+    """MB — what `engine`'s device work adds to a process at the planning state, measured on this machine in ONE child
+    process of that engine alone (`_BASE_PROBES[engine]`: this process imports neither engine's device stack, R33).
+    Lazy (the orchestrator's ruling of 22/11/2026 17:43, line 3): measured at the first launch of THAT engine and kept
+    in `cpu.runtime_base_mb` (`ensure_measured_facts`); the other engine's base waits for its own first launch and
+    compiles nothing before. None when the probe cannot run here: a plan on this profile then says its base is
+    unmeasured — a number is never written that was not measured."""
     import sys as _sys
-    out: Dict[str, int] = {}
-    for engine, code in _BASE_PROBES.items():
-        try:
-            r = subprocess.run([_sys.executable, "-c", _PLANNING_STATE + code + _PEAK_MB],
-                               capture_output=True, text=True, timeout=300)
-            lines = [l.strip() for l in r.stdout.strip().splitlines()]
-            if r.returncode == 0 and len(lines) >= 2 and lines[0].isdigit() and lines[-1].isdigit():
-                out[engine] = int(lines[-1]) - int(lines[0])
-        except (OSError, subprocess.SubprocessError):
-            continue
-    return out
+    try:
+        r = subprocess.run([_sys.executable, "-c", _PLANNING_STATE + _BASE_PROBES[engine] + _PEAK_MB],
+                           capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = [l.strip() for l in r.stdout.strip().splitlines()]
+    if r.returncode == 0 and len(lines) >= 2 and lines[0].isdigit() and lines[-1].isdigit():
+        return int(lines[-1]) - int(lines[0])
+    return None
 
 
 def detect_hardware() -> Dict[str, Any]:
@@ -466,9 +469,10 @@ def detect_hardware() -> Dict[str, Any]:
 
     # --- CPU (always) ---
     cpu = _detect_cpu(os_type)
-    # The runtime's own base, measured here per engine: the base of Prism's host estimate.
-    # (taken from a sibling generated profile when one measured it: the same machine through another card set)
-    cpu["runtime_base_mb"] = other_card_models.base_from_siblings(HARDWARE_DIR) or _measure_runtime_base_mb()
+    # The runtime's own base per engine, the base of Prism's host estimate: what a sibling generated profile measured
+    # (the same machine through another card set); an engine none measured is measured at its own first launch, in
+    # its own child (`ensure_measured_facts`, `_measure_runtime_base_mb`) — never here for both
+    cpu["runtime_base_mb"] = other_card_models.base_from_siblings(HARDWARE_DIR)
     # No parallel-read count is measured here or kept: the weight reader measures itself on each load (core.workspace.
     # weight_reader, nbxtensor.io.reader) — a count measured ahead cost 130 s on a quiet store, and a busy one gave none
     # and owed it again at every launch (the launch-time cure, 2026-11-19).
@@ -2524,6 +2528,19 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         return dict(d.get("measured") or _vendor_block(d, "measured") or {})
 
     first = measured_of(devices[0])
+    cpu = data.get("cpu")
+    if engine in _BASE_PROBES and isinstance(cpu, dict):
+        # the launched engine's runtime base, lazily (line 3 of the ruling of 22/11/2026 17:43): a sibling's measure
+        # of this engine, else one child of this engine now; the other engine's waits for its own first launch
+        base = dict(cpu.get("runtime_base_mb") or {})
+        if engine not in base:
+            mb = other_card_models.base_from_siblings(path.parent, exclude=path, engine=engine).get(engine)
+            if mb is None:
+                launch_lines.say("base", f" ({engine})")
+                mb = _measure_runtime_base_mb(engine)
+            if mb is not None:
+                cpu["runtime_base_mb"] = {**base, engine: int(mb)}
+                added["runtime_base_mb"] = [engine]
     probes = []                  # the reload probes this launch owes, decided first: what is said is what is done
     if engine is not None:
         from neurobrix.core.paths import cache_dir

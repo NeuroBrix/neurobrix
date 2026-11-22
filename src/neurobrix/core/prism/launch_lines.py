@@ -22,6 +22,8 @@ LINES = {"detect": "First launch on this machine: detecting its hardware once...
          # whose reloads were not steady enough to keep last time — the line claims neither, it says what is done
          "reload": "Measuring this machine's weight reload rate: none is kept yet for this model's stored "
                    "weights{what}...",
+         # an engine's first launch on this machine: its runtime base, measured once in one child of that engine
+         "base": "First launch of this engine on this machine: measuring its runtime base once{what}...",
          # what the weight reader measured on this launch's own loads (core.workspace.weight_reader): no read count is
          # measured ahead or kept, so the launch says what its loads found
          "loaded": "Weights loaded: {what}."}
