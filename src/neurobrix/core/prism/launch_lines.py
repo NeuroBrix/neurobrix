@@ -24,6 +24,8 @@ LINES = {"detect": "First launch on this machine: detecting its hardware once...
                    "weights{what}...",
          # an engine's first launch on this machine: its runtime base, measured once in one child of that engine
          "base": "First launch of this engine on this machine: measuring its runtime base once{what}...",
+         # a plan placing a component on the host, priced for the first time here: the host's GEMM and copy, once
+         "host": "Measuring this machine's host compute and memory once, for a plan that runs on the host...",
          # what the weight reader measured on this launch's own loads (core.workspace.weight_reader): no read count is
          # measured ahead or kept, so the launch says what its loads found
          "loaded": "Weights loaded: {what}."}

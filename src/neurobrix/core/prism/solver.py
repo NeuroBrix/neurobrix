@@ -8128,7 +8128,9 @@ class PrismSolver:
         """The facts a candidate in the running is priced with that this machine has not measured yet, measured NOW,
         once, and kept in the generated profile — never at every first launch (the orchestrator's ruling of 22/11/2026
         17:43): the per-piece reload rate when a STREAMED candidate (reloaded at every use from the container, not
-        host-held) is ranked (`autodetect.measure_reload_rates`). Each is said in one line where it is measured; what
+        host-held) is ranked (`autodetect.measure_reload_rates`, line 4); the host's GEMM and copy when a candidate
+        places a component on the host, the branch of the estimate that reads them (`autodetect.measure_host_facts`,
+        line 5). Each is said in one line where it is measured; what
         was written is read back into `profile`, under the keys the estimate reads. A fact a plan needs is never a
         default: one that cannot be measured here leaves the candidate not estimated, said by name."""
         from neurobrix.core.prism import autodetect
@@ -8137,6 +8139,8 @@ class PrismSolver:
         measured = False
         if any(n in TE.STREAM_EVERY_USE and n not in TE.HOST_HELD for _s, n, _a, _d in ranked):
             measured |= bool(autodetect.measure_reload_rates(hw, engine, getattr(container, "cache_path", None)))
+        if any(str(TE._device_of(a)).startswith("cpu") for _s, _n, allocs, _d in ranked for a in (allocs or {}).values()):
+            measured |= bool(autodetect.measure_host_facts(hw))
         if measured:
             from neurobrix.core.prism.loader import load_profile
             profile.host_measured = load_profile(hw).host_measured

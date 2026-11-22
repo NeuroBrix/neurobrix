@@ -59,8 +59,10 @@ def test_a_fact_the_profile_does_not_carry_is_refused():
         T.device_facts(None, "cuda:0")
     with pytest.raises(T.MissingFact, match="bfloat16"):
         T.compute_seconds(Work(1, 1, 1), GPU, "bfloat16")
+    # the host's copy unmeasured: refused where a host-placed component is priced (line 5 of the ruling of 22/11/2026)
     with pytest.raises(T.MissingFact, match="host_memory_gbps"):
-        T.host_facts({"host_matmul_gflops": 700})
+        T.plan_seconds("single_gpu", {"c": "cpu"}, {"c": Work(1, 1, 1)}, {}, {"cuda:0": GPU},
+                       T.host_facts({"host_matmul_gflops": 700}), "float16", stored=ST)
     with pytest.raises(T.MissingFact, match="not measured"):
         T.plan_seconds("single_gpu", {"c": "cuda:1"}, {"c": Work(1, 1, 1)}, {}, {"cuda:0": GPU}, HOST, "float16", stored=ST)
 

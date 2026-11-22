@@ -2562,16 +2562,12 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
         kept.set_chunk(first, chunks[devices[0].get("model")])
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
-    # the host's block over the vendor's, key by key (loader.load_profile): only what neither states is measured
-    if "host_matmul_gflops" not in {**(_vendor_block(devices[0], "host_measured") or {}), **(data.get("host_measured") or {})}:
-        data.setdefault("host_measured", {}).update({"source": f"measured {stamp} at the first launch on this machine (autodetect, quick)",
-                                 "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
-                                 "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))})
-        added["host_measured"] = ["host_matmul_gflops", "host_memory_gbps"]
     # written BEFORE any child probe reads the profile: on a clean machine the first child refused the vmm_chunk_bytes
     # measured above and not yet written (the stable's install test, 2026-11-05)
     added.update(P.complete_runtime_card_facts(devices, P.card_facts_in_a_child))
-    if added:
+    # another card model's chunk swept here is written too, when nothing else was measured (it rode on the host
+    # facts' write until those left the first launch)
+    if added or chunks:
         _write_first(path, data, devices, first, measured_of, added, q, chunks)
     # the Triton arena's factor is never measured at a user's first run (the supervisor 2026-11-07 12:00): its vendor
     # file or its family declares it (core/config/loader.declared_arena_factor); a probe on whatever the user imported
@@ -2594,6 +2590,42 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     _write_first(path, data, devices, first, measured_of, added, q, chunks)
     _log.debug(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
     return added
+
+
+def measure_host_facts(hardware_id: Optional[str]) -> List[str]:
+    """The host's GEMM and copy (`host_matmul_gflops`, `host_memory_gbps`), measured when Prism prices a plan that
+    places a component on the host (`PrismSolver._measure_owed_facts`), never at every first launch — the orchestrator's
+    ruling of 22/11/2026 17:43, line 5. The host's block lies over the vendor's key by key (`loader.load_profile`): only
+    what neither states is measured, once, and kept in the generated profile. Returns the keys written; [] when none is
+    owed, on a committed profile or under a census shadow."""
+    if not str(hardware_id).startswith("default"):
+        return []
+    try:
+        from neurobrix.kernels import census as _census
+        if _census.active():
+            return []
+    except Exception:  # noqa: BLE001 — no census module: a run
+        pass
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return []
+    from neurobrix.core.prism.loader import _vendor_block
+    from neurobrix.core.prism import facts_probe as P
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    stated = {**((_vendor_block(devices[0], "host_measured") if devices else None) or {}), **(data.get("host_measured") or {})}
+    if "host_matmul_gflops" in stated:
+        return []
+    launch_lines.say("host")
+    q = FIRST_LAUNCH
+    data.setdefault("host_measured", {}).update({
+        "source": f"measured {_time.strftime('%Y-%m-%d %H:%M:%S %Z')} when a host-held plan was first priced on this "
+                  f"machine (autodetect, quick)",
+        "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
+        "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))})
+    _write_profile_atomically(path, data)
+    return ["host_matmul_gflops", "host_memory_gbps"]
 
 
 def measure_reload_rates(hardware_id: Optional[str], engine: str, container_dir=None) -> List[str]:

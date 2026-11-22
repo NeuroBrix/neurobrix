@@ -50,15 +50,17 @@ DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch"
 
 def test_a_generated_profile_without_facts_is_probed_once_and_written(hw):
     _profile(hw, "default-abc", DEV)
-    assert set(A.ensure_measured_facts("default-abc")) == {"measured", "host_measured", "vmm_chunk_bytes",
-                                                           "runtime_card_facts"}
+    # the host's GEMM and copy wait for a host-held plan's pricing (line 5 of the ruling of 22/11/2026 17:43)
+    assert set(A.ensure_measured_facts("default-abc")) == {"measured", "vmm_chunk_bytes", "runtime_card_facts"}
     data = yaml.safe_load((hw / "default-abc.yml").read_text())
     for d in data["devices"]:
         assert d["runtime_total_mb"] == 16000 and d["runtime_context_mb"] == 300
         assert d["measured"]["matmul_tflops"] == {"float16": 10.0, "float32": 10.0} and d["measured"]["h2d_gbps"] == 10.0
         assert "first launch" in d["measured"]["source"] and "weight_load_gbps" not in d["measured"]
         assert d["measured"]["vmm_chunk_bytes"] == 2 << 20
-    assert data["host_measured"]["host_memory_gbps"] == 20
+    assert "host_measured" not in data and not any(c[0] in ("hmm", "hmem") for c in CALLS)
+    assert A.measure_host_facts("default-abc") == ["host_matmul_gflops", "host_memory_gbps"]
+    assert yaml.safe_load((hw / "default-abc.yml").read_text())["host_measured"]["host_memory_gbps"] == 20
     CALLS.clear()
     assert A.ensure_measured_facts("default-abc") == {} and CALLS == []
 
@@ -72,12 +74,13 @@ def test_a_committed_profile_is_never_written(hw, tmp_path):
 
 
 def test_what_the_vendor_file_states_is_not_probed_again(hw):
-    """A V100 (volta.yml states the device facts): only the host facts, which volta.yml does not state, are probed."""
+    """A V100 (volta.yml states the device facts): its device facts are not probed again (the host's, which volta.yml
+    does not state, wait for a host-held plan's pricing since the ruling of 22/11/2026 17:43, line 5)."""
     _profile(hw, "default-v100", {"brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "architecture": "volta",
                                   "compute_capability": "7.0", "supports_dtypes": ["float16", "float32"]})
     # the expandable pool's chunk is the machine's measure, never the vendor file's (R16)
     # and so is the runtime's own context on the card, which no vendor file states
-    assert set(A.ensure_measured_facts("default-v100")) == {"host_measured", "vmm_chunk_bytes", "runtime_card_facts"}
+    assert set(A.ensure_measured_facts("default-v100")) == {"vmm_chunk_bytes", "runtime_card_facts"}
     assert not any(c[0] in ("mm", "copies") for c in CALLS), CALLS
 
 
@@ -229,7 +232,7 @@ def test_a_streamed_pricing_reloads_the_smallest_component_of_each_unstated_stor
     A.measure_reload_rates("default-abc", "compiled")
     assert sorted(probed) == [("f32", "net", "compiled"), ("small", "lm", "compiled")], probed
     data = yaml.safe_load((hw / "default-abc.yml").read_text())
-    data["host_measured"]["weight_reload_gbps"] = {"compiled": {"BF16": 2.0, "F32": 1.0}}
+    data.setdefault("host_measured", {})["weight_reload_gbps"] = {"compiled": {"BF16": 2.0, "F32": 1.0}}
     # kept under this driver and library (an unkeyed rate is of an older launch and measured again: drop_stale)
     data["host_measured"]["weight_reload_under"] = card_key()
     (hw / "default-abc.yml").write_text(yaml.safe_dump(data))

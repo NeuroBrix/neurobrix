@@ -56,8 +56,11 @@ class DeviceFacts:
 
 @dataclass(frozen=True)
 class HostFacts:
-    matmul_flops: float                     # host FLOP/s (float32 GEMM)
-    memory_bps: float                       # host memory bandwidth, bytes/s (a copy in host memory)
+    #: host FLOP/s (float32 GEMM) and host memory bandwidth, bytes/s (a copy in host memory): None until measured —
+    #: they are measured when a plan placing a component on the host is priced (the ruling of 22/11/2026 17:43, line 5)
+    #: and a host-placed component is refused by name without them (`plan_seconds`)
+    matmul_flops: Optional[float]
+    memory_bps: Optional[float]
     storage_bps: Optional[float] = None     # sequential read of a weight file, bytes/s
     #: what the loader really takes to RELOAD a streamed piece's weights onto the device, GB/s per engine and stored
     #: dtype — read from the container (page cache), decode, convert to the device dtype, upload
@@ -115,14 +118,16 @@ def reload_bps(host: Optional[HostFacts], engine: Optional[str], stored: Optiona
 
 
 def host_facts(measured: Optional[Mapping[str, Any]]) -> HostFacts:
-    for key in ("host_matmul_gflops", "host_memory_gbps"):
-        if not measured or key not in measured:
-            raise MissingFact(f"host: no measured `{key}` on the hardware profile (tools/profile_facts.py)")
+    """The host's measured facts; refused by name when the profile states none. The host GEMM and copy are None until
+    measured (a plan with no host-placed component never reads them): refused where a host-placed component is priced."""
+    if not measured:
+        raise MissingFact("host: no measured `host_measured` block on the hardware profile (tools/profile_facts.py)")
     s = measured.get("storage_read_gbps")
     r = measured.get("weight_reload_gbps")
     sl = measured.get("host_slab_gbps")
-    return HostFacts(matmul_flops=float(measured["host_matmul_gflops"]) * 1e9,
-                     memory_bps=float(measured["host_memory_gbps"]) * 1e9,
+    g, m = measured.get("host_matmul_gflops"), measured.get("host_memory_gbps")
+    return HostFacts(matmul_flops=float(g) * 1e9 if g is not None else None,
+                     memory_bps=float(m) * 1e9 if m is not None else None,
                      storage_bps=float(s) * 1e9 if s is not None else None,
                      reload_gbps=_reload_table(r),
                      slab_bps=float(sl) * 1e9 if sl is not None else None)
@@ -281,6 +286,9 @@ def plan_seconds(strategy: str, allocations: Mapping[str, Any], works: Mapping[s
         if dev.startswith("cpu"):
             if host is None:
                 raise MissingFact(f"{comp} is placed on the host and the host's facts are not measured")
+            for key, v in (("host_matmul_gflops", host.matmul_flops), ("host_memory_gbps", host.memory_bps)):
+                if v is None:
+                    raise MissingFact(f"{comp} is placed on the host and the host's `{key}` is not measured")
             roof = lambda x: max(x.flops / host.matmul_flops, (x.weight_bytes + x.activation_bytes) / host.memory_bps)
             total += n * roof(w) + (roof(first) if first is not None else 0.0)
             if strategy in STORAGE_EVERY_USE:
