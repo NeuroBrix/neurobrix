@@ -89,6 +89,7 @@ def test_metal_device_module_imports_no_torch():
 
 # --- zero fallback ----------------------------------------------------------
 
+@pytest.mark.cardless     # its subject is a host without a GPU runtime, mocked: never converted into the skip
 def test_no_metal_means_a_raise_not_a_cpu_backend(monkeypatch):
     """The whole point of the seam refusing loudly.
 

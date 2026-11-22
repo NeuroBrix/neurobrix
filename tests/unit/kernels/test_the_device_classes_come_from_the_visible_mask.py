@@ -56,6 +56,7 @@ def test_the_ordinal_returned_is_the_one_the_runtime_gave_not_a_position(monkeyp
     assert _gpu_classes() == (1, 0)
 
 
+@pytest.mark.cardless     # its subject is a host without a GPU runtime, mocked: never converted into the skip
 def test_no_runtime_at_all_is_not_a_crash(monkeypatch):
     monkeypatch.setattr(DeviceAllocator, "visible_device_memory",
                         staticmethod(lambda: []))

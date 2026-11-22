@@ -34,6 +34,7 @@ def test_a_driver_that_refuses_refuses_the_plan(monkeypatch):
         solver_mod.PrismSolver()._device_reading(dev, float(dev.memory_mb), None, prof)
 
 
+@pytest.mark.cardless     # its subject is a host without a GPU runtime, mocked: never converted into the skip
 def test_a_host_with_no_gpu_runtime_plans_the_profiles_card_and_says_so(monkeypatch):
     from nbxtensor.backend.runtime import NoGpuRuntime
 

@@ -125,6 +125,7 @@ _REFUSED = ("cudaGetDeviceCount failed with error 35 on cuda: the runtime is the
             "(a driver older than the runtime, or a broken install)")
 
 
+@pytest.mark.cardless     # its subject is the refusal: never converted into the skip it tests
 def test_a_runtime_without_its_driver_is_a_skip_that_names_the_backend_and_the_code(monkeypatch):
     nd = _the_door(monkeypatch, refuses=_REFUSED, driver_libs=["libnbx-no-such-driver.so.1"])
     assert nd.absence() == "needs a CUDA device: none answered (driver error 35)"
@@ -133,6 +134,7 @@ def test_a_runtime_without_its_driver_is_a_skip_that_names_the_backend_and_the_c
     assert not nd._names_the_refusal("AssertionError: this is arithmetic, not a missing card")
 
 
+@pytest.mark.cardless     # its subject is the refusal: never converted into the skip it tests
 def test_a_driver_that_loads_and_refuses_is_broken_and_arms_nothing(monkeypatch):
     import ctypes.util
     present = ctypes.util.find_library("c") or ctypes.util.find_library("System")
@@ -141,11 +143,13 @@ def test_a_driver_that_loads_and_refuses_is_broken_and_arms_nothing(monkeypatch)
     assert nd.absence() is None and not nd._names_the_refusal("error 35")
 
 
+@pytest.mark.cardless     # its subject is the refusal: never converted into the skip it tests
 def test_a_table_with_no_driver_library_cannot_tell_and_arms_nothing(monkeypatch):
     nd = _the_door(monkeypatch, refuses=_REFUSED, driver_libs=())
     assert nd.absence() is None
 
 
+@pytest.mark.cardless     # its subject is the refusal: never converted into the skip it tests
 def test_a_door_that_counts_a_card_arms_nothing_and_one_that_counts_none_says_so(monkeypatch):
     assert _the_door(monkeypatch, answers=2).absence() is None
     nd = _the_door(monkeypatch, answers=0)

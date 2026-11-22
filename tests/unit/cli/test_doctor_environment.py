@@ -126,6 +126,7 @@ def test_no_engine_that_can_run_is_a_blocking_problem(monkeypatch):
     assert len(problems) == 1 and "Neither engine can run" in problems[0] and "no GPU runtime" in problems[0]
 
 
+@pytest.mark.cardless     # its subject is a host without a GPU runtime, mocked: never converted into the skip
 def test_a_gpu_without_its_runtime_library_is_named(monkeypatch):
     """The driver sees a card but nbxtensor opens no CUDA runtime: on a clean machine the engine read the card as
     CPU-only and told the user to build triton-cpu (2026-11-05). Since a04a688a3 (2026-11-06) what to install is
