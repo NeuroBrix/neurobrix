@@ -2,9 +2,9 @@
 norm over a sliced axis are taken ONCE over its whole input (`norm_statistics`, fp32, a fixed summation order: frame by
 frame, group by group), then each slice is normalised with them (`group_norm_apply`). The result is the whole op's
 up to the summation order of the statistics. No model, no family is named; the chunked piece calls it for every
-`NORM` its stretch starts at (`pytorch/prism/chunked_region.py`). Both engines: torch here, the Triton engine's NBXTensor
-twin in `kernels/wrappers.group_norm_statistics` / `group_norm_apply` (the first and second pass of its own group norm
-kernel, the statistics taken in the same fp32 sum and sum of squares). R33: torch is imported on the torch branch only."""
+`NORM` its stretch starts at (`pytorch/prism/chunked_region.py`). The PyTorch branch's, in torch (RED_LINES.md lines
+16-22): the Triton engine's are its twin's (`neurobrix.triton.strategies.tiled_norm`, the library's own passes); an
+NBXTensor reaching here is refused by name."""
 from __future__ import annotations
 
 from typing import Any, Tuple
@@ -18,8 +18,7 @@ def norm_statistics(x: Any, group: int, eps: float) -> Tuple[Any, Any]:
     """(mean, rstd), each [N, G] fp32, of `x` [N, C, ...] over each group's channels and every other position — what
     `aten::native_group_norm` computes — taken one sample at a time so no fp32 copy of the whole input is held."""
     if _is_nbx(x):
-        from nbxtensor.ops.norm_wrappers import group_norm_statistics
-        return group_norm_statistics(x, int(group), float(eps))
+        raise RuntimeError("ZERO FALLBACK: tiled group norm: the Triton branch's strategies are neurobrix.triton.strategies")
     import torch
     n, c = int(x.shape[0]), int(x.shape[1])
     if c % group:
@@ -37,12 +36,9 @@ def norm_statistics(x: Any, group: int, eps: float) -> Tuple[Any, Any]:
 
 def group_norm_apply(x: Any, weight: Any, bias: Any, group: int, mean: Any, rstd: Any) -> Tuple[Any, Any, Any]:
     """`aten::native_group_norm`'s three outputs for a slice `x` [N, C, ...] given the whole input's statistics: the
-    normalised slice in fp32 (the engine's fp32-class norm), mean and rstd [N, G]. On the Triton engine: in the
-    slice's dtype, as its group norm writes it (the DtypeEngine's wrap around the interceptor gives it the op's
-    operands, `ChunkedPiece._norm_interceptor`)."""
+    normalised slice in fp32 (the engine's fp32-class norm), mean and rstd [N, G]."""
     if _is_nbx(x):
-        from nbxtensor.ops.norm_wrappers import group_norm_apply as _apply
-        return _apply(x, weight, bias, int(group), mean, rstd)
+        raise RuntimeError("ZERO FALLBACK: tiled group norm: the Triton branch's strategies are neurobrix.triton.strategies")
     import torch
     n, c = int(x.shape[0]), int(x.shape[1])
     from neurobrix.core.runtime.card_handoff import to_card

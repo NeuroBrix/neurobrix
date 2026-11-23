@@ -249,7 +249,7 @@ def test_a_streamed_pricing_reloads_the_smallest_component_of_each_unstated_stor
 def test_the_reload_counts_an_nbxtensor_s_bytes():
     """Flex.1-alpha triton, 2026-11-04: `_weights_bytes` took `nbytes` first, a METHOD on NBXTensor (ATen's API), and died
     on int(method) at the first streamed reload. What this would do if the order came back: TypeError — RED."""
-    from neurobrix.pytorch.strategies import layer_streaming as LS
+    from neurobrix.triton.strategies import layer_streaming as LS
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import parse_dtype
     ex = type("E", (), {"_weights": {"w": NBXTensor.zeros((4, 8), parse_dtype("float32"), "cpu"), "none": None}})()
@@ -260,7 +260,7 @@ def test_the_reload_counts_a_zero_size_nbxtensor_as_zero():
     """Sana's text encoder holds zero-size constants (shape (0,), `_nbytes` 0): `_nbytes or nbytes` fell through to the
     METHOD and 0.6.3's first launch from PyPI died on int(method) in the arena probe's reload (2026-11-09). Red if a
     count of 0 is read as absent."""
-    from neurobrix.pytorch.strategies import layer_streaming as LS
+    from neurobrix.triton.strategies import layer_streaming as LS
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import parse_dtype
     f32 = parse_dtype("float32")

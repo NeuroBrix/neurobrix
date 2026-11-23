@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.pytorch.prism.expert_topology import _LAYERS
-from neurobrix.pytorch.strategies import expert_store as ES
+from neurobrix.triton.strategies import expert_store as ES
 
 
 class _Holder:

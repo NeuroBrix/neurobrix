@@ -4,7 +4,7 @@ Prism plans a stretch of a streamed component in slices of a token axis when its
 are over the rung (`LayerPartitioner._chunk_regions`, pytorch/prism/chunked_region.py). The stretch is
 one piece of the plan; this object stands where that piece's executor stood in
 `LayerStreamingStrategy`, with the same surface (`_dag`, `protect_tensor_id`, `load_weights`, `run`,
-`tensors_of_last_run`, `unload_weights`, `register_triton_interceptors`), so the strategy's loop
+`tensors_of_last_run`, `unload_weights`, `register_op_interceptors`), so the strategy's loop
 runs it as any other piece.
 
 Inside, the stretch runs in PASSES (`plan_region`): each pass is an ordinary executor over the ops
@@ -13,9 +13,9 @@ it needs, run once per slice of the axis. A pass's inputs that carry the axis ar
 axis is summed over the slices and fed whole to the later passes. The weights are loaded ONCE per
 run, on the piece's own executor, and every pass borrows them (`GraphExecutor._borrow`).
 
-Both engines: the slicing is the library's (`nbxtensor.ops.axis_slices`), on whatever tensor type the
-engine hands out — torch.Tensor in compiled, NBXTensor in the Triton modes; no conversion between
-them. A contraction's partials are summed
+The PyTorch branch's (RED_LINES.md lines 16-22; the Triton engine's is its twin's,
+`neurobrix.triton.strategies.chunked_piece`): the slicing is the library's (`nbxtensor.ops.axis_slices`) on the
+torch.Tensors the compiled engine hands out. A contraction's partials are summed
 in the dtype the pass executor's DtypeEngine names (`accumulation_dtype`) and stored once in the
 dtype the op's own output was given. None of these launches an autotuned kernel: the stitch holds
 no key of the census (tests/unit/prism/test_the_stitch_launches_no_autotuned_kernel.py).
@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from nbxtensor.ops.axis_slices import accumulate, own, put_slice, store, take_slice, take_slice_cyclic, whole_shape
-from neurobrix import branch_door as _branch_door
+from neurobrix.pytorch.prism import chunked_region as _chunked_region, layer_partition as _layer_partition
 
 from neurobrix.pytorch.strategies.value_parking import to_device
 from neurobrix.pytorch.strategies.tiled_norm import group_norm_apply, norm_statistics
@@ -53,7 +53,7 @@ class ChunkedPiece:
         self._unit = int(chunk.get("unit", 1))
         if self._slice < 1 or self._unit < 1:
             raise ValueError(f"chunked piece: slice {self._slice} of {self._sym} in units of {self._unit}")
-        self._axis = axis if axis is not None else _branch_door.module("prism", "chunked_region").TokenAxis(dag, self._sym, self._unit)
+        self._axis = axis if axis is not None else _chunked_region.TokenAxis(dag, self._sym, self._unit)
         if self._axis.unit != self._unit:
             raise ValueError(f"chunked piece: the axis is in units of {self._axis.unit}, the plan's of {self._unit}")
         index = {u: i for i, u in enumerate(self._axis.order)}
@@ -62,7 +62,6 @@ class ChunkedPiece:
             raise RuntimeError(f"chunked piece: the plan's stretch bounds {missing} are not in the graph")
         self._first, self._last = index[chunk["first_op"]], index[chunk["last_op"]]
         self._protected: Set[str] = set()
-        self._interceptors: Dict[str, Any] = {}
         self._passes: Optional[List[Any]] = None
         self._plan = None
         self._last_run: Dict[str, Any] = {}
@@ -104,22 +103,10 @@ class ChunkedPiece:
                 self._passes = None        # re-planned with it among the outputs, at the next run
         self._holder.protect_tensor_id(tid)
 
-    def register_triton_interceptors(self, interceptors: Dict[str, Any]) -> None:
-        inside = {(self._axis.ops.get(u) or {}).get("op_type") for u in self._axis.order[self._first:self._last + 1]}
-        hit = sorted(t for t in interceptors if t in inside)
-        if hit:
-            raise RuntimeError(
-                f"chunked piece: an interceptor for {hit} would run on slices of {self._sym} inside "
-                f"the stretch {self._chunk['first_op']}..{self._chunk['last_op']}; an interceptor "
-                f"keeps its own state across calls, and a slice is not the call it was written for")
-        self._interceptors.update(interceptors)
-        self._holder.register_triton_interceptors(interceptors)
-        for ex in self._passes or ():
-            ex.register_triton_interceptors(interceptors)
-
     def register_op_interceptors(self, interceptors: Dict[str, Any]) -> None:
         """The compiled engine's op-type interceptors (its KV cache): refused inside the sliced
-        stretch for the reason `register_triton_interceptors` gives; the holder runs the rest."""
+        stretch (an interceptor keeps its own state across calls, and a slice is not the call it was
+        written for); the holder runs the rest."""
         inside = {(self._axis.ops.get(u) or {}).get("op_type") for u in self._axis.order[self._first:self._last + 1]}
         hit = sorted(t for t in interceptors if t in inside)
         if hit:
@@ -177,7 +164,7 @@ class ChunkedPiece:
             return set()                  # the plan keeps this stretch's inputs whole on the device
         if self._plan is None:
             self._build()
-        tids = _branch_door.module("prism", "chunked_region").sliced_reads(self._plan, self._axis.ops)
+        tids = _chunked_region.sliced_reads(self._plan, self._axis.ops)
         return {n for n in (self._dag.get("segment_input_names") or []) if self._tid(n) in tids}
 
     def tensors_of_last_run(self, tids: Sequence[str]) -> Dict[str, Any]:
@@ -187,8 +174,8 @@ class ChunkedPiece:
 
     def _build(self) -> None:
         ax = self._axis
-        carriers = _branch_door.module("prism", "chunked_region").region_carriers(self._full, ax.order[self._first:self._last + 1])
-        plan, why = _branch_door.module("prism", "chunked_region").plan_region(ax, self._first, self._last, protected=frozenset(self._protected),
+        carriers = _chunked_region.region_carriers(self._full, ax.order[self._first:self._last + 1])
+        plan, why = _chunked_region.plan_region(ax, self._first, self._last, protected=frozenset(self._protected),
                                 carriers=carriers)
         if plan is None:
             raise RuntimeError(
@@ -199,17 +186,15 @@ class ChunkedPiece:
                 f"chunked piece: the plan priced {self._chunk['passes']} pass(es) for "
                 f"{self._chunk['first_op']}..{self._chunk['last_op']}, this graph needs "
                 f"{len(plan.passes)} — not the stretch the budget was accepted under")
-        seg = _branch_door.module("prism", "layer_partition").Segment(index=int(self._dag["segment_index"]), first_op=plan.first_op,
+        seg = _layer_partition.Segment(index=int(self._dag["segment_index"]), first_op=plan.first_op,
                       last_op=plan.last_op, op_count=plan.last - plan.first + 1)
         passes = []
         for cp in plan.passes:
-            sub = _branch_door.module("prism", "layer_partition").build_segment_graph(self._full, seg, pass_ops=cp.ops, outputs=cp.targets)
+            sub = _layer_partition.build_segment_graph(self._full, seg, pass_ops=cp.ops, outputs=cp.targets)
             ex = self._make(sub, self._holder)
             pins = self._pins_of(cp, plan, sub)
             if pins:
                 ex.pin_fp32_ops(pins)
-            if self._interceptors:
-                ex.register_triton_interceptors(self._interceptors)
             for tid in self._protected:
                 if tid in cp.targets:
                     ex.protect_tensor_id(tid)
@@ -225,9 +210,8 @@ class ChunkedPiece:
         def norm_slice(x, weight, bias, n, c, hw, group, eps, *rest, **kw):
             mean, rstd = self._norm_stats[uid]
             return group_norm_apply(x, weight, bias, int(group), mean, rstd)
-        # the compiled engine's norm returns its fp32 output itself; on the Triton engine the DtypeEngine wraps the
-        # interceptor as it wraps the op it replaces (its operand casts and its output contract)
-        norm_slice.self_manages_dtype = not str(getattr(self._holder, "mode", "")).startswith("triton")
+        # the compiled engine's norm returns its fp32 output itself
+        norm_slice.self_manages_dtype = True
         return norm_slice
 
     def _pins_of(self, cp: Any, plan: Any, graph: Dict[str, Any]) -> Set[str]:
@@ -254,7 +238,7 @@ class ChunkedPiece:
 
         def value(sid: str) -> int:
             if sid not in cache:
-                src = _branch_door.module("prism", "chunked_region").dim_source(syms.get(sid))
+                src = _chunked_region.dim_source(syms.get(sid))
                 if src is None:
                     raise RuntimeError(f"chunked piece: symbol {sid!r} binds from no input dimension")
                 tid, dim = src
@@ -329,7 +313,7 @@ class ChunkedPiece:
         plan = self._plan
         m = plan.margin if cp.chunked else 0
         # each slice READS its rows widened by the stretch's halo, clipped at the axis' true ends
-        for start, length, in_start, in_len in (_branch_door.module("prism", "chunked_region").slice_reads(total, count, m, plan.cyclic) if cp.chunked
+        for start, length, in_start, in_len in (_chunked_region.slice_reads(total, count, m, plan.cyclic) if cp.chunked
                                                 else [(0, total, 0, total)]):
             sub_feed = {}
             for n in names:

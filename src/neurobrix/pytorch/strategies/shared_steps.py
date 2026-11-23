@@ -1,7 +1,7 @@
 """Strategy steps the compiled and the Triton strategies ran alike, body for body — written once (Hocine Benkelaya 2026-10-29).
 
-One mixin per strategy, inherited first by both of its classes. Torch-free at import (the Triton strategies inherit
-them: R33); the tensors they move are each branch's own, through the strategy's own transfer methods.
+One mixin per strategy, inherited first by its PyTorch class (the Triton classes inherit their twin,
+`neurobrix.triton.strategies.shared_steps`); the tensors they move go through the strategy's own transfer methods.
 """
 from __future__ import annotations
 
@@ -147,7 +147,7 @@ class ComponentPlacementSteps:
     """What the compiled and the Triton `ComponentPlacementStrategy` ran alike (pytorch/strategies/component_placement.py, triton/strategies/component_placement.py)."""
 
     def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Transfer inputs to component's device (NBXTensor)."""
+        """Transfer inputs to component's device (torch.Tensor)."""
         target_device = self.component_devices.get(component_name)
         if target_device is None:
             return inputs
@@ -318,7 +318,7 @@ class SingleGPUSteps:
         component_name: str,
         inputs: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Ensure inputs are on the assigned GPU (NBXTensor transfer)."""
+        """Ensure inputs are on the assigned GPU (torch.Tensor transfer)."""
         return self.transfer_dict(inputs, self.device)
 
 

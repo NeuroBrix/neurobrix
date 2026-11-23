@@ -59,7 +59,8 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
     branch's from torch, the Triton branch's from its own allocator (no torch there). The Mac, 2026-10-15 01:58:
     a 1.3 GB segment computed under a 19 GB wired footprint, and nothing said whether that was live tensors or a cache."""
     from types import SimpleNamespace as NS
-    from neurobrix.pytorch.strategies.layer_streaming import _segment_memory_line
+    from neurobrix.triton.strategies.layer_streaming import _segment_memory_line
+    from neurobrix.pytorch.strategies.layer_streaming import _segment_memory_line as _compiled_line
     from nbxtensor.memory.allocator import DeviceAllocator as DA
     import neurobrix.core.device_utils as du
     synced = []
@@ -68,7 +69,7 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
     monkeypatch.setattr(DA._POOL, "cached", {2: 1 << 30})
     assert _segment_memory_line(NS(device="cuda:2", mode="triton")) == "device live 3072 MB, pool cached 1024 MB"
     assert synced == ["cuda:2"], "the device is synchronised before its figures are read"
-    assert _segment_memory_line(NS(device="cpu", mode="compiled")).startswith("no device allocator figures")
+    assert _compiled_line(NS(device="cpu", mode="compiled")).startswith("no device allocator figures")
 
 
 def test_a_release_says_what_the_device_still_holds(monkeypatch, engine_log):

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 from nbxtensor.memory import block_upload as BU
-from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
+from neurobrix.triton.strategies.zero3 import Zero3Strategy
 
 
 class _Host:

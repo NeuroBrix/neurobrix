@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.pytorch.strategies.base import ExecutionStrategy
+from neurobrix.triton.strategies.base import ExecutionStrategy
 
 
 class _NBX:

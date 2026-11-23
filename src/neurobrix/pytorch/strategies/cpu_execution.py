@@ -2,11 +2,9 @@
 CPU Execution Strategy — Doctrine R35 last-resort cascade
 
 All components placed on host RAM. Compute via PyTorch ATen native CPU
-dispatcher for the `compiled` and `sequential` modes (branch A). The
-`triton` and `triton_sequential` modes route to PyTorch CPU when no
-Triton-CPU runtime is integrated yet (branch B Triton-CPU integration
-is a separate workstream; until then, those modes fall back to ATen CPU
-via the existing dispatcher with a clear log note).
+dispatcher for the `compiled` and `sequential` modes (the PyTorch branch).
+The Triton modes' CPU strategy is its twin's
+(`neurobrix.triton.strategies.cpu_execution`).
 
 Activation budget: validated by the solver
 (`_try_cpu_execution`) at planning time — `sum(component peaks) <=

@@ -15,6 +15,10 @@ different graph is not the boundary the budget was accepted under.
 
 ZERO SEMANTIC, and no vendor: it names no device, no backend and no brand. It
 runs wherever the allocation points.
+
+The PyTorch branch's (RED_LINES.md lines 16-22): the Triton engine's is its twin's
+(`neurobrix.triton.strategies.layer_streaming`); a Triton segment executor reaching
+here is refused by name.
 """
 
 from __future__ import annotations
@@ -26,8 +30,6 @@ from typing import Any, Callable, Dict, List, Optional
 from neurobrix.core.runtime.graph_executor import output_key
 from neurobrix.pytorch.strategies.base import ExecutionStrategy
 import logging
-from nbxtensor import memory as _nbx_memory
-from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 
@@ -56,7 +58,7 @@ def _reset_segment_peak(seg_exec) -> None:
     op: an allocator keeps what that op needed, and the figures at the end cannot tell it from a fragmented cache."""
     dev = str(getattr(seg_exec, "device", "") or "")
     if str(getattr(seg_exec, "mode", "")).startswith("triton"):
-        return
+        raise RuntimeError("ZERO FALLBACK: layer streaming: the Triton branch's strategies are neurobrix.triton.strategies")
     from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
     _reset_cuda_peak(dev)                     # the run's peak kept before the counter restarts (none kept on MPS)
 
@@ -65,18 +67,13 @@ def _segment_memory_line(seg_exec) -> str:
     """The device memory a streamed segment leaves when it has computed, before its release — said per segment so a
     per-second trace can tell live tensors from an allocator's cache (the Mac, 2026-10-15 01:58: Allegro's first
     transformer segment held 1.3 GB of weights while the footprint sat at 19 GB wired during its compute). The
-    compiled branch reads torch's allocator (CUDA allocated / reserved, MPS allocated / driver); the Triton branch
-    its own (DeviceAllocator live and pool-cached bytes) — no torch on that branch (R33)."""
+    compiled branch reads torch's allocator (CUDA allocated / reserved, MPS allocated / driver)."""
     dev = str(getattr(seg_exec, "device", "") or "")
     # read after the device's queue drained: the line follows the run's last LAUNCH (the Mac, 2026-10-15 04:21:
     # MPS printed it the second the segment's weights arrived)
     from neurobrix.core.device_utils import device_sync
     if dev:
         device_sync(dev)
-    if str(getattr(seg_exec, "mode", "")).startswith("triton"):
-        idx = int(dev.split(":")[1]) if ":" in dev else 0
-        return (f"device live {_nbx_memory.memory_allocated(idx) / 2**20:.0f} MB, "
-                f"pool cached {_nbx_memory.pool_cached_bytes(idx) / 2**20:.0f} MB")
     from neurobrix.core.device_utils import device_allocator_figures
     f = device_allocator_figures(dev or None)
     if "allocated_mb" not in f:
@@ -88,12 +85,11 @@ def _segment_memory_line(seg_exec) -> str:
 
 
 def _weights_bytes(executor) -> int:
-    """The bytes of the weights an executor holds now (torch or NBXTensor)."""
+    """The bytes of the weights an executor holds now (torch)."""
     n = 0
-    for k, t in (getattr(executor, "_weights", None) or {}).items():
-        if t is not None and k != "_arenas":           # the arenas the Triton weights are views of: not a weight
-            # NBXTensor's own count (0 included: Sana's zero-size constants, 2026-11-09), torch's nbytes int otherwise
-            n += int(t.nbytes if getattr(t, "_nbytes", None) is None else t._nbytes)
+    for t in (getattr(executor, "_weights", None) or {}).values():
+        if t is not None:
+            n += int(t.nbytes)
     return n
 
 
@@ -110,11 +106,11 @@ def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, second
     the steadiness gate (`autodetect.STEADY_SPREAD`) give their median; three that do not are KEPT with their spread and
     date, priced at their low draw (`note_reload_rate(spread=)`), and replaced by the first steady three — never
     dropped, which made every later launch on a busy machine probe again (the catalogue's kept homes, 2026-11-19)."""
-    _ad = _branch_door.names("prism", "", "autodetect")[0]
+    from neurobrix.pytorch.prism import autodetect as _ad
     stored = _ad.stored_major(nbx_path, component)
     if stored is None or seconds <= 0:
         return
-    engine = "triton" if str(getattr(executor, "mode", "")).startswith("triton") else "compiled"
+    engine = "compiled"
     draws = _RELOAD_DRAWS.setdefault((component, engine), [])
     draws.append((int(reloaded_bytes), float(seconds)))
     if len(draws) < 3:
@@ -227,7 +223,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         embed_tokens weight" refusals. Prism budgets these bytes as resident beside the pieces. Idempotent (a held
         key is not reloaded), and called on every entry, so a base unloaded between phases gets
         them back."""
-        flow_reads_by_name = _branch_door.names("prism", "layer_partition", "flow_reads_by_name")[0]
+        from neurobrix.pytorch.prism.layer_partition import flow_reads_by_name
         if not flow_reads_by_name(component_name, getattr(base, "_dag", None),
                                   getattr(self.context, "topology", None)):
             return                    # no flow reads this component by name: nothing to hold
@@ -249,7 +245,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         executor's OWN dag, a segment executor asks the loader for precisely
         its own weights with nothing further to arrange.
         """
-        LayerPartitioner, build_segment_graph, Segment = _branch_door.names("prism", "layer_partition", "LayerPartitioner", "build_segment_graph", "Segment")
+        from neurobrix.pytorch.prism.layer_partition import LayerPartitioner, build_segment_graph, Segment
         base = self.context.component_executors.get(component_name)
         if base is None:
             raise RuntimeError(
@@ -322,7 +318,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         and in the compiled engine the full intermediate the band exists to avoid.
 
         Each piece takes the interceptors of its own ops, now and at any later registration
-        on the base (forwarded like `register_triton_interceptors`). Refused by name: a group of
+        on the base (forwarded like `register_op_interceptors`). Refused by name: a group of
         interceptors that hand each other a proxy split across two pieces (the proxy would
         cross a seam no executor carries), and an op the plan tiles that no piece holds (its
         band would silently run whole — the failure this exists to end)."""
@@ -368,8 +364,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         if hook is not None:
             hook(f"layer_streaming:{component_name}", **followers)
             return
-        takes = [n for n in ("register_op_uid_interceptors", "register_op_interceptors",
-                             "register_triton_interceptors")
+        takes = [n for n in ("register_op_uid_interceptors", "register_op_interceptors")
                  if getattr(executor, n, None) is not None]
         if takes:
             raise RuntimeError(
@@ -724,42 +719,14 @@ class LayerStreamingStrategy(ExecutionStrategy):
         executor.run = segmented_run
 
         # An interceptor registered on this executor must reach the SEGMENTS, because
-        # this executor no longer runs an op — `run` is `segmented_run` above, and the
-        # triton sequence that consults interceptors is compiled by each segment.
-        #
-        # The autoregressive flow registers the KV attention interceptor on the
-        # component's executor AFTER the strategy is installed, so nothing here can
-        # forward a registration that has not happened yet: the call itself is
-        # forwarded instead.
-        #
-        # Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct — the arms agree on the
-        # FIRST token and diverge from the second, which is the signature of a decode
-        # that is not reading a cache rather than of a broken graph:
-        #     whole     Sure, I'd be happy to
-        #     streamed  Suresearchsearchsearchsearchsearchsearchsearch
-        #
-        # One interceptor instance for all segments, deliberately. It indexes layers as
-        # `call_count % num_layers` on a counter it never resets, so three segments run in
-        # order inside one decode step continue the count instead of restarting it — the
-        # segmenting is invisible to the cache, which is the property that makes a shared
-        # instance correct rather than merely convenient.
-        def register_on_segments(interceptors, _segs=segments):
-            for seg_exec in _segs:
-                fn = getattr(seg_exec, "register_triton_interceptors", None)
-                if fn is None:
-                    raise RuntimeError(
-                        "layer_streaming: a segment executor cannot take an "
-                        "interceptor registration. Its decode would silently run "
-                        "with no KV cache, which reads as a model defect and is not "
-                        "one — a refusal is the only honest answer.")
-                fn(interceptors)
-
-        # The compiled engine's KV cache is registered by op TYPE (`register_op_interceptors`),
-        # and it must reach the segments for the same reason. Only the triton registration was
-        # forwarded, so a streamed compiled decode ran with no cache. Measured 2026-10-08 on the
-        # M4 Pro, TinyLlama-1.1B native greedy: whole ' Paris.', streamed 'The' and eleven
-        # newlines, ' Paris.' again with NBX_KV_RECOMPUTE=1. One instance for all segments,
-        # for the reason given above.
+        # this executor no longer runs an op — `run` is `segmented_run` above. The
+        # compiled engine's KV cache is registered by op TYPE (`register_op_interceptors`)
+        # on the component's executor AFTER the strategy is installed, so the call itself
+        # is forwarded. Measured 2026-10-08 on the M4 Pro, TinyLlama-1.1B native greedy:
+        # unforwarded, whole ' Paris.', streamed 'The' and eleven newlines. One instance
+        # for all segments, deliberately: it indexes layers as `call_count % num_layers` on
+        # a counter it never resets, so segments run in order inside one decode step
+        # continue the count — the segmenting is invisible to the cache.
         def register_op_types_on_segments(interceptors):
             for seg_exec in segments:
                 fn = getattr(seg_exec, "register_op_interceptors", None)
@@ -772,8 +739,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         before = dict(getattr(executor, "_op_interceptors", None) or {})
         if before:
             register_op_types_on_segments(before)
-        LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments,
-                                       op=register_op_types_on_segments)
+        LayerStreamingStrategy._follow(executor, component_name, op=register_op_types_on_segments)
 
         _log.debug(f"   [layer_streaming] '{component_name}': {len(segments)} "
                    f"segments, one resident at a time")

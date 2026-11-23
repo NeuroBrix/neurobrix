@@ -75,10 +75,8 @@ class StrategyContext:
     # component -> indices of its pieces held loaded between the component's runs (Prism `layer_stream_resident`).
     layer_resident: Dict[str, Any] = field(default_factory=dict)
 
-    # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
-    # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can
-    # run NBXTensor-native strategies (zero torch) while compiled keeps the
-    # torch path. Default "compiled" = byte-identical legacy behaviour.
+    # Execution mode: "compiled" | "sequential" on this branch (`get_strategy` refuses a Triton mode by name:
+    # the Triton branch's strategies are neurobrix.triton.strategies).
     mode: str = "compiled"
 
     # Active component tracking (for lazy loading)
@@ -116,9 +114,6 @@ class StrategyContext:
                 assert isinstance(alloc, tuple), f"Allocation must be dict or tuple, got {type(alloc)}"
                 devices.append(alloc[0])
         return list(set(devices))
-
-
-_ACCELERATOR_PREFIXES = frozenset({"cuda", "hip", "xpu", "mps", "tt"})
 
 
 class ExecutionStrategy(ABC):
@@ -303,53 +298,23 @@ class ExecutionStrategy(ABC):
         """
         Transfer tensor to target device.
 
-        Polymorphic on tensor type:
-          - torch.Tensor → .to(device) on the native (PyTorch) path.
-          - NBXTensor   → NBXTensor.to_cuda(device_idx) on the triton
-            path (zero torch, uses DeviceAllocator under the hood).
-
-        The two branches live here so strategies don't have to know
-        which engine they're wrapping. Zero3Strategy on triton would
-        otherwise try to call .pin_memory() / .to() on NBXTensor and
-        crash — this single point of polymorphism keeps the triton
-        code 100% torch-free while reusing the same strategy API.
+        torch.Tensor → card to card (`card_handoff.to_card`); an NBXTensor
+        is refused by name (the Triton branch's strategies are
+        neurobrix.triton.strategies); any other value unchanged.
 
         Args:
-            tensor: Tensor to transfer (torch.Tensor or NBXTensor)
+            tensor: Tensor to transfer (torch.Tensor)
             target_device: Target device string (e.g., "cuda:0")
-            async_transfer: Use non-blocking transfer (for NVLink). Only
-                honored on the torch path today; NBXTensor.to_cuda
-                queues on the default stream synchronously.
+            async_transfer: Use non-blocking transfer (for NVLink).
 
         Returns:
             Tensor on target device (same type as input).
         """
-        # Duck-type detection: NBXTensor exposes to_cuda/to_cpu and
-        # has _device attr. This avoids a hard import dependency on
-        # kernels.nbx_tensor from a pytorch/strategies path that may run
-        # before triton kernels are loaded.
+        # Duck-type detection: NBXTensor exposes to_cuda/to_cpu and has _device attr.
         if hasattr(tensor, 'to_cuda') and hasattr(tensor, '_device'):
-            # Triton path — zero torch. Parse "<prefix>:N" → int device_idx.
-            # `to_cuda` is the GENERIC accelerator move in this layer, not an
-            # NVIDIA one. Matching only "cuda:" sent every hip:/mps:/xpu:
-            # target into the else branch below and moved the tensor to the
-            # HOST — asked for a GPU, it delivered CPU, silently and in the
-            # wrong direction.
-            prefix, _, _idx = str(target_device).partition(":")
-            if prefix in _ACCELERATOR_PREFIXES:
-                dev_idx = int(_idx) if _idx.isdigit() else 0
-            elif prefix == "cpu":
-                # CPU target — use NBXTensor.to_cpu for zero3-style
-                # evictions (if ever called from strategy code).
-                return tensor.to_cpu()
-            else:
-                # An unrecognised device is not a CPU request. Falling back to
-                # to_cpu() here is what made the bug above silent.
-                raise ValueError(
-                    f"transfer_tensor: {target_device!r} names neither the host "
-                    f"nor a known accelerator "
-                    f"({', '.join(sorted(_ACCELERATOR_PREFIXES))})")
-            return tensor.to_cuda(dev_idx)
+            raise RuntimeError(
+                f"ZERO FALLBACK: transfer_tensor got an NBXTensor ({type(tensor).__name__}): the Triton "
+                f"branch's strategies are neurobrix.triton.strategies")
 
         if is_torch_tensor(tensor):
             if str(tensor.device) == target_device:
@@ -379,14 +344,8 @@ class ExecutionStrategy(ABC):
         """
         result = {}
         for key, value in tensors.items():
-            # torch.Tensor OR NBXTensor (duck-typed: exposes to_cuda + _device).
-            # transfer_tensor is already polymorphic over both; transfer_dict
-            # previously matched only torch.Tensor, so in triton mode every
-            # NBXTensor fell through to the pass-through branch and was NEVER
-            # moved across devices — silently breaking component_placement /
-            # pipeline_parallel multi-GPU on the triton path. For single-GPU
-            # (target == current device) transfer_tensor is a no-op
-            # (NBXTensor.to_cuda returns self), so this is regression-free.
+            # torch.Tensor, and an NBXTensor (duck-typed: exposes to_cuda + _device), which
+            # transfer_tensor refuses by name rather than pass it through unmoved.
             if is_torch_tensor(value) or (
                     hasattr(value, 'to_cuda') and hasattr(value, '_device')):
                 result[key] = self.transfer_tensor(value, target_device, async_transfer)

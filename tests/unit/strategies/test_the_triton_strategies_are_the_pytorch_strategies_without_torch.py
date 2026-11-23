@@ -32,7 +32,6 @@ TRITON_ONLY = {
     "block_scatter.py": {"_nbx_device_str"},       # an NBXTensor's device read from `_device_idx`
     "lazy_sequential.py": {"_names_accelerator"},  # a device name read by nbxtensor's accelerator prefixes
     "value_parking.py": {"_refuse_foreign"},       # a tensor that is no NBXTensor is refused by name
-    "zero3.py": {"_triton_only"},                  # a ratchet state that is not the Triton engine's is refused by name
 }
 
 

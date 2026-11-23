@@ -15,7 +15,7 @@ import pytest
 
 from nbxtensor.backend import capabilities as cap
 from nbxtensor.dtype.nbx_dtype import NBXDtype
-from neurobrix.pytorch.strategies import expert_store as strategy
+from neurobrix.triton.strategies import expert_store as strategy
 
 
 def _store(in_place=False, trace=None):

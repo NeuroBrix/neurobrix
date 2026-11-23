@@ -1,10 +1,10 @@
 """A value between a streamed component's pieces, parked on the host and brought back — the runtime of
 `Partition.swapped` (`LayerStreamingStrategy._run_pieces`, Prism's `LayerPartitioner._greedy_swapped`).
 
-Both engines, by what the tensor offers: an NBXTensor moves with `to_cpu(pinned=True)` / `to_cuda(index)` (the
-pinned host buffer is what an upload reads fastest), a torch tensor with `.to(device)`. No import of either tensor class
-(R33), no conversion between them; anything that is not a tensor (a dict of inputs, a scalar) passes through
-unchanged. A device name is read by nbxtensor's `accelerator_index`."""
+The PyTorch branch's (RED_LINES.md lines 16-22): a torch tensor moves with `.to(device)` (card to card through
+`card_handoff`); anything that is not a tensor (a dict of inputs, a scalar) passes through unchanged; an NBXTensor is
+refused by name (the Triton engine's are its twin's, `neurobrix.triton.strategies.value_parking`). A device name is
+read by nbxtensor's `accelerator_index` (the library's one reading of a device name)."""
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -13,8 +13,7 @@ from typing import Any, Optional
 def to_host(value: Any) -> Any:
     """`value` on the host (itself when it already is, or is no tensor)."""
     if hasattr(value, "to_cpu") and hasattr(value, "is_cuda"):          # NBXTensor
-        on_device = value.is_cuda or str(getattr(value, "_device", "cpu")) not in ("cpu", "")
-        return value.to_cpu(pinned=True) if on_device else value
+        raise RuntimeError("ZERO FALLBACK: value parking: the Triton branch's strategies are neurobrix.triton.strategies")
     # torch.Tensor on ANY accelerator: `is_cuda` is False on MPS, and a value "parked" by it stayed in Metal's pool —
     # mochi-1-preview's VAE at an 8 GB rung held three whole 2 981 MB maps on the device the plan had put on the host
     # (the Mac, 2026-10-27 12:06)
@@ -32,7 +31,7 @@ def to_device(value: Any, device: Optional[str]) -> Any:
     if index is None:
         return value
     if hasattr(value, "to_cuda") and hasattr(value, "is_cuda"):          # NBXTensor
-        return value if value.is_cuda else value.to_cuda(index)
+        raise RuntimeError("ZERO FALLBACK: value parking: the Triton branch's strategies are neurobrix.triton.strategies")
     if hasattr(value, "is_cuda") and hasattr(value, "to"):              # torch.Tensor
         if str(getattr(value, "device", "")) == str(device):
             return value

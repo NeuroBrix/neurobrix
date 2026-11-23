@@ -12,17 +12,18 @@ it: plan-level zero3, and the lazy_sequential brick in both engines. The state h
   routed expert. It is bound before the priming sweep and re-bound at each pass's first op, like
   zero3's non-block weights, and no block streams;
 * the expert weights, which stay on pinned host memory, their arena slots bound to the host tensors;
-* one expert store per engine (torch: `core/runtime/graph/expert_store.py`, NBXTensor:
-  `triton/expert_store.py`) sized `expert_cache_mb // one expert's bytes` slots. It is published
-  as `_expert_store` on the sequence (compiled and triton MoE closures) and on the executor
-  (triton-sequential dispatch), which call it with the experts each fused op routes to.
+* the PyTorch engine's expert store (`core/runtime/graph/expert_store.py`, torch) sized
+  `expert_cache_mb // one expert's bytes` slots. It is published as `_expert_store` on the
+  sequence (the compiled MoE closures) and on the executor, which call it with the experts each
+  fused op routes to.
 
 On a unified device the plan marks the store `expert_files` (Prism Strategy 2.5): the dense part is
 loaded to the device and the expert weights are views of the container's shards
 (`core/runtime/expert_files.py`), never pinned — on Metal pinned host memory counts against the same
 working set — and the torch store copies on the device's one queue (no CUDA stream).
 
-This module imports no tensor library: the engine's store is imported on the branch that runs it.
+The PyTorch branch's (RED_LINES.md lines 16-22): the Triton engine's store is its twin's
+(`neurobrix.triton.strategies.expert_store`); a caller that says it is the Triton engine is refused by name.
 """
 from __future__ import annotations
 
@@ -30,7 +31,6 @@ from typing import Any, Dict, Set
 
 from neurobrix.core.runtime.expert_residency import FUSED_OP, ExpertResidency, routed_layers
 import logging
-from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 #: The component strategy name, as Prism writes it into the plan.
@@ -53,16 +53,12 @@ def holds_expert_files(allocations: Dict[str, Any], component_name: str) -> bool
 
 
 def card_residency_applies(is_triton: bool, store: Any, like) -> bool:
-    """Whether a decode token's residency is kept ON THE CARD (`NBXExpertStore.enable_device_decode`): the Triton
-    engine, half-precision experts COPIED into slots (not bound in place), the routing's reuse curve already recorded
-    (the trace reads the routing back) — and a backend whose kernels read a tensor's `data_ptr()` as their address,
-    which the residency's launches stand on (`nbxtensor.backend.capabilities.backend_kernels_read_data_ptr`; armed
-    on "Triton, not in place" alone until 2026-11-11, whatever the backend). It decides; it builds nothing."""
-    from nbxtensor.backend.capabilities import backend_kernels_read_data_ptr
-    from nbxtensor.dtype.nbx_dtype import NBXDtype as _D
-    return bool(is_triton and not store.in_place and store.trace is None
-                and getattr(like[0], "_dtype", None) in (_D.float16, _D.bfloat16)
-                and backend_kernels_read_data_ptr())
+    """Whether a decode token's residency is kept ON THE CARD: never on the PyTorch engine (the Triton engine's
+    `NBXExpertStore.enable_device_decode`, `neurobrix.triton.strategies.expert_store`). It decides; it builds nothing;
+    the Triton engine asking here is refused by name."""
+    if is_triton:
+        raise RuntimeError("ZERO FALLBACK: expert store: the Triton branch's strategies are neurobrix.triton.strategies")
+    return False
 
 
 def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: Any, is_triton: bool,
@@ -122,15 +118,13 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
 
     residency = ExpertResidency(n_slots)
     if is_triton:
-        from neurobrix.triton.expert_store import NBXExpertStore
-        store = NBXExpertStore(residency, dev_idx, like,
-                               in_place=holds_expert_files(z3.context.allocations, component_name))
-    else:
-        import torch
-        from neurobrix.core.runtime.graph.expert_store import TorchExpertStore
-        store = TorchExpertStore(residency, torch.device(z3.exec_device), like,
-                                 release=(executor._release_expert_pages
-                                          if holds_expert_files(z3.context.allocations, component_name) else None))
+        raise RuntimeError(f"ZERO FALLBACK: {component_name}: the Triton branch's strategies are "
+                           f"neurobrix.triton.strategies (this is the PyTorch engine's expert store)")
+    import torch
+    from neurobrix.core.runtime.graph.expert_store import TorchExpertStore
+    store = TorchExpertStore(residency, torch.device(z3.exec_device), like,
+                             release=(executor._release_expert_pages
+                                      if holds_expert_files(z3.context.allocations, component_name) else None))
     seq._expert_store = store
     executor._expert_store = store
     # the decode's routing, recorded once per model as its reuse curve (core/runtime/routing_reuse.py), read by Prism
@@ -140,8 +134,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
         _n_exp = max(len(ids[0]) for ids in layers.values())
         store.trace = _rr.ExpertTrace(_model, component_name, top_k, _n_exp)
     holders = _hold_experts_on_cards(z3, component_name, executor, seq, is_triton, layers)
-    # A decode token's residency on the card (`NBXExpertStore.enable_device_decode`): half-precision experts copied
-    # into slots (not bound in place), once the routing's reuse curve is recorded (the trace reads the routing back).
+    # A decode token's residency on the card: the Triton engine's alone (`card_residency_applies`).
     if card_residency_applies(is_triton, store, like):
         store.enable_device_decode({k: i for i, k in enumerate(layers)}, widest)
 
@@ -172,7 +165,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     _log.debug(f"[ExpertStore] {component_name}: dense {dense_bytes / _MIB:.0f} MB resident (plan "
         f"{resident_mb:.0f} MB), {len(layers)} routed layers x {widest} experts on the host, cache "
         f"{n_slots} slots x {slot_bytes / _MIB:.2f} MB = {n_slots * slot_bytes / _MIB:.0f} MB (plan "
-        f"{cache_mb:.0f} MB), path={'triton' if is_triton else 'native'}")
+        f"{cache_mb:.0f} MB), path=native")
     return state
 
 
@@ -180,15 +173,13 @@ def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any
                            layers: Dict[str, Any]) -> list:
     """The routed experts of the blocks Prism holds WHOLE on other cards (`ComponentAllocation.expert_cards`, S3),
     copied once onto those cards and published as `_expert_cards` {layer key: (card, (gate, up, down))} on the
-    sequence and the executor: their fused op runs on that card (`moe_fused_dispatch`, the compiled MoE closure,
-    triton-sequential). Each layer's block is read as Prism reads it (`expert_topology._block_of`, the first gate
+    sequence and the executor: their fused op runs on that card (the compiled MoE closure). Each layer's block is read as Prism reads it (`expert_topology._block_of`, the first gate
     weight); a block Prism holds on a card with no routed layer of this graph is refused by name. Returns the holders."""
     cards = (z3.context.allocations.get(component_name) or {}).get('expert_cards') or {}
     seq._expert_cards = executor._expert_cards = None
     if not cards:
         return []
-    _block_of = _branch_door.names("prism", "expert_topology", "_block_of")[0]
-    from neurobrix.core.device_utils import _parse_device
+    from neurobrix.pytorch.prism.expert_topology import _block_of
     tensors = (getattr(executor, '_dag', None) or {}).get('tensors') or {}
     owner: Dict[int, str] = {}
     for card, spec in cards.items():
@@ -217,12 +208,8 @@ def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any
     held: Dict[str, Any] = {}
     holders = []
     for card, lay in sorted(per_card.items()):
-        if is_triton:
-            from nbxtensor.memory.expert_slots import HeldExperts
-            holder = HeldExperts(_parse_device(card)[1], lay)
-        else:
-            from neurobrix.core.runtime.graph.expert_store import TorchHeldExperts
-            holder = TorchHeldExperts(card, lay)
+        from neurobrix.core.runtime.graph.expert_store import TorchHeldExperts
+        holder = TorchHeldExperts(card, lay)
         holders.append(holder)
         for key in lay:
             held[key] = (card, holder.layers[key])

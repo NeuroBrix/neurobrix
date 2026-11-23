@@ -105,7 +105,7 @@ logger = logging.getLogger(__name__)
 _ZERO3_GPU_PREFIXES = ("cuda", "hip", "xpu", "mps")
 
 
-def _triton_only(is_triton: bool, what: str) -> None:
+def _refuse_the_other_branch(is_triton: bool, what: str) -> None:
     """Refuse by name a ratchet step asked for an engine that is not the Triton one."""
     if not is_triton:
         raise RuntimeError(f"ZERO FALLBACK: zero3 {what}: the Triton zero3 runs the Triton engine's sequence only "
@@ -376,7 +376,7 @@ class Zero3Strategy(TritonStrategy):
         dev_idx = state['exec_dev_idx']
         host = {tid: state['cpu_originals'][tid] for tid in entry['weight_tensor_ids']
                 if state['cpu_originals'].get(tid) is not None}
-        _triton_only(is_triton, "prefetch")
+        _refuse_the_other_branch(is_triton, "prefetch")
         # the library's block upload: on the copy stream with a readiness event, or synchronous without one
         from nbxtensor.memory.block_upload import upload_block
         state['gpu_cache'][bidx], ev = upload_block(host, dev_idx, state['transfer_stream'])
@@ -406,7 +406,7 @@ class Zero3Strategy(TritonStrategy):
         ev = state['block_events'].pop(bidx, None)
         if ev is None:
             return
-        _triton_only(is_triton, "wait")
+        _refuse_the_other_branch(is_triton, "wait")
         from nbxtensor.memory.block_upload import wait_for_upload
         wait_for_upload(ev)
 
@@ -451,7 +451,7 @@ class Zero3Strategy(TritonStrategy):
         state['gpu_cache'].pop(bidx, None)
 
         # Step 4: sync so the next malloc sees the freed region
-        _triton_only(is_triton, "evict")
+        _refuse_the_other_branch(is_triton, "evict")
         from nbxtensor.memory.block_upload import wait_device
         wait_device()
 
@@ -464,7 +464,7 @@ class Zero3Strategy(TritonStrategy):
         if state is None:
             return
         is_triton = state['is_triton']
-        _triton_only(is_triton, "reset")
+        _refuse_the_other_branch(is_triton, "reset")
         # Peak VRAM observation (criterion C diagnostics). Log once per
         # pass end when NBX_ZERO3_VRAM_LOG is set, read from
         # DeviceAllocator (exact NBX accounting).
@@ -549,7 +549,7 @@ class Zero3Strategy(TritonStrategy):
         dev_idx = self._exec_dev_idx()
         transfer_stream = 0
         transfer_stream_torch = None                 # the PyTorch engine's stream: none on this branch
-        _triton_only(is_triton, "ratchet state")
+        _refuse_the_other_branch(is_triton, "ratchet state")
         try:
             from nbxtensor.memory.block_upload import open_copy_stream
             transfer_stream = open_copy_stream(dev_idx)
@@ -689,7 +689,7 @@ class Zero3Strategy(TritonStrategy):
         if state['primed']:
             return
         seq = state['seq']
-        _triton_only(state['is_triton'], "prime")
+        _refuse_the_other_branch(state['is_triton'], "prime")
         dev = state['exec_dev_idx']
         n_flipped = seq.mark_cpu_weighted_ops_for_transfer(dev)
         seq.override_weightless_op_devices(dev)

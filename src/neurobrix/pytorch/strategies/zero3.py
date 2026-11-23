@@ -35,9 +35,8 @@ Eviction flow per block:
        + recompute_op_devices_for_slots — arena slots point at CPU
        tensors again so subsequent pure-CPU ops from the block stay
        correct.
-    3. Drop Python refs in gpu_cache[N-1] → NBXTensor.__del__
-       → DeviceAllocator.free_cuda → PCIe-visible memory returned
-       to the driver.
+    3. Drop Python refs in gpu_cache[N-1] → the torch allocator
+       frees the device memory.
 
 Priming (one-shot, first tick):
     * mark_cpu_weighted_ops_for_transfer(exec_dev): every weighted op
@@ -62,22 +61,14 @@ Install model:
     picks up executor._persistent_pre_op_callback and
     executor._post_run_hook transparently.
 
-Polymorphism:
-    Both native (CompiledSequence + torch.Tensor) and triton
-    (TritonSequence + NBXTensor) paths are supported through a single
-    ratchet — each tensor flavor exposes the same priming API
-    (rebind_partial, recompute_op_devices_for_slots, get_op_blocks,
-    materialize_slots_depending_on, override_weightless_op_devices,
-    mark_cpu_weighted_ops_for_transfer). The triton path's transport
-    (copy stream, block upload, readiness events) is nbxtensor's
-    (`nbxtensor.memory.block_upload`), not the strategy's.
-
-Portability:
-    The library's block upload is backend-dispatched through its
-    allocator, routed through the CUDA or HIP runtime depending on the
-    active backend. MPS /
-    CPU-only execute devices fall back to synchronous prefetch (no
-    stream) so the ratchet stays correct even without overlap.
+The PyTorch branch (RED_LINES.md lines 16-22): the CompiledSequence over
+torch.Tensors, exposing the priming API (rebind_partial,
+recompute_op_devices_for_slots, get_op_blocks,
+materialize_slots_depending_on, override_weightless_op_devices,
+mark_cpu_weighted_ops_for_transfer); the transport is torch's CUDA
+stream and events. The Triton branch's zero3 is its own twin
+(`neurobrix.triton.strategies.zero3`); a Triton sequence or a ratchet
+state of the Triton engine reaching here is refused by name.
 """
 
 from __future__ import annotations
@@ -90,13 +81,12 @@ from typing import TYPE_CHECKING
 
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 
-if TYPE_CHECKING:  # R33: the ATen branch imports it; the shared strategy only branches on it
+if TYPE_CHECKING:
     import torch
 
 from neurobrix.core.device_utils import device_empty_cache, device_sync
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix import branch_door as _branch_door
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +95,13 @@ logger = logging.getLogger(__name__)
 # both to RESOLVE the execution device and to decide whether to install on it —
 # they disagreed before, and the disagreement was the bug.
 _ZERO3_GPU_PREFIXES = ("cuda", "hip", "xpu", "mps")
+
+
+def _refuse_the_other_branch(is_triton: bool, what: str) -> None:
+    """Refuse by name a ratchet step asked for the Triton engine."""
+    if is_triton:
+        raise RuntimeError(f"ZERO FALLBACK: zero3 {what}: the Triton branch's strategies are "
+                           f"neurobrix.triton.strategies (this is the PyTorch engine's zero3)")
 
 
 class Zero3Strategy(ExecutionStrategy):
@@ -158,7 +155,7 @@ class Zero3Strategy(ExecutionStrategy):
                 device_str = device_str.split(":", 1)[1]
             if device_str and device_str.startswith(_ZERO3_GPU_PREFIXES):
                 return device_str
-        import torch  # the ATen branch's device probe (the triton subclass overrides this method)
+        import torch  # the ATen branch's device probe
         if torch.cuda.is_available():
             return "cuda:0"
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -177,15 +174,7 @@ class Zero3Strategy(ExecutionStrategy):
     def _pin_cpu_weights(self, component_name: str, executor: Any) -> None:
         """Pin CPU weights in-place for non_blocking DMA.
 
-        Native: one registered block (pinned_block.py); triton: NBXTensor.pin_host(). Zero torch on the triton branch.
-
-        In the triton path, the weight_loader already allocates CPU
-        shards as pinned NBXTensors (see triton/weight_loader.py
-        _load_to_pinned_cpu). This method becomes a no-op for those —
-        pin_host() on an already-pinned tensor returns self. Kept for
-        robustness: any CPU weight that slips through unpinned (e.g.
-        from a custom loader, a test harness, or a future zero3
-        variant) gets promoted here.
+        One registered block, in place (pinned_block.py).
 
         Pinned memory doubles effective PCIe throughput AND is required
         for cudaMemcpyAsync H2D overlap on a non-default stream. With
@@ -203,10 +192,6 @@ class Zero3Strategy(ExecutionStrategy):
         for t in weights.values():
             if is_torch_tensor(t) and t.device.type == "cpu":
                 total_mb += t.numel() * t.element_size()
-            elif hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu':
-                # NBXTensor and QuantizedTensor both carry their byte size
-                # (a quantized weight has no element size: int4 packed + scales).
-                total_mb += t._nbytes
         total_mb /= (1024 * 1024)
         if total_mb == 0:
             return
@@ -215,7 +200,7 @@ class Zero3Strategy(ExecutionStrategy):
         plan = getattr(self.context, '_plan', None)
         cpu_ram_mb = getattr(plan, 'cpu_ram_mb', 0) if plan else 0
         if cpu_ram_mb > 0:
-            should_pin_memory, CPUConfig = _branch_door.names("prism", "cpu_config", "should_pin_memory", "CPUConfig")
+            from neurobrix.pytorch.prism.cpu_config import should_pin_memory, CPUConfig
             cpu = CPUConfig(
                 model="runtime", cores=1, threads=1,
                 ram_mb=cpu_ram_mb, architecture="",
@@ -236,12 +221,6 @@ class Zero3Strategy(ExecutionStrategy):
             if block is not None:
                 executor._pinned_host_block = block
                 pinned += 1
-        for name in list(weights):
-            tensor = weights[name]
-            if hasattr(tensor, '_device') and getattr(tensor, '_device', None) == 'cpu':
-                if not getattr(tensor, '_pinned', False):
-                    weights[name] = tensor.pin_host()
-                    pinned += 1
         if pinned:
             logger.debug(
                 f"[Zero3] {component_name}: pinned {pinned} weights "
@@ -276,14 +255,10 @@ class Zero3Strategy(ExecutionStrategy):
         # managed GPU residency — zero3 was selected by Prism (a 31 GB
         # component was assigned it on mps:0) and then did nothing at all.
         #
-        # The ratchet's primitives — nbxtensor.memory.block_upload's copy
-        # stream, upload and events — are backend-dispatched through the
-        # library's allocator and were verified working on Metal before
-        # this guard was widened. The memory counters it also touches are
-        # diagnostics only (NBX_ZERO3_VRAM_LOG), so their accounting does not
-        # gate the mechanism. A backend where a primitive does NOT work now
-        # raises from that primitive, which is a loud failure where the old
-        # guard gave a silent no-op.
+        # A device where a primitive does NOT work raises from that
+        # primitive (the torch path refuses a non-CUDA device by name in
+        # `_build_ratchet_state`), a loud failure where the old guard gave a
+        # silent no-op.
         if not self.exec_device.startswith(_ZERO3_GPU_PREFIXES):
             return
         self._install(component_name, executor)
@@ -301,8 +276,6 @@ class Zero3Strategy(ExecutionStrategy):
             return
         if self._ratchet.get(component_name) is not None:
             return
-        if getattr(executor, 'mode', None) == "triton" and hasattr(executor, '_ensure_triton_compiled'):
-            executor._ensure_triton_compiled(executor._triton_device_index())
         state = self._build_ratchet_state(component_name, executor)
         if state is not None and not state['primed']:
             self._ratchet_prime(state, component_name)
@@ -313,23 +286,19 @@ class Zero3Strategy(ExecutionStrategy):
 
 
     def _seq_handle(self, executor: Any):
-        """Return (seq, is_triton) or (None, None) if neither is ready."""
-        tseq = getattr(executor, '_triton_seq', None)
-        if tseq is not None:
-            return tseq, True
+        """Return (seq, False) for the compiled sequence, or (None, None) if it is not ready; a Triton sequence is
+        refused by name."""
+        _refuse_the_other_branch(getattr(executor, '_triton_seq', None) is not None
+                       or getattr(executor, '_triton_seq_view', None) is not None, "sequence")
         cseq = getattr(executor, '_compiled_seq', None)
         if cseq is not None:
             return cseq, False
-        # triton-sequential: no arena, its weight store seen through the same six calls.
-        view = getattr(executor, '_triton_seq_view', None)
-        if view is not None:
-            return view[1], True
         return None, None
 
     def _snapshot_cpu_originals(
         self, executor: Any, blocks: Dict[int, Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Map tensor_id → current CPU NBXTensor / torch.Tensor.
+        """Map tensor_id → current CPU torch.Tensor.
 
         Captured once before the ratchet starts. These refs are what
         rebind_partial restores to when a block is evicted — without
@@ -391,13 +360,7 @@ class Zero3Strategy(ExecutionStrategy):
         dev_idx = state['exec_dev_idx']
         host = {tid: state['cpu_originals'][tid] for tid in entry['weight_tensor_ids']
                 if state['cpu_originals'].get(tid) is not None}
-        if is_triton:
-            # the library's block upload: on the copy stream with a readiness event, or synchronous without one
-            from nbxtensor.memory.block_upload import upload_block
-            state['gpu_cache'][bidx], ev = upload_block(host, dev_idx, state['transfer_stream'])
-            if ev is not None:
-                state['block_events'][bidx] = ev
-            return
+        _refuse_the_other_branch(is_triton, "prefetch")
         import torch
         on_cuda = self.exec_device.startswith("cuda")
         if on_cuda:
@@ -443,12 +406,9 @@ class Zero3Strategy(ExecutionStrategy):
         ev = state['block_events'].pop(bidx, None)
         if ev is None:
             return
-        if is_triton:
-            from nbxtensor.memory.block_upload import wait_for_upload
-            wait_for_upload(ev)
-        else:
-            # torch.cuda.Event.wait posts to the current stream.
-            ev.wait()
+        _refuse_the_other_branch(is_triton, "wait")
+        # torch.cuda.Event.wait posts to the current stream.
+        ev.wait()
 
     def _evict_block(
         self, state: Dict[str, Any], bidx: int, is_triton: bool
@@ -462,9 +422,8 @@ class Zero3Strategy(ExecutionStrategy):
           2. Rebind arena slots to the CPU originals. Subsequent
              fast-path reads on those slots see CPU tensors which
              route through the slow path automatically.
-          3. Drop the Python refs in gpu_cache. NBXTensor.__del__
-             (triton) or Python GC (native) calls into the allocator
-             to free the GPU memory.
+          3. Drop the Python refs in gpu_cache. Python GC calls into
+             the allocator to free the GPU memory.
           4. Sync the device so outstanding reads on the freed
              tensors finish before we return.
         """
@@ -492,11 +451,8 @@ class Zero3Strategy(ExecutionStrategy):
         state['gpu_cache'].pop(bidx, None)
 
         # Step 4: sync so the next malloc sees the freed region
-        if is_triton:
-            from nbxtensor.memory.block_upload import wait_device
-            wait_device()
-        else:
-            device_sync(self.exec_device)
+        _refuse_the_other_branch(is_triton, "evict")
+        device_sync(self.exec_device)
 
     def _reset_ratchet(self, component_name: str) -> None:
         """Drop every GPU-cached STREAMED block — the resident ones
@@ -507,38 +463,26 @@ class Zero3Strategy(ExecutionStrategy):
         if state is None:
             return
         is_triton = state['is_triton']
+        _refuse_the_other_branch(is_triton, "reset")
         # Peak VRAM observation (criterion C diagnostics). Log once per
-        # pass end when NBX_ZERO3_VRAM_LOG is set. Triton path reads
-        # from DeviceAllocator (exact NBX accounting); native path reads
-        # from torch.cuda.max_memory_allocated (device-wide — includes
+        # pass end when NBX_ZERO3_VRAM_LOG is set, read from
+        # torch.cuda.max_memory_allocated (device-wide — includes
         # any torch-cached allocations).
         if os.environ.get("NBX_ZERO3_VRAM_LOG"):
             dev_idx = state['exec_dev_idx']
-            if is_triton:
-                from nbxtensor import memory as nbx_memory
-                peak_mb = nbx_memory.peak_memory_allocated(dev_idx) / 1e6
-                live_mb = nbx_memory.memory_allocated(dev_idx) / 1e6
-                logger.debug(f"[Zero3] {component_name} pass_end: "
-                    f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
-                    f"blocks_cached={len(state['gpu_cache'])}")
-                nbx_memory.reset_peak_memory(dev_idx)
-            else:
-                import torch
-                peak_mb = torch.cuda.max_memory_allocated(dev_idx) / 1e6
-                live_mb = torch.cuda.memory_allocated(dev_idx) / 1e6
-                logger.debug(f"[Zero3] {component_name} pass_end: "
-                    f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
-                    f"blocks_cached={len(state['gpu_cache'])}")
-                from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
-                _reset_cuda_peak(f"cuda:{dev_idx}")      # the run's peak kept before the counter restarts
+            import torch
+            peak_mb = torch.cuda.max_memory_allocated(dev_idx) / 1e6
+            live_mb = torch.cuda.memory_allocated(dev_idx) / 1e6
+            logger.debug(f"[Zero3] {component_name} pass_end: "
+                f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
+                f"blocks_cached={len(state['gpu_cache'])}")
+            from neurobrix.core.runtime.graph_executor import _reset_cuda_peak
+            _reset_cuda_peak(f"cuda:{dev_idx}")      # the run's peak kept before the counter restarts
         resident = state['resident']
         for bidx in list(state['gpu_cache'].keys()):
             if bidx not in resident:
                 self._evict_block(state, bidx, is_triton)
         # Also drop any unwaited readiness events.
-        if is_triton:
-            from nbxtensor.memory.block_upload import drop_upload_events
-            drop_upload_events(state['block_events'].values())
         state['block_events'].clear()
         state['current_block'] = -1
         state['fresh_pass'] = True
@@ -590,8 +534,7 @@ class Zero3Strategy(ExecutionStrategy):
         # Prism chose single_gpu but zero3 is still selected as strategy
         # for some reason. Skip pipelining; fall back to priming only.
         has_cpu_block_weights = any(
-            (hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu')
-            or (is_torch_tensor(t) and t.device.type == 'cpu')
+            is_torch_tensor(t) and t.device.type == 'cpu'
             for t in cpu_originals.values()
         )
         if not has_cpu_block_weights:
@@ -603,46 +546,33 @@ class Zero3Strategy(ExecutionStrategy):
         # Stream setup. Transfer stream carries the async H2D; the
         # compute stream is the runtime default (stream=0).
         dev_idx = self._exec_dev_idx()
-        transfer_stream = 0
+        transfer_stream = 0                          # the Triton engine's copy stream: none on this branch
         transfer_stream_torch = None
-        if is_triton:
+        import torch
+        # The torch path's machinery IS CUDA: streams, events,
+        # set_device, memory stats — none of it exists for mps and the
+        # first prefetch dies at torch.cuda.set_device (Sana 4Kpx
+        # compiled, 2026-09-21). The solver no longer selects zero3 on
+        # a unified device (Strategy 3 consults _device_is_unified),
+        # so reaching this on a non-CUDA torch device means a stale
+        # plan or a forced strategy — refuse by name rather than
+        # AttributeError three calls later.
+        # The one non-CUDA form: a unified expert store (`expert_files`), whose dense part is
+        # already on the device and whose store copies on the device's one queue — no stream.
+        from .expert_store import holds_expert_files
+        unified_store = holds_expert_files(self.context.allocations, component_name)
+        if not self.exec_device.startswith("cuda") and not unified_store:
+            raise RuntimeError(
+                f"ZERO FALLBACK: zero3's torch path is CUDA machinery "
+                f"(streams/events/set_device) and cannot run on "
+                f"{self.exec_device!r}. On a unified device zero3 frees "
+                f"nothing (measured 2026-09-09) and the solver refuses "
+                f"to select it — re-plan rather than forcing it.")
+        if self.exec_device.startswith("cuda"):
             try:
-                from nbxtensor.memory.block_upload import open_copy_stream
-                transfer_stream = open_copy_stream(dev_idx)
-            except Exception as e:
-                logger.warning(
-                    f"[Zero3] {component_name}: transfer_stream create "
-                    f"failed ({e}); falling back to synchronous prefetch"
-                )
-                transfer_stream = 0
-        else:
-            import torch
-            # The torch path's machinery IS CUDA: streams, events,
-            # set_device, memory stats — none of it exists for mps and the
-            # first prefetch dies at torch.cuda.set_device (Sana 4Kpx
-            # compiled, 2026-09-21). The solver no longer selects zero3 on
-            # a unified device (Strategy 3 consults _device_is_unified),
-            # so reaching this on a non-CUDA torch device means a stale
-            # plan or a forced strategy — refuse by name rather than
-            # AttributeError three calls later. The triton branch above is
-            # untouched: its primitives are DeviceAllocator-dispatched and
-            # verified on Metal.
-            # The one non-CUDA form: a unified expert store (`expert_files`), whose dense part is
-            # already on the device and whose store copies on the device's one queue — no stream.
-            from .expert_store import holds_expert_files
-            unified_store = holds_expert_files(self.context.allocations, component_name)
-            if not self.exec_device.startswith("cuda") and not unified_store:
-                raise RuntimeError(
-                    f"ZERO FALLBACK: zero3's torch path is CUDA machinery "
-                    f"(streams/events/set_device) and cannot run on "
-                    f"{self.exec_device!r}. On a unified device zero3 frees "
-                    f"nothing (measured 2026-09-09) and the solver refuses "
-                    f"to select it — re-plan rather than forcing it.")
-            if self.exec_device.startswith("cuda"):
-                try:
-                    transfer_stream_torch = torch.cuda.Stream(device=dev_idx)
-                except Exception:
-                    transfer_stream_torch = None
+                transfer_stream_torch = torch.cuda.Stream(device=dev_idx)
+            except Exception:
+                transfer_stream_torch = None
 
         # `expert_store` (Prism, `_zero3_resident_budgets`): the dense part resident, the routed
         # experts served from an expert cache on the card (pytorch/strategies/expert_store.py).
@@ -690,8 +620,7 @@ class Zero3Strategy(ExecutionStrategy):
             f"{resident_bytes / 2**20:.0f} MB kept on the card (plan: "
             f"{self._resident_budget_mb(component_name):.0f} MB), "
             f"{len(state['streamed'])} streamed per pass through a 2-block window, "
-            f"path={'triton' if is_triton else 'native'}, "
-            f"stream={'async' if (transfer_stream or transfer_stream_torch) else 'sync'}")
+            f"path=native, stream={'async' if transfer_stream_torch else 'sync'}")
         return state
 
     def _resident_budget_mb(self, component_name: str) -> float:
@@ -732,10 +661,8 @@ class Zero3Strategy(ExecutionStrategy):
         bytes of its weights already on a card instead."""
         total = 0
         for t in (cpu_originals.get(tid) for tid in dict.fromkeys(entry.get('weight_tensor_ids', []))):
-            torch_t = t is not None and is_torch_tensor(t)
-            where = t.device.type if torch_t else getattr(t, '_device', None)
-            if t is not None and (where == 'cpu') != on_card:
-                total += t.numel() * t.element_size() if torch_t else int(t._nbytes)
+            if t is not None and (t.device.type == 'cpu') != on_card:
+                total += t.numel() * t.element_size()
         return total
 
     def _prime_only_state(
@@ -776,17 +703,12 @@ class Zero3Strategy(ExecutionStrategy):
         if state['primed']:
             return
         seq = state['seq']
-        if state['is_triton']:
-            dev = state['exec_dev_idx']
-            n_flipped = seq.mark_cpu_weighted_ops_for_transfer(dev)
-            seq.override_weightless_op_devices(dev)
-            path_label = f"triton/cuda:{dev}"
-        else:
-            import torch
-            exec_dev_t = torch.device(self.exec_device)
-            n_flipped = seq.mark_cpu_weighted_ops_for_transfer(exec_dev_t)
-            seq.override_weightless_op_devices(exec_dev_t)
-            path_label = f"compiled/{self.exec_device}"
+        _refuse_the_other_branch(state['is_triton'], "prime")
+        import torch
+        exec_dev_t = torch.device(self.exec_device)
+        n_flipped = seq.mark_cpu_weighted_ops_for_transfer(exec_dev_t)
+        seq.override_weightless_op_devices(exec_dev_t)
+        path_label = f"compiled/{self.exec_device}"
         logger.debug(
             f"[Zero3] {component_name}: primed {n_flipped} "
             f"non-pipelined CPU-weighted ops on {path_label}"
@@ -912,9 +834,6 @@ class Zero3Strategy(ExecutionStrategy):
             if state.get('expert_store') is not None:
                 from .expert_store import release_expert_store
                 release_expert_store(state)
-            if is_triton:
-                from nbxtensor.memory.block_upload import close_copy_stream
-                close_copy_stream(state.get('transfer_stream') or 0, state['block_events'].values())
 
     # ------------------------------------------------------------------
     # Strategy entry points
