@@ -25,7 +25,6 @@ tools/retrace_zoo.py, test_a_joined_name_is_red_in_a_tracked_file below).
 """
 from __future__ import annotations
 
-import fnmatch
 import re
 import shutil
 import subprocess
@@ -44,8 +43,13 @@ NAMES = re.compile(re.escape(TOOL_NAME) + "|" + re.escape(FOLDER_NAME), re.IGNOR
 #: English words that hold the tool's name as letters and are other words, admitted by name (the whole letter run)
 ENGLISH = ("forget", "forgets", "forgetting", "forgetful")
 #: the census fingerprints: the hashed names of the functions a derivation ran, a file format the census reads back
-#: byte for byte; renaming a function there unmakes the record. The only path-wide exemption.
-FINGERPRINTS = "src/neurobrix/config/census/*/*/*.inputs.jsonl"
+#: byte for byte; renaming a function there unmakes the record. The only whole-file exemptions, NAMED one by one
+#: (qa 1290-3: a glob admitted a new census-shaped file with any text); a new census file is added here by its review.
+FINGERPRINTS = frozenset((
+    "src/neurobrix/config/census/apple/apple_m4_pro/18g.inputs.jsonl",
+    "src/neurobrix/config/census/nvidia/volta/16g.inputs.jsonl",
+    "src/neurobrix/config/census/nvidia/volta/32g.inputs.jsonl",
+))
 _A = "(a) a name of the build-time value the container format carries (graph.json, manifest), not of a technique"
 _B = "(b) the library's allocation record (nbxtensor.memory.trace_replay): one real run's allocations"
 _C = "(c) a trace of a RUN: a debug switch, a profiler or malloc or launch trace, a settrace hook, a traceback"
@@ -184,7 +188,7 @@ def _tracked_texts(root: Path = ROOT):
                            text=True).stdout.split("\0")
     for p in paths:
         if (not p or p == SELF or p.startswith("docs/internal/") or p.endswith(".nbx") or "/.nbx" in p
-                or fnmatch.fnmatch(p, FINGERPRINTS)):
+                or p in FINGERPRINTS):
             continue
         f = root / p
         if not f.is_file():
@@ -290,3 +294,14 @@ def test_the_public_repository_names_no_build_technique():
     found = [f"{p}:{n}: {w}" for p, text in _tracked_texts() for n, w in hits(p, text)]
     assert found == [], "a tracked file says how a container is made (reword it: built, recorded at build, the " \
                         "build-time value, rebuild):\n" + "\n".join(found[:40])
+
+
+def test_the_exempt_census_files_are_named_and_tracked():
+    """qa 1290-3: each exempt fingerprint file is named and tracked (a named file gone is red); a new file of the same
+    shape is NOT exempt: it is read like any other text."""
+    if not (ROOT / ".git").exists() or shutil.which("git") is None:
+        pytest.skip("not a git checkout")
+    tracked = set(subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True,
+                                 text=True).stdout.split("\0"))
+    assert FINGERPRINTS <= tracked, sorted(FINGERPRINTS - tracked)
+    assert "src/neurobrix/config/census/amd/cdna3/64g.inputs.jsonl" not in FINGERPRINTS
