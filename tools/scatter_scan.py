@@ -49,8 +49,11 @@ LIST = Path(__file__).with_name("scatter_list.tsv")
 # The engine roots the Triton branch runs through. The PyTorch branch
 # (core/runtime/graph, core/flow, kernels/metadata_ops.py ...) is a separate
 # product by design and is NOT a migration target: torch is its tensor
-# library. Its files are skipped.
-ROOTS = ("triton", "kernels", "pytorch/prism", "core/memory", "core/module",
+# library. Its files are skipped. The PyTorch side of a doubled brick
+# (pytorch/<brick>) is read: it holds the ORIGINALS the twin rule folds the
+# Triton twins into (RED_LINES.md lines 16-22); a PyTorch-only torch file of it
+# is in PYTORCH_BRANCH_FILES.
+ROOTS = ("triton", "kernels", "pytorch/prism", "pytorch/strategies", "pytorch/neurotax", "core/memory", "core/module",
          "core/runtime", "core/state")
 SKIP_PARTS = ("triton_kernels_ref", "__pycache__")
 PYTORCH_BRANCH_PREFIXES = ("core/runtime/graph/",)
@@ -58,7 +61,9 @@ PYTORCH_BRANCH_FILES = {"kernels/metadata_ops.py", "core/runtime/torch_allocator
                         "core/runtime/graph_executor.py",
                         # the compiled halves split out of the kernel files: they stay with the engine (M1)
                         "kernels/ops/residual_chain_torch.py", "kernels/ops/fused_upsample_conv_torch.py",
-                        "kernels/torch_interop.py"}
+                        "kernels/torch_interop.py",
+                        # the PyTorch engine's one registered host block (torch's pinned memory): no Triton twin
+                        "pytorch/strategies/pinned_block.py"}
 
 # Names the pattern catches that are NOT tensor semantics (reviewed by hand;
 # a line here says why, and the list only grows with a reason).
@@ -80,6 +85,9 @@ NOT_SEMANTIC = {
     ("triton/weight_loader.py", "_load_shard_into_arenas"): "the engine's loading policy over one shard (which weight on "
         "which device or the host, at which dtype, widened or not; DESIGN.md section 3: the engine keeps its loading "
         "policy); every read, conversion and placement is nbxtensor.io.safetensors",
+    ("pytorch/strategies/zero3.py", "_install_block_on_arena"): "the zero3 ratchet handing a block's device copy to "
+        "the sequence (`seq.rebind_partial`, `recompute_op_devices_for_slots`): a call of the sequence's binding API, "
+        "no arena layout, size or copy computed; its Triton twin calls the TritonSequence's",
     ("core/module/temporal_stream_runner.py", "nbytes"): "a parked stream state answering the library's deferred-free "
         "batch (nbxtensor.memory.deferred_frees.DeferredFrees.add reads t.nbytes()) with the device bytes it holds: "
         "none, it waits in host memory; no size is computed",
