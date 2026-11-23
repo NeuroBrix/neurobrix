@@ -176,11 +176,30 @@ def reloads(container_dir: str, component: str, hardware_id: str, engine: str, n
     return {"container": Path(container_dir).name, "component": component, "draws": draws}
 
 
+def child_env(scale) -> Dict[str, str]:
+    """The child's environment. The ARENA measure (an integer scale) runs certified-only: it never sweeps, and a key
+    the directory does not serve bounds the measure. The RELOAD probe (scale = the engine's mode) is part of a FIRST
+    launch: it loads the weights as the run does, so it proves what the load meets once and keeps it, exactly as the
+    run would. Only a confirmation run (`--certified-only`, already in this environment) refuses an unproven variant."""
+    if str(scale) in ("triton", "compiled"):
+        return dict(os.environ)
+    return dict(os.environ, NBX_AUTOTUNE_CERTIFIED_ONLY="1")
+
+
+def serves_nothing_certified(exc: BaseException) -> bool:
+    """Whether the arena measure's certified-only child stopped because the store serves nothing for what it met: a key
+    the certified directory lacks (KeyNotCertified, a CERTIFIED-ONLY refusal) or an element-wise variant no proof table
+    holds (TileUnproven, "a confirmation run met"). Either bounds the measure (ProbeUncertified); any other error stops."""
+    text = str(exc)
+    return (type(exc).__name__ == "KeyNotCertified" or "CERTIFIED-ONLY" in text
+            or (type(exc).__name__ == "TileUnproven" and "a confirmation run met" in text))
+
+
 def child(container_dir: str, component: str, hardware_id: str, scale) -> Dict[str, Any]:
     """One probe in its own process (a clean allocator). Its own exception comes back by name: a device that cannot
     hold the request raises `ProbeOutOfMemory`, anything else a RuntimeError carrying the child's error — never the
     tail of its stderr (the interpreter's shutdown noise hid the cause on a fresh Mac home, 2026-11-07)."""
-    env = dict(os.environ, NBX_AUTOTUNE_CERTIFIED_ONLY="1")        # never a sweep: a missing key bounds the measure
+    env = child_env(scale)
     r = subprocess.run([sys.executable, "-m", __name__, container_dir, component, hardware_id, str(scale)],
                        capture_output=True, text=True, env=env)
     line = next((l for l in r.stdout.splitlines() if l.startswith(MARK)), None)
@@ -220,7 +239,6 @@ if __name__ == "__main__":
             out = measure(sys.argv[1], sys.argv[2], sys.argv[3], *(int(a) for a in sys.argv[4:5]))
         except Exception as exc:          # said to the parent by name: the cause, and whether the device was too small
             print(MARK + json.dumps({"error": f"{type(exc).__name__}: {str(exc)[:600]}", "oom": _OOM_TEXT in str(exc),
-                                     "uncertified": type(exc).__name__ == "KeyNotCertified"
-                                     or "CERTIFIED-ONLY" in str(exc)}), flush=True)
+                                     "uncertified": serves_nothing_certified(exc)}), flush=True)
             sys.exit(3)
         print(MARK + json.dumps(out), flush=True)
