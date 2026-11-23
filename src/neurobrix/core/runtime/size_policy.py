@@ -108,6 +108,19 @@ def _from_image(defaults, image_hw, asked_h, asked_w, where) -> Tuple[int, int]:
     return (int(asked_h) if asked_h is not None else h, int(asked_w) if asked_w is not None else w)
 
 
+def plan_size(defaults: Optional[Mapping[str, Any]], built_hw: Optional[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
+    """The size a daemon plans a "from_image" container at, before any image: what its policy resolves for the
+    container's own built aspect (`built_hw`, its built latent times the VAE scale) — the LIKELIEST request, not a
+    bound (a resolved size can hold more pixels: another aspect, the vendor's round-then-floor, an explicit size;
+    project lead 23/11/2026). None for a container of another policy, or with no built size: its declared or built
+    size stands as before."""
+    if not defaults or defaults.get("size_policy") != "from_image" or not built_hw:
+        return None
+    _policy(defaults, DEFAULTS_FILE)
+    return from_image_size(_positive_int(defaults, "max_area", "from_image", DEFAULTS_FILE),
+                           _positive_int(defaults, "size_multiple", "from_image", DEFAULTS_FILE), tuple(built_hw))
+
+
 def resolve_size(defaults: Optional[Mapping[str, Any]], image_hw: Optional[Tuple[int, int]],
                  asked_h: Optional[int], asked_w: Optional[int], where: str = DEFAULTS_FILE) -> Tuple[int, int]:
     """(height, width) a run with a conditioning image generates at, and the image is fitted to.

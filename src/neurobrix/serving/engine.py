@@ -84,7 +84,9 @@ def _container_extent(manifest, cached_defaults, topo_components):
     from neurobrix.core.runtime_values import resolve as _resolve_runtime
     from neurobrix.core.runtime.resolution.container_size import container_output_size
     from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
+    from neurobrix.core.runtime.size_policy import plan_size
     _cos = container_output_size(manifest, cached_defaults, topo_components)
+    _cos = plan_size(cached_defaults, _cos) or _cos       # a "from_image" container: its policy at its built aspect
     height = _resolve_runtime("height", container=cached_defaults, default=None,
                               extra=[("the container's own output height", _cos[0] if _cos else None)])
     width = _resolve_runtime("width", container=cached_defaults, default=None,
