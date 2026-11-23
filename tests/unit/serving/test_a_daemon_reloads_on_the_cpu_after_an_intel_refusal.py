@@ -8,7 +8,7 @@ deleted, the old engine released before the new one loads (a daemon with no engi
 import pytest
 
 from nbxtensor.backend.level_zero import IntelDeviceError
-from neurobrix.pytorch.prism import autodetect, intel_refusal
+from neurobrix.triton.prism import autodetect, intel_refusal    # the daemon below runs the Triton branch
 from neurobrix.serving.server import ServingDaemon
 
 PROFILE = "devices:\n- {index: 0, brand: intel, model: Arc A770, pci_id: '8086:56a0'}\n"

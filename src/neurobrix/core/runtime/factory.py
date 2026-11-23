@@ -26,9 +26,10 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from .graph_executor import GraphExecutor
 from neurobrix.nbx.cache import ensure_extracted
+from neurobrix import branch_door as _branch_door
 
 if TYPE_CHECKING:
-    from neurobrix.pytorch.prism.solver import ComponentAllocation
+    ComponentAllocation = _branch_door.names("prism", "solver", "ComponentAllocation")[0]
     from neurobrix.core.components.base import ComponentHandler
 
 

@@ -26,9 +26,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from nbxtensor.ops.axis_slices import accumulate, own, put_slice, store, take_slice, take_slice_cyclic, whole_shape
-from neurobrix.pytorch.prism.chunked_region import (
-    TokenAxis, dim_source, slice_reads, plan_region, region_carriers, sliced_reads)
-from neurobrix.pytorch.prism.layer_partition import Segment, build_segment_graph
+from neurobrix import branch_door as _branch_door
+
 from neurobrix.core.strategies.value_parking import to_device
 from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
 from neurobrix.core.runtime.graph_executor import output_key
@@ -39,7 +38,7 @@ class ChunkedPiece:
 
     def __init__(self, dag: Dict[str, Any], holder: Any, chunk: Dict[str, Any],
                  make_executor: Callable[[Dict[str, Any], Any], Any],
-                 axis: Optional[TokenAxis] = None):
+                 axis: Optional["TokenAxis"] = None):
         """`dag`: the component's graph as Prism cut it. `holder`: the piece's own executor (its
         segment graph), which loads the stretch's weights. `chunk`: the plan's record.
         `make_executor(graph, lender)`: an executor for a pass graph borrowing from `lender`, built
@@ -54,7 +53,7 @@ class ChunkedPiece:
         self._unit = int(chunk.get("unit", 1))
         if self._slice < 1 or self._unit < 1:
             raise ValueError(f"chunked piece: slice {self._slice} of {self._sym} in units of {self._unit}")
-        self._axis = axis if axis is not None else TokenAxis(dag, self._sym, self._unit)
+        self._axis = axis if axis is not None else _branch_door.module("prism", "chunked_region").TokenAxis(dag, self._sym, self._unit)
         if self._axis.unit != self._unit:
             raise ValueError(f"chunked piece: the axis is in units of {self._axis.unit}, the plan's of {self._unit}")
         index = {u: i for i, u in enumerate(self._axis.order)}
@@ -178,7 +177,7 @@ class ChunkedPiece:
             return set()                  # the plan keeps this stretch's inputs whole on the device
         if self._plan is None:
             self._build()
-        tids = sliced_reads(self._plan, self._axis.ops)
+        tids = _branch_door.module("prism", "chunked_region").sliced_reads(self._plan, self._axis.ops)
         return {n for n in (self._dag.get("segment_input_names") or []) if self._tid(n) in tids}
 
     def tensors_of_last_run(self, tids: Sequence[str]) -> Dict[str, Any]:
@@ -188,8 +187,8 @@ class ChunkedPiece:
 
     def _build(self) -> None:
         ax = self._axis
-        carriers = region_carriers(self._full, ax.order[self._first:self._last + 1])
-        plan, why = plan_region(ax, self._first, self._last, protected=frozenset(self._protected),
+        carriers = _branch_door.module("prism", "chunked_region").region_carriers(self._full, ax.order[self._first:self._last + 1])
+        plan, why = _branch_door.module("prism", "chunked_region").plan_region(ax, self._first, self._last, protected=frozenset(self._protected),
                                 carriers=carriers)
         if plan is None:
             raise RuntimeError(
@@ -200,11 +199,11 @@ class ChunkedPiece:
                 f"chunked piece: the plan priced {self._chunk['passes']} pass(es) for "
                 f"{self._chunk['first_op']}..{self._chunk['last_op']}, this graph needs "
                 f"{len(plan.passes)} — not the stretch the budget was accepted under")
-        seg = Segment(index=int(self._dag["segment_index"]), first_op=plan.first_op,
+        seg = _branch_door.module("prism", "layer_partition").Segment(index=int(self._dag["segment_index"]), first_op=plan.first_op,
                       last_op=plan.last_op, op_count=plan.last - plan.first + 1)
         passes = []
         for cp in plan.passes:
-            sub = build_segment_graph(self._full, seg, pass_ops=cp.ops, outputs=cp.targets)
+            sub = _branch_door.module("prism", "layer_partition").build_segment_graph(self._full, seg, pass_ops=cp.ops, outputs=cp.targets)
             ex = self._make(sub, self._holder)
             pins = self._pins_of(cp, plan, sub)
             if pins:
@@ -255,7 +254,7 @@ class ChunkedPiece:
 
         def value(sid: str) -> int:
             if sid not in cache:
-                src = dim_source(syms.get(sid))
+                src = _branch_door.module("prism", "chunked_region").dim_source(syms.get(sid))
                 if src is None:
                     raise RuntimeError(f"chunked piece: symbol {sid!r} binds from no input dimension")
                 tid, dim = src
@@ -330,7 +329,7 @@ class ChunkedPiece:
         plan = self._plan
         m = plan.margin if cp.chunked else 0
         # each slice READS its rows widened by the stretch's halo, clipped at the axis' true ends
-        for start, length, in_start, in_len in (slice_reads(total, count, m, plan.cyclic) if cp.chunked
+        for start, length, in_start, in_len in (_branch_door.module("prism", "chunked_region").slice_reads(total, count, m, plan.cyclic) if cp.chunked
                                                 else [(0, total, 0, total)]):
             sub_feed = {}
             for n in names:

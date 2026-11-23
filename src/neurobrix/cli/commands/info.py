@@ -7,6 +7,7 @@ from pathlib import Path
 
 from neurobrix import __version__
 from neurobrix.cli.utils import PACKAGE_ROOT, CACHE_DIR, STORE_DIR, format_size
+from neurobrix import branch_door as _branch_door
 
 
 # The compute branches whose installed version `info` reports, read from the
@@ -18,7 +19,7 @@ _BRANCH_DISTRIBUTIONS = ("torch", "triton")
 def _devices() -> list:
     """The accelerators, from the engine's own detection (`pytorch/prism/autodetect`),
     the one Prism plans from: every vendor its OS probes know, no framework import."""
-    from neurobrix.pytorch.prism.autodetect import detect_devices
+    detect_devices = _branch_door.names("prism", "autodetect", "detect_devices")[0]
     devices, _brand = detect_devices()
     return [{"index": d["index"], "name": d["model"], "memory_bytes": int(d["memory_mb"]) << 20,
              "brand": d["brand"], "architecture": d["architecture"],
@@ -51,7 +52,7 @@ def info_record(args) -> dict:
             if model_dir.is_dir() and (model_dir / "manifest.json").exists():
                 rec["models"].append({"name": model_dir.name,
                                       "size_bytes": sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())})
-    from neurobrix.pytorch.prism.loader import list_available_profiles
+    list_available_profiles = _branch_door.names("prism", "loader", "list_available_profiles")[0]
     rec["hardware_profiles"] = list_available_profiles()      # the committed ones and this machine's generated ones
     try:
         from neurobrix.serving.engine import daemon_identity
@@ -91,7 +92,7 @@ def cmd_info(args):
 
     if args.hardware or show_all:
         print("\nHardware Profiles:")
-        from neurobrix.pytorch.prism.loader import list_available_profiles
+        list_available_profiles = _branch_door.names("prism", "loader", "list_available_profiles")[0]
         _profiles = list_available_profiles()                 # the committed ones and this machine's generated ones
         for _name in _profiles:
             print(f"  - {_name}")

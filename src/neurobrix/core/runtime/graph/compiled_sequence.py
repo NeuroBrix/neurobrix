@@ -38,6 +38,7 @@ from .compiled_ops import CompiledOpResolver
 # is exactly the string-parsing this design exists to avoid.
 from nbxtensor.memory.oom_advice import annotate as _oom_annotate
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 
@@ -445,7 +446,7 @@ class CompiledSequence(SequenceSteps):
         # freed memory for any request (CUDA's), or no device named (the executor's tests).
         self._release_from: Optional[int] = None
         if hardware is not None and device.type != "cpu":
-            from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
+            vendor_memory_of = _branch_door.names("prism", "attention_scratch", "vendor_memory_of")[0]
             _mem = vendor_memory_of(*hardware)
             if "compiled_allocator_retention" not in _mem:
                 raise KeyError(f"ZERO FALLBACK: {hardware[0]}/{hardware[1]}'s vendor file states no "
@@ -787,7 +788,7 @@ class CompiledSequence(SequenceSteps):
             # The one argument walk (`pytorch/prism/layer_partition.rewire_arg`): a `tensor_id` of
             # any type, a `tensor_tuple`, a nested `list` — this private copy knew `tensor`,
             # `tensor_tuple` and `list` only.
-            from neurobrix.pytorch.prism.layer_partition import rewire_arg
+            rewire_arg = _branch_door.names("prism", "layer_partition", "rewire_arg")[0]
             return rewire_arg(arg, rewire)
 
         for op_uid in execution_order:
@@ -1135,7 +1136,7 @@ class CompiledSequence(SequenceSteps):
             # The one argument walk (`pytorch/prism/layer_partition.rewire_arg`): a `tensor_id` of
             # any type, a `tensor_tuple`, a nested `list` — this private copy knew `tensor`,
             # `tensor_tuple` and `list` only.
-            from neurobrix.pytorch.prism.layer_partition import rewire_arg
+            rewire_arg = _branch_door.names("prism", "layer_partition", "rewire_arg")[0]
             return rewire_arg(arg, rewire)
 
         for op_uid in execution_order:
@@ -3359,7 +3360,6 @@ class CompiledSequence(SequenceSteps):
         Diagnostic, default off, appended as JSONL so several components and
         several sequences merge naturally into one file.
         """
-        import os
         dump = os.environ.get("NBX_DUMP_PLANNED_OPS")
         if not dump:
             return

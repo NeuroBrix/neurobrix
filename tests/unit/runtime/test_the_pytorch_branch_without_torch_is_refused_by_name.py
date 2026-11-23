@@ -98,7 +98,9 @@ def test_a_mode_asked_by_its_flag_is_never_changed(monkeypatch):
     from neurobrix.cli.engine_choice import choose_engine
     monkeypatch.setattr("neurobrix.core.runtime.engines.require_engine", lambda mode: None)
     monkeypatch.setattr("neurobrix.cli.engine_choice._triton_backend_present", lambda log: True)
+    from neurobrix import branch_door
     for flag in ("compiled", "sequential", "triton", "triton_sequential"):
+        branch_door._CHOSEN[0] = None                   # each flag as a new process: one process runs one branch
         args = argparse.Namespace(compiled=False, sequential=False, triton=False, triton_sequential=False)
         setattr(args, flag, True)
         assert choose_engine(args, logging.getLogger("t")) == flag

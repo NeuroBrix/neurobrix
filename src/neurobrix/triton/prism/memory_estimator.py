@@ -1,0 +1,218 @@
+"""
+NeuroBrix Prism - Memory Estimator
+Tensor memory calculation utilities.
+
+Dtype widths come from config/dtypes.yml through core/dtype/itemsize.py (one table).
+"""
+
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+
+from neurobrix.core.config.system import bytes_to_mb, bytes_to_gb
+from nbxtensor.dtype.itemsize import itemsize, known_dtypes
+
+
+def estimate_op_workspace_bytes(
+    mode: str,
+    op_type: str,
+    input_shapes: List[List[int]],
+    output_shapes: List[List[int]],
+    dtype_bytes: int,
+    vram_per_gpu_bytes: Optional[int] = None,
+) -> int:
+    """Bound for the workspace memory an op needs ON TOP of its output tensor.
+
+    Modeled per op class. The cuDNN workspace for conv with implicit-gemm
+    on large feature maps grows ~2 × im2col matrix bytes (input × kh × kw
+    × out_h × out_w), but cuDNN itself caps it at the largest algorithm
+    that fits in VRAM. We bound by the smaller of the theoretical 2× im2col
+    and 0.75 × VRAM (R3-style: hardware-driven, no global hardcoded
+    ceiling).
+
+    Triton mode = ~0 workspace (kernels write direct to output, no im2col
+    matrix materialized) → returns 0.
+
+    Used by ActivationProfiler.overflow_ops to flag ops Prism must tile.
+    """
+    if mode in ("triton", "triton_sequential"):
+        return 0  # Triton kernels stream, no extra workspace
+
+    cl = op_type.split("::")[-1]
+
+    if cl in ("convolution", "conv2d", "conv1d", "_convolution"):
+        # cuDNN implicit-gemm on large feature maps:
+        # im2col matrix = (N × out_h × out_w) × (in_c × kh × kw) bytes
+        # Worst-case workspace ~ 2 × im2col, capped by 0.75 × VRAM.
+        if not input_shapes or not output_shapes:
+            return 0
+        in_shape = input_shapes[0]    # Conv1D/2D/3D: [N, in_c, *spatial]
+        weight_shape = input_shapes[1] if len(input_shapes) > 1 else None
+        out_shape = output_shapes[0]  # [N, out_c, *spatial_out]
+        # Rank-discriminated (3D=Conv1D, 4D=Conv2D, 5D=Conv3D video). The im2col
+        # matrix is (N × prod(out_spatial)) × (in_c × prod(kernel_spatial)).
+        # Branch on tensor rank, never on model family (R34).
+        rank = len(in_shape)
+        if (out_shape is None or weight_shape is None
+                or len(out_shape) != rank or len(weight_shape) != rank
+                or rank not in (3, 4, 5)):
+            return 0
+        n, in_c = in_shape[0], in_shape[1]
+        out_spatial = 1
+        kernel_spatial = 1
+        for ax in range(2, rank):
+            out_spatial *= out_shape[ax]
+            kernel_spatial *= weight_shape[ax]
+        im2col_bytes = n * out_spatial * in_c * kernel_spatial * dtype_bytes
+        workspace_upper = 2 * im2col_bytes
+        if vram_per_gpu_bytes is not None and vram_per_gpu_bytes > 0:
+            workspace_upper = min(workspace_upper, int(0.75 * vram_per_gpu_bytes))
+        return int(workspace_upper)
+
+    if "scaled_dot_product_attention" in cl:
+        # The build toolchain forces the MEM-EFFICIENT SDPA backend at build (R20:
+        # enable_flash=False, enable_mem_efficient=True, enable_math=True), so the
+        # runtime executes aten::_scaled_dot_product_efficient_attention. That
+        # backend STREAMS attention block-wise and NEVER materialises the full
+        # [B, H, T_q, T_k] score matrix — its only extra scratch is an
+        # O(B*H*T_q) fp32 logsumexp (+ a tiny per-CUDA-block tile, negligible at
+        # estimate granularity). The previous full-score estimate
+        # (B*H*T_q*T_k*4) over-counted by T_k× and forced unnecessary
+        # block_scatter / tiling on large-sequence video DiTs (Mochi masked
+        # attention over ~2.4k tokens at batch=2 -> ~2.8 GB phantom workspace per
+        # block, pushing a 20 GB transformer past a 32 GB GPU). Model the real
+        # mem-efficient workspace instead. R34: branch on op semantics + the
+        # doctrine-fixed backend, never on model family.
+        if not input_shapes:
+            return 0
+        q_shape = input_shapes[0]
+        if len(q_shape) < 4:
+            return 0
+        b, h, t_q = q_shape[0], q_shape[1], q_shape[2]
+        # mem-efficient inference workspace: fp32 logsumexp [B, H, T_q].
+        return int(b * h * t_q * 4)
+
+    # upsample / element-wise / norms: kernels stream output, ~no workspace
+    return 0
+
+
+def compute_tensor_bytes(shape: List[int], dtype: str) -> int:
+    """
+    Compute memory for a tensor in bytes.
+
+    ZERO HARDCODE: the width from config/dtypes.yml; an unknown dtype is refused by name.
+
+    Args:
+        shape: Tensor shape as list of integers
+        dtype: Dtype string (e.g., "float16", "float32", "bfloat16")
+
+    Returns:
+        Size in bytes
+    """
+    bytes_per_element = itemsize(dtype)
+
+    numel = 1
+    for dim in shape:
+        numel *= dim
+
+    return numel * bytes_per_element
+
+
+_UNSPECIFIED_WIDTH = 4          # fp32: a request that names no dtype plans at the widest
+
+
+def _bytes_of(dtype, role: str) -> int:
+    """The byte width of `dtype`, or a refusal naming it.
+
+    These two functions used to default a miss — source to 2 and target to 4 — so any
+    name the map does not carry returned a factor of 2.0 for EVERY pair, identity
+    included: `compute_dtype_factor("bf16", "bf16")` was 2.0, and a dtype's width
+    (`get_dtype_bytes_per_element("fp16")`, since deleted for `itemsize`) was 4. A plan then reports exactly twice the
+    memory it needs, which reads as a real figure and cannot be told from one.
+
+    That default cost two machines hours on Flex.1-alpha's 2.000x (metal-first-light
+    b945e040 / 697e80b1) before the call site was instrumented and named it.
+
+    Refusing instead is safe to the measurement: every dtype string in all 59 containers
+    of this cache is a full name already — float32 (29), bfloat16 (27), float16 (3) — so
+    no plan that works today reaches this refusal. A short name arriving later is a real
+    defect at its source, and it now says so instead of halving itself.
+    """
+    if dtype is None:
+        # ABSENCE is not an unrecognised name, and this refusal is only about names.
+        # A request that names no dtype has always been planned at the widest width, and
+        # that is the safe direction for a memory plan: it over-estimates. Under-estimating
+        # is what let mochi's VAE accept a plan 40x too small. Callers that legitimately
+        # pass None: `InputConfig()` with no dtype (profiler.py:686).
+        return _UNSPECIFIED_WIDTH
+    try:
+        return itemsize(dtype)
+    except (ValueError, TypeError):
+        raise ValueError(
+            f"compute_dtype_factor: unknown {role} dtype "
+            f"{dtype!r}.\n"
+            f"  Known: {', '.join(known_dtypes())}.\n"
+            f"  This used to default silently (source=2, target=4), which returns a "
+            f"factor of 2.0 for any pair including identity and misreports every plan "
+            f"that touches it by exactly 2x. Give the full dtype name at its source."
+        ) from None
+
+
+def compute_dtype_factor(source_dtype: str, target_dtype: str) -> float:
+    """
+    Compute memory multiplier for dtype conversion.
+
+    Args:
+        source_dtype: Original dtype (e.g., "float16")
+        target_dtype: Target dtype (e.g., "float32")
+
+    Returns:
+        Multiplier (e.g., 2.0 for float16→float32)
+    """
+    # The historical widths for an ABSENT operand are preserved exactly (source 2,
+    # target 4) so no plan that works today moves; only an unrecognised NAME — the
+    # defect the Mac flagged in b945e040 — now refuses instead of silently returning 2.0.
+    source_bytes = 2 if source_dtype is None else _bytes_of(source_dtype, "source")
+    target_bytes = 4 if target_dtype is None else _bytes_of(target_dtype, "target")
+    return target_bytes / source_bytes
+
+
+@dataclass
+class MemoryBreakdown:
+    """Memory breakdown for a component."""
+    component_name: str
+    weight_bytes: int
+    activation_bytes: int
+    overhead_bytes: int
+
+    @property
+    def total_bytes(self) -> int:
+        return self.weight_bytes + self.activation_bytes + self.overhead_bytes
+
+    @property
+    def total_mb(self) -> float:
+        return bytes_to_mb(self.total_bytes)
+
+    @property
+    def total_gb(self) -> float:
+        return bytes_to_gb(self.total_bytes)
+
+    @property
+    def weight_mb(self) -> float:
+        return bytes_to_mb(self.weight_bytes)
+
+    @property
+    def activation_mb(self) -> float:
+        return bytes_to_mb(self.activation_bytes)
+
+    @property
+    def overhead_mb(self) -> float:
+        return bytes_to_mb(self.overhead_bytes)
+
+    def __repr__(self) -> str:
+        return (
+            f"MemoryBreakdown({self.component_name}: "
+            f"weights={self.weight_mb:.0f}MB, "
+            f"activations={self.activation_mb:.0f}MB, "
+            f"overhead={self.overhead_mb:.0f}MB, "
+            f"total={self.total_mb:.0f}MB)"
+        )

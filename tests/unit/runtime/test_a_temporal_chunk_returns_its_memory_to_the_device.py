@@ -22,7 +22,9 @@ def _executor(monkeypatch, mode):
     decl = {"dags": {"first": {"tensors": {"x": {"input_name": "z"}}}, "next": {}}, "input": "x", "states": []}
     monkeypatch.setattr(ex, "ensure_extracted", lambda p: p)
     monkeypatch.setattr(ex, "_release_device_memory", lambda mode, device: calls.append(("device", mode, device)))
-    from neurobrix.pytorch.prism import temporal_stream as ts
+    from neurobrix import branch_door
+    branch_door.choose(mode)                            # the process runs this mode's branch: its Prism plans
+    ts = branch_door.module("prism", "temporal_stream")
     from neurobrix.core.module import temporal_stream_runner as tsr
     from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
     monkeypatch.setattr(ts, "load", lambda cache, comp: decl)

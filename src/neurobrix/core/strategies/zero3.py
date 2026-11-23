@@ -96,6 +96,7 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; the shared strategy only b
 from neurobrix.core.device_utils import device_empty_cache, device_sync
 
 from .base import ExecutionStrategy, StrategyContext
+from neurobrix import branch_door as _branch_door
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,7 @@ class Zero3Strategy(ExecutionStrategy):
         plan = getattr(self.context, '_plan', None)
         cpu_ram_mb = getattr(plan, 'cpu_ram_mb', 0) if plan else 0
         if cpu_ram_mb > 0:
-            from neurobrix.pytorch.prism.cpu_config import should_pin_memory, CPUConfig
+            should_pin_memory, CPUConfig = _branch_door.names("prism", "cpu_config", "should_pin_memory", "CPUConfig")
             cpu = CPUConfig(
                 model="runtime", cores=1, threads=1,
                 ram_mb=cpu_ram_mb, architecture="",

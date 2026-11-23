@@ -103,7 +103,8 @@ def tree_of(repo: Path, sha: str, scratch: Path = SCRATCH) -> Path:
     # The machine's GENERATED profiles live in ONE place (pytorch/prism/loader.GENERATED_DIR, ~/.neurobrix/hardware): a
     # tree whose loader reads them there gets none copied in (a copy in its package is refused by name); a tree from
     # before that reads them from its own config/hardware/, so it gets the machine's, from that one place.
-    loader_src = (tmp / "src" / "neurobrix" / "core" / "prism" / "loader.py").read_text()
+    loader_src = next(p for p in (tmp / "src" / "neurobrix" / "pytorch" / "prism" / "loader.py",     # since 23/11
+                                  tmp / "src" / "neurobrix" / "core" / "prism" / "loader.py") if p.exists()).read_text()
     if "GENERATED_DIR" not in loader_src:
         hw_src = Path(os.path.expanduser("~")) / ".neurobrix" / "hardware"
         hw_dst = tmp / "src" / "neurobrix" / "config" / "hardware"

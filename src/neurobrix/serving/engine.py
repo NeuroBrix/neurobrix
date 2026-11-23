@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional
 
 from neurobrix.serving.session import ConversationSession, play_turn
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 
@@ -118,6 +119,7 @@ class InferenceEngine:
         self.model_name = model_name
         self.hardware_id = hardware_id
         self.mode = mode
+        _branch_door.choose(mode)               # the daemon runs one branch: common code asks the door for its side
 
         self._pkg = None           # RuntimePackage (immutable)
         self._plan = None          # ExecutionPlan (immutable)
@@ -139,7 +141,7 @@ class InferenceEngine:
         weights persist across all subsequent requests.
         """
         from neurobrix.nbx import NBXContainer
-        from neurobrix.pytorch.prism import PrismSolver, InputConfig
+        PrismSolver, InputConfig = _branch_door.names("prism", "", "PrismSolver", "InputConfig")
         from neurobrix.core.runtime.loader import NBXRuntimeLoader
         from neurobrix.core.runtime.executor import RuntimeExecutor
         from neurobrix.cli.utils import find_model
@@ -157,7 +159,7 @@ class InferenceEngine:
 
         # 3. Solve Prism allocation, on the profile every launch plans with (the first-launch measurements asked)
         cache_path = self._container._cache_path
-        from neurobrix.pytorch.prism.loader import launch_profile
+        launch_profile = _branch_door.names("prism", "loader", "launch_profile")[0]
         hw_profile = launch_profile(self.hardware_id, self.mode, container_dir=cache_path)
         # the declared sub-components, once, at load: a daemon that cannot get one never becomes ready, and a request
         # never fetches, hashes or imports one
@@ -178,10 +180,10 @@ class InferenceEngine:
         self._hw_profile = hw_profile
         # the flow's per-component facts, as a run's plan reads them (`run.request_input_config`): the generation
         # head's one row, the generating model's prompt rows
-        from neurobrix.pytorch.prism.flow_bindings import FlowBindings
+        FlowBindings = _branch_door.names("prism", "flow_bindings", "FlowBindings")[0]
         # the batch (one item a request; doubled where the container's guidance is in force) and the dtype, by the
         # rule a run plans with — `batch_size=2` and "float16" stood here for every served family
-        from neurobrix.pytorch.prism.request_config import served_plan_fields
+        served_plan_fields = _branch_door.names("prism", "request_config", "served_plan_fields")[0]
         input_config = self._input_config = InputConfig(
             **served_plan_fields(self._family, cached_defaults, manifest),
             height=height,
@@ -195,7 +197,7 @@ class InferenceEngine:
 
         # the session's plan, its prefill chunk raised while the plan holds (pytorch/prism/served_prefill.py); the input
         # config it was priced at is the daemon's, so a re-plan prices the same rows
-        from neurobrix.pytorch.prism.served_prefill import solve_served
+        solve_served = _branch_door.names("prism", "served_prefill", "solve_served")[0]
         self._plan, input_config = solve_served(self._container, hw_profile, input_config, mode=self.mode)
         self._input_config = input_config
 
@@ -204,7 +206,7 @@ class InferenceEngine:
 
         # 3c. Apply CPU optimizations from hardware profile
         if hw_profile.cpu:
-            from neurobrix.pytorch.prism.cpu_config import apply_cpu_config
+            apply_cpu_config = _branch_door.names("prism", "cpu_config", "apply_cpu_config")[0]
             apply_cpu_config(cpu=hw_profile.cpu, strategy=self._plan.strategy, device_count=hw_profile.device_count,
                              preferred_dtype=hw_profile.preferred_dtype, mode=self.mode)
 
@@ -218,7 +220,7 @@ class InferenceEngine:
         # Qwen3-Coder-30B-A3B on two V100-32GB reloaded 57.6 GB and recopied 31 GB of experts onto its second card at
         # every request — about 150 s of a 170 s, 64-token answer (2026-11-10).
         from neurobrix.core.flow.base import holds_every_component
-        from neurobrix.pytorch.prism.host_footprint import engine_of
+        engine_of = _branch_door.names("prism", "host_footprint", "engine_of")[0]
         _topology = json.load(open(_topo_path)) if _topo_path.exists() else {}
         self._warm_serving = (loading_mode == "eager"
                               or holds_every_component(_topology, engine_of(self.mode), self._plan.components))
@@ -231,7 +233,7 @@ class InferenceEngine:
         # Data-driven hardware capability surface for Triton kernel wrappers. Gated on the Triton
         # engines (the solver's own set), as `cli/commands/run.py` gates on the mode: the ATen path never touches it, and it reads the Triton
         # branch's fp64 key, which refuses a device-less or mixed profile.
-        from neurobrix.pytorch.prism.runtime_widths import TRITON_ENGINES
+        TRITON_ENGINES = _branch_door.names("prism", "runtime_widths", "TRITON_ENGINES")[0]
         if self.mode in TRITON_ENGINES:
             from neurobrix.triton.dtype import declare_hardware_profile
             declare_hardware_profile(hw_profile)
@@ -257,7 +259,7 @@ class InferenceEngine:
         t_load = time.time() - t_start
         self._is_loaded = True
         from neurobrix.core.workspace import weight_reader_said
-        from neurobrix.pytorch.prism import launch_lines
+        launch_lines = _branch_door.names("prism", "", "launch_lines")[0]
         _read = weight_reader_said()
         if _read is not None:                # a cold-serving plan reads at its first request: said there by its loads
             launch_lines.say("loaded", _read)

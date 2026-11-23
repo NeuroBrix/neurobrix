@@ -1,0 +1,2706 @@
+"""
+NeuroBrix Prism — Universal Hardware Auto-Detection (OS-First Architecture)
+
+Detects CPU + GPU hardware and generates a hardware profile YAML.
+
+Detection flow:
+  1. Detect OS (Linux / macOS / Windows)
+  2. Detect CPU (always — every machine has one)
+  3. Detect GPUs via OS-specific cascade
+  4. Detect interconnect (multi-GPU only)
+  5. Build profile (GPU or CPU-only)
+
+Supports:
+  CPU        — x86_64 (AVX2/AVX512/AMX), ARM64 (NEON), RISC-V
+  NVIDIA     — nvidia-smi
+  AMD        — rocm-smi / rocminfo
+  Intel      — the PCI bus (sysfs / Win32_VideoController) + Level Zero
+  Apple      — system_profiler / MPS
+  Tenstorrent — tt-smi
+  Moore Threads — mtsmi
+  Biren      — brsmi
+  Iluvatar   — ixsmi
+  Hygon DCU  — rocm-smi (DTK fork)
+  Cambricon  — cnmon
+
+Called when --hardware is omitted. Creates ~/.neurobrix/hardware/default.yml once (triton/prism/loader.GENERATED_DIR).
+"""
+
+import functools
+import json
+import platform
+import re
+import os
+import subprocess
+import yaml
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+from neurobrix.triton.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
+from neurobrix.triton.prism import kept_launch_facts as kept, launch_lines, other_card_models
+import logging
+from nbxtensor import device as _nbx_device, memory as _nbx_memory
+_log = logging.getLogger(__name__)
+DEFAULT_PROFILE_PATH = HARDWARE_DIR / "default.yml"
+
+# ---------------------------------------------------------------------------
+# NVIDIA: compute capability → architecture name
+# Source: CUDA Toolkit docs — static hardware fact, nvidia-smi reports CC not name
+# ---------------------------------------------------------------------------
+_NVIDIA_ARCH_MAP = {
+    "3": "kepler",
+    "5": "maxwell",
+    "6": "pascal",
+    "7": "volta",       # 7.0 = V100
+    "8": "ampere",      # 8.0 = A100, 8.6 = RTX 3090
+    "9": "hopper",      # 9.0 = H100
+    "10": "blackwell",  # 10.0 = B200
+}
+# Capabilities that share a MAJOR with a profiled datacentre part but are not
+# that part. Without an entry here they silently inherit the datacentre
+# profile, and the values that profile declares are wrong for them in the
+# unsafe direction — a shared-memory budget larger than the card has offers
+# autotune tiles it cannot hold. Naming them makes the loader REFUSE, which is
+# the doctrine: guessing a block size produces a wrong result, not an error.
+_NVIDIA_ARCH_REFINE = {
+    "7.5": "turing",            # RTX 2080, T4 — 64 KB smem vs volta's 96 KB
+    "8.6": "ampere_consumer",   # A10, RTX 3090 — 100 KB smem vs ampere's 164 KB
+    "8.9": "ada",               # RTX 4090, L40S — 100 KB smem
+}
+
+# NVIDIA: compute capability major → supported dtypes
+_NVIDIA_DTYPE_MAP = {
+    "3": ["float32"],
+    "5": ["float32", "float16"],
+    "6": ["float32", "float16"],
+    "7": ["float32", "float16"],
+    "8": ["float32", "float16", "bfloat16"],
+    "9": ["float32", "float16", "bfloat16", "float8_e4m3fn"],
+    "10": ["float32", "float16", "bfloat16", "float8_e4m3fn"],
+}
+
+# Architecture → preferred dtype (tensor core sweet spot)
+_PREFERRED_DTYPE = {
+    # NVIDIA
+    "kepler": "float32", "maxwell": "float16", "pascal": "float16",
+    "volta": "float16", "turing": "float16",
+    "ampere": "bfloat16", "ada": "bfloat16",
+    "hopper": "bfloat16", "blackwell": "bfloat16",
+    # AMD
+    "cdna": "float16", "cdna2": "float16", "cdna3": "bfloat16",
+    "rdna2": "float16", "rdna3": "float16", "rdna4": "float16",
+    # Apple (M1=fp16, M2+=bf16 — refined below by chip generation)
+    "apple_silicon": "float16",
+    # Others
+    "wormhole": "float16", "grayskull": "float16", "blackhole": "bfloat16",
+    "musa": "float16", "birensupa": "float16",
+    "corex": "float16", "hygon_dcu": "float16",
+    "mlu": "float16",
+}
+
+# ---------------------------------------------------------------------------
+# AMD: rocminfo gfx ID → architecture name
+# ---------------------------------------------------------------------------
+_AMD_GFX_MAP = {
+    "gfx900": "vega10",     # MI25
+    "gfx906": "vega20",     # MI50/MI60
+    "gfx908": "cdna",       # MI100
+    "gfx90a": "cdna2",      # MI210/MI250/MI250X
+    "gfx940": "cdna3",      # MI300A
+    "gfx941": "cdna3",      # MI300A variant
+    "gfx942": "cdna3",      # MI300X
+    "gfx1030": "rdna2",     # RX 6900 XT
+    "gfx1100": "rdna3",     # RX 7900 XTX
+    "gfx1101": "rdna3",     # RX 7900 XT
+    # gfx1150 is no RDNA4 card: it is the Strix Point APU's GPU (rocminfo "AMD Radeon Graphics", Memory Properties APU,
+    # ollama/ollama#9999), a gfx11 target (LLVM AMDGPUUsage: GFX11.5) — the gfx11 prefix below reads it as rdna3.
+    "gfx1200": "rdna4",     # RX 9070
+}
+
+# AMD: architecture → supported dtypes
+_AMD_DTYPE_MAP = {
+    "cdna3": ["float32", "float16", "bfloat16", "float8_e4m3fn"],
+    "cdna2": ["float32", "float16", "bfloat16"],
+    "cdna": ["float32", "float16"],
+    "vega20": ["float32", "float16"],
+    "vega10": ["float32", "float16"],
+}
+
+# NVLink bandwidth per generation (per link, bidirectional)
+_NVLINK_BW_PER_LINK = {
+    1: 40,    # Pascal P100
+    2: 50,    # Volta V100
+    3: 50,    # Ampere A100
+    4: 100,   # Hopper H100
+    5: 200,   # Blackwell B200
+}
+
+# ---------------------------------------------------------------------------
+# PCI vendor IDs — the GPUs the operating system lists, named (`_listed_gpus`, `_refused`). Sources: pciutils'
+# pci.ids (8086 Intel, 10de NVIDIA, 1002 AMD/ATI, 106b Apple, 1ed5 Moore Threads); 1e52 Tenstorrent (the
+# PCI_VENDOR_ID_TENSTORRENT of the linux-pci patch "Add PCI quirk for Tenstorrent Blackhole", 2026-08; this map
+# said 1e52 = moore_threads and 1e56 = tenstorrent before); biren, iluvatar and cambricon as first written, not verified.
+# ---------------------------------------------------------------------------
+_PCI_VENDOR_MAP = {
+    "10de": "nvidia",
+    "1002": "amd",
+    "8086": "intel",
+    "106b": "apple",
+    "1ed5": "moore_threads",
+    "1e52": "tenstorrent",
+    "1f36": "biren",
+    "d100": "iluvatar",
+    "cabc": "cambricon",
+}
+
+# PCIe link speed → version mapping
+_PCIE_SPEED_MAP = {
+    "2.5": "1.0", "5.0": "2.0", "8.0": "3.0",
+    "16.0": "4.0", "32.0": "5.0", "64.0": "6.0",
+}
+
+# PCIe version → x16 bidirectional bandwidth (GB/s)
+_PCIE_BW_MAP = {
+    "1.0": 8, "2.0": 16, "3.0": 32,
+    "4.0": 64, "5.0": 128, "6.0": 256,
+}
+
+
+# ============================================================================
+# PUBLIC API
+# ============================================================================
+
+# What every cascade answers when its OS probes find nothing: the host has no
+# accelerator, said by name, and Prism plans CPU. No compute branch is imported
+# to look again (R33; the Dell's decision 2026-10-11 20:17): a torch-build
+# fallback made the profile depend on which build was installed and made a
+# CPU-only discovery pay a framework import.
+_NO_DEVICE: Tuple[List[Dict[str, Any]], str] = ([], "none")
+
+
+def detect_devices() -> Tuple[List[Dict[str, Any]], str]:
+    """The accelerators this process sees, as (devices, brand), from the OS
+    probes of this host — the one detection every reader shares: the
+    hardware profile below, the per-environment profile tag, and `neurobrix
+    info` (Studio's start-up discovery), which must answer without loading a
+    compute branch. The GPUs found and refused by name are not among them (`detect_hardware` writes them)."""
+    devices, brand = _detect_gpus(platform.system())
+    return _driven(devices), brand
+
+
+def _visible_set_tag() -> Optional[str]:
+    """A short tag naming WHAT THIS PROCESS SEES (GPU models in order): the
+    per-environment profile file is keyed by it, so two processes pinned to
+    different cards never rewrite each other's profile. None when detection
+    is unavailable (the shared default.yml serves then)."""
+    try:
+        devices, _ = detect_devices()
+    except Exception:
+        return None
+    models = [str(d.get("model")) for d in devices]
+    if not models:
+        # An EMPTY visible set is an environment of its own — a GPU-less
+        # host, or `CUDA_VISIBLE_DEVICES=""` — not a detection failure.
+        # Read as None it served the shared default.yml, which on a rack
+        # names the cards this process cannot see (2026-09-13, `upscale`
+        # planned cuda:0 under an empty set and died at the first constant).
+        return "cpu"
+    import hashlib
+    return hashlib.sha1("|".join(models).encode()).hexdigest()[:8]
+
+
+def write_profile_atomically(path: Path, profile_data: dict) -> None:
+    """Whole file or nothing: a reader in another process never sees a torn
+    profile (two pinned processes re-detecting at once tore default.yml on
+    2026-09-05 — `devices: [null]` at load)."""
+    class _NoAliasDumper(yaml.SafeDumper):
+        def ignore_aliases(self, data: object) -> bool:  # noqa: ARG002
+            return True
+
+    HARDWARE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    with open(tmp, "w") as f:
+        summary = profile_data.get("notes", "Auto-detected hardware profile")
+        first_line = summary.strip().split("\n")[0]
+        f.write(f"# Hardware Profile: {first_line}\n")
+        f.write("# Auto-generated by NeuroBrix hardware detection\n")
+        f.write("# Regenerate: delete this file and run neurobrix without --hardware\n\n")
+        yaml.dump(profile_data, f, Dumper=_NoAliasDumper,
+                  default_flow_style=False, sort_keys=False, allow_unicode=True)
+    os.replace(tmp, path)
+
+
+def _machine_device_count() -> "Optional[int]":
+    """How many GPUs the MACHINE has, ignoring any mask — or None if unknown.
+
+    The mirror of `_visible_device_filter`, and deliberately a different
+    authority: NVML (`nvidia-smi`) sits OUTSIDE `CUDA_VISIBLE_DEVICES` and
+    always reports the whole board, which is the wrong answer to "what may I
+    allocate on" and the RIGHT answer to "what does this rack have".
+
+    Returns None when the question cannot be answered here (no nvidia-smi, a
+    non-NVIDIA machine). A caller that cannot establish it sees the whole
+    machine must behave as though it does not.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    return len([l for l in result.stdout.strip().splitlines() if l.strip()])
+
+
+def _describes_the_whole_machine(profile_data: Dict[str, Any]) -> bool:
+    """May this detection be written to the SHARED `default.yml`?
+
+    Only a process that sees every card may describe the machine. This was
+    special-cased once — a process seeing NO card (tag `cpu`) turned a
+    four-GPU rack into a CPU host for every reader of the shared file
+    (2026-09-13) — and the special case fixed that instance without naming
+    the class, so every OTHER partial view kept the privilege. On 2026-09-17
+    `default.yml` on this rack read `2 x Tesla V100-SXM2-16GB`, 32 GB total,
+    written by a process pinned to `CUDA_VISIBLE_DEVICES=0,1`: both 32 GB
+    cards, and two thirds of the VRAM, absent from the machine's own file.
+    An unmasked run — the battery is one — plans against that.
+
+    Unknowable counts as "no". The shared file is read by processes that
+    cannot check it, so a writer proves the right rather than assuming it.
+    """
+    machine = _machine_device_count()
+    if machine is None:
+        return False
+    return len(profile_data.get("devices", [])) == machine
+
+
+def _complete_measured_fields(path: Path) -> None:
+    """A profile written by an older detector lacks what the current one measures, and was returned as
+    is forever: the rack's eight auto profiles predated `cpu.runtime_base_mb`, so every plan on them
+    priced no engine base (deepseek-moe triton layer_streaming: 1 264 MB priced, 1 347 measured,
+    2026-10-10). The missing measurement is taken here and written into the profile; what the file
+    already says is kept."""
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    cpu = data.get("cpu")
+    if not isinstance(cpu, dict):
+        return
+    added = {}
+    if "runtime_base_mb" not in cpu:
+        # a machine fact: what a sibling generated profile measured holds for this card set too (other_card_models);
+        # an engine no sibling measured is measured at its own first launch (`ensure_measured_facts`), not here
+        base = other_card_models.base_from_siblings(path.parent, exclude=path)
+        if base:
+            added["runtime_base_mb"] = base
+    # a hybrid CPU's core classes (2026-10-26: the profile is the one source of the host's threads), on every OS that
+    # states them (macOS perflevels, Linux's hybrid PMU lists, Windows' efficiency classes); a CPU of one class: none
+    if "performance_cores" not in cpu:
+        added.update(_hybrid_cores(platform.system()))
+    if not added:
+        return
+    cpu.update(added)
+    write_profile_atomically(path, data)
+    _log.debug(f"   [Auto-detect] Completed {path.name}: {added}")
+
+
+def work_said(probes, replay, replays: int) -> str:
+    """The time this launch expects, from what this machine measured: `replays` more chunk-probe children at what the
+    first cost (`replay`: replay s, child s), each reload probe at that cost plus its five loads at this storage's rate."""
+    from nbxtensor.io.read_rate import read_seconds
+    child_s = replay[1] if replay else 0.0
+    s = child_s * replays + sum(child_s + read_seconds(Path(r) / "components" / c, 5 * b) for b, r, c, _st in probes)
+    took = f"{s / 60:.0f} min" if s >= 90 else f"{s:.0f} s"
+    return f", up to about {took} (from what one measure took here; first kernel compiles add to it)" if s else ""
+
+
+def get_or_create_default_profile() -> str:
+    """
+    Ensure the auto-detected profile of THIS environment exists in
+    config/hardware/ (same dir as all profiles) and return its hardware_id.
+
+    The profile is keyed by the visible GPU set (`default-<tag>.yml`): the set
+    is a property of the ENVIRONMENT (`CUDA_VISIBLE_DEVICES`), not of the
+    machine, and concurrent processes pinned to different cards must each
+    read their own. `default.yml` is refreshed alongside as the human-facing
+    latest detection of the MACHINE — except by a process that sees no card
+    (tag `cpu`), which describes its own environment and reads or creates
+    `default-cpu.yml` only. Detection unavailable → the shared `default.yml`.
+
+    Returns:
+        The hardware_id string (usable with load_profile(id)).
+    """
+    tag = _visible_set_tag()
+    if tag is None:
+        if DEFAULT_PROFILE_PATH.exists():
+            _complete_measured_fields(DEFAULT_PROFILE_PATH)
+            return "default"
+        launch_lines.say("detect")
+        profile_data = detect_hardware()
+        write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
+        _log.debug(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
+        return "default"
+
+    hardware_id = f"default-{tag}"
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    from neurobrix.triton.prism import intel_refusal
+    if path.exists() and intel_refusal.stale():       # an Intel refusal recorded under another driver / nbxtensor
+        path.unlink()                                  # version: the machine is detected again, the chip tried again
+    if path.exists():
+        _complete_measured_fields(path)
+        return hardware_id
+
+    launch_lines.say("detect")
+    _log.debug("   [Auto-detect] No --hardware specified, detecting system hardware...")
+    profile_data = detect_hardware()
+    write_profile_atomically(path, profile_data)
+    if _describes_the_whole_machine(profile_data):
+        # The shared default.yml is the MACHINE's latest detection, so only a
+        # process that sees the whole machine may write it. The condition used
+        # to be `tag != "cpu"`, which fixed the one partial view that had been
+        # caught — a process seeing NO card turned a four-card rack into a CPU
+        # host for every reader (2026-09-13) — and left the privilege with
+        # every other one. A process pinned to two of four cards then wrote a
+        # 2x16GB machine over a 2x16GB+2x32GB rack (2026-09-17).
+        write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
+    _log.debug(f"   [Auto-detect] Created profile: {path}")
+    return hardware_id
+
+
+def load_default_profile():
+    """
+    Load the default hardware profile as a PrismProfile.
+
+    Creates default.yml in config/hardware/ if it doesn't exist,
+    then loads it through the standard load_profile() path.
+    """
+    hardware_id = get_or_create_default_profile()
+    from neurobrix.triton.prism.loader import load_profile
+    return load_profile(hardware_id)
+
+
+# ============================================================================
+# MAIN DETECTION ORCHESTRATOR (OS-FIRST)
+# ============================================================================
+
+#: One probe per engine, measured from the state a run plans in (the CLI imported, no engine yet): the
+#: engine's own modules imported, its device context created and its compute libraries loaded the way a
+#: run's first ops load them — a GEMM, a convolution and an attention on the compiled engine (cuBLAS,
+#: cuDNN and the SDPA kernels are loaded on first use, not at import), a Triton kernel compiled and
+#: launched on the Triton engine (the JIT's compiler is loaded on first launch). The probe prints its
+#: resident memory at the planning state, then its peak, in MB; the difference is what the engine adds.
+#: Each runs under the interpreter and the card door of the process that builds the profile. The Triton
+#: probe imports no torch (R33) and uses only kernels that are certified or need no autotune sweep, so
+#: building a profile writes no autotune cache (read: the replay cache's files and mtimes unchanged).
+#: The probe's own memory, in MB: VmRSS ("now") / VmHWM ("peak") from /proc/self/status on Linux — never
+#: ru_maxrss there, which Linux carries across fork and exec (a probe started by a large process would
+#: report its parent's size: the base measured 0 inside a 2.4 GB test process, 2026-09-27); ru_maxrss
+#: elsewhere (macOS: bytes, and no /proc).
+_MB_OF = ("import resource, sys\n"
+          "def _mb(kind):\n"
+          "    if sys.platform.startswith('linux'):\n"
+          "        key = 'VmRSS:' if kind == 'now' else 'VmHWM:'\n"
+          "        return next(int(l.split()[1]) for l in open('/proc/self/status') if l.startswith(key)) // 1024\n"
+          "    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1 << 20)\n")
+_PLANNING_STATE = (_MB_OF +
+                   "import neurobrix.cli.commands.run, neurobrix.nbx.container, neurobrix.triton.prism.solver\n"
+                   "print(_mb('now'))\n")
+_BASE_PROBES = {
+    "triton": (
+        "import neurobrix.triton.flow.iterative_process\n"
+        "from nbxtensor.memory.allocator import DeviceAllocator; from nbxtensor.dtype.nbx_dtype import NBXDtype; from nbxtensor.tensor import NBXTensor\n"
+        "from nbxtensor.ops import elementwise_wrappers, linalg_wrappers\n"
+        "if DeviceAllocator.device_count() > 0:\n"
+        "    DeviceAllocator.set_device(0)\n"
+        "    a = NBXTensor.zeros((64, 64), NBXDtype.float16)\n"
+        "    elementwise_wrappers.add(a, a)\n"
+        "    linalg_wrappers.mm(a, a)\n"),
+}
+_PEAK_MB = "print(_mb('peak'))\n"
+
+
+def _measure_runtime_base_mb(engine: str) -> Optional[int]:
+    """MB — what `engine`'s device work adds to a process at the planning state, measured on this machine in ONE child
+    process of that engine alone (`_BASE_PROBES[engine]`: this process imports neither engine's device stack, R33).
+    Lazy (the orchestrator's ruling of 22/11/2026 17:43, line 3): measured at the first launch of THAT engine and kept
+    in `cpu.runtime_base_mb` (`ensure_measured_facts`); the other engine's base waits for its own first launch and
+    compiles nothing before. None when the probe cannot run here: a plan on this profile then says its base is
+    unmeasured — a number is never written that was not measured."""
+    import sys as _sys
+    try:
+        r = subprocess.run([_sys.executable, "-c", _PLANNING_STATE + _BASE_PROBES[engine] + _PEAK_MB],
+                           capture_output=True, text=True, timeout=300)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = [l.strip() for l in r.stdout.strip().splitlines()]
+    if r.returncode == 0 and len(lines) >= 2 and lines[0].isdigit() and lines[-1].isdigit():
+        return int(lines[-1]) - int(lines[0])
+    return None
+
+
+def detect_hardware() -> Dict[str, Any]:
+    """
+    Detect all hardware (CPU + GPUs + interconnects). Returns a hardware profile dict.
+
+    OS-first detection:
+    1. Detect OS → route to OS-specific detectors
+    2. CPU detection (always — every machine has a CPU)
+    3. GPU detection via OS-specific cascade
+    4. Interconnect detection (multi-GPU only)
+    """
+    os_type = platform.system()  # "Linux", "Darwin", "Windows"
+
+    # --- CPU (always) ---
+    cpu = _detect_cpu(os_type)
+    # The runtime's own base per engine, the base of Prism's host estimate: what a sibling generated profile measured
+    # (the same machine through another card set); an engine none measured is measured at its own first launch, in
+    # its own child (`ensure_measured_facts`, `_measure_runtime_base_mb`) — never here for both
+    cpu["runtime_base_mb"] = other_card_models.base_from_siblings(HARDWARE_DIR)
+    # No parallel-read count is measured here or kept: the weight reader measures itself on each load (core.workspace.
+    # weight_reader, nbxtensor.io.reader) — a count measured ahead cost 130 s on a quiet store, and a busy one gave none
+    # and owed it again at every launch (the launch-time cure, 2026-11-19).
+
+    # --- GPUs (OS-specific cascade): the driven ones, and the ones no backend drives, refused by name ---
+    found, brand = _detect_gpus(os_type)
+    if _driven(found):
+        # the profile names what else the machine has (a laptop's integrated GPU beside its NVIDIA card): read here, where
+        # the profile is written, never on every launch's detection (`detect_devices`: +200 ms of bus reading measured)
+        found = found + _beside(brand)
+    devices, refused = _driven(found), _refusals(found)
+    for d in devices:
+        if d.get("unified_memory") and "host_memory_mb" not in d:
+            d["host_memory_mb"] = cpu["ram_mb"]      # one pool: what the machine has, beside what the GPU may hold
+
+    # --- System vendor ---
+    vendor = _detect_system_vendor(os_type)
+
+    # --- Totals ---
+    num_gpus = len(devices)
+    total_vram_mb = sum(d["memory_mb"] for d in devices)
+    total_vram_gb = round(total_vram_mb / 1024, 1) if total_vram_mb > 0 else 0
+    ram_gb = round(cpu.get("ram_mb", 0) / 1024, 1) if cpu.get("ram_mb") else 0
+
+    # --- Preferred dtype ---
+    if devices:
+        arch = devices[0].get("architecture", "unknown")
+        preferred_dtype = _PREFERRED_DTYPE.get(arch, "float16")
+        # Apple M2+: prefer bf16 (same exponent range as fp32, no overflow)
+        if arch == "apple_silicon" and "bfloat16" in devices[0].get("supports_dtypes", []):
+            preferred_dtype = "bfloat16"
+    else:
+        # CPU-only: derive from CPU features
+        preferred_dtype = _cpu_preferred_dtype(cpu)
+
+    # --- Profile ID ---
+    if devices:
+        model_short = _shorten_gpu_name(devices[0].get("model", "gpu"))
+        from neurobrix.triton.prism.structure import single_card_profile_id, rig_profile_id
+        if num_gpus == 1:
+            profile_id = single_card_profile_id(model_short, devices[0]["memory_mb"])
+        else:
+            profile_id = rig_profile_id(num_gpus, model_short, total_vram_gb)
+    else:
+        cpu_short = _shorten_cpu_name(cpu.get("model", "cpu"))
+        profile_id = f"auto-{cpu_short}-cpu-{int(ram_gb)}g"
+
+    # --- Interconnect ---
+    if num_gpus > 1:
+        interconnect, pcie_fallback = _detect_interconnect(devices, brand)
+    elif num_gpus == 1:
+        pcie_ver = devices[0].get("pcie_version", "3.0")
+        pcie_bw = _PCIE_BW_MAP.get(pcie_ver, 32)
+        interconnect = {"groups": []}
+        pcie_fallback = {"version": pcie_ver, "lanes": 16, "bandwidth_gbps": pcie_bw}
+    else:
+        # CPU-only: no PCIe relevant
+        interconnect = {"groups": []}
+        pcie_fallback = {"version": "0.0", "lanes": 0, "bandwidth_gbps": 0}
+
+    # --- Topology label ---
+    if num_gpus == 0:
+        topology_label = "CPU-Only"
+    elif num_gpus == 1:
+        topology_label = "Single-GPU"
+    else:
+        topology_label = "Multi-GPU"
+
+    # --- Summary ---
+    summary: Dict[str, Any] = {
+        "total_gpus": num_gpus,
+        "total_vram_gb": total_vram_gb,
+        "total_ram_gb": ram_gb,
+        "topology": topology_label,
+    }
+
+    # --- Notes ---
+    notes = _build_notes(cpu, devices, brand, vendor, interconnect, refused)
+
+    profile: Dict[str, Any] = {
+        "id": profile_id,
+        "vendor": vendor,
+        "preferred_dtype": preferred_dtype,
+        "summary": summary,
+        "cpu": cpu,
+        "devices": devices,
+        "interconnect": interconnect,
+        "pcie_fallback": pcie_fallback,
+        "notes": notes,
+    }
+    if refused:
+        # Read by Prism, which plans without them and says so in the plan (`ExecutionPlan.refused_devices`).
+        profile["refused_devices"] = refused
+
+    return profile
+
+
+# ============================================================================
+# CPU DETECTION (per-OS)
+# ============================================================================
+
+def _hybrid_cores(os_type: str) -> Dict[str, int]:
+    """{performance_cores, efficiency_cores} of a hybrid CPU, physical cores, as its OS states them; {} for a CPU of one
+    core class (or an OS that states no class)."""
+    if os_type == "Darwin":
+        return {k: v for k, v in _detect_cpu_darwin().items() if k in ("performance_cores", "efficiency_cores")}
+    if os_type == "Linux":
+        return _hybrid_cores_linux(Path("/sys"))
+    if os_type == "Windows":
+        return _hybrid_cores_windows()
+    return {}
+
+
+def _cpu_list(text: str) -> List[int]:
+    """The kernel's CPU-list format ("0-7,16,18-19") as CPU numbers; an empty list for an empty file."""
+    out: List[int] = []
+    for part in text.strip().split(","):
+        if part:
+            a, _, b = part.partition("-")
+            out.extend(range(int(a), int(b or a) + 1))
+    return out
+
+
+def _hybrid_cores_linux(sys_root: Path) -> Dict[str, int]:
+    """An Intel hybrid CPU on Linux: the kernel lists its performance and efficiency CPUs as two perf PMUs
+    (`devices/cpu_core/cpus`, `devices/cpu_atom/cpus`; kernel tools/perf/Documentation/intel-hybrid.txt). Hybrid only
+    when BOTH lists hold a CPU (a part without E-cores exposes an empty `cpu_atom`); counted in physical cores, a
+    logical CPU's core being (package, core_id) from its topology."""
+    classes = {}
+    for key, pmu in (("performance_cores", "cpu_core"), ("efficiency_cores", "cpu_atom")):
+        f = sys_root / "devices" / pmu / "cpus"
+        cpus = _cpu_list(f.read_text()) if f.is_file() else []
+        topo = sys_root / "devices" / "system" / "cpu"
+        classes[key] = len({((topo / f"cpu{n}/topology/physical_package_id").read_text().strip(),
+                             (topo / f"cpu{n}/topology/core_id").read_text().strip()) for n in cpus})
+    return classes if all(classes.values()) else {}
+
+
+def _core_efficiency_classes(buf: bytes) -> List[int]:
+    """Each processor core's EfficiencyClass from GetLogicalProcessorInformationEx(RelationProcessorCore)'s buffer:
+    records of {DWORD Relationship, DWORD Size, PROCESSOR_RELATIONSHIP{BYTE Flags, BYTE EfficiencyClass, ...}} (winnt.h;
+    a higher class is a more performant core, all equal on a CPU of one class)."""
+    import struct
+    out, off = [], 0
+    while off + 10 <= len(buf):
+        relationship, size = struct.unpack_from("<II", buf, off)
+        if size <= 0:
+            raise RuntimeError(f"ZERO FALLBACK: a processor record of size {size} at offset {off}")
+        if relationship == 0:                                    # RelationProcessorCore
+            out.append(buf[off + 9])
+        off += size
+    return out
+
+
+def _hybrid_cores_windows() -> Dict[str, int]:
+    """A hybrid CPU on Windows 10+: GetLogicalProcessorInformationEx gives each core's EfficiencyClass; the highest
+    class is the performance cores, every other the efficiency cores."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    n = wintypes.DWORD(0)
+    k32.GetLogicalProcessorInformationEx(0, None, ctypes.byref(n))
+    buf = ctypes.create_string_buffer(n.value)
+    if not k32.GetLogicalProcessorInformationEx(0, buf, ctypes.byref(n)):
+        raise RuntimeError(f"ZERO FALLBACK: GetLogicalProcessorInformationEx failed ({ctypes.get_last_error()})")
+    classes = _core_efficiency_classes(buf.raw[:n.value])
+    if len(set(classes)) < 2:
+        return {}
+    top = max(classes)
+    return {"performance_cores": classes.count(top), "efficiency_cores": len(classes) - classes.count(top)}
+
+
+def _detect_cpu(os_type: str) -> Dict[str, Any]:
+    """Detect CPU info. Always succeeds — every machine has a CPU."""
+    if os_type == "Linux":
+        return _detect_cpu_linux()
+    elif os_type == "Darwin":
+        return _detect_cpu_darwin()
+    elif os_type == "Windows":
+        return _detect_cpu_windows()
+    # Unknown OS — minimal info
+    return {
+        "model": platform.processor() or "Unknown CPU",
+        "cores": 1,
+        "threads": 1,
+        "ram_mb": 4096,
+        "architecture": platform.machine(),
+        "features": [],
+    }
+
+
+def _detect_cpu_linux() -> Dict[str, Any]:
+    """Detect CPU on Linux via /proc/cpuinfo + /proc/meminfo + lscpu."""
+    model = "Unknown CPU"
+    features: List[str] = []
+    cores = 1
+    threads = 1
+    ram_mb = 4096
+    arch = platform.machine()  # x86_64, aarch64, riscv64
+
+    # --- /proc/cpuinfo ---
+    try:
+        cpuinfo = Path("/proc/cpuinfo").read_text()
+        # Model name (x86)
+        m = re.search(r'^model name\s*:\s*(.+)$', cpuinfo, re.MULTILINE)
+        if m:
+            model = m.group(1).strip()
+
+        # ARM: look for "CPU implementer" + "Hardware" or "model name"
+        if model == "Unknown CPU":
+            m = re.search(r'^Hardware\s*:\s*(.+)$', cpuinfo, re.MULTILINE)
+            if m:
+                model = m.group(1).strip()
+
+        # CPU flags (x86) or Features (ARM)
+        flags_match = re.search(r'^(?:flags|Features)\s*:\s*(.+)$', cpuinfo, re.MULTILINE)
+        if flags_match:
+            all_flags = flags_match.group(1).strip().split()
+            # Extract relevant features for inference
+            relevant = {
+                "avx", "avx2", "avx512f", "avx512_vnni", "avx512_bf16",
+                "amx_bf16", "amx_int8", "amx_tile",
+                "fma", "sse4_1", "sse4_2", "f16c",
+                "asimd", "fphp", "asimdhp", "sve", "sve2",  # ARM
+            }
+            features = [f for f in all_flags if f in relevant]
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    # --- /proc/meminfo ---
+    try:
+        meminfo = Path("/proc/meminfo").read_text()
+        m = re.search(r'^MemTotal:\s*(\d+)\s*kB', meminfo, re.MULTILINE)
+        if m:
+            ram_mb = int(m.group(1)) // 1024
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    # --- lscpu for core/thread counts ---
+    try:
+        result = subprocess.run(
+            ["lscpu"], capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split("\n"):
+                if "Core(s) per socket:" in line:
+                    val = line.split(":")[-1].strip()
+                    try:
+                        sockets_cores = int(val)
+                    except ValueError:
+                        sockets_cores = 1
+                elif "Socket(s):" in line:
+                    val = line.split(":")[-1].strip()
+                    try:
+                        sockets = int(val)
+                    except ValueError:
+                        sockets = 1
+                elif "CPU(s):" in line and "NUMA" not in line and "On-line" not in line:
+                    val = line.split(":")[-1].strip()
+                    try:
+                        threads = int(val)
+                    except ValueError:
+                        pass
+
+            # cores = cores_per_socket * sockets
+            try:
+                cores = sockets_cores * sockets  # type: ignore[possibly-undefined]
+            except NameError:
+                cores = threads
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        # Fallback: nproc
+        try:
+            result = subprocess.run(
+                ["nproc"], capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                threads = int(result.stdout.strip())
+                cores = threads  # Can't distinguish without lscpu
+        except Exception:
+            pass
+
+    return {
+        "model": model,
+        "cores": cores,
+        "threads": threads,
+        "ram_mb": ram_mb,
+        "architecture": arch,
+        "features": features,
+    }
+
+
+def _detect_cpu_darwin() -> Dict[str, Any]:
+    """Detect CPU on macOS via sysctl."""
+    model = "Unknown CPU"
+    cores = 1
+    threads = 1
+    ram_mb = 8192
+    arch = platform.machine()  # arm64 or x86_64
+    features: List[str] = []
+
+    # Model name
+    model = _sysctl_str("machdep.cpu.brand_string") or "Unknown CPU"
+
+    # If Apple Silicon and brand_string is empty, try hw.model
+    if model == "Unknown CPU":
+        model = _sysctl_str("hw.model") or "Unknown CPU"
+
+    # Core counts
+    cores = _sysctl_int("hw.physicalcpu") or 1
+    threads = _sysctl_int("hw.logicalcpu") or cores
+    # A hybrid CPU's core classes (Apple silicon: perflevel0 = performance, perflevel1 = efficiency)
+    perf_levels = _sysctl_int("hw.nperflevels") or 1
+    hybrid = {}
+    if perf_levels >= 2:
+        hybrid = {"performance_cores": _sysctl_int("hw.perflevel0.physicalcpu"),
+                  "efficiency_cores": _sysctl_int("hw.perflevel1.physicalcpu")}
+
+    # RAM
+    memsize = _sysctl_int("hw.memsize")
+    if memsize:
+        ram_mb = memsize // (1024 * 1024)
+
+    # CPU features
+    if arch == "arm64":
+        # Apple Silicon always has NEON + FP16
+        features = ["neon", "fp16"]
+    else:
+        # Intel Mac — check for AVX
+        leaf7 = _sysctl_str("machdep.cpu.leaf7_features") or ""
+        ext_features = _sysctl_str("machdep.cpu.extfeatures") or ""
+        cpu_features = _sysctl_str("machdep.cpu.features") or ""
+        all_feat = (cpu_features + " " + leaf7 + " " + ext_features).lower()
+        relevant = {"avx", "avx2", "avx512f", "fma", "sse4.1", "sse4.2", "f16c"}
+        features = [f for f in relevant if f in all_feat]
+
+    return {
+        "model": model,
+        "cores": cores,
+        "threads": threads,
+        "ram_mb": ram_mb,
+        "architecture": arch,
+        "features": features,
+        **{k: v for k, v in hybrid.items() if v},
+    }
+
+
+def _detect_cpu_windows() -> Dict[str, Any]:
+    """Detect CPU on Windows via wmic or PowerShell."""
+    model = "Unknown CPU"
+    cores = 1
+    threads = 1
+    arch = platform.machine()
+    features: List[str] = []
+
+    # --- wmic CPU ---
+    try:
+        result = subprocess.run(
+            ["wmic", "cpu", "get",
+             "Name,NumberOfCores,NumberOfLogicalProcessors",
+             "/format:csv"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 4 and parts[1]:
+                    model = parts[1]
+                    try:
+                        cores = int(parts[2])
+                    except (ValueError, IndexError):
+                        pass
+                    try:
+                        threads = int(parts[3])
+                    except (ValueError, IndexError):
+                        pass
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        # PowerShell fallback
+        try:
+            result = subprocess.run(
+                ["powershell", "-Command",
+                 "Get-CimInstance Win32_Processor | "
+                 "Select-Object Name,NumberOfCores,NumberOfLogicalProcessors | "
+                 "ConvertTo-Json"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                if isinstance(data, list):
+                    data = data[0]
+                model = data.get("Name", model)
+                cores = data.get("NumberOfCores", cores)
+                threads = data.get("NumberOfLogicalProcessors", threads)
+        except Exception:
+            pass
+
+    # --- RAM: Win32_OperatingSystem.TotalVisibleMemorySize (KB), through PowerShell's CIM — wmic, which this read
+    # first, is disabled by default from Windows 11 24H2, and its absence wrote an invented 8192 MB into the profile ---
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_OperatingSystem).TotalVisibleMemorySize"],
+            capture_output=True, text=True, timeout=30,
+        )
+        ram_mb = int(result.stdout.strip()) // 1024 if result.returncode == 0 else None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
+        ram_mb = None
+    if not ram_mb:
+        raise RuntimeError("ZERO FALLBACK: Windows did not state this machine's memory (PowerShell's Get-CimInstance "
+                           "Win32_OperatingSystem answered no TotalVisibleMemorySize): the hardware profile is never "
+                           "written with an invented figure")
+
+    # Infer features from model name (best-effort on Windows)
+    model_lower = model.lower()
+    if "13th gen" in model_lower or "14th gen" in model_lower or "ultra" in model_lower:
+        features = ["avx2", "avx512f"]
+    elif "12th gen" in model_lower or "11th gen" in model_lower:
+        features = ["avx2", "avx512f"]
+    elif any(gen in model_lower for gen in ["5th gen", "sapphire", "emerald", "granite"]):
+        features = ["avx2", "avx512f", "amx_bf16", "amx_int8"]
+    elif "ryzen" in model_lower or "epyc" in model_lower:
+        features = ["avx2"]
+    elif "apple" in model_lower or "m1" in model_lower or "m2" in model_lower:
+        features = ["neon", "fp16"]
+
+    return {
+        "model": model,
+        "cores": cores,
+        "threads": threads,
+        "ram_mb": ram_mb,
+        "architecture": arch,
+        "features": features,
+    }
+
+
+def _cpu_preferred_dtype(cpu: Dict[str, Any]) -> str:
+    """Determine preferred dtype for CPU-only inference."""
+    features = cpu.get("features", [])
+    # Intel AMX — native bf16 matrix ops
+    if "amx_bf16" in features or "amx_tile" in features:
+        return "bfloat16"
+    # AVX512 BF16 extension
+    if "avx512_bf16" in features:
+        return "bfloat16"
+    # ARM FP16 arithmetic (Apple Silicon, Graviton3+)
+    if "fp16" in features or "fphp" in features or "asimdhp" in features:
+        return "float16"
+    return "float32"
+
+
+# ============================================================================
+# GPU DETECTION (OS-FIRST DISPATCH)
+# ============================================================================
+
+def _detect_gpus(os_type: str) -> Tuple[List[Dict[str, Any]], str]:
+    """Detect GPUs using OS-specific cascade. Returns (devices, brand)."""
+    if os_type == "Linux":
+        return _detect_gpus_linux()
+    elif os_type == "Darwin":
+        return _detect_gpus_darwin()
+    elif os_type == "Windows":
+        return _detect_gpus_windows()
+    return [], "unknown"
+
+
+def _detect_gpus_linux() -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Linux GPU detection cascade:
+    nvidia-smi → rocm → Intel (the PCI bus + Level Zero) → tt-smi → chinese SMI → the PCI bus → no device.
+
+    A detector's answer stands when it drives one device; the GPUs it found and could not drive ride with it, refused
+    by name (`_refused`). When none drives anything, every GPU the PCI bus lists is refused by name and the machine
+    plans on its CPU: a GPU no backend drives never makes the whole machine refused.
+    """
+    # An explicitly EMPTY CUDA_VISIBLE_DEVICES means "no GPU", conclusively.
+    # Checked before the cascade: filtering only the nvidia-smi result made
+    # that detector look like it had FAILED, so detection fell through to the
+    # lspci fallback — which reads the PCI bus and cannot see the variable at
+    # all — and rebuilt a four-GPU profile on a process that could address
+    # none of them. Caught by the CPU-only regression cell, 2026-09-03.
+    if _visible_device_filter() == []:
+        return [], "none"
+
+    for detector, brand in [
+        (_parse_nvidia_smi, "nvidia"),
+        (_parse_rocm, "amd"),
+        (_parse_xpu, "intel"),
+        (_parse_tenstorrent, "tenstorrent"),
+        (_parse_moore_threads, "moore_threads"),
+        (_parse_biren, "biren"),
+        (_parse_iluvatar, "iluvatar"),
+        (_parse_cambricon, "cambricon"),
+    ]:
+        devices = detector()
+        if _driven(devices):
+            return _apply_visible_filter(_driven(devices)) + _refusals(devices), brand
+
+    # no backend drives a GPU here: what the PCI bus lists, each refused by name
+    devices, brand = _parse_listed()
+    if devices:
+        return devices, brand
+
+    return _NO_DEVICE
+
+
+def _detect_gpus_darwin() -> Tuple[List[Dict[str, Any]], str]:
+    """
+    macOS GPU detection:
+    system_profiler → no device
+    """
+    devices = _parse_system_profiler()
+    if devices:
+        driven = _driven(devices)
+        return devices, driven[0].get("brand", "apple") if driven else "none"
+
+    return _NO_DEVICE
+
+
+def _detect_gpus_windows() -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Windows GPU detection cascade:
+    nvidia-smi → rocm-smi → Intel (Win32_VideoController + Level Zero) → Win32_VideoController → no device
+    """
+    for detector, brand in [
+        (_parse_nvidia_smi, "nvidia"),
+        (_parse_rocm, "amd"),
+        (_parse_xpu, "intel"),
+    ]:
+        devices = detector()
+        if _driven(devices):
+            return _apply_visible_filter(_driven(devices)) + _refusals(devices), brand   # CUDA_VISIBLE_DEVICES, as on Linux
+
+    # no backend drives a GPU here: what Windows lists, each refused by name
+    devices, brand = _parse_listed()
+    if devices:
+        return devices, brand
+
+    return _NO_DEVICE
+
+
+# ============================================================================
+# GPU VENDOR PARSERS (shared by Linux + Windows where CLI is identical)
+# ============================================================================
+
+def _visible_device_filter() -> "Optional[List[int]]":
+    """Physical indices the process may actually use, per CUDA_VISIBLE_DEVICES.
+
+    `nvidia-smi` reports every card in the machine and ignores the variable
+    entirely. Prism planning on that raw list places components on devices
+    the process cannot address — the CUDA runtime then refuses with
+    "invalid device ordinal", or, worse, the user who deliberately pinned a
+    card watches work land on one they excluded.
+
+    Returns None when there is nothing to filter (variable unset, or set to
+    a form we will not guess at, such as GPU-UUID entries). CUDA itself
+    stops at the first entry it cannot parse, and so do we.
+    """
+    raw = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if raw is None:
+        return None
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if not entries:
+        return []                      # explicitly set to empty: no GPU visible
+    visible: List[int] = []
+    for entry in entries:
+        try:
+            visible.append(int(entry))
+        except ValueError:
+            return None                # UUID form — do not guess
+    return visible
+
+
+def _apply_visible_filter(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Restrict a detected device list to CUDA_VISIBLE_DEVICES and RE-INDEX.
+
+    CUDA renumbers the visible set 0..N-1 in the order the variable lists
+    them, so a plan built on physical indices would address the wrong card,
+    or one the process cannot address at all.
+    """
+    visible = _visible_device_filter()
+    if visible is None:
+        return devices
+    by_physical = {d.get("index"): d for d in devices}
+    out: List[Dict[str, Any]] = []
+    for new_index, physical in enumerate(visible):
+        device = by_physical.get(physical)
+        if device is None:
+            break                  # CUDA stops at the first invalid entry
+        out.append(dict(device, index=new_index, physical_index=physical))
+    return out
+
+
+def _parse_nvidia_smi() -> List[Dict[str, Any]]:
+    """Detect NVIDIA GPUs via nvidia-smi, restricted to the visible set."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi",
+             "--query-gpu=index,name,memory.total,compute_cap,pci.bus_id",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    devices = []
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 5:
+            continue
+
+        idx = int(parts[0])
+        name = parts[1]
+        mem_mb = int(float(parts[2]))
+        cc = parts[3]
+        pci_bus = parts[4]
+
+        arch = _nvidia_cc_to_arch(cc)
+        cc_major = cc.split(".")[0]
+        dtypes = _NVIDIA_DTYPE_MAP.get(cc_major, ["float32", "float16"])
+        pcie_ver = _detect_pcie_version_sysfs(pci_bus)
+
+        devices.append({
+            "index": idx,
+            "brand": "nvidia",
+            "model": name,
+            "memory_mb": mem_mb,
+            "compute_capability": cc,
+            "supports_dtypes": dtypes,
+            "architecture": arch,
+            "pcie_version": pcie_ver,
+        })
+
+    return devices
+
+
+def _parse_rocm() -> List[Dict[str, Any]]:
+    """Detect AMD GPUs via rocminfo + rocm-smi."""
+    devices = _parse_rocminfo()
+    if devices:
+        return devices
+    return _parse_rocmsmi()
+
+
+def _parse_rocminfo() -> List[Dict[str, Any]]:
+    """AMD GPUs from rocminfo's agents (ROCm/rocminfo rocminfo.cc, amd-staging): each GPU agent's `Name` (its gfx target),
+    `Marketing Name`, `Memory Properties` ("APU" when HSA_AMD_MEMORY_PROPERTY_AGENT_IS_APU is set: the GPU draws on the
+    host's memory) and its pools, whose `Size` rocminfo prints in KB (`pool_size / 1024` then "KB" — this parser read
+    them as bytes, so no pool ever passed its 1e9 test and every card got an invented 16 384 MB). The device's memory is
+    its first GLOBAL coarse-grained pool (the VRAM of a discrete card, 24 GiB on an RX 7900 XTX; on an APU what the
+    driver lets the GPU hold of the host's memory, 28 GiB of a Radeon 780M's laptop). A GPU agent with no such pool is
+    refused by name, never given a figure."""
+    try:
+        result = subprocess.run(
+            ["rocminfo"], capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    devices: List[Dict[str, Any]] = []
+    for block in re.split(r'^\s*Agent \d+\s*$', result.stdout, flags=re.M)[1:]:
+        fields = dict(re.findall(r'^  (\S[^:\n]*?):[ \t]*(.*?)[ \t]*$', block, flags=re.M))   # the agent's own lines
+        gfx_id, name = fields.get("Name", ""), fields.get("Marketing Name") or fields.get("Name", "")
+        if fields.get("Device Type") != "GPU" or not gfx_id.startswith("gfx") or "hygon" in name.lower():
+            continue
+        pool = re.search(r'Segment:\s*GLOBAL; FLAGS: COARSE GRAINED\s*\n\s*Size:\s*(\d+)\([0-9a-fx]+\)\s*KB', block)
+        if pool is None:
+            devices.append({"model": name, "brand": "amd", "refused": f"rocminfo states no GLOBAL coarse-grained pool "
+                                                                      f"for this {gfx_id} agent: its memory is unknown"})
+            continue
+        mem_mb = int(pool.group(1)) // 1024
+        arch = _AMD_GFX_MAP.get(gfx_id, _amd_gfx_to_arch(gfx_id))
+        dev: Dict[str, Any] = {
+            "index": len(_driven(devices)),
+            "brand": "amd",
+            "model": name,
+            "memory_mb": mem_mb,
+            "compute_capability": gfx_id,
+            "supports_dtypes": _AMD_DTYPE_MAP.get(arch, ["float32", "float16"]),
+            "architecture": arch,
+            "pcie_version": "4.0",
+        }
+        if "APU" in fields.get("Memory Properties", ""):
+            # One pool with the host. Its largest single allocation: ROCr states no per-allocation cap below the pool's
+            # (hsa_ext_amd.h HSA_AMD_MEMORY_POOL_INFO_ALLOC_MAX_SIZE is "Maximum aggregate allocation size"), so the
+            # pool's own size bounds one arena — stated, not left silent (the loader refuses a unified device without it).
+            dev.update(unified_memory=True, max_allocation_mb=mem_mb, pcie_version="N/A")
+        devices.append(dev)
+    return devices
+
+
+def _parse_rocmsmi() -> List[Dict[str, Any]]:
+    """Detect AMD GPUs via rocm-smi --showproductname."""
+    try:
+        result = subprocess.run(
+            ["rocm-smi", "--showproductname"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return []
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    devices = []
+    idx = 0
+    for line in result.stdout.split("\n"):
+        match = re.search(r'GPU\[(\d+)\].*?:\s*(.+)', line)
+        if not match:
+            continue
+        gpu_idx = int(match.group(1))
+        name = match.group(2).strip()
+        mem_mb = _amd_get_vram_mb(gpu_idx)
+        if mem_mb is None:
+            devices.append({"model": name, "brand": "amd", "refused": "neither sysfs (mem_info_vram_total) nor rocm-smi "
+                                                                      "states this GPU's memory: it is unknown"})
+            continue
+        arch = _amd_name_to_arch(name)
+        dtypes = _AMD_DTYPE_MAP.get(arch, ["float32", "float16"])
+
+        devices.append({
+            "index": gpu_idx,
+            "brand": "amd",
+            "model": name,
+            "memory_mb": mem_mb,
+            "compute_capability": "0.0",
+            "supports_dtypes": dtypes,
+            "architecture": arch,
+            "pcie_version": "4.0",
+        })
+        idx += 1
+
+    return devices
+
+
+def _driven(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The devices a backend drives (a detection's list also carries the GPUs it refused by name)."""
+    return [d for d in devices if "refused" not in d]
+
+
+def _refusals(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The GPUs a detection found and no backend drives, each with its reason."""
+    return [d for d in devices if "refused" in d]
+
+
+@functools.lru_cache(maxsize=1)
+def _pci_platforms() -> Dict[int, Dict[str, Any]]:
+    """{vendor id: {device id: platform row}} of `config/vendors/pci_platforms.yml` (the kernel's PCI id tables, each
+    row with its source), with each vendor's `no_target` reasons resolved into the rows."""
+    from neurobrix.core.config.loader import CONFIG_ROOT
+    data = yaml.safe_load((CONFIG_ROOT / "vendors" / "pci_platforms.yml").read_text()) or {}
+    out: Dict[int, Dict[str, Any]] = {}
+    for vendor in data.values():
+        reasons = vendor.get("no_target") or {}
+        rows = out.setdefault(int(vendor["vendor_id"]), {})
+        for row in vendor.get("platforms") or []:
+            row = dict(row, no_target=reasons[row["no_target"]] if row.get("no_target") else None)
+            rows.update({int(i): row for i in row["ids"]})
+    return out
+
+
+def _refused(gpu: Dict[str, Any], why: str) -> Dict[str, Any]:
+    """A GPU the operating system lists and no backend drives, named — its PCI id, its platform and whether it is
+    integrated when the platform table knows it — with the reason. Prism plans without it and says so."""
+    vendor = _PCI_VENDOR_MAP[f"{gpu['vendor_id']:04x}"]
+    row = _pci_platforms().get(gpu["vendor_id"], {}).get(gpu["device_id"])
+    out = {"model": gpu.get("name") or f"{vendor} GPU", "brand": vendor,
+           "pci_id": f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}", "bus": gpu.get("bus")}
+    if row:
+        out.update(platform=row["platform"], integrated=bool(row["integrated"]))
+    out["refused"] = why
+    return out
+
+
+def _parse_xpu() -> List[Dict[str, Any]]:
+    """The Intel GPUs the operating system lists (`_listed_gpus`), each driven or refused by name. One is DRIVEN when a
+    device file lists its PCI id (nbxtensor/backend/devices/intel, `pci_device_ids`: the architecture Intel's compiler
+    targets) and the Level Zero loader reports it; its facts are then the device's own (`level_zero.gpu_facts`): its
+    integration with the host, the memory it may hold and its largest single allocation. No oneAPI tool is asked
+    (xpu-smi and sycl-ls are absent from an ordinary machine: they made every Intel laptop a GPU of architecture
+    "unknown", whose plan was refused)."""
+    intel = [g for g in _listed_gpus() if _PCI_VENDOR_MAP.get(f"{g['vendor_id']:04x}") == "intel"]
+    if not intel:
+        return []
+    from nbxtensor.backend import device_files, level_zero
+    facts = level_zero.gpu_facts()
+    taken: set = set()
+    out = []
+    for gpu in intel:
+        row = _pci_platforms().get(gpu["vendor_id"], {}).get(gpu["device_id"]) or {}
+        found = device_files.for_pci_id("intel", gpu["device_id"])
+        if found is None:
+            out.append(_refused(gpu, row.get("no_target") or "no device file lists its PCI id (nbxtensor/backend/"
+                                                              "devices/intel/*.yml, pci_device_ids)"))
+            continue
+        if facts is None:
+            out.append(_refused(gpu, f"the Level Zero loader ({', '.join(level_zero.LIBS)}), through which Intel GPUs "
+                                     f"are driven, is not installed — `neurobrix doctor` names the packages; then "
+                                     f"delete the generated hardware profile to detect the machine again"))
+            continue
+        index = next((i for i, f in enumerate(facts) if f["pci_device_id"] == gpu["device_id"] and i not in taken),
+                     None)
+        if index is None:
+            out.append(_refused(gpu, "the Level Zero loader reports no such GPU (the Intel compute runtime is not "
+                                     "installed for it) — `neurobrix doctor` names the packages"))
+            continue
+        taken.add(index)
+        from neurobrix.triton.prism import intel_refusal
+        why = intel_refusal.recorded(f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}")
+        if why:                              # refused at run time under these versions: planned without, said
+            out.append(_refused(gpu, why))
+            continue
+        out.append(_intel_device(index, facts[index], found, gpu))
+    return out
+
+
+def _intel_device(index: int, fact: Dict[str, Any], found: Tuple[str, Dict[str, Any]],
+                  gpu: Dict[str, Any]) -> Dict[str, Any]:
+    """The profile's device of an Intel GPU Level Zero reports: its architecture is its device file's (the compiler's
+    target), its precision the engine's half of that file, its memory the device's. An integrated GPU draws on the
+    host's memory: it is described as unified (`memory_mb` what the driver lets it hold, `host_memory_mb` the machine's,
+    `max_allocation_mb` its largest single allocation) and Prism plans it as one pool with the host."""
+    name, desc = found
+    from neurobrix.core.config.loader import get_vendor_config
+    precision = get_vendor_config("intel", name).get("precision") or {}
+    dtypes = ["float32"] + [d for d, key in (("float16", "supports_fp16"), ("bfloat16", "supports_bf16"))
+                            if precision.get(key)]
+    dev: Dict[str, Any] = {
+        "index": index, "brand": "intel", "model": fact["name"], "memory_mb": fact["memory_bytes"] >> 20,
+        "compute_capability": str(desc["compute_capability"]), "supports_dtypes": dtypes, "architecture": name,
+        "pcie_version": "N/A" if fact["integrated"] else _detect_pcie_version_sysfs(gpu.get("bus") or ""),
+        "pci_id": f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}",
+        "max_allocation_mb": fact["max_allocation_bytes"] >> 20,
+    }
+    if fact["integrated"]:
+        dev["unified_memory"] = True
+    return dev
+
+
+def _listed_gpus() -> List[Dict[str, Any]]:
+    """[{vendor_id, device_id, bus, name}] of the GPUs the operating system lists, with no vendor tool: Linux, the PCI
+    bus in sysfs (named by `lspci` when pciutils is installed); Windows, Win32_VideoController."""
+    if platform.system() == "Windows":
+        return _listed_gpus_windows()
+    if platform.system() != "Linux":
+        return []
+    from nbxtensor.backend.install_help import pci_display_devices
+    names = _lspci_names()
+    return [{"vendor_id": v, "device_id": d, "bus": bus, "name": names.get(bus)}
+            for v, d, bus in pci_display_devices()]
+
+
+def _lspci_names() -> Dict[str, str]:
+    """{PCI address: name} from pciutils' PCI id database (`lspci -Dnn`: "0000:00:02.0 VGA compatible controller [0300]:
+    Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics] [8086:9a49] (rev 01)"); {} when lspci is not installed — the
+    device is then named by its PCI id and its platform."""
+    try:
+        result = subprocess.run(["lspci", "-Dnn"], capture_output=True, text=True, timeout=10)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return {}
+    out = {}
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        m = re.match(r'(\S+)\s+[^:]+:\s*(.+?)\s*\[[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\]', line.strip())
+        if m:
+            out[m.group(1).lower()] = m.group(2)
+    return out
+
+
+def _listed_gpus_windows() -> List[Dict[str, Any]]:
+    """The GPUs on the PCI bus as Windows lists them: Win32_VideoController's Name and the ids of its PNPDeviceID
+    ("PCI\\VEN_8086&DEV_4692&SUBSYS_D0001458&REV_0C\\3&11583659&0&10"), through PowerShell's CIM, which ships with
+    Windows 10 and 11 (wmic is disabled by default from Windows 11 24H2). A controller with no PCI id (the Microsoft
+    Basic Display Adapter, a software renderer) is no GPU. AdapterRAM is not read: a uint32, and on an integrated GPU a
+    figure that is not its memory (Microsoft, Win32_VideoController; 1 GiB on a UHD 730)."""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_VideoController | Select-Object Name,PNPDeviceID | ConvertTo-Json"],
+            capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+    try:
+        data = json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else []
+    except ValueError:
+        return []
+    out = []
+    for gpu in data if isinstance(data, list) else [data]:
+        pnp = str(gpu.get("PNPDeviceID") or "")
+        m = re.search(r'PCI\\VEN_([0-9A-Fa-f]{4})&DEV_([0-9A-Fa-f]{4})', pnp)
+        if m:
+            out.append({"vendor_id": int(m.group(1), 16), "device_id": int(m.group(2), 16), "bus": pnp,
+                        "name": gpu.get("Name")})
+    return out
+
+
+def _parse_tenstorrent() -> List[Dict[str, Any]]:
+    """Detect Tenstorrent accelerators via tt-smi."""
+    try:
+        result = subprocess.run(
+            ["tt-smi", "--json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["tt-smi"], capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    devices = []
+    idx = 0
+
+    # Try JSON
+    try:
+        import json
+        data = json.loads(result.stdout)
+        for dev in data.get("devices", data if isinstance(data, list) else []):
+            name = dev.get("board_type", dev.get("name", "Tenstorrent Accelerator"))
+            arch = "wormhole" if "wormhole" in name.lower() else \
+                   "blackhole" if "blackhole" in name.lower() else "grayskull"
+            mem_mb = 12288 if "n150" in name.lower() else \
+                     24576 if "n300" in name.lower() else 12288
+
+            devices.append({
+                "index": idx,
+                "brand": "tenstorrent",
+                "model": name,
+                "memory_mb": mem_mb,
+                "compute_capability": "0.0",
+                "supports_dtypes": ["float32", "float16", "bfloat16"],
+                "architecture": arch,
+                "pcie_version": "4.0",
+            })
+            idx += 1
+        if devices:
+            return devices
+    except Exception:
+        pass
+
+    # Text parse fallback
+    for line in result.stdout.split("\n"):
+        line_lower = line.lower()
+        if "wormhole" in line_lower or "grayskull" in line_lower or "blackhole" in line_lower:
+            name = line.strip().split("|")[1].strip() if "|" in line else line.strip()
+            arch = "wormhole" if "wormhole" in line_lower else \
+                   "blackhole" if "blackhole" in line_lower else "grayskull"
+            mem_mb = 12288 if "n150" in line_lower else \
+                     24576 if "n300" in line_lower else 12288
+
+            devices.append({
+                "index": idx,
+                "brand": "tenstorrent",
+                "model": name,
+                "memory_mb": mem_mb,
+                "compute_capability": "0.0",
+                "supports_dtypes": ["float32", "float16", "bfloat16"],
+                "architecture": arch,
+                "pcie_version": "4.0",
+            })
+            idx += 1
+
+    return devices
+
+
+def _parse_moore_threads() -> List[Dict[str, Any]]:
+    """Detect Moore Threads GPUs via mtsmi."""
+    return _run_generic_smi(["mtsmi", "-q"], ["mtsmi"], "moore_threads", "musa")
+
+
+def _parse_biren() -> List[Dict[str, Any]]:
+    """Detect Biren GPUs via brsmi."""
+    return _run_generic_smi(["brsmi", "-q"], ["brsmi"], "biren", "birensupa")
+
+
+def _parse_iluvatar() -> List[Dict[str, Any]]:
+    """Detect Iluvatar CoreX GPUs via ixsmi."""
+    return _run_generic_smi(["ixsmi", "-q"], ["ixsmi"], "iluvatar", "corex")
+
+
+def _parse_cambricon() -> List[Dict[str, Any]]:
+    """Detect Cambricon MLU via cnmon."""
+    return _run_generic_smi(["cnmon", "info"], ["cnmon"], "cambricon", "mlu")
+
+
+def _run_generic_smi(
+    primary_cmd: List[str],
+    fallback_cmd: List[str],
+    brand: str,
+    default_arch: str,
+) -> List[Dict[str, Any]]:
+    """Run a vendor SMI tool and parse its output."""
+    try:
+        result = subprocess.run(
+            primary_cmd, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                fallback_cmd, capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    return _parse_smi_output(result.stdout, brand, default_arch)
+
+
+# ============================================================================
+# MACOS-ONLY: system_profiler
+# ============================================================================
+
+def _parse_system_profiler() -> List[Dict[str, Any]]:
+    """Detect GPUs on macOS via system_profiler SPDisplaysDataType."""
+    try:
+        result = subprocess.run(
+            ["system_profiler", "SPDisplaysDataType", "-json"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return []
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    try:
+        import json
+        data = json.loads(result.stdout)
+    except Exception:
+        return []
+
+    displays = data.get("SPDisplaysDataType", [])
+    devices = []
+    idx = 0
+
+    for gpu in displays:
+        name = gpu.get("sppci_model", gpu.get("_name", "Unknown GPU"))
+        vendor_str = gpu.get("spdisplays_vendor", "").lower()
+
+        # Set only where the hardware actually has the property; a device
+        # that does not share memory with the host says nothing rather than
+        # saying False, so a profile never asserts what was not detected.
+        host_mem_mb = None
+        max_alloc_mb = None
+        unified = None
+
+        # Determine brand
+        if "apple" in vendor_str or "apple" in name.lower():
+            brand = "apple"
+            arch = "apple_silicon"
+            # Apple Silicon: unified memory. `mem_mb` is what the GPU may
+            # HOLD (the device's working set), not what the machine has —
+            # they differ by 26% here and Prism budgets against the former.
+            mem_mb = _detect_apple_memory_mb()
+            host_mem_mb = _detect_apple_host_memory_mb()
+            max_alloc_mb = _detect_apple_max_allocation_mb()
+            unified = True
+            dtypes = ["float32", "float16"]
+            if _apple_supports_bf16(name):
+                dtypes.append("bfloat16")
+            pcie_ver = "N/A"
+        elif "amd" in vendor_str or "ati" in vendor_str:
+            # An Intel Mac's Radeon: no backend of this engine drives an AMD GPU under macOS (ROCm does not exist
+            # there; the Metal device files describe Apple silicon). Refused by name, the Mac planned on its CPU — it
+            # was written as a DRIVEN AMD device before, a plan on a GPU nothing could run (the Mac's review, 2026-11-08).
+            devices.append({"model": name, "brand": "amd",
+                            "refused": "no backend of this engine drives an AMD GPU under macOS (ROCm does not exist "
+                                       "there; the Metal device files describe Apple silicon)"})
+            continue
+        elif "intel" in vendor_str:
+            # An Intel Mac's integrated GPU: no backend of this engine drives it under macOS (Level Zero does not exist
+            # there; the Metal device files describe Apple silicon), and system_profiler names no platform for it.
+            # Refused by name — written "xe" before, an architecture no vendor file has, which refused the whole Mac.
+            devices.append({"model": name, "brand": "intel",
+                            "refused": "no backend of this engine drives an Intel GPU under macOS (Level Zero does not "
+                                       "exist there; the Metal device files describe Apple silicon)"})
+            continue
+        else:
+            brand = "apple"
+            arch = "apple_silicon"
+            mem_mb = _detect_apple_memory_mb()
+            dtypes = ["float32", "float16"]
+            pcie_ver = "N/A"
+
+        # Check Metal support
+        metal_support = gpu.get("spdisplays_metal", "")
+        if "supported" in str(metal_support).lower():
+            if "float16" not in dtypes:
+                dtypes.append("float16")
+
+        _dev = {
+            "index": idx,
+            "brand": brand,
+            "model": name,
+            "memory_mb": mem_mb if mem_mb > 0 else 8192,
+            "compute_capability": "0.0",
+            "supports_dtypes": dtypes,
+            "architecture": arch,
+            "pcie_version": pcie_ver,
+        }
+        if unified is not None:
+            _dev["unified_memory"] = unified
+        if host_mem_mb is not None:
+            # What the MACHINE has. `memory_mb` is what the GPU may hold.
+            # Recorded so the gap is visible instead of being rediscovered.
+            _dev["host_memory_mb"] = host_mem_mb
+        if max_alloc_mb is not None:
+            # The largest single allocation the device grants (Metal: one buffer). The solver cuts no arena
+            # above it. Absent = no limit below `memory_mb`.
+            _dev["max_allocation_mb"] = max_alloc_mb
+        devices.append(_dev)
+        idx += 1
+
+    return devices
+
+
+# ============================================================================
+# NO BACKEND DROVE A GPU: WHAT THE OPERATING SYSTEM LISTS, REFUSED BY NAME
+# ============================================================================
+
+def _beside(brand: str) -> List[Dict[str, Any]]:
+    """The GPUs of OTHER vendors the operating system lists beside the cards `brand`'s backend drives (a laptop's
+    integrated GPU beside its NVIDIA card), each named and refused: an Intel GPU with its own reason when it has one, else
+    because a plan holds one vendor's backend. Before, the first detector that drove a card ended the cascade and the
+    integrated GPU was not named at all (0.6.3 known limit)."""
+    intel = {(d["pci_id"], d.get("bus")): d for d in _parse_xpu()} if brand != "intel" else {}
+    out = []
+    for gpu in _listed_gpus():
+        vendor = _PCI_VENDOR_MAP.get(f"{gpu['vendor_id']:04x}")
+        if vendor is None or vendor == brand:
+            continue                 # no GPU vendor this engine knows, or the driven vendor's own cards (already listed)
+        own = intel.get((f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}", gpu.get("bus")))
+        out.append(own if own is not None and "refused" in own else _refused(
+            gpu, f"beside the {brand} cards: a plan runs one vendor's backend, so this {vendor} GPU is not planned"))
+    return out
+
+
+def _parse_listed() -> Tuple[List[Dict[str, Any]], str]:
+    """Every GPU the operating system lists, when no backend's detection drove one: each refused by name (an Intel GPU
+    with its own reason, `_parse_xpu`), so the profile says what the machine has and Prism plans on its CPU."""
+    intel = {(d["pci_id"], d.get("bus")): d for d in _parse_xpu()}
+    out = []
+    for gpu in _listed_gpus():
+        vendor = _PCI_VENDOR_MAP.get(f"{gpu['vendor_id']:04x}")
+        if vendor is None:
+            continue                 # no GPU vendor this engine knows: a server's management display, not a compute device
+        own = intel.get((f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}", gpu.get("bus")))
+        out.append(own if own is not None and "refused" in own else _refused(
+            gpu, f"no {vendor} runtime answered on this machine (its driver or compute runtime is not installed) — "
+                 f"`neurobrix doctor` names the packages"))
+    return out, "none"
+
+
+
+# ============================================================================
+# GENERIC SMI PARSER (shared by Moore Threads, Biren, Iluvatar, Cambricon)
+# ============================================================================
+
+def _parse_smi_output(
+    output: str,
+    brand: str,
+    default_arch: str,
+) -> List[Dict[str, Any]]:
+    """
+    Parse nvidia-smi-style output from vendor SMI tools.
+    Most Chinese GPU vendors model their CLI after nvidia-smi.
+    """
+    devices = []
+    idx = 0
+    current_name = ""
+    current_mem_mb = 0
+
+    for line in output.split("\n"):
+        line_stripped = line.strip()
+
+        name_match = re.search(
+            r'(?:Product Name|GPU Name|Device Name|Card Name)\s*:\s*(.+)',
+            line_stripped, re.IGNORECASE,
+        )
+        if name_match:
+            current_name = name_match.group(1).strip()
+
+        mem_match = re.search(
+            r'(?:Total|FB Memory|Memory Total)\s*:\s*(\d+)\s*(?:MiB|MB)',
+            line_stripped, re.IGNORECASE,
+        )
+        if mem_match:
+            current_mem_mb = int(mem_match.group(1))
+
+        mem_bytes_match = re.search(
+            r'(?:Total|Memory)\s*:\s*(\d+)\s*(?:bytes|B)\b',
+            line_stripped, re.IGNORECASE,
+        )
+        if mem_bytes_match:
+            val = int(mem_bytes_match.group(1))
+            if val > 1_000_000_000:
+                current_mem_mb = val // (1024 * 1024)
+
+        mem_gb_match = re.search(
+            r'(?:Total|Memory|VRAM)\s*:\s*(\d+)\s*(?:GiB|GB)',
+            line_stripped, re.IGNORECASE,
+        )
+        if mem_gb_match:
+            current_mem_mb = int(mem_gb_match.group(1)) * 1024
+
+        table_match = re.match(r'\|\s*(\d+)\s*\|\s*(.+?)\s*\|', line_stripped)
+        if table_match:
+            row_name = table_match.group(2).strip()
+            if row_name and not row_name.startswith("-") and not row_name.startswith("="):
+                if not current_name:
+                    current_name = row_name
+
+        gpu_boundary = re.search(r'GPU\s*\[?(\d+)', line_stripped, re.IGNORECASE)
+        if gpu_boundary and current_name and idx > 0:
+            devices.append({
+                "index": idx - 1,
+                "brand": brand,
+                "model": current_name,
+                "memory_mb": current_mem_mb if current_mem_mb > 0 else 16384,
+                "compute_capability": "0.0",
+                "supports_dtypes": ["float32", "float16"],
+                "architecture": default_arch,
+                "pcie_version": "4.0",
+            })
+            current_name = ""
+            current_mem_mb = 0
+
+        if gpu_boundary:
+            idx = int(gpu_boundary.group(1)) + 1
+
+    if current_name:
+        devices.append({
+            "index": max(0, idx - 1) if idx > 0 else 0,
+            "brand": brand,
+            "model": current_name,
+            "memory_mb": current_mem_mb if current_mem_mb > 0 else 16384,
+            "compute_capability": "0.0",
+            "supports_dtypes": ["float32", "float16"],
+            "architecture": default_arch,
+            "pcie_version": "4.0",
+        })
+
+    return devices
+
+
+# ============================================================================
+# INTERCONNECT DETECTION
+# ============================================================================
+
+def _detect_interconnect(
+    devices: List[Dict[str, Any]],
+    brand: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect GPU interconnect topology. Returns (interconnect, pcie_fallback)."""
+    num_gpus = len(devices)
+    pcie_ver = devices[0].get("pcie_version", "3.0") if devices else "3.0"
+    pcie_bw = _PCIE_BW_MAP.get(pcie_ver, 32)
+
+    pcie_fallback = {
+        "version": pcie_ver,
+        "lanes": 16,
+        "bandwidth_gbps": pcie_bw,
+    }
+
+    if num_gpus <= 1:
+        return {"groups": []}, pcie_fallback
+
+    members = list(range(num_gpus))
+
+    if brand == "nvidia":
+        return _detect_nvidia_interconnect(devices, members, pcie_fallback)
+    elif brand == "amd":
+        return _detect_amd_interconnect(members, pcie_fallback)
+    elif brand == "tenstorrent":
+        return _detect_tenstorrent_interconnect(members, pcie_fallback)
+    elif brand == "cambricon":
+        return _detect_cambricon_interconnect(members, pcie_fallback)
+
+    return {
+        "groups": [{
+            "index": 0,
+            "members": members,
+            "type": "cpu_bounce",
+            "tech": "pcie",
+            "bandwidth_gbps": pcie_bw,
+        }],
+    }, pcie_fallback
+
+
+def _detect_nvidia_interconnect(
+    devices: List[Dict[str, Any]],
+    members: List[int],
+    pcie_fallback: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect NVIDIA NVLink topology via nvidia-smi topo -m."""
+    num_gpus = len(devices)
+
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "topo", "-m"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("nvidia-smi topo failed")
+    except Exception:
+        return _pcie_interconnect(members, pcie_fallback), pcie_fallback
+
+    nvlink_pairs: List[Tuple[int, int, int]] = []
+    has_nvlink = False
+
+    for line in result.stdout.strip().split("\n"):
+        line = line.strip()
+        if not line.startswith("GPU"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        match = re.match(r'GPU(\d+)', parts[0])
+        if not match:
+            continue
+        gpu_a = int(match.group(1))
+
+        for col_idx, val in enumerate(parts[1:], start=0):
+            if val.startswith("NV"):
+                has_nvlink = True
+                num_links = int(val[2:]) if len(val) > 2 and val[2:].isdigit() else 1
+                gpu_b = col_idx
+                if gpu_a < gpu_b:
+                    nvlink_pairs.append((gpu_a, gpu_b, num_links))
+
+    if not has_nvlink:
+        return _pcie_interconnect(members, pcie_fallback), pcie_fallback
+
+    cc = devices[0].get("compute_capability", "7.0")
+    cc_major = int(cc.split(".")[0])
+    nvlink_gen = max(1, cc_major - 5)
+    bw_per_link = _NVLINK_BW_PER_LINK.get(nvlink_gen, 50)
+
+    # Aggregate NVLink bandwidth per GPU
+    links_per_gpu: Dict[int, int] = {}
+    for a, b, n in nvlink_pairs:
+        links_per_gpu[a] = links_per_gpu.get(a, 0) + n
+        links_per_gpu[b] = links_per_gpu.get(b, 0) + n
+    max_links = max(links_per_gpu.values()) if links_per_gpu else 1
+    total_bw = max_links * bw_per_link
+
+    all_connected = all(
+        any(a == i and b == j for a, b, _ in nvlink_pairs)
+        for i in range(num_gpus) for j in range(i + 1, num_gpus)
+    )
+
+    topo_type = "full_mesh" if all_connected and num_gpus > 1 else \
+                "nvlink_p2p" if num_gpus == 2 else "full_mesh"
+
+    return {
+        "groups": [{
+            "index": 0,
+            "members": members,
+            "type": topo_type,
+            "tech": "nvlink",
+            "bandwidth_gbps": total_bw,
+        }],
+    }, pcie_fallback
+
+
+def _detect_amd_interconnect(
+    members: List[int],
+    pcie_fallback: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect AMD Infinity Fabric / xGMI interconnect."""
+    try:
+        result = subprocess.run(
+            ["rocm-smi", "--showtopo"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and "XGMI" in result.stdout.upper():
+            return {
+                "groups": [{
+                    "index": 0,
+                    "members": members,
+                    "type": "full_mesh",
+                    "tech": "xgmi",
+                    "bandwidth_gbps": 200,
+                }],
+            }, pcie_fallback
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    for card in sorted(Path("/sys/class/drm/").glob("card*")):
+        hive_path = card / "device" / "xgmi_hive_id"
+        if hive_path.exists():
+            try:
+                hive_id = hive_path.read_text().strip()
+                if hive_id and hive_id != "0":
+                    return {
+                        "groups": [{
+                            "index": 0,
+                            "members": members,
+                            "type": "full_mesh",
+                            "tech": "xgmi",
+                            "bandwidth_gbps": 200,
+                        }],
+                    }, pcie_fallback
+            except (PermissionError, ValueError):
+                pass
+
+    return _pcie_interconnect(members, pcie_fallback), pcie_fallback
+
+
+def _detect_tenstorrent_interconnect(
+    members: List[int],
+    pcie_fallback: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect Tenstorrent ethernet mesh interconnect."""
+    try:
+        result = subprocess.run(
+            ["tt-topology"], capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and "eth" in result.stdout.lower():
+            return {
+                "groups": [{
+                    "index": 0,
+                    "members": members,
+                    "type": "full_mesh",
+                    "tech": "ethernet_mesh",
+                    "bandwidth_gbps": 100,
+                }],
+            }, pcie_fallback
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return _pcie_interconnect(members, pcie_fallback), pcie_fallback
+
+
+def _detect_cambricon_interconnect(
+    members: List[int],
+    pcie_fallback: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect Cambricon MLULink interconnect."""
+    try:
+        result = subprocess.run(
+            ["cnmon", "mlulink", "-t"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and "mlulink" in result.stdout.lower():
+            return {
+                "groups": [{
+                    "index": 0,
+                    "members": members,
+                    "type": "full_mesh",
+                    "tech": "mlulink",
+                    "bandwidth_gbps": 200,
+                }],
+            }, pcie_fallback
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return _pcie_interconnect(members, pcie_fallback), pcie_fallback
+
+
+def _pcie_interconnect(
+    members: List[int],
+    pcie_fallback: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Default PCIe-only interconnect group."""
+    return {
+        "groups": [{
+            "index": 0,
+            "members": members,
+            "type": "cpu_bounce",
+            "tech": "pcie",
+            "bandwidth_gbps": pcie_fallback.get("bandwidth_gbps", 32),
+        }],
+    }
+
+
+# ============================================================================
+# SYSTEM VENDOR DETECTION (per-OS)
+# ============================================================================
+
+def _detect_system_vendor(os_type: str) -> str:
+    """Detect system/motherboard vendor."""
+    if os_type == "Darwin":
+        return "apple"
+
+    if os_type == "Linux":
+        return _detect_vendor_linux()
+
+    if os_type == "Windows":
+        return _detect_vendor_windows()
+
+    return "custom"
+
+
+def _detect_vendor_linux() -> str:
+    """Detect system vendor on Linux from DMI data."""
+    paths = [
+        "/sys/class/dmi/id/sys_vendor",
+        "/sys/class/dmi/id/board_vendor",
+        "/sys/class/dmi/id/chassis_vendor",
+    ]
+    known_vendors = {
+        "dell": "dell", "hp": "hp", "hewlett": "hp",
+        "lenovo": "lenovo", "supermicro": "supermicro",
+        "asus": "asus", "gigabyte": "gigabyte", "msi": "msi",
+        "apple": "apple", "inspur": "inspur", "huawei": "huawei",
+        "sugon": "sugon", "h3c": "h3c",
+    }
+    for path in paths:
+        try:
+            with open(path) as f:
+                raw = f.read().strip().lower()
+            for keyword, name in known_vendors.items():
+                if keyword in raw:
+                    return name
+            if raw:
+                return raw
+        except (FileNotFoundError, PermissionError):
+            continue
+    return "custom"
+
+
+def _detect_vendor_windows() -> str:
+    """Detect system vendor on Windows via wmic."""
+    try:
+        result = subprocess.run(
+            ["wmic", "computersystem", "get", "Manufacturer", "/format:csv"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 2 and parts[-1] and parts[-1] != "Manufacturer":
+                    raw = parts[-1].lower()
+                    known = {
+                        "dell": "dell", "hp": "hp", "hewlett": "hp",
+                        "lenovo": "lenovo", "asus": "asus",
+                        "gigabyte": "gigabyte", "msi": "msi",
+                        "apple": "apple", "microsoft": "microsoft",
+                    }
+                    for keyword, name in known.items():
+                        if keyword in raw:
+                            return name
+                    return raw
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return "custom"
+
+
+# ============================================================================
+# UNIVERSAL HELPERS
+# ============================================================================
+
+def _nvidia_cc_to_arch(cc: str) -> str:
+    """Convert NVIDIA compute capability to architecture name."""
+    if cc in _NVIDIA_ARCH_REFINE:
+        return _NVIDIA_ARCH_REFINE[cc]
+    major = cc.split(".")[0]
+    return _NVIDIA_ARCH_MAP.get(major, "unknown")
+
+
+def _amd_gfx_to_arch(gfx_id: str) -> str:
+    """Map unknown gfx IDs to architecture by prefix pattern."""
+    if gfx_id.startswith("gfx9"):
+        major = int(gfx_id[3:5]) if len(gfx_id) >= 5 else 90
+        if major >= 94:
+            return "cdna3"
+        elif major >= 90:
+            return "cdna2" if "a" in gfx_id else "cdna"
+        return "vega20"
+    elif gfx_id.startswith("gfx12"):
+        return "rdna4"
+    elif gfx_id.startswith("gfx11"):
+        return "rdna3"
+    elif gfx_id.startswith("gfx10"):
+        return "rdna2"
+    return "rdna"
+
+
+def _amd_name_to_arch(name: str) -> str:
+    """Infer AMD architecture from GPU marketing name."""
+    n = name.lower()
+    if "mi300" in n:
+        return "cdna3"
+    elif "mi250" in n or "mi210" in n:
+        return "cdna2"
+    elif "mi100" in n:
+        return "cdna"
+    elif any(x in n for x in ["7900", "7800", "7700", "7600"]):
+        return "rdna3"
+    elif any(x in n for x in ["9070", "9060"]):
+        return "rdna4"
+    elif any(x in n for x in ["6900", "6800", "6700"]):
+        return "rdna2"
+    return "rdna"
+
+
+def _amd_get_vram_mb(gpu_idx: int) -> Optional[int]:
+    """Get AMD GPU VRAM via sysfs or rocm-smi."""
+    for card in sorted(Path("/sys/class/drm/").glob("card*")):
+        vram_path = card / "device" / "mem_info_vram_total"
+        if vram_path.exists():
+            try:
+                vram_bytes = int(vram_path.read_text().strip())
+                if vram_bytes > 1_000_000_000:
+                    return vram_bytes // (1024 * 1024)
+            except (ValueError, PermissionError):
+                pass
+
+    try:
+        result = subprocess.run(
+            ["rocm-smi", "-d", str(gpu_idx), "--showmeminfo", "vram"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split("\n"):
+                if "Total" in line:
+                    nums = re.findall(r'(\d+)', line)
+                    if nums:
+                        val = int(nums[-1])
+                        if val > 1_000_000:
+                            return val // (1024 * 1024)
+    except Exception:
+        pass
+
+    return None                  # unknown: the GPU is refused by name, never given a figure
+
+
+def _detect_pcie_version_sysfs(pci_addr: str) -> str:
+    """Detect PCIe version from Linux sysfs for any vendor."""
+    if not pci_addr or pci_addr == "N/A":
+        return "3.0"
+    try:
+        addr = pci_addr.lower().strip()
+        sysfs_path = Path(f"/sys/bus/pci/devices/{addr}/current_link_speed")
+        if sysfs_path.exists():
+            speed = sysfs_path.read_text().strip()
+            gt_match = re.search(r'([\d.]+)\s*GT/s', speed)
+            if gt_match:
+                gt_val = gt_match.group(1)
+                return _PCIE_SPEED_MAP.get(gt_val, "3.0")
+    except Exception:
+        pass
+    return "3.0"
+
+
+def _apple_supports_bf16(chip_name: str) -> bool:
+    """
+    Check if Apple Silicon chip supports bfloat16.
+
+    bf16 requires M2 or later AND macOS 14+ (Sonoma).
+    M1 family does NOT support bf16 in hardware.
+    """
+    import platform
+    gen = _apple_chip_generation(chip_name)
+    if gen < 2:
+        return False
+
+    # Check macOS version (need 14+ for bf16)
+    try:
+        mac_ver = platform.mac_ver()[0]  # e.g., "14.2.1"
+        major = int(mac_ver.split('.')[0])
+        return major >= 14
+    except (ValueError, IndexError):
+        return False
+
+
+def _apple_chip_generation(chip_name: str) -> int:
+    """
+    Extract Apple Silicon generation number from chip name.
+
+    "Apple M1 Max" → 1, "Apple M4 Pro" → 4, "Apple M5" → 5
+    Returns 0 if not recognized.
+    """
+    import re
+    m = re.search(r'\bm(\d+)', chip_name.lower())
+    return int(m.group(1)) if m else 0
+
+
+# Apple Silicon GPU specifications — from Apple official specs.
+# Key: chip variant → (gpu_cores, memory_bandwidth_gbps, max_memory_gb)
+# Sources: apple.com/newsroom, en.wikipedia.org/wiki/Apple_silicon
+_APPLE_SILICON_SPECS = {
+    # M1 family (2020-2021)
+    "m1":           (8,   68.25, 16),
+    "m1 pro":       (16,  200,   32),
+    "m1 max":       (32,  400,   64),
+    "m1 ultra":     (64,  800,   128),
+    # M2 family (2022-2023)
+    "m2":           (10,  100,   24),
+    "m2 pro":       (19,  200,   32),
+    "m2 max":       (38,  400,   96),
+    "m2 ultra":     (76,  800,   192),
+    # M3 family (2023-2024)
+    "m3":           (10,  100,   24),
+    "m3 pro":       (18,  150,   36),
+    "m3 max":       (40,  400,   128),
+    "m3 ultra":     (80,  800,   512),
+    # M4 family (2024-2025)
+    "m4":           (10,  120,   32),
+    "m4 pro":       (20,  273,   64),
+    "m4 max":       (40,  546,   128),
+    "m4 ultra":     (80,  819,   256),
+    # M5 family (2025-2026)
+    "m5":           (10,  154,   32),
+    "m5 pro":       (20,  307,   64),
+    "m5 max":       (40,  614,   128),
+    "m5 ultra":     (80,  921,   256),
+}
+
+
+def _detect_apple_host_memory_mb() -> int:
+    """Total physical RAM. On unified memory the CPU and GPU share it, but
+    the GPU may not have all of it — see `_detect_apple_memory_mb`."""
+    memsize = _sysctl_int("hw.memsize")
+    if memsize:
+        return memsize // (1024 * 1024)
+    return 8192
+
+
+def _detect_apple_memory_mb() -> int:
+    """How much memory the GPU may actually hold, not how much the machine has.
+
+    `hw.memsize` was reported here, so a 24 GB machine advertised a 24576 MB
+    device. The allocator enforces something else entirely: the device's own
+    `recommendedMaxWorkingSetSize`, which on this M4 Pro is **18186 MB** —
+    26% less. Prism therefore accepted plans the allocator then refused, and
+    "the budget it announces is the budget it executes" was false before any
+    strategy had a chance to be right.
+
+    Measured 2026-09-09: recommendedMaxWorkingSetSize = 19069665280 bytes
+    against hw.memsize = 25769803776.
+
+    The device is asked, never guessed. When the GPU API is not reachable the
+    machine is not going to run on it either, so total RAM is the honest
+    answer for what is then a host-only profile, and it is returned rather
+    than a made-up fraction of it.
+    """
+    try:
+        import Metal                                    # vendor layer: allowed here
+        device = Metal.MTLCreateSystemDefaultDevice()
+        if device is not None:
+            budget = int(device.recommendedMaxWorkingSetSize())
+            if budget > 0:
+                return budget // (1024 * 1024)
+    except Exception:
+        pass
+    return _detect_apple_host_memory_mb()
+
+
+def _detect_apple_max_allocation_mb() -> int:
+    """The largest SINGLE allocation the Metal device grants, in MB; a named refusal when it cannot be asked.
+
+    `memory_mb` is how much the GPU may hold in all (`recommendedMaxWorkingSetSize`); one buffer has its own,
+    smaller ceiling, `MTLDevice.maxBufferLength`, and the device refuses a larger one however much is free.
+    Measured on this M4 Pro (2026-10-04): maxBufferLength = 14302248960 bytes (13 639 MB) against a working set
+    of 19069665280 (18 186 MB). A streamed segment is ONE arena, one buffer: at 17.1 GB free Prism cut
+    deepseek-moe-16b-chat in 3 segments, the first asked 14 661 558 272 bytes and the allocation failed ("GPU
+    malloc failed (error 1) … driver_free=17785MB"), where 4 segments of ~10 GB allocate. Published as the
+    device's `max_allocation_mb` for the solver to cut against. The device is asked, never a table; a profile
+    that does not carry the key says "no limit below the device's memory", which is what a CUDA card gives.
+
+    The Mac, 2026-11-08: a profile regenerated without the key let a 13 912.6 MiB arena through and Open-Sora-v2's Triton
+    cell failed at weight loading; this function had swallowed its own failure. A device that cannot be asked is now a
+    named refusal: a profile is never written without the fact (rule 1, ZERO FALLBACK).
+    """
+    why = None
+    try:
+        import Metal                                    # vendor layer: allowed here
+        device = Metal.MTLCreateSystemDefaultDevice()
+        largest = int(device.maxBufferLength()) if device is not None else 0
+        if largest > 0:
+            return largest // (1024 * 1024)
+        why = "MTLCreateSystemDefaultDevice() returned no device" if device is None else f"maxBufferLength() = {largest}"
+    except Exception as exc:                            # said, never swallowed
+        why = f"{type(exc).__name__}: {exc}"
+    raise RuntimeError(
+        f"ZERO FALLBACK: the Apple GPU's largest single allocation (MTLDevice.maxBufferLength) cannot be read ({why}). "
+        f"Without it Prism would plan arenas the device refuses. On a Mac, `python -m nbxtensor install-metal` installs "
+        f"pyobjc-framework-Metal, which this reading needs; then run again to generate the hardware profile.")
+
+
+def _shorten_gpu_name(name: str) -> str:
+    """Shorten GPU name for profile ID."""
+    name = name.lower()
+    for prefix in ["nvidia ", "geforce ", "tesla ", "quadro ", "amd ", "intel ",
+                    "radeon ", "instinct ", "arc ", "cambricon ", "moore threads ",
+                    "iluvatar ", "biren ", "tenstorrent "]:
+        name = name.replace(prefix, "")
+    for suffix in ["-sxm2", "-sxm4", "-sxm5", "-sxm", "-pcie", "-hbm2",
+                    "-hbm2e", "-hbm3", " ti", " super"]:
+        name = name.replace(suffix, "")
+    name = re.sub(r'[^a-z0-9]+', '-', name).strip('-')
+    return name
+
+
+def _shorten_cpu_name(name: str) -> str:
+    """Shorten CPU name for profile ID."""
+    name = name.lower()
+    for prefix in ["intel(r) ", "amd ", "apple ", "core(tm) ", "xeon(r) ",
+                    "processor ", "cpu "]:
+        name = name.replace(prefix, "")
+    # Remove frequency
+    name = re.sub(r'@\s*[\d.]+\s*[gm]hz', '', name)
+    name = re.sub(r'[^a-z0-9]+', '-', name).strip('-')
+    # Truncate to reasonable length
+    if len(name) > 20:
+        name = name[:20].rstrip('-')
+    return name
+
+
+def _sysctl_str(key: str) -> Optional[str]:
+    """Read a macOS sysctl string value."""
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", key],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _sysctl_int(key: str) -> Optional[int]:
+    """Read a macOS sysctl integer value."""
+    val = _sysctl_str(key)
+    if val:
+        try:
+            return int(val)
+        except ValueError:
+            pass
+    return None
+
+
+def _build_notes(
+    cpu: Dict[str, Any],
+    devices: List[Dict[str, Any]],
+    brand: str,
+    vendor: str,
+    interconnect: Dict[str, Any],
+    refused: List[Dict[str, Any]],
+) -> str:
+    """Build human-readable notes string."""
+    lines = []
+
+    num_gpus = len(devices)
+
+    if num_gpus == 0:
+        lines.append(f"CPU-only system: {cpu.get('model', 'Unknown CPU')}")
+        ram_gb = round(cpu.get('ram_mb', 0) / 1024, 1)
+        lines.append(f"RAM: {ram_gb} GB, {cpu.get('cores', 1)} cores / {cpu.get('threads', 1)} threads")
+        features = cpu.get("features", [])
+        if features:
+            lines.append(f"CPU features: {', '.join(features)}")
+        lines.append("No GPU detected. Models run on CPU." if not refused else "No GPU driven. Models run on CPU.")
+    else:
+        if num_gpus == 1:
+            lines.append(f"1 x {devices[0].get('model', 'GPU')}")
+        else:
+            models: Dict[str, int] = {}
+            for d in devices:
+                m = d.get("model", "GPU")
+                models[m] = models.get(m, 0) + 1
+            parts = [f"{count} x {model}" for model, count in models.items()]
+            lines.append(" + ".join(parts))
+
+        lines.append(f"GPU brand: {brand}")
+        arch = devices[0].get("architecture", "unknown")
+        lines.append(f"Architecture: {arch}")
+
+        # CPU info for offload context
+        ram_gb = round(cpu.get('ram_mb', 0) / 1024, 1)
+        lines.append(f"CPU: {cpu.get('model', 'Unknown')} ({cpu.get('cores', '?')} cores, {ram_gb} GB RAM)")
+
+        groups = interconnect.get("groups", [])
+        if groups:
+            g = groups[0]
+            tech = g.get("tech", "none")
+            if tech not in ("none", "pcie"):
+                bw = g.get("bandwidth_gbps", 0)
+                lines.append(f"Interconnect: {tech} ({bw} GB/s)")
+
+    for d in refused:
+        lines.append(f"GPU refused: {d['model']} ({d.get('pci_id') or d['brand']}) - {d['refused']}")
+    if vendor != "custom":
+        lines.append(f"System vendor: {vendor}")
+
+    lines.append("Auto-generated by NeuroBrix hardware detection.")
+    return "\n".join(lines)
+
+
+def _board_of(index: int, rows: Dict[int, Dict[str, Any]]) -> "Optional[int]":
+    """The driver's board index of the process's device `index`.
+
+    The plan numbers devices as the process sees them (CUDA renumbers the visible set 0..N-1,
+    `_apply_visible_filter`); nvidia-smi numbers boards. Under `CUDA_VISIBLE_DEVICES=1` the
+    process's device 0 IS board 1 — read as board 0 it took another card's sharing facts
+    (2026-09-27). An entry may name a board or a GPU UUID (or its prefix, as CUDA accepts);
+    one that matches no board is None — the caller then reads the card as unmeasured.
+    """
+    import os as _os
+    raw = _os.environ.get("CUDA_VISIBLE_DEVICES")
+    if raw is None:
+        return index
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if not 0 <= index < len(entries):
+        return None
+    entry = entries[index]
+    if entry.isdigit():
+        return int(entry) if int(entry) in rows else None
+    for board, row in rows.items():
+        if row["uuid"] == entry or row["uuid"].startswith(entry):
+            return board
+    return None
+
+
+def runtime_card_facts(index: int) -> dict:
+    """{runtime_total_mb, runtime_context_mb} of a dedicated card as the engine's runtime sees it, READ through the
+    library: the total its allocator reports (cudaMemGetInfo, `nbxtensor.memory.device_total_bytes`) and this process's
+    own context on it as the driver attributes it (`nbxtensor.backend.process_memory.process_device_bytes`) — two
+    reads, no allocation and no timing — or {} when the runtime cannot answer (the census shadow then refuses the card
+    by name). Never torch, never the engine's own query of the driver's tool."""
+    from nbxtensor.backend.process_memory import process_device_bytes
+    try:
+        total = _nbx_memory.device_total_bytes(index)
+        if total is None or total <= 0:
+            return {}
+        own = process_device_bytes(index)        # the context the total's read opened: 0 or None is no reading
+        if not own:
+            return {}
+        return {"runtime_total_mb": int(total // (1024 * 1024)), "runtime_context_mb": int(round(own / (1024 * 1024)))}
+    except _nbx_device.NoGpuRuntime:  # no runtime here: the facts are absent, said by the shadow's refusal
+        return {}
+
+
+def device_sharing(index: int):
+    """The sharing facts of one card, from the driver's own tool: whether it drives a display,
+    how much memory OTHER processes hold on it, and this process's own context. Vendor seam of
+    `triton/prism/memory_budget.py`; `None` when no tool answers here (the budget then treats the
+    card as shared, the safe side). `index` is the device as this process numbers it — the same
+    index the allocator's free figure is read at; the board nvidia-smi is asked about is mapped
+    from it through `CUDA_VISIBLE_DEVICES` (`_board_of`)."""
+    import os as _os
+    try:
+        q = subprocess.run(["nvidia-smi", "--query-gpu=index,uuid,display_active,memory.used,memory.total",
+                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10)
+        if q.returncode != 0:
+            return None
+        rows = {}
+        for line in q.stdout.strip().splitlines():
+            parts = [x.strip() for x in line.split(",")]
+            if len(parts) >= 5 and parts[0].isdigit():
+                rows[int(parts[0])] = {"uuid": parts[1], "display": parts[2].lower() == "enabled",
+                                        "used_mb": float(parts[3]), "total_mb": float(parts[4])}
+        board = _board_of(index, rows)
+        if board is None:
+            return None
+        apps = subprocess.run(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,used_memory",
+                               "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10)
+        own, others = 0.0, 0.0
+        if apps.returncode == 0:
+            me = _os.getpid()
+            for line in apps.stdout.strip().splitlines():
+                parts = [x.strip() for x in line.split(",")]
+                if len(parts) >= 3 and parts[0] == rows[board]["uuid"] and parts[1].isdigit():
+                    mb = float(parts[2]) if parts[2].replace(".", "", 1).isdigit() else 0.0
+                    if int(parts[1]) == me:
+                        own += mb
+                    else:
+                        others += mb
+        r = rows[board]
+        return {"display_active": r["display"], "held_by_others_mb": others, "own_context_mb": own,
+                "total_mb": r["total_mb"], "free_mb": r["total_mb"] - r["used_mb"], "source": "nvidia-smi"}
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# First-launch facts (the supervisor's S2, 2026-10-27 22:20): what the time estimate reads, measured where it runs
+# ---------------------------------------------------------------------------------------------------------------------
+#: the quick first-launch probe (`facts_probe`): one GEMM size, 256 MB copies
+FIRST_LAUNCH = {"gemm_sizes": (4096,), "gemm_warmup": 10, "gemm_rep": 30, "copy_bytes": 256 << 20, "copy_reps": 5,
+                "host_gemm_n": 2048, "host_copy_bytes": 256 << 20,
+                # the expandable pool's chunk (facts_probe.vmm_chunk_bytes): the multiples of the granularity tried,
+                # ascending, and the repetitions of each timing
+                "vmm_ks": (1, 2, 4, 8, 16, 32, 64), "vmm_reps": 3,
+                # one decode step's linear (a 7B model's MLP: x[1, 4096] @ W[14336, 4096]^T), timed over 50 launches
+                "gemv_kn": (4096, 14336), "gemv_reps": 50,
+                # the expert store's miss copy (moe_device_residency.measure_miss_copy): copy_bytes as that many experts
+                "expert_copy_blocks": (1024, 2048, 4096, 8192, 16384), "expert_copy_warps": (2, 4, 8, 16),
+                "expert_copy_reps": 5, "expert_copy_experts": 8}
+#: a load smaller than this is not a loader rate (its fixed costs dominate)
+LOADER_RATE_MIN_BYTES = 256 << 20
+#: draws of one measure agree when their spread is within this share of their median: the steadiness gate the
+#: supervisor set for profile facts a neighbour can disturb (2026-11-02 09:50) — the reload rate's three runs
+#: (`layer_streaming._note_reload`) and the arena factor's (`_measure_arena_factor`); a policy, not a measure
+STEADY_SPREAD = 0.05
+#: the hardware profile this process runs under (set by the run once it resolved it): the one its loaders write into
+ACTIVE_HARDWARE_ID: Optional[str] = None
+
+
+def stored_major(cache_path, component: str) -> Optional[str]:
+    """The floating dtype most of `component`'s stored bytes are in (its weights index), or None."""
+    import json as _json
+    index = Path(cache_path) / "components" / component / "weights_index.json"
+    if not index.exists():
+        return None
+    by: Dict[str, int] = {}
+    for v in (_json.loads(index.read_text()).get("tensors") or {}).values():
+        d = str(v.get("dtype", "")) if isinstance(v, dict) else ""
+        if d in STORED_DTYPES:
+            by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
+    return max(by, key=by.get) if by else None
+STORED_DTYPES = {"bfloat16": "BF16", "float32": "F32", "float16": "F16"}
+
+
+def generated_profile(hardware_id: Optional[str]) -> Optional[Path]:
+    """The generated profile (`default-*`) of `hardware_id` that a first-launch or owed measure writes, or None: a
+    committed profile is never written, a census shadow (no card) measures nothing, and no file has nothing to complete
+    — the one guard of `ensure_measured_facts` and of `owed_facts`' measures."""
+    if not str(hardware_id).startswith("default"):
+        return None
+    # the census module ships with the engine: one that cannot be imported or read is a broken install, raised by its
+    # own name — never taken for "no census", which would let a census shadow measure (qa 1231-n1)
+    from neurobrix.kernels import census as _census
+    if _census.active():
+        return None
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    return path if path.exists() else None
+
+
+def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, container_dir=None) -> dict:
+    """Measure, ONCE, on a GENERATED profile (`default-*`), the device and host facts Prism's time estimate reads that
+    neither the profile nor its architecture's tracked vendor file states (the quick probe), and write them with their
+    source. The engine's LOADER rate is not probed here: the loader measures itself at its first real load
+    (`note_loader_rate`) — until then Prism ranks without an estimate and says so (the supervisor's decision S2,
+    2026-10-27 23:00). A committed profile is never written; a census shadow (no card) measures nothing. Returns what
+    was added; with `container_dir` (the requested model's), only the reload rates of its own stored dtypes."""
+    path = generated_profile(hardware_id)
+    if path is None:
+        return {}
+    from neurobrix.triton.prism.loader import vendor_block
+    from neurobrix.triton.prism import facts_probe as P
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    if not devices:
+        return {}
+    stamp, q = _time.strftime("%Y-%m-%d %H:%M:%S %Z"), FIRST_LAUNCH
+    # class facts measured ONCE per card model and machine: what a sibling card set's profile (or an identical card of
+    # this one) measured is taken, never measured again (other_card_models.from_siblings)
+    # (and a kept fact of another driver or library is dropped first, measured again: qa on 1215)
+    added: Dict[str, Any] = dict(other_card_models.from_siblings(path, data, devices))
+
+    measured_of = lambda d: dict(d.get("measured") or vendor_block(d, "measured") or {})  # noqa: E731
+
+    first = measured_of(devices[0])
+    # the runtime's card facts, READ in this process when it sees one card (`card_facts_reader`), are read FIRST: the
+    # context the driver attributes to this process is the launch's own only before any measure of this process holds
+    # memory on the card (qa 1235-1, Dell p1235 TABLE_c1: compiled 564 MiB read after torch's GEMM and copies against
+    # 306 in a child); the child, which holds nothing of this process, keeps its place after the chunk is written
+    now, after_chunk = P.card_facts_readers(devices)
+    added.update(P.complete_runtime_card_facts(devices, now))
+    if engine in _BASE_PROBES and isinstance(cpu := data.get("cpu"), dict):
+        # the launched engine's runtime base, lazily (line 3 of the ruling of 22/11/2026 17:43): a sibling's measure
+        # of this engine, else one child of this engine now; the other engine's waits for its own first launch
+        base = dict(cpu.get("runtime_base_mb") or {})
+        if engine not in base:
+            mb = other_card_models.shipped_or_sibling_base(devices[0], path, engine)  # read; else measured below
+            if mb is None:
+                launch_lines.say("base", f" ({engine})")
+                mb = _measure_runtime_base_mb(engine)
+            if mb is not None:
+                cpu["runtime_base_mb"] = {**base, engine: int(mb)}
+                added["runtime_base_mb"] = [engine]
+    # the chunk is READ from the library's rule where it answers the card's class (kept.chunk_owed); swept once else
+    owed_chunk = kept.chunk_owed(devices[0], first, 0)
+    replay = P.vmm_first_replay(0) if owed_chunk else None    # made ahead: it prices the rest
+    if not first or owed_chunk:
+        launch_lines.say("measure", work_said([], replay, q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
+    dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
+    if not first:
+        first = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick: one GEMM size, "
+                           f"{q['copy_bytes'] >> 20} MB copies; tools/profile_facts.py measures the full set)",
+                 "matmul_tflops": {t: round(P.matmul_tflops(t, q["gemm_sizes"], q["gemm_warmup"], q["gemm_rep"])["best"], 1)
+                                   for t in dtypes},
+                 **{k: round(v, 1) for k, v in P.copies(q["copy_bytes"], q["copy_reps"]).items()}}
+        added["measured"] = sorted(k for k in first if k != "source")
+    if engine is not None and engine not in (first.get("gemv_gbps") or {}):
+        first.setdefault("gemv_gbps", {})[engine] = {t: P.gemv_gbps(t, engine, *q["gemv_kn"], q["gemv_reps"]) for t in dtypes}
+        added["gemv_gbps"] = [engine]
+    # every card model's chunk swept at once, each on its own first card, side by side (`kept.sweep_chunks`)
+    chunks = kept.sweep_chunks(devices, first, measured_of, q, replay)
+    if owed_chunk:
+        # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
+        kept.set_chunk(first, chunks[devices[0].get("model")])
+        added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
+    # written BEFORE any child probe reads the profile: on a clean machine the first child refused the vmm_chunk_bytes
+    # measured above and not yet written (the stable's install test, 2026-11-05)
+    added.update(P.complete_runtime_card_facts(devices, after_chunk))
+    # another card model's chunk swept here is written too, when nothing else was measured (it rode on the host
+    # facts' write until those left the first launch)
+    if added or chunks:
+        _write_first(path, data, devices, first, measured_of, added, q, chunks)
+    # the Triton arena's factor is never measured at a user's first run (the supervisor 2026-11-07 12:00): its vendor
+    # file or its family declares it (core/config/loader.declared_arena_factor); a probe on whatever the user imported
+    # measured 1.4 to 28 and swept uncertified kernels for 40 minutes. The bounded probe (census shapes) is 0.6.2's.
+    if engine == "triton" and "expert_copy" not in first and devices[0].get("unified_memory"):
+        # a unified device maps the host's experts in place (Prism's Strategy 2.5, core/runtime/expert_files.py): the
+        # card-side miss copy is not its path, and its launch (Triton's own, host addresses in the tables) does not bind
+        # on Metal (the Mac, 2026-11-03 10:43) — not measured, said; the store refuses by name if it is ever reached
+        _log.debug("   [Auto-detect] expert_copy not measured: a unified device maps its experts (Strategy 2.5), the "
+                   "card-side miss copy is not its path")
+    elif engine == "triton" and "expert_copy" not in first:
+        # the expert store's miss copy on this card (the supervisor 2026-11-03 10:32: 75-93 % of a MoE decode's GPU time)
+        from nbxtensor.ops.moe_device_residency import measure_miss_copy
+        first["expert_copy"] = {k: v for k, v in measure_miss_copy(q["copy_bytes"], q["expert_copy_reps"],
+                                                                   q["expert_copy_blocks"], q["expert_copy_warps"],
+                                                                   q["expert_copy_experts"]).items() if k != "grid"}
+        added["expert_copy"] = first["expert_copy"]
+    if not added:
+        return {}
+    _write_first(path, data, devices, first, measured_of, added, q, chunks)
+    _log.debug(f"   [Auto-detect] measured on this machine and written into {path.name}: {added}")
+    return added
+
+
+def _write_first(path, data, devices, first, measured_of, added, q, chunks=None) -> None:
+    """The first launch's device facts onto every card of card 0's model (they share what card 0 measured), and each
+    other model's own facts onto its cards (`other_card_models`: a second write finds their chunk in the blocks and measures nothing), written."""
+    other_card_models.place(devices, first, other_card_models.measured_of_others(devices, measured_of, added, q, chunks))
+    write_profile_atomically(path, data)
+
+
+def _measure_arena_factor(hardware_id: str, device: dict) -> float:
+    """The arena factor of `device` (the generated profile's card 0), measured on the cache's smallest container
+    (`arena_probe`); refused by name when the runs disagree — never a value carried from another card."""
+    from neurobrix.core.paths import cache_dir
+    from neurobrix.triton.prism import arena_probe as A
+    total, ctx = device.get("runtime_total_mb"), device.get("runtime_context_mb")
+    unified = device.get("memory_mb") if device.get("unified_memory") else None   # the card as the planner reads it
+    if unified is None and (total is None or ctx is None):
+        raise RuntimeError("ZERO FALLBACK: no runtime_total_mb / runtime_context_mb (nor memory_mb on a unified device)")
+    steady = STEADY_SPREAD
+    root, comp = A.smallest_container(cache_dir())
+    weights = sum(f.stat().st_size for f in (root / "components" / comp).rglob("*.safetensors"))
+    import json as _json
+    grows = bool(A.scaled_names(_json.loads((root / "components" / comp / "graph.json").read_text())))
+    factor, runs = A.factor_on_card(int(unified or int(total) - int(ctx)) << 20, weights,
+                                    lambda k: A.child(str(root), comp, hardware_id, k), 3, steady, grows)
+    if factor is None:
+        raise RuntimeError(f"ZERO FALLBACK: the arena probe's runs on {root.name}:{comp} disagree "
+                           f"({[round(r['hold_bytes'] / r['walked_bytes'], 3) for r in runs]}): no factor written")
+    return round(float(factor), 3)
+
+
+def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloaded_bytes: int, seconds: float,
+                     what: str, spread: Optional[Tuple[float, float]] = None) -> bool:
+    """The engine measured ITSELF reloading streamed pieces at a real run (`core/strategies/layer_streaming.py`): the
+    pieces a token loads again — read from the container through the page cache, decoded, converted, uploaded —
+    `reloaded_bytes` in `seconds`. Written on a GENERATED profile only, as `host_measured.weight_reload_gbps.{engine}.
+    {stored}` when neither it nor the vendor file states it: the fact Prism prices a per-token reload with BEFORE the run
+    (`time_estimate.reload_bps`, refused by name without it — the supervisor 2026-11-02 06:40). True when written.
+
+    `spread`: (low, high) GB/s of draws that did not agree within the steadiness gate (a busy machine). Such a measure is
+    KEPT — with its spread and its date in `weight_reload_spread.{engine}.{stored}` — and the figure Prism reads is its
+    LOW draw: a plan priced at the slowest reload the machine showed holds across the spread (the estimate of a reloading
+    plan only grows as the rate falls, nothing else it is ranked against moves), so it is the safe decision of the two.
+    Until 2026-11-19 an unsteady measure was not written and every later launch made the probe again (the catalogue's
+    kept homes: TinyLlama owed BF16 three launches in a row). A later steady measure replaces it; an unsteady one never
+    replaces a kept figure."""
+    if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
+            or reloaded_bytes < LOADER_RATE_MIN_BYTES:
+        return False
+    st = STORED_DTYPES.get(str(stored), str(stored))
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return False
+    from neurobrix.triton.prism.loader import vendor_block
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    kept.drop_stale(data)          # rates of another driver or library are no rates to keep beside (qa on 1215)
+    host = data.get("host_measured")
+    vendor = vendor_block(devices[0], "host_measured") if devices else None
+    if not kept.reload_may_be_written(host, vendor, engine, st, spread):
+        return False
+    host = data.setdefault("host_measured", {})           # over the vendor's block key by key (loader.load_profile)
+    stamp = _time.strftime('%Y-%m-%d %H:%M:%S %Z')
+    gbps = round(reloaded_bytes / seconds / 1e9, 3) if spread is None else round(float(min(spread)), 3)
+    how = kept.put_reload(host, engine, st, gbps, spread, stamp)
+    host.setdefault("weight_reload_source", []).append(
+        f"{engine} {st}: {how} measured by the engine itself reloading streamed pieces at a real run "
+        f"{stamp}, {what}, {reloaded_bytes / 1e9:.2f} GB reloaded")
+    write_profile_atomically(path, data)
+    _log.debug(f"   [Auto-detect] the {engine} engine measured its per-token reload: {st} {gbps} GB/s"
+               f"{'' if spread is None else ' (unsteady: its low draw)'}, written into {path.name}")
+    return True
+
+
+def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where: str, landed_bytes: int, seconds: float,
+                     what: str) -> bool:
+    """The engine's loader measured ITSELF at a real load (`GraphExecutor`'s loaders): `landed_bytes` of weights stored
+    as `stored` (a weights-index dtype name) landed on the card or in host memory (`where`) in `seconds`. Written, on a
+    GENERATED profile only, where neither it nor the vendor file states that rate: the first load as `cold`, a later
+    one as `warm`. True when written."""
+    if not hardware_id or not str(hardware_id).startswith("default") or seconds <= 0 \
+            or landed_bytes < LOADER_RATE_MIN_BYTES:
+        return False
+    st = STORED_DTYPES.get(str(stored), str(stored))
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if not path.exists():
+        return False
+    from neurobrix.triton.prism.loader import vendor_block
+    import time as _time
+    data = yaml.safe_load(path.read_text()) or {}
+    devices = data.get("devices") or []
+    if not devices:
+        return False
+    measured = dict(devices[0].get("measured") or vendor_block(devices[0], "measured") or {})
+    rates = ((measured.get("weight_load_gbps") or {}).get(engine) or {}).get(st, {}).get(where) or {}
+    state = "cold" if "cold" not in rates else ("warm" if "warm" not in rates else None)
+    if state is None:
+        return False
+    gbps = round(landed_bytes / seconds / 1e9, 3)
+    tree = measured.setdefault("weight_load_gbps", {}).setdefault(engine, {}).setdefault(st, {})
+    tree.setdefault(where, {})[state] = gbps
+    measured.setdefault("weight_load_source", []).append(
+        f"{engine} {st} {where} {state}: {gbps} GB/s measured by the loader itself at a real load "
+        f"{_time.strftime('%Y-%m-%d %H:%M:%S %Z')}, {what}, {landed_bytes / 1e9:.2f} GB landed")
+    same = devices[0].get("model")
+    for d in devices:
+        if d.get("model") == same:
+            d["measured"] = dict(measured)
+    write_profile_atomically(path, data)
+    _log.debug(f"   [Auto-detect] the {engine} loader measured itself: {st} to the {where} ({state}) {gbps} GB/s, "
+               f"written into {path.name}")
+    return True

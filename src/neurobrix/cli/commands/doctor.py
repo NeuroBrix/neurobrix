@@ -9,6 +9,7 @@ import logging
 import shutil
 import subprocess
 from nbxtensor import device as _nbx_device
+from neurobrix import branch_door as _branch_door
 
 #: the diagnosis's facts (build, driver, PCI ids) under -v; the verdicts on stdout
 log = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def _torch_wheels() -> dict:
 def _torch_install_hint(cap: str | None) -> str:
     """The command that installs the torch build measured on this GPU's architecture (the wheel table); an
     architecture the table does not list is sent to PyTorch's selector, never given a build nobody ran on it."""
-    from neurobrix.pytorch.prism.autodetect import _nvidia_cc_to_arch
+    _nvidia_cc_to_arch = _branch_door.names("prism", "autodetect", "_nvidia_cc_to_arch")[0]
     table = _torch_wheels()
     index_url = table["index_url"]
     arch = _nvidia_cc_to_arch(cap) if cap else None
@@ -141,7 +142,7 @@ def check_compute_environment() -> list[str]:
     else:
         from nbxtensor.backend.install_help import report
         log.debug("  GPU drivers:    " + report().replace("\n", "\n                  "))
-    from neurobrix.pytorch.prism import intel_refusal
+    intel_refusal = _branch_door.names("prism", "", "intel_refusal")[0]
     for line in intel_refusal.doctor_lines():        # the experimental Intel backend: its label, its run-time refusals
         print(f"  {line}")
 

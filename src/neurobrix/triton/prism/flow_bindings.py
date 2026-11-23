@@ -1,0 +1,439 @@
+"""The symbol bindings a request's FLOW implies for one component — facts no symbol name carries.
+
+`ActivationProfiler.build_symbol_map` binds a graph's symbols by NAME from one request config
+(batch, height, width, time, seq_len). Four flow facts are per component, and a name cannot say them:
+
+* **CFG batch** — the CFG engine runs the flow's LOOP components on [uncond, cond] in one batch
+  (`CFGEngine._execute_batched_cfg`), and nothing else; a denoiser that takes a `guidance` input
+  embeds the scale and runs no batch-2 pass (`cfg.engine.guidance_embedding_component`). A loop
+  component the plan splits (`ExecutionPlan.cfg_split_components`) runs each branch on its own, at
+  one branch's batch (`InputConfig.guidance_passes`).
+* **A diffusion encoder's length** — the prompt is tokenized to the encoder's declared length
+  (`text.processor.diffusion_max_length`): Open-Sora's T5 runs at 512 tokens, built at 31.
+* **The denoiser's text axis** — a pre-loop encoder's hidden state is FINALIZED before the loop
+  (`text_encoder_handler.finalized_text_length`: Wan pads to 512, Sana slices to 300).
+* **A FLUX denoiser's packed inputs** — the flow packs the latent (`packed_4d_shape` /
+  `packed_5d_shape`) and synthesizes its positional ids and cond (`conditioning_shapes`); its image
+  tokens are that packing, not the build's.
+* **An image encoder's view** — the request's image reaches `global.pixel_values` as the CLIP view
+  of the build's own processor (`input_processor.prepare_image_inputs`, `image_dsp.clip_view_shape`),
+  whatever the request's height and width: Wan2.1-I2V's image encoder runs at 224x224. Its height and
+  width symbols bound by name took the request's latent grid (60x104 at 480x832).
+* **A vision-language model's vision tower** — the request's image reaches it as the build's processor
+  makes it (`input_processor.prepare_image_inputs`, the function the CLI runs): `hidden_states` the patch rows,
+  `grid_thw` the grid whose VALUES bind its grid symbols (the flow's contract, core/flow/vlm.py and
+  triton/flow/vlm.py). Unbound, every one of them took its build extent under the placement floor:
+  Ming-Lite-Omni-1.5's tower was priced at its build's 17 020 patches (4 x 17 020 x 17 020 fp32 attention, 9.9 GB
+  of activations) for a 448x448 image of about a thousand, and its Triton plan was refused on the Mac and on a
+  16 GB card (2026-10-14).
+* **A VACE control encoder's pair** — under the loop component's `vace_control_conditioning`
+  flag the run feeds the component `global.image` reaches the (inactive, reactive) clips stacked on
+  its batch (`image_dsp.VACE_CONTROL_CLIPS`, the CLI's `vace_control_pair_np`).
+
+Prism prices each component with these (the plan), and the derived census keys with the same map:
+one binding for both. Each rule CALLS the function the flow itself runs.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+
+class _Shape:
+    """A shape the runtime's binder reads (`SymbolResolver.bind_from_inputs` reads `.shape`)."""
+
+    def __init__(self, shape):
+        self.shape = tuple(int(d) for d in shape)
+
+
+class _Values(_Shape):
+    """An input whose VALUES bind symbols too (`input::<name>::val_<i>`): its shape and its data, as the
+    runtime's binder reads them (`.shape`, `.numpy()`)."""
+
+    def __init__(self, array):
+        import numpy as np
+        self._a = np.asarray(array)
+        super().__init__(self._a.shape)
+
+    def numpy(self):
+        return self._a
+
+
+def bind_from_shapes(dag: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, int]:
+    """{symbol: value} of a graph fed `inputs` {input name: shape, or an array whose values bind symbols}
+    — the runtime's own binder."""
+    from neurobrix.triton.symbols import SymbolResolver
+    res = SymbolResolver(dag.get("symbolic_context") or {})
+    feed = {f"input::{k}": (v if isinstance(v, _Shape) else
+                            _Values(v) if hasattr(v, "dtype") else _Shape(v)) for k, v in inputs.items()}
+    res.bind_from_inputs(feed, list(feed), dag.get("tensors") or {})
+    return dict(res.bindings)
+
+
+class FlowBindings:
+    """A request's flow, as far as symbol bindings go: built once per request from the container's
+    topology (`run.request_input_config`), asked per component graph by `build_symbol_map`."""
+
+    def __init__(self, topology: Dict[str, Any], cache_path, container_name: Optional[str] = None,
+                 cfg_split_components=(), image_path: Optional[str] = None):
+        self.topology = topology or {}
+        # the request's image (`--input-image`): what a vision tower is fed, through the build's processor
+        self.image_path = image_path
+        self.cache_path = Path(cache_path) if cache_path is not None else None
+        # the name the container registers its flags under: its MANIFEST model_name, never the
+        # name the request used (a path, an alias)
+        self.container_name = container_name
+        # The flags this flow reads (`vace_control_conditioning`, `zero_pad_embeddings`) are the
+        # CONTAINER's, registered in `nbx.component_flags` when a container is opened: the bindings
+        # register them from the topology they are built from, so a reader that never opens the
+        # container (the derived census) binds what the run binds — unregistered, every flag read
+        # here answered its default and the census priced VACE's control encoder at batch 1.
+        if container_name:
+            from neurobrix.nbx import component_flags
+            component_flags.register(container_name, self.topology.get("extracted_values"))
+        # The loop components whose guidance branches run one pass each (`ExecutionPlan.
+        # cfg_split_components`): their batch is ONE branch's, not the guidance batch.
+        self.cfg_split_components = frozenset(cfg_split_components or ())
+        self.flow = self.topology.get("flow") or {}
+        self._graphs: Dict[str, Dict[str, Any]] = {}
+
+    # -- the container's own graphs ------------------------------------------------------------
+    def graph(self, comp: str) -> Dict[str, Any]:
+        if comp not in self._graphs:
+            self._graphs[comp] = json.loads(
+                (self.cache_path / "components" / comp / "graph.json").read_text())
+        return self._graphs[comp]
+
+    # -- the rules ------------------------------------------------------------------------------
+    def prompt_prefill_length(self, comp: str, input_config=None) -> Optional[int]:
+        """The longest pass the flow's GENERATING language model runs: its prompt — the request's own token count when
+        the request states it (`InputConfig.seq_len`, counted by the flow's own rule, `core/runtime/prompt_length`), else
+        the prompt budget the state engine sizes its cache with (`defaults.prompt_margin`, the same figure
+        `PrismSolver._estimate_kv_cache_bytes` adds to max_tokens) — every later token is a pass of one row. A 400-token
+        prompt was priced at the margin's 128 rows (TinyLlama ~0.01 GiB, 652 MB held, 2026-11-08). None for any other
+        component. Unbound, the
+        language model's sequence axis took its BUILD extent under the placement floor, the whole cache at once:
+        Janus-Pro-7B, built at 704 positions (576 image tokens + 128), priced its text logits over 5 x 704 rows,
+        687.5 MB of a 1 375 MB activation figure, where the run held ~300 MB (the Dell's split on a V100, 2026-10-28)."""
+        gen = self.flow.get("generation") or {}
+        lm = gen.get("lm_component")
+        if not lm or self.cache_path is None:
+            return None
+        from neurobrix.triton.prism.time_estimate import resolve_flow_name
+        names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
+            if (self.cache_path / "components").exists() else []
+        if resolve_flow_name(lm, names) != comp:
+            return None
+        asked = getattr(input_config, "seq_len", None) if input_config is not None else None
+        if asked:
+            return int(asked)
+        defaults_path = self.cache_path / "runtime" / "defaults.json"
+        defaults = json.loads(defaults_path.read_text()) if defaults_path.exists() else {}
+        from neurobrix.core.state.price import DEFAULT_PROMPT_MARGIN
+        return int(defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
+
+    def head_rows(self, comp: str, input_config=None) -> Optional[int]:
+        """The rows the flow feeds its generation HEAD in one pass: 1 — both engines project the last position only
+        (`core/flow/autoregressive.py` `get_logits(hidden[:, -1:, :])`, the Triton strategies' `hidden.select(1, T - 1)`),
+        at the prompt's pass as at every token's. Bound by name, the head's sequence axis took the request's prompt
+        rows: Qwen3-Coder-30B-A3B's 151 936-wide head was priced 1.2 MB a prompt row, 1 184 MB between a 128-row and
+        a 1 024-row prefill chunk, for logits no engine computes (2026-11-10). None for any other component, and for
+        a scoring request (`InputConfig.scoring`, `--set global.score_mode=1`), whose head does run every position
+        (`get_logits_all`): its rows are the request's."""
+        head = (self.flow.get("generation") or {}).get("head_component")
+        if not head or self.cache_path is None or getattr(input_config, "scoring", False):
+            return None
+        from neurobrix.triton.prism.time_estimate import resolve_flow_name
+        names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
+            if (self.cache_path / "components").exists() else []
+        return 1 if resolve_flow_name(head, names) == comp else None
+
+    def head_runs_without_amp(self, comp: str) -> bool:
+        """True when `comp` is the TEXT generation head, which the compiled flow runs with AMP off
+        (`core/flow/autoregressive.py` `_create_strategy`: "logits are scores, not activations" — the fp32 upcast would
+        copy vocabulary x hidden). With AMP off no dtype wrapper copies an operand (`DtypeEngine.compile_op`), so the
+        head's transposed weight is read as the view it is: its bytes are no activation on the compiled engine either
+        (`profiler.weight_transposes_read_in_place`, the Triton engines' rule). Not the image-token head nor a VLM's
+        head: the flow leaves their AMP on, and their price is unchanged."""
+        gen = self.flow.get("generation") or {}
+        head = gen.get("head_component")
+        if gen.get("type") != "autoregressive_text" or not head or self.cache_path is None:
+            return False
+        from neurobrix.triton.prism.time_estimate import resolve_flow_name
+        names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
+            if (self.cache_path / "components").exists() else []
+        return resolve_flow_name(head, names) == comp
+
+    def encoder_lengths(self) -> Dict[str, int]:
+        """{pre-loop text encoder: tokenized length} of an iterative (diffusion) flow."""
+        if self.flow.get("type") != "iterative_process":
+            return {}
+        from neurobrix.core.module.text.processor import diffusion_max_length
+        out = {}
+        for enc in self.flow.get("pre_loop") or []:
+            tok = "tokenizer" + (("_" + enc.split("text_encoder_", 1)[1])
+                                 if enc.startswith("text_encoder_") else "")
+            n = diffusion_max_length(self.topology, enc,
+                                     (self.topology.get("extracted_values") or {}).get(tok) or {})
+            if n:
+                out[enc] = n
+        return out
+
+    def pixel_view(self, comp: str) -> Optional[Dict[str, tuple]]:
+        """{input name: shape} of the image view the run feeds `comp` through `global.pixel_values`:
+        the CLIP view of the build's processor, when the build embeds one and the flow declares no
+        VLM preprocessing of its own (`input_processor.prepare_image_inputs`'s own branch); None
+        otherwise."""
+        if self.flow.get("vlm") or self.cache_path is None:
+            return None
+        cfg = self.cache_path / "modules" / "image_processor" / "preprocessor_config.json"
+        if not cfg.exists():
+            return None
+        names = [c.get("to", "").partition(".")[2] for c in self.topology.get("connections") or []
+                 if c.get("from") == "global.pixel_values" and c.get("to", "").partition(".")[0] == comp]
+        if not names:
+            return None
+        from neurobrix.core.module.vision.image_dsp import clip_view_shape
+        shape = clip_view_shape(json.loads(cfg.read_text()))
+        return {n: shape for n in names}
+
+    def vision_inputs(self, comp: str) -> Optional[Dict[str, Any]]:
+        """{input name: shape or values} the VLM flow feeds its vision tower `comp` for the request's image —
+        `hidden_states` (the patch rows) and `grid_thw` (the grid, whose values bind symbols), the build's own
+        preprocessing (`input_processor.prepare_image_inputs`); None for any other component, or a request
+        with no image."""
+        v = self.flow.get("vlm") or {}
+        if comp != v.get("vision_component") or not self.image_path or self.cache_path is None:
+            return None
+        from neurobrix.core.module.vision.input_processor import prepare_image_inputs
+        import numpy as np
+        in_cfg = v.get("input") or {}
+        ins = prepare_image_inputs(self.topology, self.container_name, str(self.image_path), self.cache_path)
+        if "input::all_pixel_values" in (self.graph(comp).get("tensors") or {}):
+            # the STAGED contract (the flow's own detection, TritonVLMEngine._execute_staged_splice): the tower
+            # takes the processor's three outputs, `tgt_sizes` binding by its values (MiniCPM-o-4_5)
+            names = ("all_pixel_values", "patch_attention_mask", "tgt_sizes")
+            missing = [n for n in names if f"global.{n}" not in ins]
+            if missing:
+                raise ValueError(f"ZERO FALLBACK: the build's processor gave {sorted(ins)} for the request's "
+                                 f"image — no {missing} for the staged vision tower '{comp}'")
+            return {n: np.asarray(ins[f"global.{n}"].cpu().numpy() if hasattr(ins[f"global.{n}"], "cpu")
+                                  else ins[f"global.{n}"]) for n in names}
+        pix = ins.get(in_cfg.get("image_variable", "global.pixel_values"))
+        grid = ins.get(in_cfg.get("grid_variable", "global.image_grid_thw"))
+        if pix is None or grid is None:
+            raise ValueError(f"ZERO FALLBACK: the build's processor gave {sorted(ins)} for the request's image — "
+                             f"no patch rows or grid for the vision tower '{comp}'")
+        grid = np.asarray(grid.cpu().numpy() if hasattr(grid, "cpu") else grid)
+        return {"hidden_states": tuple(int(d) for d in pix.shape), "grid_thw": grid}
+
+    def text_axes(self, input_config) -> Dict[tuple, int]:
+        """{(loop component, input name): finalized length} — each pre-loop encoder's HIDDEN STATE
+        feeding a loop input, finalized as the handler finalizes it (a pooled vector is no
+        sequence)."""
+        from neurobrix.core.components.handlers.text_encoder_handler import finalized_text_length
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        loop = set((self.flow.get("loop") or {}).get("components") or [])
+        pre = self.flow.get("pre_loop") or []
+        enc_len = self.encoder_lengths()
+        out = {}
+        for conn in self.topology.get("connections") or []:
+            src, dst = conn.get("from", ""), conn.get("to", "")
+            enc, _, oname = src.partition(".")
+            comp, _, inp = dst.partition(".")
+            if enc not in pre or comp not in loop or "hidden_state" not in oname:
+                continue
+            n = enc_len.get(enc)
+            if n is None:
+                from neurobrix.triton.prism.profiler import ActivationProfiler
+                ge = self.graph(enc)
+                be = ActivationProfiler(ge).build_symbol_map(input_config, placement_floor=False,
+                                                             flow=False)
+                lens = [int(be[s]) for s, i in ((ge.get("symbolic_context") or {}).get("symbols")
+                                               or {}).items()
+                        if i.get("name") in ("seq_len", "sequence_length") and be.get(s) is not None]
+                if not lens:
+                    continue
+                n = max(lens)
+            cfg = dict((self.topology.get("extracted_values") or {}).get("tokenizer") or {})
+            if get_component_flag(self.container_name, enc, "zero_pad_embeddings", default=False):
+                cfg["zero_pad_embeddings"] = True
+            out[(comp, inp)] = finalized_text_length(cfg, n)
+        return out
+
+    def packed_denoiser_inputs(self, comp: str, dag: Dict[str, Any], input_config,
+                               text_axes: Dict[tuple, int]) -> Optional[Dict[str, list]]:
+        """A FLUX denoiser's inputs as the Triton flow builds them (batch 1; the CFG batch after):
+        the post-loop VAE's own input at the request, packed, with its ids, cond and text. None for
+        any other component."""
+        loop = self.flow.get("loop") or {}
+        if comp not in (loop.get("components") or []):
+            return None
+        from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler as H
+        ins = {sp.get("input_name"): sp for sp in dag["tensors"].values() if sp.get("input_name")}
+        four_d = H.declared_packing(self.topology, loop.get("components") or []) is not None
+        if "img_ids" not in ins and not four_d:
+            return None
+        vae = next(iter(self.flow.get("post_loop") or []), None)
+        if vae is None:
+            return None
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        from neurobrix.triton.symbols import SymbolResolver
+        gv = self.graph(vae)
+        bv = ActivationProfiler(gv).build_symbol_map(input_config, placement_floor=False, flow=False)
+        rv = SymbolResolver(gv.get("symbolic_context") or {})
+        for sid, v in bv.items():
+            if v is not None:
+                rv._bind(sid, int(v))
+        zin = next(sp for sp in gv["tensors"].values() if sp.get("input_name"))
+        ss = zin.get("symbolic_shape")
+        latent = ([rv.resolve(d) for d in ss["dims"]] if isinstance(ss, dict) and ss.get("dims")
+                  else list(zin["shape"]))
+        latent = [1, *latent[1:]]
+        out: Dict[str, list] = {}
+        if len(latent) == 5 and "img_ids" in ins:
+            from neurobrix.triton import flux_video_conditioning as FV
+            packed = H.packed_5d_shape(latent)
+            txt_seq = next((n for (lc, inp), n in text_axes.items() if lc == comp and inp == "txt"),
+                           None)
+            if txt_seq is None:
+                return None
+            cs = FV.conditioning_shapes(1, packed[1], packed[2], latent[1], latent[2], latent[3],
+                                        latent[4], txt_seq)
+            out = {"img": packed, "img_ids": cs["img_ids"], "txt_ids": cs["txt_ids"],
+                   "cond": cs["cond"], "txt": [1, txt_seq, ins["txt"]["shape"][-1]]}
+        elif len(latent) == 4 and four_d:
+            out[loop.get("state_input", "hidden_states")] = H.packed_4d_shape(latent)
+            for (lc, inp), n in text_axes.items():
+                if lc == comp and inp in ins:
+                    out[inp] = [1, n, ins[inp]["shape"][-1]]
+        else:
+            return None
+        for name, sp in ins.items():
+            if name not in out:
+                out[name] = [1, *sp["shape"][1:]] if sp.get("shape") else [1]
+        return out
+
+    def vace_control_batch(self, comp: str) -> Optional[int]:
+        """The batch the run feeds `comp` when it is the VACE control encoder: the component the
+        image input reaches, under a loop component carrying `vace_control_conditioning` (the flag
+        the CLI builds the pair on). None for any other component."""
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        from neurobrix.core.module.vision.image_dsp import VACE_CONTROL_CLIPS
+        loop = (self.flow.get("loop") or {}).get("components") or []
+        if not any(get_component_flag(self.container_name, c, "vace_control_conditioning", default=None)
+                   for c in loop):
+            return None
+        fed = {conn.get("to", "").partition(".")[0] for conn in self.topology.get("connections") or []
+               if conn.get("from") == "global.image"}
+        return len(VACE_CONTROL_CLIPS) if comp in fed else None
+
+    def pass_batch(self, comp: str) -> Optional[int]:
+        """The batch `comp` runs in ONE PASS when the flow feeds it a stack of independent items: the stack's size,
+        or fewer when the vendor's own reference runs them in separate passes and the container says so
+        (`vace_control_conditioning.items_per_pass`, written by the container builder from the registry with its source — diffusers'
+        WanVACEPipeline.prepare_video_latents encodes `inactive` and `reactive` as two calls of one item). None for a
+        component the flow does not feed such a stack. A declared value that is not a positive divisor of the stack is
+        refused by name: the passes would not cover the stack."""
+        fed = self.vace_control_batch(comp)
+        if fed is None:
+            return None
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        loop = (self.flow.get("loop") or {}).get("components") or []
+        decl = next((get_component_flag(self.container_name, c, "vace_control_conditioning", default=None)
+                     for c in loop if get_component_flag(self.container_name, c, "vace_control_conditioning", default=None)), None)
+        per = (decl or {}).get("items_per_pass") if isinstance(decl, dict) else None
+        if per is None:
+            return fed
+        if not isinstance(per, int) or per <= 0 or fed % per:
+            raise ValueError(f"ZERO FALLBACK: {comp}'s control pair declares items_per_pass={per!r}, which does not "
+                             f"divide the {fed} items the flow feeds it")
+        return per
+
+    def split_batches(self, components) -> Dict[str, Dict[str, int]]:
+        """{component: {"fed": the items the flow feeds it, "per_pass": the items one pass takes}} for every component
+        of `components` the vendor's reference runs in more than one pass (`pass_batch` below its fed batch): what
+        `ExecutionPlan.batch_split_components` records and the executor runs item group by item group."""
+        out: Dict[str, Dict[str, int]] = {}
+        for comp in components:
+            fed, per = self.vace_control_batch(comp), self.pass_batch(comp)
+            if fed is not None and per is not None and per < fed:
+                out[comp] = {"fed": int(fed), "per_pass": int(per)}
+        return out
+
+    def overrides(self, dag: Dict[str, Any], input_config) -> Dict[str, int]:
+        """{symbol id: value} this component's flow imposes on top of the name-driven map."""
+        comp = dag.get("component_name")
+        if not comp:
+            return {}
+        table = (dag.get("symbolic_context") or {}).get("symbols") or {}
+        out: Dict[str, int] = {}
+        vis = self.vision_inputs(comp)
+        if vis:
+            # every symbol the runtime binder binds from the tower's inputs, the patch-row axis included (the
+            # builder names `hidden_states`'s dim 0 `batch`; a vision tower runs no guidance batch to keep apart)
+            out.update(bind_from_shapes(dag, vis))
+        view = self.pixel_view(comp)
+        if view:
+            out.update({sid: v for sid, v in bind_from_shapes(dag, view).items()
+                        if (table.get(sid) or {}).get("name") != "batch"})
+        pair = self.pass_batch(comp)                 # the items ONE pass takes, the batch every figure is priced at
+        if pair:
+            for sid, info in table.items():
+                if info.get("name") == "batch":
+                    out[sid] = pair
+        prefill = self.prompt_prefill_length(comp, input_config)
+        if prefill is not None:
+            for sid, info in table.items():
+                if info.get("name") in ("seq_len", "sequence_length"):
+                    out[sid] = prefill
+        head = self.head_rows(comp, input_config)
+        if head is not None:
+            for sid, info in table.items():
+                if info.get("name") in ("seq_len", "sequence_length"):
+                    out[sid] = head
+        enc_len = self.encoder_lengths()
+        if comp in enc_len:
+            for sid, info in table.items():
+                if info.get("name") in ("seq_len", "sequence_length"):
+                    out[sid] = enc_len[comp]
+        loop = set((self.flow.get("loop") or {}).get("components") or [])
+        if comp not in loop:
+            return out
+        axes = self.text_axes(input_config)
+        packed = self.packed_denoiser_inputs(comp, dag, input_config, axes)
+        if packed is not None:
+            out.update(bind_from_shapes(dag, packed))
+        else:
+            for (lc, inp), n in axes.items():
+                if lc != comp:
+                    continue
+                for sid, info in table.items():
+                    src = info.get("source") or ""
+                    if src == f"input::{inp}::dim_1" or ("mask" in src and src.endswith("::dim_1")):
+                        out[sid] = n
+        from neurobrix.triton.cfg.engine import guidance_embedding_component
+        if guidance_embedding_component(self.topology) is None and input_config.batch_size:
+            n = int(input_config.batch_size)
+            if comp in self.cfg_split_components:
+                passes = getattr(input_config, "guidance_passes", None)
+                if not passes:
+                    raise ValueError(
+                        f"ZERO FALLBACK: {comp} is planned to run its guidance branches one pass "
+                        f"each, but the request states no guidance batch to split "
+                        f"(guidance_passes={passes!r})")
+                n //= int(passes)
+            for sid, info in table.items():
+                if info.get("name") == "batch":
+                    out[sid] = n
+        return out
+
+    def split_guidance(self, components) -> "FlowBindings":
+        """These bindings with `components` running their guidance branches one pass each — the
+        request the solver re-prices when the guidance batch does not fit (`_split_guidance_batch`).
+        The rest (graphs read, flags registered) is shared, not re-read."""
+        import copy
+        other = copy.copy(self)
+        other.cfg_split_components = frozenset(components)
+        return other

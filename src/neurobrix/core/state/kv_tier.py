@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import List, Optional, Sequence
 
 from nbxtensor.memory.kv_host_tier import HostPagePool, PrefixIndex, host_tier_pages, sequence_pages
+from neurobrix import branch_door as _branch_door
 
 
 class KVTier:
@@ -184,7 +185,7 @@ def kv_tier_for(plan, profile) -> "tuple[Optional[KVTier], str]":
     `serving.kv_host_tier_mb` (system.yml) caps it when set (absent or null: the computed budget; 0: off). Page-locked
     host pages on a discrete card, pageable on unified memory. None (said) for a plan without a KV cache."""
     import yaml
-    from neurobrix.pytorch.prism.solver import PrismSolver
+    PrismSolver = _branch_door.names("prism", "solver", "PrismSolver")[0]
     from neurobrix.core.workspace import SYSTEM_YML
     if getattr(plan, "kv_cache_plan", None) is None:
         return None, "KV host tier: none (the plan holds no KV cache)"

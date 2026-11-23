@@ -18,6 +18,7 @@ from typing import Optional
 
 import yaml
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 SYSTEM_YML = Path(__file__).resolve().parent.parent / "config" / "system.yml"
@@ -84,7 +85,7 @@ def weight_reader(source=None):
     ceiling = load_ceiling()
     if _READER is None or _READER[0] != os.getpid() or _READER[2].ceiling != ceiling:
         from nbxtensor.io.reader import Reader
-        from neurobrix.pytorch.prism import autodetect as _ad, kept_launch_facts as _kept
+        _ad, _kept = _branch_door.names("prism", "", "autodetect", "kept_launch_facts")
         if _READER is not None and _READER[:2] == (os.getpid(), threading.get_ident()):
             # the reader a new ceiling replaces ends its threads when this thread made it: a load of another thread
             # (a daemon holding two models) may still read through it, and its pool is not shut under it; a forked

@@ -1,0 +1,10515 @@
+"""
+NeuroBrix Prism - Hardware Allocation Solver
+
+Algorithm: Best-Fit-Decreasing with Activation-Aware Memory Estimation
+- Sort components by total memory DESCENDING (largest first)
+- Sort GPUs by capacity DESCENDING (32GB before 16GB)
+- Best-Fit placement: each component goes to smallest GPU that fits
+- NVLink/PCIe topology awareness for optimal spillover
+- Per-GPU contextual dtype conversion costing
+"""
+
+import copy
+import dataclasses
+import json
+import logging
+import math
+import os
+import re
+from typing import TYPE_CHECKING
+
+from datetime import datetime
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
+
+from neurobrix.triton.prism.host_footprint import engine_of, streamed_loads
+from neurobrix.triton.prism import owed_facts as OF
+from neurobrix.triton.prism import load_ceiling
+from neurobrix.triton.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
+from neurobrix.triton.prism.structure import names_accelerator
+from nbxtensor.backend.host_memory import MemoryState, memory_state
+from neurobrix.triton.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
+                                                rung_down_mb, describe as _describe_budget, read_device_sharing,
+                                                host_budget_mb as _host_budget_mb_read)
+from neurobrix.triton.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.core.runtime_values import MissingRuntimeValue
+_log = logging.getLogger(__name__)
+
+
+class PlanNotComputable(RuntimeError):
+    """A plan that cannot be computed refuses by name.
+
+    Prism's numbers are consulted by the per-cell memory gate as if
+    they had been measured. A coefficient standing in for a failed
+    measurement (`weight_bytes * 0.5`), an empty string standing in for
+    an unreadable topology, or `None` standing in for an unreadable
+    graph all produce a plan that LOOKS computed. See
+    `core.runtime_values` for the same rule on request values.
+    """
+
+
+from neurobrix.triton.prism.memory_estimator import compute_dtype_factor
+from neurobrix.core.config import get_prism_defaults
+from nbxtensor.dtype import itemsize as _itemsize
+from neurobrix.core.config.system import PRISM_DEFAULTS
+from nbxtensor.ops import tiling_sizes as _ts
+from nbxtensor import memory as _nbx_memory
+
+if TYPE_CHECKING:
+    from nbx import NBXContainer, ComponentData
+
+
+# =============================================================================
+# DATACLASSES
+# =============================================================================
+
+def _consumed_weights(comp):
+    """[(name, stored bytes, shape, stored dtype)] of the weights the engines load for this component, or None.
+
+    Two sources, both already in hand at plan time: the graph names which
+    parameters ops consume, and `weights_index.json` gives each one's size.
+    Neither is re-read from disk here -- the container carries them.
+
+    None means the question could not be answered from what is present, and
+    the caller then sizes by the file, which over-estimates. Under-estimating
+    would plan a model into a budget it does not fit, so the asymmetry is
+    deliberate.
+    """
+    graph = getattr(comp, "graph", None)
+    index = getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None)
+    if not isinstance(graph, dict):
+        return None
+    tensors = graph.get("tensors")
+    ops = graph.get("ops")
+    order = graph.get("execution_order")
+    if not isinstance(tensors, dict) or not isinstance(ops, dict) or not order:
+        return None
+
+    entries = []
+    seen = set()
+    sizes = None
+    if isinstance(index, dict):
+        sizes = index.get("tensors") if isinstance(index.get("tensors"), dict) else None
+
+    for op_uid in order:
+        op = ops.get(op_uid) or {}
+        for tid in (op.get("input_tensor_ids") or []):
+            t = tensors.get(tid)
+            if t is None or not t.get("is_parameter"):
+                continue
+            name = t.get("weight_name") or tid
+            if name in seen:
+                continue
+            seen.add(name)
+            if sizes is not None and name in sizes:
+                meta = sizes[name]
+                entries.append((name, int(meta.get("size_bytes", 0)), meta.get("shape"), meta.get("dtype")))
+            else:
+                # No index entry: compute from the graph's own shape/dtype.
+                n = 1
+                shape = t.get("shape") or []
+                for d in shape:
+                    if not isinstance(d, int) or d < 0:
+                        return None          # symbolic: cannot size honestly
+                    n *= d
+                entries.append((name, n * _itemsize.itemsize(t.get("dtype")),   # an unknown dtype is refused by name
+                                shape, t.get("dtype")))
+    if not seen:
+        return None
+    # What the engines LOAD is the consumed set plus every non-block weight
+    # (the token embedding, the head, the norms a flow reads by name outside
+    # the graph — GraphExecutor.consumed_in_loader_space). Budget the same
+    # set, or the plan under-estimates in the direction the docstring calls
+    # unsafe (review of 2026-09-13).
+    if sizes is not None:
+        from neurobrix.triton.weight_loader import _BLOCK_RE   # torch-free
+        for name, meta in sizes.items():
+            if name in seen or _BLOCK_RE.search(name):
+                continue
+            seen.add(name)
+            meta = meta or {}
+            entries.append((name, int(meta.get("size_bytes", 0)), meta.get("shape"), meta.get("dtype")))
+    return entries
+
+
+def _consumed_weight_bytes(comp, dtype_mult: float):
+    """Bytes of the weights this component's graph actually reads (`_consumed_weights`) at `dtype_mult` of their
+    stored bytes, or None."""
+    entries = _consumed_weights(comp)
+    if entries is None:
+        return None
+    return int(sum(e[1] for e in entries) * dtype_mult)
+
+
+def _held_weight_sizes(comp, compute_dtype, exclude=frozenset()) -> Optional[List[int]]:
+    """The bytes of each weight the Triton loader places on a device for this component (`_consumed_weights`), at the
+    dtype it holds it in under `compute_dtype` (`expert_files.held_dtype(..., "triton")`, its loader's one rule), or
+    None where `_consumed_weights` cannot say. `exclude`: weights that are not placed there (an expert store's routed
+    experts). The arena they take is the library's layout of these sizes (`nbxtensor.memory.layout.arena_layout`,
+    what `ComponentArena(total)` asks the device for). Triton engines only: it reads the Triton loader's rule."""
+    entries = _consumed_weights(comp)
+    if entries is None:
+        return None
+    from neurobrix.core.runtime.expert_files import held_dtype
+    from nbxtensor.memory.layout import tensor_nbytes
+    sizes = []
+    for name, _stored, shape, dtype in entries:
+        if name in exclude:
+            continue
+        if shape is None or dtype is None:
+            raise RuntimeError(f"ZERO FALLBACK: weight {name!r} states no shape or dtype; the bytes it is held in "
+                               f"cannot be read")
+        sizes.append(tensor_nbytes(shape, held_dtype(dtype, compute_dtype, "triton")))
+    return sizes
+
+
+def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None) -> int:
+    """The plan's device bytes that are host bytes: all of them when the profile declares its device
+    unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
+    ledger reserves what a unified run really takes (the Mac, 2026-10-03).
+
+    What a plan holds AT ONCE, not every component it ever loads: a streamed plan the larger of its
+    window and the dearest phase its whole components hold (`peak_loaded_bytes`); a plan
+    that loads on demand (`loading_mode == "lazy"`) the dearest of its flow's phases, which the solver
+    passes as `peak_loaded_bytes` (`PrismSolver._peak_loaded_bytes`); an eager plan, or a caller with
+    no phases to give, the plan's total. Janus-Pro-7B on the Mac's idle reading planned
+    lazy_sequential whole at the 16 384 rung and was then sent down to a streamed 12 288 because its
+    host side summed the decoder the triton flow loads only after the language model is released."""
+    if any(d.has_unified_memory for d in profile.devices):
+        window = getattr(plan, "device_window_mb", None)
+        if window is not None:
+            return max(int(window * 2**20), int(peak_loaded_bytes or 0))
+        if peak_loaded_bytes is not None and plan.loading_mode == "lazy":
+            return int(peak_loaded_bytes)
+        return int(plan.total_memory_mb * 2**20)
+    return 0
+
+
+def _vendor_arch(spec) -> tuple:
+    """(vendor, architecture) naming a device's file."""
+    brand = getattr(spec, "brand", None)
+    return getattr(brand, "value", brand), spec.architecture
+
+
+def _device_is_unified(device_string: str, profile) -> bool:
+    """Does this allocation target share ONE memory pool with the host?
+
+    Decides whether a `zero3:` offload frees device memory. On a discrete
+    card host RAM and device memory are disjoint and zero3's premise holds:
+    the weights leave the device. On a unified device they are the same
+    bytes, "offload" moves nothing, and counting only activations tells the
+    solver a plan fits when it does not.
+
+    Measured 2026-09-09, DeepSeek-Coder-V2-Lite-Instruct on a 24576 MB
+    unified device: Prism scored `lazy_sequential` "the only viable
+    strategy" with its `model` component on zero3 at 31259.5 MB — 27% over
+    the budget it had just read. The run then planned 32104 MB; the eager
+    arm was SIGKILLed by the OS and the Triton arm's allocator refused at
+    the budget, reporting a 5.5 MB pinned allocation failure that was really
+    a full working set.
+
+    Vendor-agnostic by construction: it asks the DEVICE whether its memory
+    is unified, so an APU on `hip:0` and an integrated `xpu:0` are answered
+    by the same code with no line added.
+    """
+    if not isinstance(device_string, str) or profile is None:
+        return False
+    # "zero3:mps:0" -> "mps:0" -> index 0
+    tail = device_string.split(":", 1)[1] if device_string.startswith("zero3:") else device_string
+    try:
+        index = int(tail.rsplit(":", 1)[1])
+    except (IndexError, ValueError):
+        return False
+    for dev in getattr(profile, "devices", None) or []:
+        if dev.index == index:
+            return dev.has_unified_memory
+    return False
+
+
+@dataclass
+
+class ComponentAllocation:
+    """Allocation plan for a single component."""
+    name: str
+    devices: List[str]
+    dtype: str
+    memory_mb: float
+    architecture: str
+    vendor: str
+    sharded: bool = False
+    shard_map: Dict[str, str] = field(default_factory=dict)
+    strategy: str = "single_gpu"
+    # zero3 only: the MB of this component's weights its card keeps resident across passes, the room
+    # the plan leaves beside everything it holds with the component (`_zero3_resident_budgets`). The
+    # ratchet streams only the blocks beyond it. 0 streams every block on every pass.
+    resident_weight_mb: float = 0.0
+    # Triton engine only: the bytes of dead tensors the hot loop may queue before it drains, on
+    # this component's device (`PrismSolver._assign_drain_cliffs`, `memory_budget.
+    # planned_drain_cliff_bytes`): the profile's cliff, or less where the plan holds a component
+    # whole with less room beside it. None — a compiled plan, a host device — drains at the profile's.
+    deferred_drain_cliff_bytes: Optional[int] = None
+    # Compiled engine only, on a device whose compiled attention writes its full scores (the vendor's
+    # `memory.compiled_sdpa_full_scores`): the bytes of scores one chunk of an attention may write
+    # (`PrismSolver._attention_budget`), the figure Prism priced each attention at. None: the device writes none.
+    attention_scores_budget_bytes: Optional[int] = None
+    # expert_store only (a routed zero3 component, `_zero3_resident_budgets`): the MB of device
+    # slots holding recently routed experts beside the resident dense part (`resident_weight_mb`).
+    expert_cache_mb: float = 0.0
+    # expert_store on a UNIFIED device (`_place_component` Strategy 2.5): the routed experts are
+    # never loaded — the runtime maps them from the container's files and copies a missed expert into
+    # a cache slot (core/runtime/expert_files.py). On a discrete card they sit in pinned host memory.
+    expert_files: bool = False
+    # expert_store on a multi-card profile (`_spread_experts`, S3): {card: {"blocks": [first, last], "cache_mb": MB,
+    # "experts": n}} — the routed experts of those blocks held WHOLE in that card's cache, the block's fused MoE op run
+    # there (the hidden state crosses to it and back); the home device (`device`) keeps the dense part and serves the
+    # other blocks' experts through `expert_cache_mb`. Empty: one card serves every block, as before.
+    expert_cards: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def device(self) -> str:
+        return self.devices[0] if self.devices else "cpu"
+
+    @property
+    def is_cpu(self) -> bool:
+        return self.devices == ["cpu"]
+
+
+@dataclass
+class ComponentMemory:
+    """Memory requirement: Total = Weights + Activations + Overhead"""
+    component_name: str
+    weight_bytes: int
+    activation_bytes: int
+    overhead_bytes: int
+    peak_op_uid: str = ""
+    peak_step: int = 0
+    activation_profiled: bool = False
+    attention_per_block_bytes: int = 0
+    attention_dominates: bool = False
+    #: the ONE arena the Triton loader allocates for the component held whole (the library's layout of
+    #: `_held_weight_sizes`), and the
+    #: dense part's when it is served as an expert store; None under the compiled engine (no arena) or where the
+    #: graph cannot say
+    arena_bytes: Optional[int] = None
+    dense_arena_bytes: Optional[int] = None
+    #: what the Triton allocator holds at its peak while the component runs whole: the walk's allocations, its frees
+    #: through the hot loop's deferred queue, replayed through the allocator's pool (`nbxtensor.memory.pool.simulate`);
+    #: None under the compiled engine and with no graph. Stated beside the run's measured figure (M3 exit).
+    held_peak_bytes: Optional[int] = None
+    #: what the Triton pool alone holds over the walked live set, as a ratio (the walk replayed with every dead tensor
+    #: freed at once); stated, read by no decision yet; None where nothing was replayed
+    pool_ratio: Optional[float] = None
+    # The KV cache inside `activation_bytes` (the language model's): one allocation the state engine makes once,
+    # never the arena's per-op activations — `_live_activation_mb` keeps it out of the arena factor.
+    kv_bytes: int = 0
+
+    @property
+    def total_bytes(self) -> int:
+        return self.weight_bytes + self.activation_bytes + self.overhead_bytes
+
+    @property
+    def total_mb(self) -> float:
+        return self.total_bytes / (1024 * 1024)
+
+    @property
+    def weight_mb(self) -> float:
+        return self.weight_bytes / (1024 * 1024)
+
+    @property
+    def activation_mb(self) -> float:
+        return self.activation_bytes / (1024 * 1024)
+
+    @property
+    def overhead_mb(self) -> float:
+        return self.overhead_bytes / (1024 * 1024)
+
+
+@dataclass
+class KVCachePlan:
+    """KV cache allocation computed by Prism. Runtime MUST use these values."""
+    max_cache_len: int          # Max tokens cacheable — ceiling (Prism VRAM budget)
+    num_layers: int
+    num_kv_heads: int
+    k_head_dim: int             # K head dimension (qk_nope + qk_rope for MLA, else head_dim)
+    v_head_dim: int             # V head dimension (v_head_dim for MLA, else head_dim)
+    dtype: str                   # Cache dtype string (may differ from weight dtype)
+    memory_bytes: int           # Total KV cache memory budget (at max_cache_len)
+    per_token_bytes: int        # Memory per cached token (for runtime info)
+    initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max_cache_len)
+    # The positions a SERVING session would hold on this plan's device: the remaining room this cache was sized from, in
+    # the declared window (`kv_cache_size(serve=True)`) — the longest context a user's request can reach on this memory
+    # class, which the derived census keys a decoder's prompt lengths up to. None: the decoder's state declares no window
+    # (no session is planned for it) or its floor does not fit the room.
+    session_reach: Optional[int] = None
+    # The rows of one prefill chunk (docs/design/prism_kv.md §5bis): a request's prefill split into chunks of exactly
+    # this many rows, a multiple of the cache page, the last chunk completed with masked rows the next chunk or the
+    # decode overwrites — so every chunk meets the same kernel keys and a turn served from a session's cache gives the
+    # bytes of the same turns prefilled together. Chosen by Prism from the certified times of each candidate's census
+    # keys (triton/prism/prefill_chunk.py), never a constant; None: one chunk of the turn's own rows, the reason stated.
+    # A serving session's turns read it; a one-shot request prefills in one pass.
+    prefill_chunk: Optional[int] = None
+    # Why prefill_chunk is what it is (triton/prism/prefill_chunk.py): the candidates' certified costs, or why none was
+    # eligible — stated, never silent.
+    prefill_chunk_reason: str = ""
+
+    @property
+    def head_dim(self) -> int:
+        """Backward compat for code that reads .head_dim"""
+        return self.k_head_dim
+
+    @property
+    def memory_mb(self) -> float:
+        return self.memory_bytes / (1024 * 1024)
+
+
+class ProfileFactMissing(RuntimeError):
+    """A fact the plan needs that the hardware profile does not declare (rule 1): refused by name, never read as 0 and
+    never taken for a reading that failed."""
+
+
+@dataclass
+class DeviceState:
+    """
+    GPU Resource Entity with Contextual Sizing.
+
+    The cost of storing a block depends on THIS GPU's capabilities:
+    - On A100 (supports BF16): Block costs X MB
+    - On V100 (no BF16): Block costs 2X MB (must convert to FP32)
+    - On H100 (supports FP8): Block could cost 0.5X MB
+    """
+    device_string: str
+    capacity_mb: float                 # the law's budget for this device (`_prepare_devices`): what a plan may hold
+    used_mb: float = 0.0
+    #: What the MACHINE holds on this card outside this plan — the driver's
+    #: free reading subtracted from the capacity at `_prepare_devices`. Kept
+    #: apart from `used_mb`, which is the plan's own accounting and is reset
+    #: by every fresh copy a strategy tests against; the machine's figure is
+    #: not the plan's to reset.
+    external_used_mb: float = 0.0      # 0 since 2026-10-25: what others hold is the execution door's business
+    components: List[str] = field(default_factory=list)
+    spec: Optional[DeviceSpec] = None
+    #: What the DEVICE recommends, before the machine's real availability is
+    #: taken into account. Kept beside `capacity_mb` rather than replacing it,
+    #: because a refusal that names only one of the two teaches nothing.
+    recommended_mb: float = 0.0
+    #: The moment's free reading of this pool when a live one was taken (None under the census shadow or
+    #: when the device could not be read): the EXECUTION DOOR (`memory_budget.execution_door`), never the budget.
+    live_free_mb: Optional[float] = None
+    #: The law's answer for this pool (triton/prism/memory_budget.py), computed once at
+    #: `_prepare_devices` from the reading: what a plan is budgeted against, and the rung a
+    #: tiled component sizes its tile from. 0 = no reading was taken (a cell's hand-built
+    #: state): the door then derives both from the state itself.
+    budget_mb: float = 0.0
+    tile_rung_mb: int = 0
+    budget_note: str = ""
+    #: The machine as it was when this plan was made. None where the plan was
+    #: built without reading it (a discrete card, or an unreadable platform).
+    host_memory: Optional["MemoryState"] = None
+
+    @property
+    def free_mb(self) -> float:
+        return self.capacity_mb - self.used_mb - self.external_used_mb
+
+
+    @property
+    def supports_dtypes(self) -> List[str]:
+        return self.spec.supports_dtypes if self.spec else ["float32", "float16"]
+
+    def get_cost_multiplier(self, model_dtype: str) -> float:
+        """Contextual cost: BF16→FP32 = 2x on V100, native = 1x"""
+        supported = self.supports_dtypes
+        if model_dtype == "bfloat16" and "bfloat16" not in supported:
+            if "float16" in supported:
+                return 1.0  # bf16 → fp16 (Prism validates safety)
+            return 2.0  # bf16 → fp32
+        if model_dtype == "float16" and "float16" not in supported:
+            return 2.0
+        # Future: FP8 could return 0.5
+        return 1.0
+
+    def get_real_block_size(self, base_size_mb: float, model_dtype: str) -> float:
+        return base_size_mb * self.get_cost_multiplier(model_dtype)
+
+    def can_fit(self, memory_mb: float) -> bool:
+        return memory_mb <= self.free_mb
+
+
+    def allocate(self, component_name: str, memory_mb: float) -> None:
+        if not self.can_fit(memory_mb):
+            raise RuntimeError(f"ZERO FALLBACK: Cannot allocate {memory_mb:.0f}MB to {self.device_string}")
+        self.used_mb += memory_mb
+        self.components.append(component_name)
+
+
+@dataclass
+class ExecutionPlan:
+    """Complete execution plan with component allocations."""
+    components: Dict[str, ComponentAllocation]
+    target_dtype: str
+    total_memory_mb: float
+    strategy: str
+    component_memory: Dict[str, ComponentMemory]
+    loading_mode: str = "lazy"
+    # Why THIS strategy was chosen over the others that also fitted. An engine
+    # that decides without saying so is indistinguishable from one that
+    # decides badly, so the reason travels with the plan and is printed.
+    selection_reason: str = ""
+    # Every strategy that fitted, best first, as (name, score) — and the ones
+    # the KV-cache check then refused, as (name, score, why). `--explain-plan`
+    # prints them; a plan that names only its winner cannot be audited.
+    candidates: List[Tuple[str, float]] = field(default_factory=list)
+    rejected: List[Tuple[str, float, str]] = field(default_factory=list)
+    # Point B (docs/design/prism-time-score.md): the chosen plan's estimated seconds for the request and every ranked
+    # candidate's ({strategy: seconds, or why it was not estimated}); empty when the profile carries no measured facts.
+    estimated_s: Optional[float] = None
+    time_estimates: Dict[str, Any] = field(default_factory=dict)
+    kv_cache_plan: Optional[KVCachePlan] = None
+    # The state engine's policy for the decode cache (core/state/policy.py, step 5): its name and why, recorded with
+    # the plan and printed in the selection reason; None when the flow decodes nothing.
+    state_policy: Optional[str] = None
+    state_policy_reason: str = ""
+    cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
+    # Components the lifecycle strategy classified as TRANSIENT (used once per
+    # request) rather than persistent (re-entered every step). Empty for every
+    # other strategy. `single_gpu_lifecycle` is accepted on a budget of
+    # `persistent weights + one transient at a time`, and that budget is only
+    # true if the executor actually releases a transient after it has run --
+    # so the classification has to travel with the plan instead of dying in
+    # the solver, which is where it used to stop.
+    transient_components: List[str] = field(default_factory=list)
+    # component -> [[first_op_uid, last_op_uid], ...], the segments the
+    # LAYER-STREAMING rung was budgeted against. Carried rather than
+    # recomputed: the executor's dag may have been transformed since Prism
+    # read it (MoE fusion rewrites which tensors an op reads), and a segment
+    # boundary recomputed on a different graph is not the boundary the budget
+    # was accepted under.
+    layer_stream_plan: Dict[str, List[List[str]]] = field(default_factory=dict)
+    # Triton engine: the deferred-drain cliff each accelerator drains at, in bytes
+    # (`PrismSolver._assign_drain_cliffs`); also carried on each component's allocation.
+    deferred_drain_cliffs: Dict[str, int] = field(default_factory=dict)
+    # component -> `graph_fingerprint` of the graph those segments were cut on. The strategy
+    # refuses to cut a graph with another fingerprint (register 106).
+    layer_stream_graph: Dict[str, str] = field(default_factory=dict)
+    # component -> norm_topk_prob for a streamed component whose MoE the plan declared (cut
+    # fused). The strategy cuts with the SAME declaration: the vlm flows declare only after the
+    # pieces are built, so the base graph at the cut is not yet fused.
+    layer_stream_moe: Dict[str, bool] = field(default_factory=dict)
+    # component -> the stretches of it run in slices of a token axis, each one of its segments
+    # (`LayerPartitioner._chunk_regions`, triton/prism/chunked_region.py): [{"first_op", "last_op",
+    # "symbol", "slice", "count", "passes", "peak_bytes"}, ...]. The streaming strategy runs each
+    # such segment slice by slice at the planned `slice`; empty for every other plan.
+    layer_stream_chunks: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    # The streamed components whose values between pieces wait on the host (`Partition.swapped`):
+    # the strategy parks every value the next piece does not read (`LayerStreamingStrategy._run_pieces`).
+    layer_stream_swapped: List[str] = field(default_factory=list)
+    # component -> the indices of its pieces held loaded between the component's runs (`Partition.resident`,
+    # `LayerPartitioner.hybrid`): a re-entered component streams only the pieces the rung cannot hold beside the window.
+    layer_stream_resident: Dict[str, List[int]] = field(default_factory=dict)
+    # Op-level tiling — per-component plan emitted when a single op's
+    # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
+    # up by RuntimeExecutor to wire op_uid interceptors on the component's
+    # GraphExecutor. Empty dict when no op-level tiling is required.
+    runtime_op_tiling: Dict = field(default_factory=dict)
+    #: Why the op-level tiling RUNG declined, in words, or None when it did not
+    #: decline. It rides on the plan because `explain_plan` never sees the
+    #: solver — the solver's own `_op_tiling_declined` was assigned in three
+    #: places and read in none, so the reason existed only for someone who
+    #: wrapped the method from outside to look at it.
+    op_tiling_declined: Optional[str] = None
+    #: The band kept back from every card's capacity, and WHY it is that size.
+    #: A budget whose variance exceeds its own shortfall cannot decide anything,
+    #: so the plan states its margin rather than leaving a reader to discover it.
+    margin_mb: Optional[int] = None
+    margin_reason: Optional[str] = None
+    #: the execution door's verdict for the moment the plan was taken (`memory_budget.execution_door`): the pool holds
+    #: less than the plan places on it. A dry run (--explain-plan, the census) prints it beside the plan; the run raises it
+    #: before loading anything. None when the door is open or no live reading was taken.
+    execution_door: Optional[str] = None
+    #: The GPUs the machine has and no backend drives (the profile's `refused_devices`), each named with its reason:
+    #: the plan was made without them, and says so.
+    refused_devices: List[Dict[str, Any]] = field(default_factory=list)
+    #: when the machine was busy at planning time and the plan was RE-SOLVED on the memory free now (`solve_smart`):
+    #: {"from": the plan the facts gave, "free_now_mb", "held_by_others_mb"}; None when the facts' plan ran
+    busy_replan: Optional[Dict[str, Any]] = None
+    #: A streamed plan's device bytes at its worst moment — what stays resident beside the segments
+    #: (whole components, graph constants, flow-read weights, the KV reserve) plus the largest
+    #: segment's weights and the activations alive while it runs. None for a plan that holds its
+    #: components as `total_memory_mb` says. `total_memory_mb` of a streamed plan is the components'
+    #: sum at full residency (granite-speech 18 085 MB where the window is a fraction of it, the Mac
+    #: 2026-10-03), which no reservation should take for what the run holds.
+    device_window_mb: Optional[float] = None
+    # Component-level spatial tiling — per-component plan emitted when a
+    # spatial component (4D/5D input + scale config) would NOT fit a GPU
+    # untiled (so it would otherwise be offloaded to host RAM) but DOES fit
+    # when its decode is run on overlapping spatial tiles. Picked up by
+    # RuntimeExecutor to instantiate a TilingEngine with the Prism-chosen
+    # tile_size, keeping the component on GPU. Empty dict when no
+    # component-level tiling is required (e.g. the video VAE at high
+    # resolution; reuses the R31 TilingEngine brick). Each entry:
+    # {"tile_size", "scale_factor", "overlap", "window_alignment"}.
+    component_tiling: Dict = field(default_factory=dict)
+    #: Whether a spatial tile of a component is that component (`PrismSolver._tile_only_if_exact`): per component
+    #: considered for tiling, {"exact": bool, "why": text, "op": the op that couples space or None}. A component
+    #: whose entry is not exact is never tiled (owner, 2026-10-16: Prism chooses only exact cuts, read from the graph).
+    tiling_exactness: Dict = field(default_factory=dict)
+    #: The components run in TEMPORAL CHUNKS through the stream the container builder derived from their graph
+    #: (`triton/prism/temporal_stream.py`): {component: {"schedule": [first, next...] input frames, "frames": the
+    #: request's, "reference": "clip" (chunked = the clip graph, no op global over time) | "vendor" (the vendor's own
+    #: chunked function, declared with its source), "activation_bytes", "states"}}. The runtime runs the first chunk
+    #: graph, then the next one carrying the states (`core/module/temporal_stream_runner.py`), both engines.
+    component_stream: Dict = field(default_factory=dict)
+    #: Why a component with a stream was not streamed ({component: reason}).
+    stream_declined: Dict = field(default_factory=dict)
+    #: The loop components whose classifier-free guidance runs its branches ONE PASS EACH instead of
+    #: one batch holding both (`_split_guidance_batch`). Set only when no plan holds the request on
+    #: the accelerator at the guidance batch and one does at the batch of a single branch: the
+    #: batch axis is the cut that is exact — every op of a denoiser is per-sample — and the two CFG
+    #: engines (core/cfg, triton/cfg) read it from here and run the same prepared batch branch by
+    #: branch. Empty for every other plan.
+    cfg_split_components: List[str] = field(default_factory=list)
+    #: {component: {"fed": n, "per_pass": k}} — a component the flow feeds a stack of n independent items that its
+    #: vendor's reference runs k items at a time (`FlowBindings.split_batches`, from the container's declaration with
+    #: its source). Every figure of the plan is priced at k; the executor runs the n items in n/k passes and joins the
+    #: outputs on the batch axis (`Executor._execute_component`). Exact: the items share nothing. Empty otherwise.
+    batch_split_components: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    # What this plan holds in HOST memory on its engine (host_footprint.py): a host ledger reserves
+    # it, a measured peak judges it.
+    host_footprint: Dict = field(default_factory=dict)
+    # The reads in flight a weight load may grow to under this plan (the weight reader's ceiling, core.workspace): the
+    # count `host_footprint` priced, the most that fits the host (`load_ceiling.ceiling`); 0 before Step 7.9.
+    load_ceiling: int = 0
+    # On a device that draws on host memory: [(rung MB, strategy, host side MB)] per rung solve() tried.
+    unified_rungs_tried: List = field(default_factory=list)
+    # A routed (MoE) plan's working set — dense part + the experts a token reads + an expert cache on
+    # the profile's standard rung (expert_topology.py). Stated, never read to place; None when no
+    # component routes.
+    expert_working_set: Optional[Dict] = None
+
+    @property
+    def primary_device(self) -> str:
+        return next(iter(self.components.values())).device if self.components else "cpu"
+
+    @property
+    def dtype(self) -> str:
+        return self.target_dtype
+
+    def get_allocation(self, component_name: str) -> Optional[ComponentAllocation]:
+        return self.components.get(component_name)
+
+    def get_device(self, component_name: str) -> str:
+        alloc = self.components.get(component_name)
+        return alloc.device if alloc else "cpu"
+
+
+    def to_dict(self, hardware_profile: str = "unknown") -> Dict[str, Any]:
+        return {
+            "version": "0.1.0",
+            "created_at": datetime.now().isoformat(),
+            "hardware_profile": hardware_profile,
+            "strategy": self.strategy,
+            "loading_mode": self.loading_mode,
+            "target_dtype": self.target_dtype,
+            "total_memory_mb": self.total_memory_mb,
+            "components": {
+                name: {
+                    "devices": alloc.devices,
+                    "primary_device": alloc.device,
+                    "dtype": alloc.dtype,
+                    "memory_mb": alloc.memory_mb,
+                    "architecture": alloc.architecture,
+                    "vendor": alloc.vendor,
+                    "sharded": alloc.sharded,
+                    "shard_map": alloc.shard_map,
+                    "resident_weight_mb": alloc.resident_weight_mb,
+                    "deferred_drain_cliff_bytes": alloc.deferred_drain_cliff_bytes,
+                    "attention_scores_budget_bytes": alloc.attention_scores_budget_bytes,
+                    "strategy": alloc.strategy,
+                    "expert_cache_mb": alloc.expert_cache_mb,
+                    "expert_cards": {k: dict(v) for k, v in (alloc.expert_cards or {}).items()},
+                }
+                for name, alloc in self.components.items()
+            },
+            "memory_breakdown": {
+                name: {
+                    "weight_mb": mem.weight_mb,
+                    "activation_mb": mem.activation_mb,
+                    "overhead_mb": mem.overhead_mb,
+                    "total_mb": mem.total_mb,
+                    "peak_op": mem.peak_op_uid,
+                    "activation_profiled": mem.activation_profiled,
+                    "arena_bytes": mem.arena_bytes,
+                    "dense_arena_bytes": mem.dense_arena_bytes,
+                    "held_peak_bytes": mem.held_peak_bytes,
+                    "pool_ratio": mem.pool_ratio,
+                }
+                for name, mem in self.component_memory.items()
+            },
+            "kv_cache_plan": {
+                "max_cache_len": self.kv_cache_plan.max_cache_len,
+                "num_layers": self.kv_cache_plan.num_layers,
+                "num_kv_heads": self.kv_cache_plan.num_kv_heads,
+                "k_head_dim": self.kv_cache_plan.k_head_dim,
+                "v_head_dim": self.kv_cache_plan.v_head_dim,
+                "dtype": self.kv_cache_plan.dtype,
+                "memory_mb": self.kv_cache_plan.memory_mb,
+                "per_token_bytes": self.kv_cache_plan.per_token_bytes,
+                # exact, never through the float MB above (a restored plan lost them: the defect A's step 0 names)
+                "memory_bytes": int(self.kv_cache_plan.memory_bytes),
+                "initial_cache_len": int(self.kv_cache_plan.initial_cache_len),
+                "session_reach": self.kv_cache_plan.session_reach,
+                "prefill_chunk": self.kv_cache_plan.prefill_chunk,
+                "prefill_chunk_reason": self.kv_cache_plan.prefill_chunk_reason,
+            } if self.kv_cache_plan else None,
+        }
+
+    def save(self, output_path: Path, hardware_profile: str = "unknown") -> None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(self.to_dict(hardware_profile), f, indent=2)
+
+    @classmethod
+    def load(cls, plan_path: Path) -> "ExecutionPlan":
+        with open(plan_path, 'r') as f:
+            data = json.load(f)
+
+        components = {
+            name: ComponentAllocation(
+                name=name,
+                devices=comp["devices"],
+                # required, like `devices` and `memory_mb` beside it: a plan
+                # serialised without a dtype is a defect, not a float32 request
+                dtype=comp["dtype"],
+                memory_mb=comp["memory_mb"],
+                architecture=comp.get("architecture", ""),
+                vendor=comp.get("vendor", ""),
+                sharded=comp["sharded"],
+                shard_map=comp.get("shard_map", {}),
+                # a plan saved before the field streamed every zero3 block: 0 is that plan's meaning
+                resident_weight_mb=float(comp.get("resident_weight_mb", 0.0)),
+                # a plan saved before the field drained at the profile's cliff: None is that meaning
+                deferred_drain_cliff_bytes=comp.get("deferred_drain_cliff_bytes"),
+                # a plan saved before the field states no budget: the engine refuses it on a device that writes scores
+                attention_scores_budget_bytes=comp.get("attention_scores_budget_bytes"),
+                # a plan saved before these fields carried no component strategy: the dataclass default
+                strategy=comp.get("strategy", "single_gpu"),
+                expert_cache_mb=float(comp.get("expert_cache_mb", 0.0)),
+                expert_cards={k: dict(v) for k, v in (comp.get("expert_cards") or {}).items()},
+            )
+            for name, comp in data.get("components", {}).items()
+        }
+
+        component_memory = {
+            name: ComponentMemory(
+                component_name=name,
+                weight_bytes=int(mem.get("weight_mb", 0) * 1024 * 1024),
+                activation_bytes=int(mem.get("activation_mb", 0) * 1024 * 1024),
+                overhead_bytes=int(mem.get("overhead_mb", 0) * 1024 * 1024),
+                peak_op_uid=mem.get("peak_op", ""),
+                activation_profiled=mem.get("activation_profiled", False),
+                # a plan saved before these fields laid out no arena and replayed no pool: None
+                arena_bytes=mem.get("arena_bytes"),
+                dense_arena_bytes=mem.get("dense_arena_bytes"),
+                held_peak_bytes=mem.get("held_peak_bytes"),
+                pool_ratio=mem.get("pool_ratio"),
+            )
+            for name, mem in data.get("memory_breakdown", {}).items()
+        }
+
+        # Deserialize KV cache plan
+        kv_data = data.get("kv_cache_plan")
+        kv_cache_plan = None
+        if kv_data:
+            kv_cache_plan = KVCachePlan(
+                max_cache_len=kv_data["max_cache_len"],
+                num_layers=kv_data["num_layers"],
+                num_kv_heads=kv_data["num_kv_heads"],
+                k_head_dim=kv_data.get("k_head_dim") or kv_data["head_dim"],
+                v_head_dim=kv_data.get("v_head_dim") or kv_data["head_dim"],
+                dtype=kv_data["dtype"],   # required, like num_layers above
+                memory_bytes=int(kv_data["memory_bytes"]),
+                per_token_bytes=kv_data.get("per_token_bytes", 0),
+                initial_cache_len=int(kv_data["initial_cache_len"]),
+                session_reach=kv_data.get("session_reach"),
+                # a plan saved before the field planned one chunk: None is that plan's meaning
+                prefill_chunk=kv_data.get("prefill_chunk"),
+                prefill_chunk_reason=kv_data.get("prefill_chunk_reason", ""),
+            )
+
+        return cls(
+            components=components,
+            target_dtype=data.get("target_dtype", "float32"),
+            total_memory_mb=data.get("total_memory_mb", 0.0),
+            strategy=data.get("strategy", "unknown"),
+            component_memory=component_memory,
+            loading_mode=data.get("loading_mode", "lazy"),
+            kv_cache_plan=kv_cache_plan,
+        )
+
+
+# Backwards compatibility
+PipelineExecutionPlan = ExecutionPlan
+
+
+# =============================================================================
+# PRISM SOLVER - Enterprise Grade
+# =============================================================================
+
+#: The memory ladder: fine at the bottom, coarse at the top. A uniform 2 GB
+#: step discards half of an 8 GB machine and hands a 128 GB machine sixty-four
+#: rungs — sixty-four certified key families — for nothing. Whole gigabytes;
+#: the 4096 MB floor is the lowest USABLE rung.
+
+
+def _capped_budget_mb(reading, capacity: float) -> float:
+    """The law's budget for this reading, never above the capacity it budgets.
+
+    A BUDGET CANNOT EXCEED THE CAPACITY IT BUDGETS. The law rounds a reading onto the
+    commercial ladder and the nearest rung can sit ABOVE the device: a V100-16GB reads
+    capacity 15 564.8 MB (16 384 x 0.95) and came out with budget 16 384.0 — over the
+    capacity, and over the card's real driver_total of 16 151 MB. A plan sized against it is
+    accepted and then cannot run; measured on the class-1 MoE models, whose segments were cut
+    against 16 384 and OOM'd by ~286 MB at execution. e55e5c9e capped the UNIFIED reading by
+    capacity; this is the same invariant one level out, for every device kind.
+
+    EXCEPT BEHIND THE DOOR. `NBX_PRISM_BUDGET_MB` imposes a rung on every pool so a census
+    enumerating rungs is reproducible, and it must win over the ambient — that is its whole
+    purpose. Capping it by a capacity that was itself lowered from a live host reading puts
+    the ambient straight back: measured, door=8192 with 6 000 MB free returned 5 700, which
+    is the reading and not the rung, and the census would be a coin toss again.
+
+    So: the door is honoured exactly; only the DERIVED budget is capped.
+    """
+    from neurobrix.triton.prism.memory_budget import budget_mb as _bmb
+    value = float(_bmb(reading))
+    if os.environ.get("NBX_PRISM_BUDGET_MB"):
+        return value
+    return min(value, float(capacity)) if capacity > 0 else value
+
+
+def _census_shadow_active() -> bool:
+    """True when this process is a census SHADOW.
+
+    A shadow enumerates the keys a machine's plan demands; it executes nothing. So the
+    room's free memory — which is what gets a real render killed mid-execution, and the whole
+    reason `_prepare_devices` lowers capacity on unified memory — says nothing about it, and
+    letting it in makes a census a function of whatever else happened to be running.
+    """
+    try:
+        from neurobrix.kernels import census as _census
+        return bool(_census.active())
+    except Exception:  # noqa: BLE001 — no census module means no shadow
+        return False
+
+def _graph_constant_bytes(graph: Optional[Dict], stores_fp64: bool) -> int:
+    """Resident bytes of the constants baked into `graph`, as the EXECUTOR holds them.
+
+    `GraphExecutor._load_constants_from_graph` loads every tensor carrying
+    `constant: True` and a `constant_data` payload, each in the dtype its branch
+    STORES it in: a store without fp64 (`stores_fp64` False — the Triton engine,
+    `triton.dtype.stores_fp64`; a device whose profile declares no fp64 under the
+    DtypeEngine) holds a float64 as float32 and a complex128 as complex64. The
+    width priced is the dtype table's for that stored dtype
+    (`core/dtype/itemsize.storage_dtype`), so the figure is what stays resident
+    rather than what the graph declares. The caller answers `stores_fp64` from
+    `PrismSolver._constants_store_fp64`.
+
+    A computable buffer (`is_computable`) is deliberately NOT counted: the loader
+    skips its constant_data and recomputes it at runtime resolution, so its built
+    size is not what it occupies.
+
+    A dimension that is not a concrete int is skipped rather than guessed. That is a
+    symbolic constant and its size is a question for the resolver, not for a budget.
+    """
+    if not isinstance(graph, dict):
+        return 0
+    total = 0
+    for tdata in (graph.get("tensors") or {}).values():
+        if not isinstance(tdata, dict):
+            continue
+        if tdata.get("is_computable") or not tdata.get("constant"):
+            continue
+        if not tdata.get("constant_data"):
+            continue
+        shape = tdata.get("shape") or []
+        if not shape or not all(isinstance(d, int) and d > 0 for d in shape):
+            continue
+        # ZERO FALLBACK: a dtype the table does not know is not silently halved or
+        # assumed 4 bytes — the caller gets a refusal naming it (config/dtypes.yml).
+        width = _itemsize.itemsize(_itemsize.storage_dtype(tdata.get("dtype"), stores_fp64))
+        n = 1
+        for d in shape:
+            n *= d
+        total += n * width
+    return total
+
+
+#: THE PHYSICAL ORDER of the strategies (the owner, 2026-10-25 15:16, docs/design/prism-fastest-plan-that-fits.md §2b):
+#: what a strategy does with the weights decides its rank; inside a rank the measured time decides (the estimate,
+#: `time_estimate.py`), else today's penalties. A plan that re-reads its weights per phase or per token is taken
+#: only when no resident and no tiled plan fits. Measured before this order: Sana_1600M_4Kpx_BF16 streamed on every
+#: profile while only its activations overflowed; Qwen3-Omni-30B, Wan2.2-I2V-A14B and mochi took lazy_sequential on
+#: four NVLink cards whose memory held them whole (registres/journaux/prism_choices_2026_10_25.tsv).
+STRATEGY_RANK = {
+    "single_gpu": 1, "single_gpu_lifecycle": 1,                                   # resident, one device
+    "component_placement": 2, "block_scatter": 2, "pipeline_parallel": 2, "weight_sharding": 2,   # resident, spread
+    "op_level_tiling": 3,                                                          # resident, the overflowing ops cut
+    # the weights cross the host link again — zero3 streams blocks per use, lazy_sequential loads a component per phase
+    # (its routed component as an expert store: Qwen3-30B's 48 x 128 experts on the host, dense 2.3 GB resident, the
+    # gate's 174 s), layer_streaming re-reads per layer per token: ONE rank, the measured time decides (the estimate:
+    # Qwen3-30B on one V100, zero3 754 s against lazy_sequential 15.3 s — a fixed order among them would have cost 4-50x
+    # on every routed model, measured 2026-10-25 16:20, prism_choices_2026_10_25_after.tsv)
+    "zero3": 4, "component_placement_lazy": 4, "lazy_sequential": 4, "layer_streaming": 4,
+    "cpu_execution": 6, "cpu_streaming": 6,                                        # host compute
+}
+RANK_BASE = {1: 1000.0, 2: 800.0, 3: 600.0, 4: 400.0, 5: 200.0, 6: 10.0}   # rank 5 is free: host compute is 6
+#: a rank's floor: no penalty takes a strategy below it, so a rank never crosses the one beneath
+RANK_FLOOR_SPAN = 99.0
+
+
+def order_candidates(candidates, estimates):
+    """`candidates`: (score, name, ...) tuples. Grouped by physical rank; inside a rank the estimated time decides, and
+    equal estimates keep today's score order (the sort is stable); an unestimated candidate follows the estimated ones
+    of its rank."""
+    by_score = sorted(candidates, key=lambda c: -float(c[0]))
+    out = []
+    for rank in sorted({STRATEGY_RANK.get(c[1], 9) for c in by_score}):
+        group = [c for c in by_score if STRATEGY_RANK.get(c[1], 9) == rank]
+        ests = {c[1]: (estimates or {}).get(c[1]) for c in group}
+        out.extend(sorted(group, key=lambda c: (0, ests[c[1]]) if isinstance(ests[c[1]], float) else (1, 0.0)))
+    return out
+
+
+def untiled_reason(blocking, components) -> str:
+    """Why the op-level tiling rung cannot claim these components: the TilingEngine bands convolutions and rms_norm
+    only, and the op at each component's activation peak is named — never a silent decline."""
+    kinds = []
+    for n, m in blocking:
+        comp = next((c for c in components if getattr(c, "name", None) == n), None)
+        op = ((getattr(comp, "graph", None) or {}).get("ops") or {}).get(getattr(m, "peak_op_uid", ""), {}) if comp else {}
+        kinds.append(f"{n}: peak at {getattr(m, 'peak_op_uid', '') or '?'} ({op.get('op_type', 'unknown op')})")
+    return ("the TilingEngine bands convolutions and rms_norm only and none of the overflowing ops is one — "
+            + "; ".join(kinds) + " — no tiled implementation exists for that op, so the rung cannot claim it")
+
+
+
+def _spatial_input(graph) -> tuple:
+    """(H, W) of a graph's first rank-4 (NCHW) or rank-5 (NCDHW) input, (None, None) when it has none."""
+    tensors = graph.get("tensors", {})
+    for iid in graph.get("input_tensor_ids", []):
+        shape = tensors.get(str(iid), {}).get("shape", [])
+        if isinstance(shape, list) and len(shape) in (4, 5):
+            return shape[-2], shape[-1]
+    return None, None
+
+class PrismSolver:
+    """
+    Enterprise Grade Hardware Allocation Solver.
+
+    Intelligence Features:
+    - Best-Fit-Decreasing with activation profiling
+    - NVLink/PCIe topology-aware spillover
+    - Per-GPU contextual dtype costing
+    - Quadratic attention memory correction
+    - LLM vs Diffusion model detection
+    - Automatic strategy selection with fallbacks
+    """
+
+    def __init__(self, overhead_factor: float = 0.05):
+        prism_defaults = get_prism_defaults()
+        # `safety_margin` (0.95, config/system.yml) multiplied every device's capacity before the budget law and
+        # its reserves — a coefficient hedging what the measured reserve (`_margin_mb`, the runtime's own context in
+        # `memory_budget.budget_mb`) already hedges, 909 MB of the Mac's pool and 819 MB of a V100-16GB taken from
+        # every plan (the Mac, 2026-10-25 18:10: 17 277 where the device declares 18 186). The budget is the pool's
+        # declared figure less MEASURED facts (the owner, 15:16); the coefficient is gone.
+        self.overhead_factor = overhead_factor
+        # Driver/library overhead reserve. Value + empirical derivation:
+        # PRISM_DEFAULTS["oom_reserve_mb"] (config/system.py). Where it is READ today (2026-09-24):
+        # the single-GPU KV-cache budget in the post-scoring check, and `_margin_mb` (the margin a
+        # plan states). The acceptance gates — _try_single_gpu, _try_single_gpu_lifecycle,
+        # _place_component — no longer subtract it: they hold a plan against the rung
+        # (`_effective_capacity_mb`) under the 2026-09-21 memory law. No literal default here —
+        # config/system.py is the single source (a missing key is a config regression and must crash).
+        self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
+        #: Strategies whose host side overshot the free memory at the current rung (reset per solve).
+        self._host_declined: set = set()
+        #: MB the Triton loader's copies in flight hold of a unified pool, read from the container a solve plans
+        #: (`_solve_at_rung`); None outside a solve — `_rung_part_mb` refuses to read it then.
+        self._load_copies_mb: Optional[float] = None
+        #: THE SPREAD OF THE DEVICE READING, measured, at a FIXED point in a
+        #: FIXED computation — the same op of the same request, refused three
+        #: times, and what the driver said free each time:
+        #:
+        #:   live_tracked=8242MB   driver_free 5662 / 6586 / 7598 MB
+        #:                         spread 1936 MB = 12.0% of a 16151 MB card
+        #:   live_tracked=10073MB  driver_free 1390 / 2042 / 2350 MB
+        #:                         spread  960 MB =  5.9%
+        #:
+        #: The Mac measured 12598 -> 15248 MB on an idle machine, 21%, which is
+        #: what `plan_advice.READING_VOLATILITY` already carries for its advice
+        #: text. 0.12 is this rack's, and it is the one a CUDA plan is budgeted
+        #: against; the two are not averaged, because they are measurements of
+        #: different drivers.
+        #:
+        #: WHY IT IS A FRACTION. `oom_reserve_mb` is 3072 MB whatever the card.
+        #: On a 16151 MB card that is 19.0%, comfortably over the spread. On a
+        #: 32501 MB card it is 9.5%, UNDER it — an absolute reserve against a
+        #: proportional variance is adequate at one size and short at another.
+
+    #: Class-level so it survives a solver built without __init__ (several
+    #: cells construct one that way to test a single rung); an instance may
+    #: still override it.
+    reading_volatility = 0.12
+
+    #: What the last `solve()` evaluated and why `layer_streaming` declined, for its refusals.
+    #: Reset at the top of every `solve()`; class-level (immutable) so a solver built without
+    #: __init__ can still reach a refusal and say that nothing was evaluated.
+    _strategies_tried: tuple = ()
+    _layer_streaming_declined = None
+    _rejected: tuple = ()
+
+    def _margin_mb(self, capacity_mb: float) -> int:
+        """The band the plan keeps back, and says it keeps back: the allocator's reserve
+        (`PRISM_DEFAULTS["oom_reserve_mb"]`, or the vendor file's measured `memory.plan_reserve_mb`
+        when it states one). The 12 % "reading volatility" term hedged a budget taken from the
+        moment's free reading; since 2026-10-25 the budget is the pool's declared fact
+        (`memory_budget.budget_mb`) and the moment's reading is the execution door, so there is no
+        volatility left to hedge - Janus-Pro-7B on the Mac lost its resident plan to that hedge
+        (692 MB of KV refused behind 3 072 MB held back)."""
+        vendor = getattr(self, "_vendor_plan_reserve_mb", None)
+        return int(vendor) if vendor else int(self.oom_reserve_mb)
+
+    @staticmethod
+    def _alloc_devices(alloc) -> set:
+        """The device strings an allocation occupies: its device (a `zero3:` prefix stripped: the compute card),
+        and every device of its shard map."""
+        devs = set()
+        if alloc is None:
+            return devs
+        parts = alloc if isinstance(alloc, tuple) else (alloc,)
+        for p in parts:
+            if isinstance(p, str):
+                devs.add(p.split(":", 1)[1] if p.startswith("zero3:") else p)
+            elif isinstance(p, dict):
+                devs.update(str(v) for v in p.values() if isinstance(v, str) and not v.startswith("cpu"))
+        return devs
+
+    @staticmethod
+    def _dealt_cache_cards(strat_allocs: Dict, kv_cards) -> set:
+        """The cache's cards when a component's weight files are dealt over several cards (a `tp:` allocation), else none."""
+        dealt = any(str(a[0] if isinstance(a, tuple) else a).startswith("tp:") for a in strat_allocs.values())
+        return set(kv_cards or ()) if dealt else set()
+
+    def _kv_stripped(self, component_memory: Dict, kv_bytes: int) -> Dict:
+        """`component_memory` with the decoder's KV estimate taken out of ITS activation and total bytes (the estimate
+        sits in the decoder's activations, `_compute_memory`): the cache this check sizes is not held twice, and a MAX
+        over components then compares what each really holds."""
+        lm = self._lm_component_name
+        if lm is None or lm not in component_memory or not kv_bytes:
+            return component_memory
+        out = dict(component_memory)
+        m = copy.copy(out[lm])
+        m.activation_bytes = max(int(m.activation_bytes) - int(kv_bytes), 0)
+        out[lm] = m
+        return out
+
+    def _kv_devices(self, strat_allocs: Dict, profile=None) -> Optional[set]:
+        """The memory pools the decode cache lives in: the decoder's own cards (the cache sits beside the layers that
+        read it), and the host with them when a card is unified — one pool, so a component placed on the host holds the
+        same memory (the Mac: MiniCPM-o's towers on the host, 2026-10-15). None when no decoder is named."""
+        lm = self._lm_component_name
+        if lm is None or lm not in strat_allocs:
+            return None
+        devs = self._alloc_devices(strat_allocs[lm])
+        first = strat_allocs[lm][0] if isinstance(strat_allocs[lm], tuple) else strat_allocs[lm]
+        if isinstance(first, str) and first.startswith("tp:"):
+            # A decoder whose weight FILES are dealt over several cards runs its weightless ops — the cache's appends
+            # and reads — on its first card (`RuntimeFactory._extract_device`): the whole cache lives there. Sized
+            # against the sum of the cards' room, Qwen3-Coder-30B-A3B's 3 084 MB cache was accepted beside 29 016 MB
+            # of weights on a 32 GB card and the run died at layer 43 (31 854 MB live, 2026-11-11).
+            devs = {first[3:].split(",")[0]}
+        if any(_device_is_unified(d, profile) for d in devs if not d.startswith("cpu")):
+            devs = devs | {"cpu"}
+        return devs or None
+
+    def _resident_bytes_for_kv_check(self, strat_name: str, strat_allocs: Dict,
+                                     component_memory: Dict, profile,
+                                     kv_already_counted: int = 0, container=None,
+                                     only_devices: Optional[set] = None) -> int:
+        """What `strat_name` holds on the accelerator at its peak, for the KV-cache check.
+
+        Each component costs what its allocation keeps resident: a `layer_streaming` segment's
+        announced peak; activations and overhead only when zero3 maps it to a DISCRETE card's
+        host (on a unified device the "offloaded" weights stay in the same pool, so they
+        count); its whole `total_bytes` otherwise. Counting offloaded weights as resident
+        rejected valid mixed plans (lazy_sequential mapping a 57 GB LM to zero3:cuda:0 was
+        "over capacity" on a 32 GB card, the KV check failed, the cascade fell to
+        cpu_execution on a GPU node).
+
+        The costs are combined by what the plan holds AT ONCE. Under a strategy that loads on
+        demand (`_loads_on_demand`) that is the FLOW's lifecycle, read from its own phases for the
+        engine and the kind of session the plan runs under (`core/flow/base.py resident_together`,
+        `_phase_peak`): the dearest phase, with every component no phase names. An image decode on
+        the triton engine releases its language model before its decoder loads, so a single run
+        never holds the two together. The cache this check sizes is in no phase — its buffers
+        outlive the language model (triton/kv_cache.py `clear`) — so it is held against the dearest
+        phase, whichever that is. The VLM flow runs each tower and projection alone and decodes with
+        the LM, its head and its speech leg together (MiniCPM-o: 16 247 MB of decode phase where
+        the SUM counted 18 119, its 1 872 MB of towers never beside the LM — a MAX over single
+        components would have accepted far less, registers 104 and 119). A flow that declares no
+        phases keeps the SUM of every component — the bound that holds whatever it keeps: the
+        triton dual_ar flow loads its quantizer with the model still resident where the compiled one
+        unloads first, and waits on its handlers being read into a phase function. A strategy that
+        does not load on demand keeps the SUM: nothing unloads.
+
+        Combined only after every cost is known, so the result does not depend on the order the
+        components are visited in — an in-loop `max(total, x)` beside `total += y` did.
+
+        `only_devices`: count only the components placed on those devices — the cards the decode cache
+        lives on (`_kv_devices`); a component on another card holds none of their memory.
+        """
+        partitions = (getattr(self, "_layer_stream_partitions", {}) or {}) \
+            if strat_name == "layer_streaming" else {}
+        costs = {}
+        # A component the request never loads (`_unloaded_by_request`) holds nothing, eager or lazy.
+        unloaded = self._unloaded_by_request(container) if container is not None else set()
+        for name, m in component_memory.items():
+            if name in unloaded:
+                continue
+            alloc = strat_allocs.get(name)
+            dev = alloc[0] if isinstance(alloc, tuple) else alloc
+            if only_devices is not None and alloc is not None and not (self._alloc_devices(alloc) & only_devices):
+                continue
+            part = partitions.get(name)
+            if part is not None:
+                costs[name] = int(part.peak_resident_bytes)   # a segment never held the cache
+                continue
+            store_mb = self._unified_store_mb(strat_name, name, dev, profile)
+            if (isinstance(dev, str) and dev.startswith("zero3:")
+                    and not _device_is_unified(dev, profile)):
+                cost = int(m.activation_bytes + m.overhead_bytes)
+                # A ROUTED component the grant (`_zero3_resident_budgets`) will serve as an expert store holds at
+                # least its dense part and the widest layer's top_k experts on the card: that floor is the plan's
+                # before the cache is sized. Priced at its activations alone, a served session's cache took the
+                # room first — Qwen3-Coder-30B-A3B on two V100-32GB: 24 576 MB of KV, no room left for the store,
+                # every block streamed from the host at every token (6.7 s a token, 2026-11-10).
+                floor = (self._expert_store_floor(name, m.weight_mb * self._cost_multiplier_on(dev, name, container,
+                                                                                              profile),
+                                                  self._cost_multiplier_on(dev, name, container, profile))
+                         if container is not None else None)
+                if floor is not None:
+                    cost += int((floor[0] + floor[1]) * 1024 * 1024)
+            elif store_mb is not None:
+                # an expert store on a unified device: its dense part and the floor of its expert
+                # cache beside its activations — the routed experts stay in the container's pages.
+                # Its activations as the arena holds them (`_live_activation_mb`): the figure the
+                # store was placed against (`_place_component` Strategy 2.5) and is granted its cache
+                # from (`_zero3_resident_budgets`). At the profiled figure a served cache took the
+                # difference (DeepSeek-Coder-V2-Lite, triton, 51.6 MB) out of the store's floor.
+                cost = int(self._live_activation_mb(m) * 1024 * 1024 + m.overhead_bytes
+                           + store_mb * 1024 * 1024)
+            elif isinstance(dev, str) and dev.startswith("tp:") and only_devices is not None and container is not None:
+                # dealt over several cards: what the cache's card holds of it — its files there, at the device's cost
+                files = container.get_shard_sizes().get(name, {})
+                held = sum(b for f, b in files.items() if alloc[1].get(f) in only_devices)
+                cost = int(held * self._cost_multiplier_on(next(iter(only_devices)), name, container, profile)
+                           + m.activation_bytes + m.overhead_bytes)
+            else:
+                cost = int(m.total_bytes)
+            # The KV estimate is inside the named LM's activations (`_compute_memory`); the check
+            # sizes the cache itself, so it comes out of THAT component's cost — before the costs
+            # are combined. Taken off the combined figure instead, it came off a MAX that could be
+            # another component's, and off plans where no LM was named and nothing carried it.
+            if name == self._lm_component_name:
+                cost = max(cost - int(kv_already_counted), 0)
+            costs[name] = cost
+        if container is not None and self._loads_on_demand(strat_name):
+            return self._phase_peak(container, costs)
+        return sum(costs.values())
+
+    def _unified_store_mb(self, strat_name: str, name: str, dev, profile) -> Optional[float]:
+        """The MB an expert store placed by `strat_name` holds of `name` on the unified device `dev`
+        (dense + the cache floor, `_place_component` Strategy 2.5), or None when it placed none
+        there. Only `lazy_sequential` places components one by one (`_try_lazy_sequential`)."""
+        if strat_name != AllocationStrategy.LAZY_SEQUENTIAL.value or not isinstance(dev, str):
+            return None
+        if not _device_is_unified(dev, profile):
+            return None
+        return (getattr(self, "_unified_expert_stores", None) or {}).get(name)
+
+    def _loads_on_demand(self, strat_name: str) -> bool:
+        """True when a plan of `strat_name` loads a component when the flow reaches it and lets the
+        flow release it — `_build_plan`'s `loading_mode == "lazy"` for every strategy it decides by
+        NAME: one that is not eager, the two streaming rungs, a serve session degraded to cold. A
+        name that is no AllocationStrategy member (`op_level_tiling`) is decided there from the
+        plan's totals, which this check does not have: it is held to the SUM here, the bound that
+        holds either way. (An eager plan preloads nothing either — executors are built without
+        weights — but nothing it loads is released, so the SUM is what it ends up holding.)"""
+        if getattr(self, "_serve_cold_fallback", False) or strat_name in ("cpu_streaming", "layer_streaming"):
+            return True
+        return strat_name in {s.value for s in AllocationStrategy if not s.is_eager}
+
+    def _flow_phases(self, container):
+        """The flow's phases on the engine this plan runs on, for a single run or a served session
+        (`core/flow/base.py resident_together`), or None when it declares none. A session is served
+        by the REQUEST (`_serve_requested`), never by `_serve_mode`, which the cold re-evaluation
+        turns off while the session it plans still runs several requests in one process: placed
+        under that pass, a served VLM's streamed tower was cut beside nothing, though the head and
+        the speech leg the request before left are loaded beside it."""
+        from neurobrix.core.flow.base import resident_together
+        return resident_together(self._flow_topology(container), engine_of(getattr(self, "_mode", "compiled")),
+                                 served=bool(getattr(self, "_serve_requested", False)))
+
+    def _unloaded_by_request(self, container) -> set:
+        """The components the REQUEST never loads (`core/flow/base.py unloaded_by_request`): its
+        output mode (`InputConfig.mode`) decides the legs the flow runs, and a leg that does not run
+        loads nothing. A text request to an omni VLM never loads its speech components; they were
+        priced beside its streamed language model all the same, and Qwen3-Omni-30B-A3B-Instruct
+        (the Mac, 2026-10-04, --mode text) was refused: 11 607 MB of whole components — talker.model
+        6 345 MB, code2wav, the talker pieces — filled the 11 305 MB usable beside the thinker's
+        segments. Empty for a served session, and where the mode is not known: every leg is priced."""
+        from neurobrix.core.flow.base import unloaded_by_request
+        request = getattr(self, "_input_config", None)
+        return unloaded_by_request(self._flow_topology(container), getattr(request, "mode", None),
+                                   bool(getattr(self, "_serve_requested", False)), getattr(request, "inputs", None))
+
+    def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None,
+                    holding: Optional[str] = None) -> int:
+        """The most a plan that loads on demand holds at one moment, from a cost per component: the
+        dearest of the flow's phases, each with every component no phase names (nothing says it is
+        unloaded); the SUM when the flow declares no phases. `outliving` bytes that `owner` carries
+        in its own cost but that outlive it (a KV cache's buffers) are added to every phase that
+        does not hold `owner`. With `holding`, only the phases that hold that component are read —
+        what is on the device WHILE it is loaded (every phase when none names it)."""
+        unloaded = self._unloaded_by_request(container)
+        costs = {n: c for n, c in costs.items() if n not in unloaded}
+        phases = self._flow_phases(container)
+        if not phases:
+            return sum(costs.values())
+        named = set().union(*phases)
+        loose = sum(c for n, c in costs.items() if n not in named)
+        if holding is not None and holding in named:
+            phases = [ph for ph in phases if holding in ph]
+        return loose + max(sum(costs.get(n, 0) for n in ph) + (0 if owner in ph else int(outliving))
+                           for ph in phases)
+
+    def _kv_capacity_bytes(self, dev: "DeviceState", bounded: set) -> int:
+        """What the decode cache may be sized against on `dev`: the USABLE part where a component's residency is granted
+        after the cache (`bounded`: an expert store, a zero3 card, a decoder's dealt files); on the Triton engine, the
+        part a component held WHOLE was accepted against (`_whole_usable_mb`, net of the drain's floor: the hot loop's
+        dead-tensor queue is a plan promise, never memory a cache is granted on); elsewhere the rung."""
+        if dev.device_string in bounded:
+            return int(self._usable_mb(dev) * 1024 * 1024)
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            return int(self._whole_usable_mb(dev) * 1024 * 1024)
+        return int(self._effective_capacity_mb(dev) * 1024 * 1024)
+
+    def _kv_growth_reserve_bytes(self, cards, bounded: set) -> int:
+        """The allocator's reserve (`_margin_mb`) the decode cache may not take on `cards`, its floor included
+        (`price.kv_cache_size`): summed over the cards whose capacity is the raw rung — the compiled engine on a card no
+        residency is granted on after the cache. 0 where `_kv_capacity_bytes` already holds the band back: the usable
+        part (`bounded`), and on the Triton engine the whole-usable part (its runtime growth measured, `_rung_part_mb`).
+        Run or served, the cache that took the band left the first prefill no room: a 7B decoder held lazy on a 16 GB
+        card, plan + cache = the 15 845 MB budget, out of memory on a 260 MiB matmul; its floor granted inside the band,
+        out of memory from 4 358 positions (2026-11-15)."""
+        raw = [] if engine_of(getattr(self, "_mode", "compiled")) == "triton" else [d for d in cards if d.device_string not in bounded]
+        return sum(int(self._margin_mb(self._effective_capacity_mb(d)) * 1024 * 1024) for d in raw)
+
+    def _kv_card_room(self, cards, held: int, kv_plan) -> Optional[Tuple[str, int]]:
+        """(card, bytes) the decode cache and what the plan holds beside it leave the cache's ONE card on the Triton
+        engine, from the accounting that sized the cache — the drain's room there (`_assign_drain_cliffs`). Sized apart,
+        the two promised the same memory: deepseek-moe-16b-chat served on one V100-32GB, 31 376 MB held whole + a
+        session reach of 2 126 positions (930 MB) + a 725 MB cliff on a 32 195 MB card, out of memory from request 2
+        (2026-11-12). None elsewhere (several cards, another engine, no cache)."""
+        if kv_plan is None or not cards or len(cards) != 1 or engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        room = int(self._rung_part_mb(cards[0]) * 1024 * 1024)
+        return cards[0].device_string, room - held - int(kv_plan.memory_bytes)
+
+    def _assign_drain_cliffs(self, container, plan, devices) -> None:
+        """The deferred-drain cliff of every accelerator the plan uses, set on each component held
+        there (`ComponentAllocation.deferred_drain_cliff_bytes`) — the figure the Triton hot loop
+        drains at instead of the profile's:
+
+            cliff(dev) = min(profile cliff, room),
+            room       = the rung's part (`_rung_part_mb`) less the largest WHOLE cost the plan holds
+                         on dev (`_whole_component_mb` of every component placed whole there).
+
+        `memory_budget.planned_drain_cliff_bytes` computes it, the door pinning it. A component is
+        whole here when it is on that one device, not zero3, not streamed and not tiled; the others
+        were budgeted against `_usable_mb`, the profile's cliff set aside, and bound nothing. Every
+        whole placement read `_whole_usable_mb`, so the room is at least the profile's floor; a
+        room under it (a forced strategy) is still the cliff the run gets — the plan's figure,
+        stated in the plan, never a silent profile default. Compiled plans and host devices: None."""
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return
+        from neurobrix.triton.prism.memory_budget import planned_drain_cliff_bytes
+        mib = 1024 * 1024
+        by_name = {d.device_string: d for d in (devices or [])}
+        streamed = set(plan.layer_stream_plan or {})
+        tiled = set(plan.component_tiling or {}) | set(getattr(plan, "component_stream", None) or {})
+        whole_mb: Dict[str, float] = {}
+        for name, alloc in plan.components.items():
+            dev = by_name.get(str(alloc.device))
+            if dev is None or len(alloc.devices) != 1 or alloc.strategy == "zero3":
+                continue
+            if name in streamed or name in tiled or name not in plan.component_memory:
+                continue
+            cost = self._held_component_mb(container, name, plan.component_memory[name], dev, alloc)
+            whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0), cost)
+        # A streamed plan holds its WINDOW on the card (resident beside + constants + flow reads +
+        # KV + the largest piece): a held cost like a whole component. Cut against the profile's
+        # cliff it leaves at least that cliff and changes nothing; cut against the floor it sets
+        # the room the card drains at.
+        if plan.layer_stream_plan and getattr(plan, "device_window_mb", None):
+            for name in plan.layer_stream_plan:
+                alloc = plan.components.get(name)
+                dev = by_name.get(str(alloc.device)) if alloc is not None else None
+                if dev is not None:
+                    whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0),
+                                                      float(plan.device_window_mb))
+        cliffs: Dict[str, int] = {}
+        for name, alloc in plan.components.items():
+            own: List[int] = []
+            for key in alloc.devices:
+                dev = by_name.get(str(key))
+                memory = self._drain_profile_memory(dev) if dev is not None else None
+                if memory is None:
+                    continue
+                if key not in cliffs:
+                    room_mb = self._rung_part_mb(dev) - whole_mb.get(key, 0.0)
+                    left = getattr(self, "_kv_card_left", None)
+                    if left is not None and left[0] == key:
+                        # the decode cache's card: what the components held there AND the cache leave it, as the
+                        # cache was sized (`_kv_card_left`) — the largest whole component alone left it the cache too
+                        room_mb = min(room_mb, left[1] / mib)
+                    cliffs[key] = planned_drain_cliff_bytes(memory, room_mb * mib)
+                own.append(cliffs[key])
+            # A component spread over several cards runs one queue per card's sequence; it
+            # carries the smallest of their cliffs, so no card it touches is drained above its own.
+            alloc.deferred_drain_cliff_bytes = min(own) if own else None
+        plan.deferred_drain_cliffs = cliffs
+
+    def _zero3_resident_budgets(self, container, plan, devices, profile) -> None:
+        """How many MB of each zero3 component's weights its card keeps RESIDENT across passes
+        (`ComponentAllocation.resident_weight_mb`), set on the plan.
+
+        zero3 streams a component's blocks from host memory through a two-block window and, at the
+        end of a pass, released every block — so an autoregressive decode streamed EVERY block on
+        EVERY token, with the card otherwise empty. Janus-Pro-7B on a 16 GB V100: 12.4 GB over PCIe
+        per image token, 2.64 s a step against a 1.84 s floor at 7.07 GB/s pinned, 576 steps, 1 520 s;
+        the zero3 ratchet's peak was 2 152 MB of the 16 GB (2026-10-09).
+
+        The room is what the plan already priced, read through the same authorities and nothing
+        else: the usable part of the card for a component held on it (`_usable_mb`), less what the
+        device holds while the component is loaded — every component of the phases that hold it at
+        its plan cost (`_phase_peak(holding=)`; a zero3 component at its activations and overhead,
+        its earlier grant added), the KV cache as planned in place of the estimate priced inside
+        the language model — less the streaming window (two of its largest blocks, `_parse_blocks`,
+        at the device's cost for its dtype). The components are granted in name order, each grant
+        added to its cost before the next is read. A unified device is never zero3 (`_place_component`).
+
+        An expert store `_place_component` placed on a UNIFIED device (Strategy 2.5) is granted here
+        too, by the same arithmetic with no window (no block streams): its dense part resident and
+        the rest of the room as its expert cache (`_expert_store_budget`), its plan figure raised to
+        match. A room the KV cache left below the store's floor is refused by name: the plan was
+        accepted at the floor against the rung, and the usable part of it does not hold it."""
+        z3 = [n for n, a in sorted(plan.components.items())
+              if a.strategy == "zero3"
+              or (a.strategy == "expert_store" and _device_is_unified(a.device, profile))]
+        if not z3:
+            return
+        by_name = {d.device_string: d for d in (devices or [])}
+        lm = self._lm_component_name
+        kv_planned = int(getattr(plan.kv_cache_plan, "memory_bytes", 0) or 0)
+        kv_priced = (self._estimate_kv_cache_bytes(container, self._target_dtype_str)
+                     if (plan.kv_cache_plan is not None and lm is not None) else 0)
+        granted: Dict[str, int] = {}
+        mib = 1024 * 1024
+        for name in z3:
+            alloc = plan.components[name]
+            dev = by_name.get(alloc.device)
+            unified = _device_is_unified(alloc.device, profile)
+            if dev is None or (unified and alloc.strategy != "expert_store"):
+                continue
+            costs: Dict[str, int] = {}
+            for n, m in plan.component_memory.items():
+                a = plan.components.get(n)
+                if a is not None and a.strategy in ("zero3", "expert_store"):
+                    c = (int(self._live_activation_mb(m, by_name.get(a.device, dev)) * mib) + int(m.overhead_bytes)
+                         + granted.get(n, 0))
+                    if a.strategy == "expert_store" and _device_is_unified(a.device, profile):
+                        # its graph constants, loaded beside it (`_place_component` Strategy 2.5)
+                        c += int(self._graph_constants_mb(container, n, by_name.get(a.device) or dev) * mib)
+                else:
+                    c = int(m.total_bytes)
+                if n == lm:
+                    c = max(c - kv_priced, 0) + kv_planned
+                costs[n] = c
+            held_mb = (self._phase_peak(container, costs, outliving=kv_planned, owner=lm, holding=name)
+                       if self._loads_on_demand(plan.strategy) else sum(costs.values())) / mib
+            mult = dev.get_cost_multiplier(self._get_component_dtype(container, name))
+            window_mb = 0.0 if unified else 2.0 * max(
+                self._parse_blocks(container, name).get("block_sizes", {}).values(), default=0.0) * mult
+            # The Triton hot loop's dead-tensor queue is a plan promise too (the supervisor's rule,
+            # 2026-10-13 02:05: never a cache granted on memory the plan has already promised): the usable
+            # part is net of the profile's cliff (`_usable_mb`), and the store's device keeps that cliff
+            # because `_assign_drain_cliffs` prices a store at what it holds (`_held_component_mb`). The
+            # grant subtracted the cliff a second time from 2026-10-13 and the served KV check, sized against
+            # the usable part, took the store's floor: DeepSeek-Coder-V2-Lite served on the Mac's profile
+            # descended 16 384 -> 8 192 and streamed.
+            room_mb = self._usable_mb(dev) - held_mb - window_mb
+            weight_mb = plan.component_memory[name].weight_mb * mult
+            store = self._expert_store_budget(name, weight_mb, room_mb + window_mb, mult)
+            if unified:
+                self._refuse_unheld_expert_files(container, name, alloc)
+                if store is None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: '{name}' was placed as an expert store on {alloc.device} and its "
+                        f"room is {room_mb:.0f} MB (usable {self._usable_mb(dev):.0f} MB - held "
+                        f"{held_mb:.0f} MB with the KV cache as planned), below its dense part and the "
+                        f"widest top_k experts — the floor it was accepted at")
+                alloc.expert_files = True
+                m = plan.component_memory[name]
+                before_mb = alloc.memory_mb
+                alloc.memory_mb = (m.activation_mb + m.overhead_bytes / mib + store[0] + store[1]
+                                   + self._graph_constants_mb(container, name, dev))
+                plan.total_memory_mb += alloc.memory_mb - before_mb
+            if store is not None:
+                # The component routes and its working set fits where every weight does not: the
+                # dense part resident, the routed experts through a cache on the card — no block
+                # streams, so no window is held.
+                alloc.strategy = "expert_store"
+                alloc.resident_weight_mb, alloc.expert_cache_mb = store
+                granted[name] = int((alloc.resident_weight_mb + alloc.expert_cache_mb) * mib)
+                self.__dict__.setdefault("_zero3_residency", {})[name] = (
+                    f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB = dense "
+                    f"{alloc.resident_weight_mb:.0f} MB + expert cache {alloc.expert_cache_mb:.0f} MB")
+                self.__dict__.setdefault("_expert_mult", {})[name] = mult
+                if not unified:
+                    self._spread_experts(plan, name, alloc, devices, mult, container)
+                continue
+            resident_mb = max(0.0, min(room_mb, weight_mb))
+            alloc.resident_weight_mb = float(int(resident_mb))
+            granted[name] = int(alloc.resident_weight_mb * mib)
+            self.__dict__.setdefault("_zero3_residency", {})[name] = (
+                f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB - window {window_mb:.0f} MB")
+
+    def _spread_experts(self, plan, name: str, alloc, devices, mult: float, container=None) -> None:
+        """S3: an expert store whose profile has other cards holds whole blocks' routed experts in THEIR memory
+        (`ComponentAllocation.expert_cards`) — every expert of a block resident, so the block's routed weights never
+        cross a host link again; the home cache then serves only the blocks left to it. A card takes contiguous blocks
+        from the last one down while their experts fit its room: its usable rung less what the plan already places on
+        it and less the component's live activations (the fused MoE op of each block runs there). The largest room
+        first; a card with no room for one block's experts takes none. Before: Qwen3-30B-A3B on 4 V100-16GB served
+        every routed expert from card 0's 3.7 GB cache over its host link, three cards idle (the Mac's probe, 2026-10-28)."""
+        topo = (getattr(self, "_expert_topology", None) or {}).get(name)
+        others = [d for d in (devices or []) if d.device_string != alloc.device
+                  and not getattr(d.spec, "has_unified_memory", False)]
+        if topo is None or not topo.layers or not others or any(l.block is None for l in topo.layers):
+            return
+        mib = 1024 * 1024
+        reserve_mb = self._moe_op_reserve_mb(name, topo.layers)
+        if reserve_mb is None:
+            mem = plan.component_memory.get(name)
+            reserve_mb = self._live_activation_mb(mem) if mem is not None else 0.0
+        placed: Dict[str, float] = {}
+        for n, a in plan.components.items():
+            for card in (a.expert_cards or {}):
+                placed[card] = placed.get(card, 0.0) + float(a.expert_cards[card]["cache_mb"]) + reserve_mb
+            placed[a.device] = placed.get(a.device, 0.0) + float(a.memory_mb or 0.0)
+        # A card no component runs on holds an arena of exact bytes and its MoE ops' temporaries, freed as each op
+        # returns (`triton/sequence.py`, the held-card branch): its room is the card's budget. The whole-component
+        # fraction and the deferred drain price a SEQUENCE running there, and only a card that runs one pays them —
+        # the rack's 4 V100 (2026-10-28 08:25) peaked at 12 703 MB on card 3 for 12 672 MB held, 3.4-4.3 GB idle a card.
+        runs = {a.device for a in plan.components.values()}
+        room = {d.device_string: (self._usable_mb(d) if d.device_string in runs else self._effective_capacity_mb(d))
+                - placed.get(d.device_string, 0.0) - reserve_mb for d in others}
+        layers = sorted(topo.layers, key=lambda l: l.block)
+        cards: Dict[str, Dict[str, Any]] = {}
+        for card in sorted(room, key=lambda c: -room[c]):
+            taken, mb = [], 0.0
+            while layers:
+                one = layers[-1].n_experts * layers[-1].expert_bytes / mib * mult
+                if mb + one > room[card]:
+                    break
+                taken.append(layers.pop()); mb += one
+            if taken:
+                cards[card] = {"blocks": [taken[-1].block, taken[0].block], "cache_mb": float(math.ceil(mb)),
+                               "experts": sum(l.n_experts for l in taken)}
+        # The HOME card: its room is the cache of the blocks left on the host, and a block it holds WHOLE never misses
+        # but takes that room from the cache every other block shares. Priced by the routing's reuse curve (a measured
+        # fact of the model, `expert_topology.routing_reuse`): the home holds the number of blocks that least expert
+        # bytes cross its host link per token. Without the curve it holds none — the Dell's 4 V100 decode went 381 ->
+        # 468 ms when blocks were held there unpriced (2026-10-28 05:56).
+        from neurobrix.triton.prism.expert_topology import routing_reuse, hit_rate
+        curve = routing_reuse(getattr(container, "cache_path", None), name) if container is not None else None
+        floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
+        mb, k_best = 0.0, 0
+        if curve and layers:
+            def missed(k: int) -> float:
+                left = layers[:len(layers) - k]
+                block_mb = sum(l.n_experts * l.expert_bytes for l in layers[len(layers) - k:]) / mib * mult
+                cache = alloc.expert_cache_mb - block_mb
+                if cache < (floor_mb if left else 0.0):
+                    return float("inf")
+                if not left:
+                    return 0.0
+                slots = cache / (left[0].expert_bytes / mib * mult) / len(left)
+                return sum(l.top_k * l.expert_bytes * (1.0 - hit_rate(curve, slots)) for l in left)
+            k_best = min(range(len(layers) + 1), key=lambda k: (missed(k), k))
+        if k_best:
+            home = layers[len(layers) - k_best:]
+            del layers[len(layers) - k_best:]
+            mb = sum(l.n_experts * l.expert_bytes for l in home) / mib * mult
+            cards[alloc.device] = {"blocks": [home[0].block, home[-1].block], "cache_mb": float(math.ceil(mb)),
+                                   "experts": sum(l.n_experts for l in home)}
+        if not cards:
+            return
+        alloc.expert_cards = cards
+        left_mb = sum(l.n_experts * l.expert_bytes for l in layers) / mib * mult
+        alloc.expert_cache_mb = float(int(min(alloc.expert_cache_mb - mb, left_mb))) if layers else 0.0
+        plan.total_memory_mb += sum(c["cache_mb"] + reserve_mb for k, c in cards.items() if k != alloc.device)
+        logging.getLogger(__name__).debug(
+            "Prism: %s holds the routed experts of blocks %s on %s; %s serves the other %d block(s) through a %.0f MB "
+            "cache", name, {c: v["blocks"] for c, v in cards.items()}, sorted(cards), alloc.device, len(layers),
+            alloc.expert_cache_mb)
+
+    def _moe_op_reserve_mb(self, name: str, layers) -> Optional[float]:
+        """What a card running a routed layer's fused MoE op holds beside its experts, at the request: the op's
+        activation inputs and outputs, and its own intermediates — every routed token's gate and up projections
+        (2 x intermediate) and its down product (hidden) at the compute width — the largest over `layers`. None when
+        the request's sizing or the op's shapes are not known (the caller then reserves the component's live peak)."""
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        graph = (self.__dict__.get("_executed_graphs") or {}).get(name)
+        sizing = (self.__dict__.get("_request_sizing") or {}).get(name)
+        if graph is None or sizing is None:
+            return None
+        smap, width, _w = sizing
+        prof = ActivationProfiler(graph)
+        best = 0
+        for l in layers:
+            op = (prof.ops or {}).get(l.op_uid) or {}
+            acts = [t for t in (op.get("input_tensor_ids") or []) + (op.get("output_tensor_ids") or [])
+                    if t in prof.tensors and not (prof.tensors[t].get("is_parameter") or prof.tensors[t].get("is_buffer")
+                                                   or prof.tensors[t].get("constant"))]
+            x = next((t for t in (op.get("input_tensor_ids") or []) if t in acts), None)
+            if x is None:
+                return None
+            shape = prof._resolve_shape(prof.tensors[x], smap)
+            if not shape:
+                return None
+            hidden = int(shape[-1])
+            tokens = 1
+            for d in shape[:-1]:
+                tokens *= int(d)
+            inter = l.expert_bytes // max(1, 3 * hidden * int(width))
+            io = sum(prof._compute_size(prof._resolve_shape(prof.tensors[t], smap), prof.tensors[t])
+                     for t in acts)
+            best = max(best, io + tokens * l.top_k * (2 * inter + hidden) * int(width))
+        return best / (1024 * 1024)
+
+    def _refuse_unheld_expert_files(self, container, name: str, alloc) -> None:
+        """Refuses, at plan time and by name, a unified expert store whose routed experts are STORED in a
+        dtype other than the one its engine holds them in.
+
+        A file-backed store binds each routed expert to a view of its stored bytes and copies them into
+        cache slots unconverted (core/runtime/expert_files.py), so the load refuses any expert whose
+        stored dtype is not the dtype the engine computes it in (`bind_views`). A plan accepted here
+        then died at load. The same rule decides both (`expert_files.held_dtype`), from the same two
+        reads: the stored dtype from the component's weights index (`read_weights_index`, the read the
+        load's `locate` makes), the compute dtype from the plan — `alloc.dtype`, the per-component dtype
+        the dtype door resolved (`_resolve_component_dtypes`), which the runtime's dtype engine holds a
+        component on an accelerator in (`compute_dtype_for_placement`; a unified store is never a host
+        placement) — under the engine this plan is for (`self._mode`). An index that cannot be read, or
+        a routed expert it does not record, is refused too: the plan would accept what it cannot check."""
+        from pathlib import Path as _P
+        from neurobrix.core.runtime.expert_files import held_dtype
+        from nbxtensor.dtype.nbx_dtype import parse_dtype
+        from neurobrix.nbx.weight_presence import read_weights_index
+        topo = (getattr(self, "_expert_topology", None) or {}).get(name)
+        names = sorted({n for l in (topo.layers if topo else []) for n in l.expert_weight_names})
+        if not names:
+            raise RuntimeError(f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device} and "
+                               f"its topology names no routed expert weight")
+        base = getattr(container, "cache_path", None)
+        index = read_weights_index(name, _P(base) / "components" / name) if base is not None else None
+        if index is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device}, whose routed experts "
+                f"are mapped from the container's files, and its weights index cannot be read "
+                f"(cache path {base}): the experts' stored dtype cannot be checked against the compute dtype")
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        compute = parse_dtype(alloc.dtype)
+        unheld: Dict[Tuple[str, str], List[str]] = {}
+        for n in names:
+            entry = index.get(n)
+            if not isinstance(entry, dict) or not entry.get("dtype"):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device} and its routed "
+                    f"expert {n!r} has no stored dtype in its weights index")
+            stored = parse_dtype(entry["dtype"])
+            held = held_dtype(stored, compute, engine)
+            if held != stored:
+                unheld.setdefault((stored.name, held.name), []).append(n)
+        if unheld:
+            pairs = "; ".join(f"{len(ns)} stored {s_} held as {h_} (e.g. {ns[0]!r})"
+                              for (s_, h_), ns in sorted(unheld.items()))
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device} under the {engine} "
+                f"engine at the plan's dtype {compute.name}, and its routed experts are not stored in the "
+                f"dtype that engine computes them in: {pairs}. The store maps stored bytes and converts "
+                f"none (core/runtime/expert_files.py) — the load would refuse it; a file-backed expert "
+                f"must be stored in its compute dtype")
+
+    def _cost_multiplier_on(self, device: str, name: str, container, profile) -> float:
+        """The cost multiplier of `name`'s dtype on the profile's device `device` ("zero3:cuda:2" or "cuda:2") — the
+        figure `DeviceState.get_cost_multiplier` gives the placement."""
+        dev_str = device.split(":", 1)[1] if device.startswith("zero3:") else device
+        spec = next((d for d in profile.devices if d.get_device_string() == dev_str), None)
+        if spec is None:
+            return 1.0 if dev_str == "cpu" else DeviceState(dev_str, 0.0).get_cost_multiplier(
+                self._get_component_dtype(container, name))
+        return DeviceState(dev_str, 0.0, spec=spec).get_cost_multiplier(self._get_component_dtype(container, name))
+
+    def _expert_store_budget(self, name: str, weight_mb: float, room_mb: float,
+                             mult: float) -> Optional[Tuple[float, float]]:
+        """(resident dense MB, expert cache MB) when `name` runs as an expert store in `room_mb`,
+        else None (it stays zero3).
+
+        A routed component's fused MoE op does not read its whole layer per token: it reads
+        `top_k` experts. Priced as an expert store, its footprint on the card is the dense part
+        (every weight but the routed experts, `expert_topology.py`) plus a cache of at least the
+        widest `top_k` experts. A call routing to more experts than the cache holds (a prefill)
+        is served in runs of cached experts by both engines, so one layer's full expert set is
+        never required. Selected when that minimum fits and every weight does not (where every
+        weight fits, zero3 keeps them all resident). The cache takes the rest of the room, capped
+        at every routed expert. Stacked expert slabs have no per-expert host tensor to copy and stay
+        zero3."""
+        floor = self._expert_store_floor(name, weight_mb, mult)
+        if floor is None:
+            return None
+        dense_mb, floor_mb, routed_mb = floor
+        if not (dense_mb + floor_mb <= room_mb < weight_mb):
+            return None
+        cache_mb = float(int(min(room_mb - dense_mb, routed_mb)))
+        return dense_mb, cache_mb
+
+    def _expert_store_floor(self, name: str, weight_mb: float,
+                            mult: float) -> Optional[Tuple[float, float, float]]:
+        """(dense MB, floor MB, routed MB) of `name` served as an expert store, at the device's cost
+        multiplier `mult` — the dense part (every weight but the routed experts), the widest layer's
+        `top_k` experts (the least cache one call can run in), every routed expert — or None when
+        it cannot be one: no fused routed layer, or a stacked expert slab (no per-expert tensor to
+        copy into a slot). The one reading `_expert_store_budget` (the grant) and `_place_component`
+        (a unified device's placement) both price from."""
+        topo = (getattr(self, "_expert_topology", None) or {}).get(name)
+        if topo is None or not topo.layers or any(l.stacked for l in topo.layers):
+            return None
+        mib = 1024 * 1024
+        routed_mb = topo.routed_bytes / mib * mult
+        dense_mb = float(math.ceil(weight_mb - routed_mb))
+        floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
+        return dense_mb, floor_mb, routed_mb
+
+    def _attention_budget(self, profile):
+        """(vendor memory, the bytes of scores one chunk of an attention may write) on this profile, or None where the
+        compiled attention writes none (triton/prism/attention_scratch.py, the vendor's `memory.compiled_sdpa_full_scores`).
+        ONE figure for the whole plan: the smallest device's — every attention is priced at it and every component
+        placed on such a device carries it (`_assign_attention_budgets`), so the engine cuts what Prism priced. The
+        Triton engine runs its own attention kernels: None."""
+        if engine_of(getattr(self, "_mode", "compiled")) != "compiled" or profile is None or not profile.devices:
+            return None
+        from neurobrix.triton.prism.attention_scratch import vendor_memory, scores_budget, writes_full_scores
+        dev = min(profile.devices, key=lambda d: d.memory_mb)
+        memory = vendor_memory(dev)
+        if not writes_full_scores(memory):
+            return None
+        return memory, scores_budget(memory, dev.memory_mb)
+
+    def _attention_scratch(self, profile, dtype: str):
+        """(batch, heads, Tq, Tk, D=, Dv=) -> the scores an attention writes while it runs, or None. The compiled
+        engine: what its attention writes at the plan's budget (`attention_scratch.scratch_bytes`). The Triton engines:
+        what THEIR route writes — the wrappers' own `launch_keys.sdpa_route` over the device's vendor facts: the
+        deterministic math route's fp32 scores and their softmax at the value's width, a chunked route one chunk of
+        them, the flash route none. Unpriced, Wan2.2-I2V-A14B's cross-attention (q 2 x 40 x 4 680, k 512, under the V100's
+        math budget) wrote its 731 MB of scores beside a piece cut to the card's edge and ran out of memory (2026-10-28)."""
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            # one per profile and dtype: a temporal stream's search prices every chunk it tries through it, and each
+            # build reads every device's vendor file
+            cache = self.__dict__.setdefault("_triton_scratch_by", {})
+            key = (id(profile), str(dtype))
+            if key not in cache or cache[key][0] is not profile:
+                cache[key] = (profile, self._triton_attention_scratch(profile, dtype))
+            return cache[key][1]
+        found = self._attention_budget(profile)
+        if found is None:
+            return None
+        from neurobrix.triton.prism.attention_scratch import scratch_bytes
+        memory, budget = found
+        return lambda b, h, tq, tk, **_: scratch_bytes(memory, budget, b, h, tq, tk)
+
+    def _triton_attention_scratch(self, profile, dtype: str):
+        if profile is None or not profile.devices:
+            return None
+        from neurobrix.triton.prism.attention_scratch import vendor_memory
+        from nbxtensor.ops import tiling_sizes as _ts
+        from nbxtensor.ops import launch_keys as _lk
+        from nbxtensor.dtype.nbx_dtype import NBXDtype
+        # the route the wrappers take on EACH card the plan may run on (`wrappers._sdpa_math_scores_budget_bytes_for`:
+        # the executing device's budget, `tiling_sizes.sdpa_math_scores_budget`), priced at the dearest of them: on a
+        # rack of 16 and 32 GB cards an attention between the two budgets runs the math route on the larger one
+        from neurobrix.core.config.loader import vendor_config_for_device
+        from nbxtensor.ops._configs import matrix_unit
+        routes = []
+        for device in profile.devices:
+            memory = vendor_memory(device)
+            brand = getattr(getattr(device, "brand", None), "value", getattr(device, "brand", None))
+            # the matrix unit of THIS device's vendor file, read once (never the planning process's own profile)
+            unit = matrix_unit(vendor_config_for_device(brand, device.architecture,
+                                                        getattr(device, "compute_capability", None),
+                                                        model=getattr(device, "name", None)))
+            routes.append((_ts.sdpa_math_scores_budget(int(memory.get("sdpa_math_max_scores_bytes") or 0),
+                                                       float(memory.get("sdpa_math_scores_device_fraction") or 0.0),
+                                                       device.memory_mb),
+                           int(memory.get("sdpa_math_min_chunk_rows") or 0), int(memory.get("sdpa_math_max_chunks") or 0),
+                           unit))
+        # `dtype`: the dtype the component runs at (`_run_dtype`, the DtypeEngine's resolution the executor receives)
+        unit_dtype = NBXDtype[dtype]                    # an unknown dtype is refused by name
+        native_bf16 = [bool(profile.has_native_bf16)] * len(profile.devices)   # the run's flag is the profile's (`set_hardware_profile`)
+        takes = {}                                      # (device route, head dim) -> the unit runs its flash
+
+        def scratch(b, h, tq, tk, D, Dv, Hk=None, mask=False):
+            # the math route's buffers as the wrapper takes them (`attention_wrappers.math_attention_cost` /
+            # `chunked_math_attention_cost`: the scores' product, its scale, a mask made dense, the softmax, the casts,
+            # the output's product), less the output the walk already counts; the flash route writes no scores
+            from nbxtensor.ops import attention_wrappers as _aw
+            from nbxtensor.ops._cost import Spec
+            hk = int(Hk or h)
+            q = Spec.contiguous((b, h, tq, D), dtype)
+            k = Spec.contiguous((b, hk, tk, D), dtype)
+            v = Spec.contiguous((b, hk, tk, Dv), dtype)
+            m = Spec.contiguous((b, 1, tq, tk), dtype) if mask else None
+            worst = 0
+            for i, (budget, min_rows, max_chunks, unit) in enumerate(routes):
+                if (i, D) not in takes:
+                    takes[(i, D)] = _lk.unit_flash_takes(D, unit_dtype, unit_dtype, unit_dtype, unit)
+                route, rows = _lk.sdpa_route(b, h, tq, tk, D, Dv, budget, min_rows, max_chunks,
+                                             unit_flash=takes[(i, D)])
+                if route == "flash":
+                    continue
+                facts = dict(native_bf16=native_bf16[i], force_accum=False, contract_half=False, unit=unit)
+                cost = (_aw.math_attention_cost(q, k, v, m, False, **facts) if route == "math"
+                        else _aw.chunked_math_attention_cost(q, k, v, rows, m, False, **facts))
+                worst = max(worst, cost.peak_bytes - sum(x.nbytes for x in cost.outputs))
+            return worst
+        return scratch
+
+    def _op_workspace(self, profile):
+        """(op_type, x_shape, x_width, out_width) -> the bytes the compiled engine's implementation of an op holds beside
+        its input and output while it runs, as the device's vendor file states it per op type
+        (triton/prism/op_workspace.py `compiled_op_workspace`, read at the first op priced; an op the table does not name
+        holds nothing; a `null` entry refuses the plan by name). None for the Triton engines — their ops are the kernels'
+        wrappers, whose transients the price carries themselves (the pad, the conv3d folds) — and with no device."""
+        if profile is None or not profile.devices:
+            return None
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            return None
+        from neurobrix.triton.prism.attention_scratch import vendor_memory
+        from neurobrix.triton.prism.op_workspace import op_workspace_fraction, op_workspace_fractions
+        device = min(profile.devices, key=lambda d: d.memory_mb)
+        table = op_workspace_fractions(vendor_memory(device))
+        name = f"{getattr(device, 'brand', '?')}/{device.architecture}"
+
+        def vendor_table(op_type, x_shape, x_width, out_width):
+            f = op_workspace_fraction(table, op_type, name)
+            return int(math.prod(int(d) for d in x_shape) * int(x_width) * f) if f else 0
+        return vendor_table
+
+    def _conv3d_workspace(self, profile, dtype: Optional[str] = None):
+        """(x_shape, w_shape, attrs, x_width, out_width) -> the bytes a 3-D convolution holds beside its input and
+        output while it runs, by the engine this plan is for: the compiled engine's cuDNN workspace as the vendor file
+        states it (triton/prism/op_workspace.py, read at the first conv3d priced); the Triton engines' declared cost
+        (`nbxtensor.ops.conv_wrappers.conv3d_cost`, the wrapper's own path: the temporal pad, each tap and its conv2d on
+        each card's matrix unit, the bias), its peak less the result the walk already counts, at the dearest card the
+        plan may run on. `dtype`: the component's run dtype, the name a 2-byte width stands for. None with no device.
+        It replaced `tiling_sizes.conv3d_one_shot_peak`, a formula of the wrapper written beside it that had drifted
+        from it (the matrix unit's contiguous frames and dense result unpriced; the result counted twice) (M3)."""
+        if profile is None or not profile.devices:
+            return None
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            from nbxtensor.ops import conv_wrappers as _cw
+            from nbxtensor.ops._cost import Spec
+            from nbxtensor.ops._configs import matrix_unit
+            from neurobrix.core.config.loader import vendor_config_for_device
+            units = []
+            for device in profile.devices:
+                brand = getattr(getattr(device, "brand", None), "value", getattr(device, "brand", None))
+                units.append(matrix_unit(vendor_config_for_device(brand, device.architecture,
+                                                                  getattr(device, "compute_capability", None),
+                                                                  model=getattr(device, "name", None))))
+            half = dtype if dtype and _itemsize.itemsize(dtype) == 2 else "float16"
+            names = {2: half, 4: "float32", 8: "float64"}
+
+            def triton_declared(x_shape, w_shape, attrs, x_width, out_width):
+                x = Spec.contiguous(tuple(int(d) for d in x_shape), names[int(x_width)])
+                w = Spec.contiguous(tuple(int(d) for d in w_shape), names[int(x_width)])
+                worst = 0
+                for unit in units:
+                    cost = _cw.conv3d_cost(x, w, attrs.get("stride", 1), attrs.get("padding", 0),
+                                           attrs.get("dilation", 1), int(attrs.get("groups", 1) or 1),
+                                           bool(attrs.get("has_bias")), names[int(out_width)], unit)
+                    worst = max(worst, cost.peak_bytes - sum(b.nbytes for b in cost.outputs))
+                return worst
+            return triton_declared
+        from neurobrix.triton.prism.attention_scratch import vendor_memory
+        from neurobrix.triton.prism.op_workspace import conv3d_workspace_bytes
+        memory = vendor_memory(min(profile.devices, key=lambda d: d.memory_mb))
+
+        def cudnn(x_shape, w_shape, attrs, x_width, out_width):
+            return conv3d_workspace_bytes(memory, math.prod(int(d) for d in x_shape) * int(x_width))
+        return cudnn
+
+    def _assign_attention_budgets(self, plan, profile) -> None:
+        """The budget every attention was priced at, stated on each component the plan computes on an accelerator
+        (`ComponentAllocation.attention_scores_budget_bytes`); None on a host and where the device writes no scores."""
+        found = self._attention_budget(profile)
+        for alloc in plan.components.values():
+            on_host = str(alloc.device).startswith("cpu") and alloc.strategy != "zero3"
+            alloc.attention_scores_budget_bytes = None if (found is None or on_host) else found[1]
+
+    def _peak_loaded_bytes(self, container, plan, devices=None) -> int:
+        """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
+        each component's total); the KV cache, priced inside its owner's total, stays allocated in
+        the phases that no longer hold the owner.
+
+        A streamed plan: its components held WHOLE, each at what it holds under that rung (a tiled
+        one its tiled figure, `_layer_stream_cost`); the streamed ones are the window's
+        (`unified_device_bytes` takes the larger). CogVideoX-2b on the Mac: text_encoder streamed in
+        a 4 610 MB window, then the transformer whole at 4 622 MB and the tiled VAE at 4 436 MB."""
+        totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()}
+        streamed = getattr(plan, "layer_stream_plan", None)
+        if streamed:
+            cost = self._layer_stream_cost              # the rung that streamed prices every component
+            missing = sorted(n for n in totals if n not in streamed and n not in cost)
+            if missing:
+                raise KeyError(f"layer_streaming rung priced no cost for {missing}")
+            totals = {n: int(cost[n]) for n in totals if n not in streamed}
+        else:
+            # A plan that is not streamed holds a TILED component at its tile, as the placement priced it
+            # (`_tiled_component_mb`: its weights at the card's cost multiplier and one tile's activations),
+            # never at its untiled activations: Allegro's VAE under the Mac's profile is tiled to 6.7 GB per
+            # tile and was priced at 415 GB — a 436 GB unified device figure, a 419 GB host reservation
+            # (2026-10-14).
+            by_name = {d.device_string: d for d in (devices or [])}
+            for n, spec in (getattr(plan, "component_tiling", None) or {}).items():
+                a = plan.components.get(n)
+                dev = by_name.get(str(a.device)) if a is not None else None
+                if n in totals and dev is not None and n in plan.component_memory:
+                    totals[n] = int(self._tiled_component_mb(container, n, plan.component_memory[n], dev, spec)
+                                    * 1024 * 1024)
+        for n, a in plan.components.items():
+            if a.strategy == "expert_store" and n in totals:
+                # its dense part and its expert cache beside its activations: the routed experts
+                # are never loaded whole (`_place_component` Strategy 2.5, `_zero3_resident_budgets`)
+                m = plan.component_memory[n]
+                totals[n] = int(m.activation_bytes + m.overhead_bytes
+                                + (a.resident_weight_mb + a.expert_cache_mb) * 1024 * 1024)
+        kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
+        return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
+
+    def _peak_loaded_weight_bytes(self, container, plan, profile) -> Optional[int]:
+        """The weights the dearest phase of a plan that loads on demand holds on a unified device (the KV cache that
+        outlives its owner beside them, `_phase_peak`) — what a load's tensors in flight sit beside (`host_footprint`);
+        None for any other plan (streamed, eager, or a discrete card), whose load and peak keep their sum."""
+        if (not any(d.has_unified_memory for d in profile.devices) or plan.loading_mode != "lazy"
+                or getattr(plan, "device_window_mb", None) is not None or getattr(plan, "layer_stream_plan", None)):
+            return None
+        weights = {n: int(m.weight_bytes) for n, m in plan.component_memory.items()}
+        for n, a in plan.components.items():
+            if a.strategy == "expert_store" and n in weights:
+                weights[n] = int((a.resident_weight_mb + a.expert_cache_mb) * 1024 * 1024)
+        kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
+        return self._phase_peak(container, weights, outliving=kv, owner=self._lm_component_name)
+
+    @property
+    def whole_component_fraction(self) -> float:
+        """PRISM_DEFAULTS["whole_component_fraction"], read where it is used — a property, so a
+        solver built without __init__ (several cells test one rung that way) reads the same
+        figure, and no copy of the value exists outside the configuration."""
+        return float(get_prism_defaults()["whole_component_fraction"])
+
+    def _usable_mb(self, dev: "DeviceState") -> float:
+        """What ONE component held whole may occupy on `dev`: the rung, times the whole-component
+        fraction (PRISM_DEFAULTS, provenance stated there).
+
+        The single authority for "does this component fit whole". `_place_component` accepts a
+        component whole against it, and `_try_layer_streaming` streams exactly the components it
+        refuses and cuts their segments against it. They used to read two different figures —
+        0.92 x rung to place whole, the rung itself to stream — and a component between the two
+        was served by neither: PixArt-XL-2-1024-MS's 9 630 MB text_encoder (9 171.7 MB whole) on
+        the Mac's profile, at any rung in [9 630, 9 969) MB, planned `cpu_streaming`, off the
+        accelerator, on a device that holds it.
+
+        Under the Triton engine the part is net of the DEFERRED DRAIN at the profile's cliff
+        (`_deferred_drain_mb`): the dead tensors the hot loop retires and frees only at its drain
+        cliff sit on the card beside whatever runs. This is the figure segments, zero3 activations,
+        residency and tiles are budgeted against. A component held WHOLE is judged against
+        `_whole_usable_mb` instead, and the plan then gives the device the cliff its room allows
+        (`_assign_drain_cliffs`).
+        """
+        return self._rung_part_mb(dev) - self._deferred_drain_mb(dev)
+
+    def _rung_part_mb(self, dev: "DeviceState") -> float:
+        """The part of the rung one component may hold, before any drain is set aside: the whole rung under the Triton
+        engines, whose budget holds the runtime's measured growth (`_runtime_growth`) and whose activations price their
+        attention's scores (`_triton_attention_scratch`); the whole-component fraction (0.92, its provenance never
+        recorded) under the compiled engine, whose growth is not measured yet. On the Triton engine the fraction hid
+        those two terms: unpriced, Wan2.2-I2V-A14B's pieces ran out of memory by them; hedged, Janus-Pro-7B's language
+        model was refused whole and ran 3.4x slower on a V100-16GB (2026-10-28)."""
+        return self._part_of_rung_mb(self._effective_capacity_mb(dev), dev.spec)
+
+    def _part_of_rung_mb(self, rung_mb: float, spec) -> float:
+        """The part of a rung of `rung_mb` one component may hold on the device `spec` describes (`_rung_part_mb`, and a
+        temporal stream's tile rung). Under the Triton engines where the runtime's growth during a run is a measured fact
+        (`_runtime_growth_fact`: the budget holds it): the whole rung, less — on a UNIFIED device — the loader's copies in
+        flight, held in the same pool as the device plan while it loads (`host_footprint.triton_load_copies_bytes`).
+        Elsewhere — the compiled engine, a device whose growth is not measured — the whole-component fraction (0.92,
+        its provenance never recorded) stands, said in the budget's note: it is what holds those terms there."""
+        if spec is None or self._runtime_growth_fact(spec) is None:
+            return float(rung_mb) * self.whole_component_fraction
+        if not spec.has_unified_memory or engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            # the compiled engine whose growth is a fact on this device: the budget holds it (`_runtime_growth`), and
+            # its loader's copies are not the Triton loader's (`triton_load_copies_bytes`): the whole rung
+            return float(rung_mb)
+        if self._load_copies_mb is None:
+            raise RuntimeError("ZERO FALLBACK: the part of a unified rung is read outside a solve: the loader's copies "
+                               "in flight are the container's (`_solve_at_rung` reads them)")
+        return float(rung_mb) - self._load_copies_mb
+
+    def _whole_usable_mb(self, dev: "DeviceState") -> float:
+        """What ONE component held WHOLE may occupy on `dev`: the rung's part less the SMALLEST drain
+        the plan may leave the Triton hot loop (`_deferred_drain_floor_mb`, the profile's floor).
+        The plan then drains that device at min(profile cliff, the room left beside its largest
+        whole component) — `memory_budget.planned_drain_cliff_bytes`, the same function the hot
+        loop's cliff comes from — so a component that fits whole beside a smaller queue stays whole,
+        and one that leaves less than the floor is streamed, zero3 or tiled against `_usable_mb`.
+        Janus-Pro-7B's language model on the idle Mac (14 168 MB whole, 15 073 MB of rung part):
+        904 MB of room, cliff 904 MB instead of the profile's 954, held whole.
+        Under compiled and on a host both drains are 0 and the two figures are one."""
+        return self._rung_part_mb(dev) - self._deferred_drain_floor_mb(dev)
+
+    def _deferred_drain_mb(self, dev: "DeviceState") -> float:
+        """What the Triton engine's deferred-free queue holds on `dev` at its worst, in MB — the
+        price of the drain, read from the device's vendor profile (`memory.deferred_drain_cliff_bytes`,
+        through `memory_budget.deferred_drain_retained_bytes`, the reading the runtime drains by).
+
+        The hot loops (`triton/sequence.py`) retire every dead or overwritten tensor onto a queue and
+        free it, after a device sync, only when the queue reaches the cliff; under the allocator pool
+        (the default) no earlier drain fires. Until 2026-10-11 the plan priced the live set and not
+        that queue, and the allocator reclaimed it by draining on a refused malloc and retrying
+        (`[NBX_OOM_RECLAIM] freed ...`): 1 279 times in Allegro's 16 GB triton run, up to 1 883 MB a
+        time in CogVideoX-5b-I2V's (mq24 gate, 2026-10-10) — a plan that fitted only through a rescue.
+        The queue is one per running sequence, so it is priced once per device, inside `_usable_mb`.
+        This is the CEILING: a device whose plan holds a component whole drains at the room that
+        component leaves, never more than this (`_whole_usable_mb`, `_assign_drain_cliffs`).
+
+        0 under the compiled engine (torch frees at the kill point; there is no queue) and on a host
+        device (its queue is host memory, priced by the host ledger). A card whose profile states no
+        cliff is refused by name: an unstated queue is not an empty one."""
+        from neurobrix.triton.prism.memory_budget import deferred_drain_retained_bytes
+        return self._read_drain(dev, deferred_drain_retained_bytes)
+
+    def _deferred_drain_floor_mb(self, dev: "DeviceState") -> float:
+        """The smallest queue the plan may leave the Triton hot loop on `dev`, in MB: the profile's
+        `deferred_drain_floor_bytes` (`memory_budget.planned_drain_floor_bytes`; the door pins it to
+        its cliff). 0 under compiled and on a host, as the drain itself."""
+        from neurobrix.triton.prism.memory_budget import planned_drain_floor_bytes
+        return self._read_drain(dev, planned_drain_floor_bytes)
+
+    def _drain_profile_memory(self, dev: "DeviceState") -> Optional[dict]:
+        """`dev`'s vendor profile `memory:` section when the Triton engine runs on an accelerator,
+        None otherwise (the compiled engine has no queue; a host device's queue is host memory)."""
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        if str(getattr(dev, "device_string", "")).startswith("cpu"):
+            return None
+        spec = getattr(dev, "spec", None)
+        if spec is None:
+            raise PlanNotComputable(
+                f"{dev.device_string} carries no device spec, so its vendor profile cannot be read "
+                f"and the Triton engine's deferred-drain queue cannot be priced on it")
+        from neurobrix.core.config.loader import get_vendor_config
+        brand = getattr(spec, "brand", None)
+        return (get_vendor_config(getattr(brand, "value", brand), spec.architecture)
+                .get("memory", {}) or {})
+
+    def _runtime_growth(self, spec) -> Tuple[float, str]:
+        """(MB, words) taken off the budget for the runtime's growth during a run (`_runtime_growth_fact`); a device whose
+        growth is not measured: 0, said — its plans keep the whole-component fraction (`_part_of_rung_mb`)."""
+        fact = self._runtime_growth_fact(spec)
+        if fact is not None:
+            return fact
+        if spec is None or getattr(spec, "architecture", None) is None or str(spec.get_device_string()).startswith("cpu"):
+            return 0.0, ""
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        key = f"{engine}_runtime_growth_mb"
+        return 0.0, (f"the {engine} runtime's growth during a run is not measured on {spec.architecture} "
+                     f"({key}): not priced, the whole-component fraction holds it")
+
+    def _runtime_growth_fact(self, spec) -> Optional[Tuple[float, str]]:
+        """(MB, words): what the engine's runtime holds on an accelerator beyond the context read when the plan starts,
+        grown during a run — the kernels' modules and the local memory the driver reserves for them as they load,
+        outside every allocator. The vendor file's measured `memory.<engine>_runtime_growth_mb`; unmeasured: 0, said.
+        Measured 2026-10-28 on V100-SXM2 (triton): the bytes no allocator holds went from the 312 MB context to
+        1 223 MB in Wan2.2-I2V-A14B's run and 1 055 MB in Sana 4K's; their streamed pieces, cut to the card less the
+        context alone, ran out of memory by that growth (lot gate 2026-10-28)."""
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        brand = getattr(spec, "brand", None)
+        arch = getattr(spec, "architecture", None)
+        if arch is None or str(spec.get_device_string()).startswith("cpu"):
+            return None
+        from neurobrix.core.runtime import runtime_growth
+        measured = runtime_growth.load(getattr(self, "_growth_model", None), engine, arch)
+        if measured is not None:
+            return measured, (f"less the {engine} runtime's growth during this model's run, {measured:.0f} MB "
+                              f"(measured, engine store)")
+        from neurobrix.core.config.loader import get_vendor_config
+        memory = (get_vendor_config(getattr(brand, "value", brand), arch).get("memory", {}) or {})
+        key = f"{engine}_runtime_growth_mb"
+        value = memory.get(key)
+        if value is None:
+            return None
+        return float(value), (f"less the {engine} runtime's measured growth during a run, {float(value):.0f} MB "
+                              f"({key}, the device's envelope: this model's own growth is not measured yet)")
+
+    def _read_drain(self, dev: "DeviceState", reading) -> float:
+        """One drain figure of `dev` in MB through `reading(memory) -> bytes`; 0 where there is no
+        queue; a profile that does not state the figure refused by name."""
+        memory = self._drain_profile_memory(dev)
+        if memory is None:
+            return 0.0
+        try:
+            return reading(memory) / (1024 * 1024)
+        except KeyError as exc:
+            spec = dev.spec
+            raise PlanNotComputable(f"{dev.device_string} ({spec.architecture}): {exc.args[0]}") from exc
+
+    def _max_allocation_mb(self, dev: "DeviceState") -> Optional[int]:
+        """THE LARGEST SINGLE ALLOCATION `dev` GRANTS, in MB — `DeviceSpec.max_allocation_mb`, the
+        profile's fact (Metal's `MTLDevice.maxBufferLength`: 13 639 MB on an M4 Pro whose working set
+        is 18 186 MB) — or None: the profile says nothing and the card grants its whole memory.
+
+        What it bounds is an ARENA: the weights the Triton engine loads for one component, or for one
+        streamed piece, or for a streamed component's base, are ONE buffer per device
+        (`triton/weight_loader.py`: `ComponentArena(total, dev)`, one `malloc_cuda(total)`). The
+        activations are separate allocations and are not in it. At 17.1 GB free Prism cut
+        deepseek-moe-16b-chat in 3 segments against the usable 15 073 MB; the first piece's arena asked
+        14 661 558 272 bytes in one allocation and the device refused it by SIZE with 17 785 MB free
+        ("GPU malloc failed (error 1)", the Mac, 2026-10-04).
+
+        The ARENA is the Triton engine's: the compiled engine loads each weight as its own tensor,
+        so a component is never one allocation there and this bound does not apply (None)."""
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        cap = getattr(getattr(dev, "spec", None), "max_allocation_mb", None)
+        return int(cap) if cap else None
+
+    @staticmethod
+    def _arena_mb_of(comp_name: str, mem: "ComponentMemory", field_name: str) -> float:
+        """The MB of the arena `mem` carries in `field_name` (the library's layout of `_held_weight_sizes`), or a
+        refusal naming the component: an arena bound is never judged from a figure nobody laid out."""
+        nbytes = getattr(mem, field_name, None)
+        if nbytes is None:
+            raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' carries no {field_name}: its graph and weights index "
+                               f"do not say which weights the Triton loader places in its arena")
+        return nbytes / (1024 * 1024)
+
+    def _arena_over_allocation(self, container, comp_name: str, mem: "ComponentMemory",
+                               dev: "DeviceState") -> Optional[str]:
+        """Why `comp_name` cannot be held whole on `dev` as ONE arena, or None when it can."""
+        cap = self._max_allocation_mb(dev)
+        if cap is None:
+            return None
+        arena = self._arena_mb_of(comp_name, mem, "arena_bytes")
+        if arena <= cap:
+            return None
+        why = (f"'{comp_name}' held whole is one arena of {arena:,.0f} MB of weights, over the "
+               f"{cap:,} MB {dev.device_string} grants in a single allocation (the profile's "
+               f"max_allocation_mb)")
+        # Said by the refusal (`_fail_error`): a rung that keeps components whole declines it.
+        self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
+        return why
+
+    def _graph_constants_mb(self, container, comp_name: str, dev: "DeviceState") -> float:
+        """The MB of graph constants `comp_name`'s executor loads on `dev` (`_graph_constant_bytes`, in
+        the dtype the plan's engine stores them in there, `_constants_store_fp64`); 0 when the
+        container carries no graph for it."""
+        for comp in (container.get_neural_components() or []) if container is not None else []:
+            if comp.name == comp_name:
+                return _graph_constant_bytes(getattr(comp, "graph", None),
+                                             self._constants_store_fp64(dev)) / (1024 * 1024)
+        return 0.0
+
+    def _store_arena_over_allocation(self, container, comp_name: str, mem: "ComponentMemory",
+                                     dev: "DeviceState") -> Optional[str]:
+        """Why the unified expert store `comp_name` cannot load its dense part as ONE arena on `dev`,
+        or None — the bound `_place_component` placed it under (Strategy 2.5: `store[0] <= cap`), read
+        from the same floor (`_expert_store_floor`) at the device's cost for the component's dtype."""
+        cap = self._max_allocation_mb(dev)
+        if cap is None:
+            return None
+        mult = dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+        floor = self._expert_store_floor(comp_name, mem.weight_mb * mult, mult)
+        if floor is None:
+            return self._arena_over_allocation(container, comp_name, mem, dev)
+        dense = self._arena_mb_of(comp_name, mem, "dense_arena_bytes")
+        if dense <= cap:
+            return None
+        why = (f"'{comp_name}' as an expert store loads its dense part as one arena of {dense:,.0f} MB, "
+               f"over the {cap:,} MB {dev.device_string} grants in a single allocation (the profile's "
+               f"max_allocation_mb)")
+        self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
+        return why
+
+    def _parked_cap_mb(self, dev: "DeviceState", profile) -> Optional[float]:
+        """What the Triton allocator's pool may keep PARKED on `dev` beside a new allocation, in MB (the pool's
+        answer, `nbxtensor.memory.pool_parked_cap_bytes`; `math.inf` unbounded), or None where a parked block never
+        sits beside one: a discrete card's driver refuses what it cannot serve and the pool is flushed and the request
+        retried, while a UNIFIED device serves the request beside it. So None on a discrete device, under the
+        compiled engine (no such pool), and with the pool off (`nbxtensor.memory.pool_enabled`)."""
+        import math
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton" or not _nbx_memory.pool_enabled():
+            return None
+        if not _device_is_unified(dev.device_string, profile):
+            return None
+        cap = _nbx_memory.pool_parked_cap_bytes(*_vendor_arch(dev.spec), float(dev.spec.memory_mb) * (1 << 20))
+        return cap / (1 << 20) if cap else math.inf
+
+    def _arena_door(self, container, strat_name: str, allocs, devices, component_memory) -> Optional[str]:
+        """Why the plan `strat_name` proposes asks some device for one arena over its largest
+        allocation, or None. A component counts when it is held WHOLE on one accelerator: allocated
+        to a device of the plan whose shards all sit there, and not cut by `layer_streaming` (its
+        pieces are bounded by the partitioner). Host-held weights (`zero3:`, `cpu`) are no arena of
+        the device."""
+        if not allocs:
+            return None
+        by_name = {d.device_string: d for d in (devices or [])}
+        streamed = (set(getattr(self, "_layer_stream_partitions", {}) or {})
+                    if strat_name == "layer_streaming" else set())
+        for comp_name, alloc in sorted(allocs.items()):
+            if comp_name in streamed or comp_name not in component_memory:
+                continue
+            dev_str, shard_map = (alloc if isinstance(alloc, tuple) else (alloc, {}))
+            dev = by_name.get(dev_str)
+            if dev is None or any(v != dev_str for v in (shard_map or {}).values()):
+                continue
+            if (strat_name == AllocationStrategy.LAZY_SEQUENTIAL.value
+                    and getattr(dev.spec, "has_unified_memory", False)
+                    and comp_name in (getattr(self, "_unified_expert_stores", None) or {})):
+                # An expert store on a unified device (`_place_component` Strategy 2.5) loads its
+                # DENSE part as its one arena; its routed experts are views of the container's shards
+                # and its cache is one small allocation per slot (core/runtime/expert_files.py,
+                # triton/expert_store.py). Judged by its whole weight, deepseek-moe-16b-chat's store
+                # (2 323 MB dense of 32 GB) was refused under the M4 Pro's 13 639 MB bound and streamed.
+                why = self._store_arena_over_allocation(container, comp_name, component_memory[comp_name], dev)
+                if why is not None:
+                    return why
+                continue
+            why = self._arena_over_allocation(container, comp_name, component_memory[comp_name], dev)
+            if why is not None:
+                return why
+        return None
+
+    def _holds_whole(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
+                     usable_mb: Optional[float] = None) -> bool:
+        """ONE answer to "is `comp_name` held whole on `dev`": its whole cost within the part of the
+        rung a whole component may hold (`_whole_usable_mb`, or the figure the caller passes) AND its
+        arena within the device's largest allocation."""
+        usable = self._whole_usable_mb(dev) if usable_mb is None else usable_mb
+        return (self._whole_component_mb(container, comp_name, mem, dev) <= usable
+                and self._arena_over_allocation(container, comp_name, mem, dev) is None)
+
+    def _live_activation_mb(self, mem: "ComponentMemory", dev: Optional["DeviceState"] = None) -> float:
+        """A component's activation AS THE ARENA HOLDS IT while the component runs WHOLE on a
+        device: the profiled peak under the compiled engine's caching allocator, times
+        the planned device's measured `memory.triton_arena_activation_factor` under the triton modes
+        (`_triton_arena_factor`), the KV cache inside the figure apart.
+
+        On the V100 (volta.yml), measured before S4a/S4b: ~1.3x on CogVideoX-5b's VAE tile
+        (2026-09, the tiling call site budgets tiles by it) and 1.35x on mochi-1-preview's whole
+        VAE at 85 frames 320x576 (profiled 24 561 MB, placed whole on a 32 GB card by the bare
+        figure, dead at 25 202 MB live asking 8 493 MB more — 2026-09-26). Read by the three
+        decisions that hold a component whole on a card — `_place_component`'s whole, zero3 and
+        tiling-trigger tests — and by nothing else: the streamed segments of a language model
+        keep the profiled figure and their own reserve rules (pinned on the Mac's readings), for
+        no measurement of the factor exists on them, and a factor applied where it was not
+        measured is a guess wearing a number."""
+        if str(getattr(self, "_mode", "compiled")).startswith("triton"):
+            # the KV cache inside the figure is one allocation made once, not the arena's activations
+            kv_mb = int(getattr(mem, "kv_bytes", 0) or 0) / (1024 * 1024)
+            return (float(mem.activation_mb) - kv_mb) * self._triton_arena_factor(dev) + kv_mb
+        return float(mem.activation_mb)
+
+    def _pool_rules(self, profile) -> Optional[Dict[str, Any]]:
+        """The device allocator's rules a walk is replayed through — the pool's (the keywords of
+        `nbxtensor.memory.pool.simulate`) and the Triton hot loop's deferred queue (`drain_cliff`,
+        `drain_count`: dead tensors are freed together when either is reached) — or None where the
+        plan's engine has neither (the compiled engine). The parked cap is the pool's answer
+        (`nbxtensor.memory.pool_parked_cap_bytes`) for the profile's smallest device — the one the walk is budgeted
+        against — of the imposed rung where one is. The pool off (`nbxtensor.memory.pool_enabled`): no pool."""
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        if not _nbx_memory.pool_enabled():
+            return {"pooled": False}
+        if profile is None or not getattr(profile, "devices", None):
+            return {"parked_cap": 0}
+        from neurobrix.core.config.loader import get_vendor_config
+        spec = min(profile.devices, key=lambda d: d.memory_mb)
+        memory = (get_vendor_config(*_vendor_arch(spec)).get("memory", {}) or {})
+        total_mb = float(spec.memory_mb)
+        from neurobrix.triton.prism.memory_budget import DEFERRED_DRAIN_COUNT, door_mb, deferred_drain_retained_bytes
+        door = door_mb()
+        if door is not None:
+            total_mb = min(total_mb, float(door))
+        return {"parked_cap": _nbx_memory.pool_parked_cap_bytes(*_vendor_arch(spec), total_mb * (1 << 20)),
+                # the hot loop's deferred queue: dead tensors freed together at the cliff or the count (`DeferredFrees`)
+                "drain_cliff": int(deferred_drain_retained_bytes(memory)),
+                "drain_count": DEFERRED_DRAIN_COUNT}
+
+    def _triton_arena_factor(self, on: Optional["DeviceState"] = None) -> float:
+        """The Triton arena's hold over the walked activations while a component runs whole, as the vendor file of the
+        device it is judged on measured it (`memory.triton_arena_activation_factor`): `on`'s, else the planned
+        profile's smallest device (the one a whole component is judged on first). Unmeasured (null or absent): the
+        plan is refused by name — a factor carried from another device is a guess wearing a number."""
+        from neurobrix.core.config.loader import declared_arena_factor
+        dev = getattr(on, "spec", None)
+        if dev is None:
+            profile = getattr(self, "_planned_profile", None)
+            devices = [d for d in (getattr(profile, "devices", None) or [])
+                       if not str(getattr(d, "device_string", "")).startswith("cpu")]
+            if not devices:
+                raise PlanNotComputable("the Triton arena's factor is read from the vendor file of the device a "
+                                        "component is judged on, and this plan names no accelerator")
+            dev = min(devices, key=lambda d: d.memory_mb)
+        brand = getattr(getattr(dev, "brand", None), "value", getattr(dev, "brand", None))
+        # the device's vendor file, else its family's (vendors/family_facts.yml); a factor a first launch measured into a
+        # generated profile is not read: measured on whatever the user had imported, it came out between 1.4 and 28
+        value, why = declared_arena_factor(brand, dev.architecture, getattr(dev, "compute_capability", None),
+                                           model=getattr(dev, "name", None))
+        if value is None:
+            raise PlanNotComputable(
+                f"{brand}/{dev.architecture}: no memory.triton_arena_activation_factor (what the Triton arena holds over "
+                f"the walked activations while a component runs whole): {why}, so no Triton plan is priced on it")
+        return float(value)
+
+    def _phase_peak_carried_mb(self, container, costs: Dict[str, int]) -> float:
+        """The dearest phase of the flow (`_flow_phases`, its towers first, the decode last), each with its components
+        as placed (`costs`, bytes) AND the graph outputs of the components of the phases BEFORE it, which the flow keeps
+        until a later phase consumes them (a VLM's tower outputs wait for the language model's splice: 296 MB live on
+        MiniCPM-o-4_5 when its language model loads, 2026-10-27). In MB. Without phases: the sum."""
+        # what the request never loads holds nothing at any moment (`_unloaded_by_request`), as `_phase_peak` reads it
+        unloaded = self._unloaded_by_request(container)
+        costs = {n: c for n, c in costs.items() if n not in unloaded}
+        phases = self._flow_phases(container)
+        if not phases:
+            return sum(costs.values()) / (1024 * 1024)
+        named = set().union(*phases)
+        loose = sum(c for n, c in costs.items() if n not in named)
+        carried, best, seen = 0, 0, set()
+        for ph in phases:
+            best = max(best, loose + sum(costs.get(n, 0) for n in ph) + carried)
+            for n in ph - seen - unloaded:       # a component that never runs hands nothing on
+                carried += self._component_output_bytes(n)
+            seen |= ph
+        return best / (1024 * 1024)
+
+    def _component_output_bytes(self, name: str) -> int:
+        """The bytes of a component's graph outputs at this request (`work.component_work`'s `output_bytes`)."""
+        cache = self.__dict__.setdefault("_output_bytes_cache", {})
+        if name not in cache:
+            from neurobrix.triton.prism.profiler import ActivationProfiler
+            from neurobrix.triton.prism.work import component_work
+            comp = next((c for c in (getattr(self, "_neural_components", None) or []) if c.name == name), None)
+            ic = getattr(self, "_input_config", None)
+            if comp is None or ic is None:
+                cache[name] = 0
+            else:
+                prof = ActivationProfiler(comp.graph)
+                cache[name] = int(component_work(prof, prof.build_symbol_map(ic)).output_bytes)
+        return cache[name]
+
+    def _held_as_planned_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
+                            alloc: "ComponentAllocation", tiling=None, stream=None) -> float:
+        """What a component the plan loads on demand holds on `dev` while it is loaded, AS THE PLAN PLACES IT: a zero3
+        component its resident part and its activations (its blocks stream), a tiled one its weights and one tile
+        (`_tiled_component_mb`), a temporally streamed one its weights and one chunk, an expert store its dense part
+        and cache (`_held_component_mb`), any other its whole cost. The ONE figure the execution door and the lazy
+        plan's phase check read."""
+        if str(alloc.strategy) == "zero3":
+            return float(alloc.resident_weight_mb or 0.0) + self._live_activation_mb(mem, dev)
+        if tiling is not None:
+            return self._tiled_component_mb(container, comp_name, mem, dev, tiling)
+        if stream is not None:
+            return (mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+                    + float(stream["activation_bytes"]) / (1024 * 1024))
+        return self._held_component_mb(container, comp_name, mem, dev, alloc)
+
+    def _held_component_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
+                           alloc: "ComponentAllocation") -> float:
+        """What a component the plan places on `dev` holds there: an expert store its dense part and its expert cache
+        as granted beside its activations as the arena holds them (and its graph constants on a unified device,
+        `_place_component` Strategy 2.5) — never its routed experts, which stay in pinned host memory or in the
+        container's pages; any other component its whole cost (`_whole_component_mb`). Priced at its whole weights,
+        a store left its card a drain cliff of 0 (Qwen3-Omni-30B 32g triton, 2026-10-13)."""
+        if alloc.strategy != "expert_store":
+            return self._whole_component_mb(container, comp_name, mem, dev)
+        consts = (self._graph_constants_mb(container, comp_name, dev)
+                  if getattr(getattr(dev, "spec", None), "has_unified_memory", False) else 0.0)
+        return (float(alloc.resident_weight_mb) + float(alloc.expert_cache_mb) + self._live_activation_mb(mem, dev)
+                + consts)
+
+    def _whole_component_mb(self, container, comp_name: str, mem: "ComponentMemory",
+                            dev: "DeviceState") -> float:
+        """What `comp_name` costs held whole on `dev`: its weights at the device's cost for the
+        component's dtype, plus its activations as the arena holds them (`_live_activation_mb`).
+        The figure `_usable_mb` is compared to."""
+        return (mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+                + self._live_activation_mb(mem, dev))
+
+    def _effective_capacity_mb(self, dev: "DeviceState") -> float:
+        """What a whole plan may be budgeted against on `dev`: `dev.budget_mb`, the memory law's
+        answer for its reading (memory_budget.py) — a shared pool's free reading rounded down onto
+        the ladder, a dedicated card whole less its own context — capped at the capacity. No
+        margin is subtracted here; this docstring said one was.
+
+        The second bound is the ladder law at the plan's ENTRY (owner,
+        2026-09-20: the budget is what gets quantised, before anything is
+        derived). Until it stood here, the rung was consulted only once a
+        plan overflowed the card's CAPACITY, and `free_mb` was the plan's own
+        accounting — so a request that fitted a V100-32GB whole was accepted
+        while a neighbour held 18-27 GB of the card, never tiled, and died at
+        its first allocation: five of five runs, real-esrgan-x8 at 1024,
+        2026-09-20. With the reading in `free_mb` (see `_prepare_devices`)
+        the same request sees 5-14 GB, is bounded by the 4-12 GB rungs, and
+        descends to the tiling rung by itself.
+        """
+        if dev.budget_mb > 0:
+            return float(dev.budget_mb)
+        # A state built by hand (a cell testing one rung): the law from the state itself —
+        # dedicated when nothing external holds it, shared otherwise.
+        return float(_budget_mb(DeviceReading(kind="device", capacity_mb=dev.capacity_mb, free_mb=dev.free_mb,
+                                              held_by_others_mb=dev.external_used_mb)))
+
+    # =========================================================================
+    # TOPOLOGY INTELLIGENCE
+    # =========================================================================
+
+    def _get_device_index(self, device_string: str) -> int:
+        """Extract device index: 'cuda:2' → 2"""
+        return int(device_string.split(':')[1])
+
+
+    def _find_pipeline_device(
+        self, required_mb: float, devices: List[DeviceState],
+        last_device: Optional[DeviceState], profile: PrismProfile
+    ) -> Optional[DeviceState]:
+        """
+        Topology-aware device selection for pipeline.
+        Priority: 1) Same NVLink group 2) Any device with capacity
+        """
+        if not devices:
+            return None
+
+        if last_device is None:
+            return next((d for d in devices if d.free_mb >= required_mb), None)
+
+        last_idx = self._get_device_index(last_device.device_string)
+        topology = profile.topology
+
+        same_group = []
+        other = []
+
+        for dev in devices:
+            if dev.free_mb < required_mb:
+                continue
+            dev_idx = self._get_device_index(dev.device_string)
+            if topology.devices_have_fast_interconnect([last_idx, dev_idx]):
+                same_group.append(dev)
+            else:
+                other.append(dev)
+
+        return same_group[0] if same_group else (other[0] if other else None)
+
+    # =========================================================================
+    # PUBLIC API
+    # =========================================================================
+
+    @staticmethod
+    def _declared_vae_scale(container) -> Optional[int]:
+        """The VAE's spatial compression of this container, by its ONE derivation:
+        `resolution.container_size.vae_scale_factor` — the manifest, then the defaults in both
+        spellings, then the build — the brick the CLI binds the request with and the executor
+        sizes its latents with. None for a container without a latent space.
+
+        Prism used to read a second one, `2 ** (len(block_out_channels) - 1)` from the VAE's
+        arch, and wrote it over the caller's: right for a VAE whose compression is its block
+        count, 4x short per side for one that patchifies on top of it. Over the shared cache the
+        two disagree on SANA-Video_2B_720p only (declared 32, `spatial_compression_ratio`; the
+        arch 8): every spatial symbol of its transformer was priced at 4x per side the latent
+        the runtime runs (84x168 for 21x42 at 672x1344) — 16x over, and a 16 GB plan of layer
+        streaming, a guidance split and op-level bands it never needed (2026-10-05). The tiled
+        VAE decode was not moved by it: its tile is sized at the scale its graph measures."""
+        if not container.cache_path:
+            return None
+        import json as _json
+        from neurobrix.core.runtime.resolution.container_size import vae_scale_factor
+        root = Path(str(container.cache_path))
+
+        def read(rel):
+            f = root / rel
+            return _json.loads(f.read_text()) if f.exists() else {}
+        declared = vae_scale_factor(read("manifest.json"), read("runtime/defaults.json"),
+                                    read("topology.json").get("components") or {})
+        return int(declared) if declared else None
+
+    def solve(
+        self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
+        serve_mode: bool = False, mode: str = "compiled",
+    ) -> ExecutionPlan:
+        """The plan at the rung the free reading gives — and, on a device that draws on host memory, at
+        the highest rung whose WHOLE host side fits that reading.
+
+        On unified memory the device plan and the run's host side (the engine's base, the weights a
+        streamed or lazy plan holds and loads, the output boundary) come out of ONE pool. The rung is
+        read from the free memory alone, so more free memory gave a larger window whose host side no
+        longer fit: Janus-Pro-7B on the Mac planned a 7 531 MB window (host 12 760 MB) at 11 638 MB free
+        and a 10 362 MB window (host 15 592 MB) at 12 652 MB free (the Mac, 2026-10-03 23:48) — every
+        streamed model oscillated between fitting and not with the minute's reading. The plan's host
+        side is priced (Step 7.9, host_footprint.py); when it exceeds the reading, the rung steps DOWN
+        the ladder and the plan is solved again. The lowest rung that still overshoots is kept, said
+        (the engine never refuses — the owner, 2026-10-03 22:35); a lower rung no strategy fits keeps
+        the rung above, said. Behind the census door the rung is imposed and this is not done.
+        """
+        from neurobrix.triton.prism.memory_budget import memory_ladder_mb
+        self._unified_rung_cap_mb = None
+        self._host_declined = set()      # strategies whose host side overshot the reading at this rung
+        host = memory_state()
+        unified = [d for d in profile.devices if d.has_unified_memory]
+        descends = bool(unified and host.measured and not _census_shadow_active()
+                        and not os.environ.get("NBX_PRISM_BUDGET_MB"))
+        log = logging.getLogger(__name__)
+        tried = []
+        try:
+            plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+        except RuntimeError as refusal:
+            # A rung no strategy fits is not the machine's last word on a pool whose rung is read from
+            # the free memory: the rungs below are tried, highest first (Flex.1-alpha on the Mac at
+            # 12.6 GB free was refused at 11 264 and planned at 8 192 — the Mac, 2026-10-03 23:48).
+            if not descends:
+                raise
+            # The refusal's own record (what it rejected and why streaming declined) is the one said if
+            # no lower rung fits either: each lower solve resets it.
+            _said = (list(self._rejected), self._layer_streaming_declined, list(self._strategies_tried))
+            rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
+            plan = None
+            last = refusal                # the refusal of the rung named beside it, not the first one's
+            for lower in reversed([r for r in memory_ladder_mb() if r < rung]):
+                tried.append((int(rung), "refused", None))
+                self._unified_rung_cap_mb = float(lower)
+                try:
+                    plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                    log.warning("unified memory: no strategy fits rung %s (%s) — rung %s", int(rung),
+                                str(last).splitlines()[0], lower)
+                    break
+                except RuntimeError as below:
+                    rung, last = lower, below
+            if plan is None:
+                self._unified_rung_cap_mb = None
+                self._rejected, self._layer_streaming_declined, self._strategies_tried = _said
+                raise refusal
+        if not descends or not plan.host_footprint:
+            return plan
+        # THE POOL'S FACT (the owner, 2026-10-25 15:16): on a unified machine the whole host side of a plan must fit
+        # the installed RAM the profile declares, less the engine's measured base — never the moment's free reading,
+        # which moved HAT-L (157 MB of weights) to layer_streaming beside another run and back to single_gpu a minute
+        # later (the Mac, 16:56). The moment's reading is the execution door after the loop.
+        pool_mb = self._unified_host_pool_mb(profile)
+        while True:
+            fp = plan.host_footprint
+            # The pool is a FACT that holds no NeuroBrix process (the installed RAM less the system's share measured
+            # calm, less the engine's base), so the plan's WHOLE host side goes against it — the process's resident
+            # memory included — less the base the pool already took off (`base_bytes` is a term of `total_bytes`).
+            # It subtracted the resident instead: the base counted twice, the resident never, and on a profile with
+            # no measured base (the M4 Pro) a lazy_sequential plan of 18 006 MB was accepted on a 17 582 MB pool
+            # (2026-10-26). The moment's reading, which excludes what the process holds, is the door below.
+            need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("base_bytes", 0))) / (1 << 20)
+            rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
+            tried.append((int(rung), plan.strategy, int(need_mb)))
+            if need_mb <= pool_mb:
+                break
+            # The SAME rung first, without this strategy: a lower rung shrinks the device window, never
+            # an eager load, so an eager plan overshot by its loading overshoots at every rung (VibeVoice-
+            # 1.5B on the Mac, 2026-10-08: single_gpu's 15 066 MB at 12 288 down to 6 144, then
+            # layer_streaming at 4 096 reloading its language model every step). A strategy that loads
+            # lazily holds one component's load at a time.
+            self._host_declined = set(self._host_declined) | {plan.strategy}
+            try:
+                plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                log.debug("unified memory: %s's host side (%.0f MB) is over %.0f MB free at rung %s — %s",
+                         tried[-1][1], need_mb, host.available_mb, int(rung), plan.strategy)
+                continue
+            except RuntimeError:
+                self._host_declined = set()
+            lower = [r for r in memory_ladder_mb() if r < rung]
+            if not lower:
+                log.warning("unified memory: the plan's host side (%.0f MB) exceeds the %.0f MB free even at "
+                            "the lowest rung (%s) — kept, the system may page; rungs tried %s",
+                            need_mb, host.available_mb, int(rung), tried)
+                break
+            self._unified_rung_cap_mb = float(lower[-1])
+            try:
+                below = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+            except RuntimeError as e:
+                log.warning("unified memory: the plan's host side (%.0f MB) exceeds the %.0f MB free at rung "
+                            "%s, and no strategy fits rung %s (%s) — the rung above is kept; rungs tried %s",
+                            need_mb, host.available_mb, int(rung), lower[-1], str(e).splitlines()[0], tried)
+                self._unified_rung_cap_mb = float(rung)
+                plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                break
+            log.debug("unified memory: rung %s planned a host side of %.0f MB over %.0f MB free — rung %s",
+                     int(rung), need_mb, host.available_mb, lower[-1])
+            plan = below
+        plan.unified_rungs_tried = tried
+        # THE EXECUTION DOOR for the unified pool: the plan sized by the facts runs only if the pool is free enough
+        # NOW; what holds it is said, and the plan is never traded for a slower one (`memory_budget.execution_door`).
+        fp = plan.host_footprint or {}
+        need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
+        if host.measured and need_mb > float(host.available_mb):
+            plan.execution_door = (
+                f"ZERO FALLBACK: the plan ({plan.strategy}) needs {need_mb:.0f} MB of the unified pool and "
+                f"{float(host.available_mb):.0f} MB are free now ({getattr(host, 'source', '')}); the plan is sized by "
+                f"the pool's declared {pool_mb:.0f} MB and is not traded for a slower one — free the memory (another "
+                f"process holds it) or plan under a smaller profile")
+        return plan
+
+    def _solve_at_rung(
+        self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
+        serve_mode: bool = False, mode: str = "compiled",
+    ) -> ExecutionPlan:
+        """
+        Solve optimal allocation with Best-Fit-Decreasing.
+
+        In serve mode: tries hot budget first (all weights resident). If no strategy
+        fits hot mode, falls back to cold budget and warns the user that the daemon
+        will run in cold mode (weights swap per phase, not near-zero latency).
+
+        Strategies tried in order:
+        1. single_gpu - All on largest GPU
+        2. component_placement - Whole components on different GPUs
+        3. pipeline_parallel - Per-layer sequential fill (like Accelerate)
+        4. block_scatter - Block-level best-fit distribution
+        5. weight_sharding - Weight-file round-robin
+        6. component_placement_lazy - Component placement with lazy swap
+        7. lazy_sequential - One component at a time
+        8. zero3 - CPU offload
+        """
+
+        # THE EXECUTION MODE, recorded before any rung runs. Prism plans for BOTH engines and
+        # has never needed to know which one; `layer_streaming` does, because the branches
+        # transform the graph differently before running it and a boundary must name an op the
+        # executor will still have. Default "compiled" keeps every existing caller's behaviour.
+        self._mode = str(mode or "compiled")
+        # the model whose measured runtime growth the budget reads (`_runtime_growth`, core/runtime/runtime_growth.py)
+        from neurobrix.core.runtime.precision_contract import registry_model_name as _rmn
+        _cp = getattr(container, "cache_path", None)
+        self._growth_model = _rmn(_cp) if _cp else None
+        # what the Triton loader's copies in flight hold of a UNIFIED pool beside the device plan (`_rung_part_mb`)
+        from neurobrix.triton.prism.host_footprint import triton_load_copies_bytes
+        self._load_copies_mb = triton_load_copies_bytes(self._weight_sizes_by_component(container)) / (1024 * 1024)
+        # THE PROFILE THE PLAN IS FOR — what every hardware-dependent price reads (the tile
+        # lattice), never the planning process's active profile (stage B P3).
+        self._planned_profile = profile
+        self._serve_mode = serve_mode
+        # {component: elements of its graph outputs at the request} — the host estimate's output term.
+        self._output_elements: Dict[str, int] = {}
+        # The REQUEST's serve intent, never toggled. `_serve_mode` is set False for the cold
+        # re-evaluation and restored before the KV check; a reserve taken during the cold pass from
+        # the toggled flag was one turn while the check then demanded two.
+        self._serve_requested = serve_mode
+        self._serve_cold_fallback = False  # Track if serve degraded to cold
+        # Per-SOLVE record of what was tried and why a rung declined, read by every refusal. Reset
+        # here, never left to the rung that writes it: a rung the force door filters out never runs,
+        # and a reused solver then printed the previous solve's reason.
+        self._strategies_tried = []
+        self._layer_streaming_declined = None
+        self._rejected = []
+
+        neural_components = container.get_neural_components()
+        if not neural_components:
+            return self._empty_plan(profile)
+
+        if input_config is None:
+            batch = PRISM_DEFAULTS.get("default_batch_size", 2)
+            input_config = InputConfig(batch_size=batch, height=1024, width=1024)
+
+        neural_components = sorted(neural_components, key=lambda c: c.name)
+        self._neural_components = neural_components
+
+        # vae_scale is a MODEL property: the container's own declaration (`_declared_vae_scale`)
+        # replaces whatever the caller passed. No VAE (an LLM, an upscaler) leaves it untouched.
+        _declared = self._declared_vae_scale(container)
+        if _declared and input_config.vae_scale != _declared:
+            logging.getLogger(__name__).debug(
+                "Prism: vae_scale %s -> %s (the container's declaration)",
+                input_config.vae_scale, _declared)
+            input_config.vae_scale = int(_declared)
+
+        # Step 0a: Detect op-level tiling needs per component (fused
+        # upsample→conv pairs whose intermediate tensor would OOM). Done
+        # AFTER strategies are tried — only if the cascade can't place the
+        # component otherwise. For Sana 4Kpx VAE: upsample::3→conv::55 and
+        # upsample::4→conv::62 (16 GB intermediate at 4Kpx).
+        # The actual scan happens after _evaluate_all_strategies — see
+        # _detect_op_level_tiling_pairs() below. This comment marks where
+        # the data lives in the plan: plan.runtime_op_tiling.
+
+        # Step 0: Determine model category from manifest family — DATA-DRIVEN
+        # Reads execution.has_kv_cache from config/families/<family>.yml plus
+        # topology.flow.generation.type to discriminate VQ-image autoregressive
+        # paths from text autoregressive paths. Falls back to legacy detection
+        # for the unknown case (defensive).
+        manifest = container.get_manifest() or {}
+        family = manifest.get("family", "unknown")
+        has_lm_config = bool(self._read_lm_config(container))
+        # a family without its file is refused by get_family_config by name (every family of the 49 has one), never
+        # read as "no KV cache"
+        from neurobrix.core.config import get_family_config
+        family_kv_cache = bool(get_family_config(family).get("execution", {}).get("has_kv_cache", False))
+
+        # Inspect topology for autoregressive_image (VQ multimodal Janus pattern)
+        try:
+            topology = self._flow_topology(container)
+        except Exception as exc:
+            # `gen_type = ""` stood here, and an empty generation type reads as
+            # "not an image-VQ model" — a container whose topology cannot be
+            # read was silently planned as something else.
+            raise PlanNotComputable(
+                f"the container's topology could not be read "
+                f"({type(exc).__name__}: {exc}), so the generation type is "
+                f"unknown and the plan cannot tell which flow this model runs."
+            ) from exc
+        gen_type = (topology.get("flow", {})
+                            .get("generation", {}).get("type", "") or "")
+        is_image_vq = (gen_type == "autoregressive_image") and has_lm_config
+
+        if is_image_vq:
+            self._model_category = "image_vq"
+        elif family_kv_cache:
+            self._model_category = "llm"
+        else:
+            self._model_category = "diffusion"
+
+        # A plan needs a decode cache exactly when the container declares the KV its flow's decoder keeps
+        # (core/state/price.py, the build's `state` section): a flow that decodes with an undeclared component is
+        # refused by name there. The family's category no longer decides it: Prism priced a cache for every
+        # `has_kv_cache` family, flows that allocate none included (docs/design/state-engine.md §1).
+        self._needs_kv_cache = self._kv_declared(container) is not None
+        # The cache is sized for the request the package declares (runtime/defaults.json: max_tokens, its margin); a
+        # decoding package without that file has no request to size it for. Planned anyway, its estimate fell to the
+        # decoder's whole window (Qwen3-Coder-30B-A3B on the Mac, its package without runtime/defaults.json: 24 GB of
+        # KV reserve, 2026-10-12): refused, naming the file.
+        if self._needs_kv_cache:
+            _defaults = (container.cache_path / "runtime" / "defaults.json" if container.cache_path else None)
+            if _defaults is None or not _defaults.exists():
+                raise PlanNotComputable(
+                    f"the container '{manifest.get('model_name', '?')}' (family {family!r}) runs a KV-cached decoder, "
+                    f"and its request facts cannot be read — {_defaults if _defaults else 'no cache path'} is absent: "
+                    f"the cache cannot be sized, so the plan cannot be computed. The package is incomplete.")
+
+        # Step 1: Resolve target dtype (model-level — used for KV-cache sizing
+        # and the genuine all-fp32 fallback below).
+        target_dtype = self._resolve_dtype(container, profile)
+        target_dtype_str = str(target_dtype).split('.')[-1]
+        # A busy re-plan of a plan that fell back to float32 (`solve_smart`) starts where that solve settled: the dtype
+        # that just failed is never re-tried, and every figure it takes (the KV reserve, the cuts) is a float32 one.
+        _settled = bool(getattr(self, "_settled_fp32", False)) and self._try_fp32_fallback(container, profile)
+        self._fell_back_fp32 = _settled
+        if _settled:
+            target_dtype_str = "float32"
+        self._target_dtype_str = target_dtype_str
+
+        # Step 1.5: Resolve PER-COMPONENT dtype for the memory estimate.
+        # `_resolve_dtype` collapses the WHOLE model to float32 as soon as a
+        # single component is fp32-forced (e.g. a VAE-class component on
+        # V100). Estimating every component at that model-wide float32
+        # over-counts each fp16 component 2x (CogVideoX-5b transformer:
+        # 21 GB estimated vs 11 GB real fp16) and can wrongly offload a
+        # component that fits. Estimate each component at the dtype it
+        # ACTUALLY runs — the same per-component map the executor uses
+        # downstream (`_resolve_component_dtypes`, Step 5).
+        component_dtypes = self._resolve_component_dtypes(
+            neural_components, profile, container)
+        self._component_dtypes = component_dtypes
+
+        # Component-level spatial tiling accumulator. Populated by
+        # _place_component when a spatial-overflow component is kept on GPU
+        # via tiling instead of host offload; surfaced on the plan for the
+        # executor to instantiate a TilingEngine. _input_config is stashed so
+        # the tile sizer can read the runtime spatial extent.
+        self._component_tiling = {}
+        self._tiling_exactness = {}
+        # The components run in temporal chunks ({component: spec}) and why one was not (`_temporal_stream`).
+        self._component_stream = {}
+        self._stream_declined = {}
+        # The expert stores the lazy_sequential pass places on a unified device (`_place_component`).
+        self._unified_expert_stores = {}
+        # The host rungs' own device sizing under the Triton engine (`_size_host_placement_on_device`),
+        # per rung: {rung: {component: tiling}} and {rung: (card, usable MB, {component: live MB})}.
+        self._host_device_tilings = {}
+        self._host_device_overflow = {}
+        self._host_device_card = {}
+        # Why the tiling engine gave a component no tile ({component: reason}, `_tiling_decline`).
+        self._tiling_declined = {}
+        self._tiling_declined_by_rung = {}
+        # Why a component was not held whole: its arena over the device's largest allocation
+        # ({component: reason}, `_arena_over_allocation`).
+        self._arena_declined = {}
+        # {rung: (card, usable MB)}: the figure a rung's tiling reasons were held to (`_record_rung_tiling_decline`).
+        self._tiling_rung_figure = {}
+        self._input_config = input_config
+
+        # Step 2: Compute memory requirements (tiling-aware via profile)
+        component_memory = self._compute_memory(
+            container, neural_components, input_config, target_dtype_str,
+            profile=profile, component_dtypes=None if _settled else component_dtypes,
+        )
+        # A component whose vendor's own reference runs in temporal chunks runs so at every request: its
+        # activations are one chunk's (`_declared_streams`).
+        self._declared_streams(container, component_memory, profile)
+        sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
+
+        # Step 3: Prepare devices
+        devices = self._prepare_devices(profile)
+
+        # Step 4: Try ALL strategies and pick best by score.
+        # Doctrine R35 — Prism never refuses. The cascade always ends with
+        # `cpu_execution` (everything on CPU, perf libre). This is the last-
+        # resort entry of the cascade for any hardware that exposes CPU +
+        # RAM, including profiles with zero GPUs (developer machines, CI
+        # runners, dev boxes, future Mac Studio).
+        if not devices:
+            # CPU-only profile: skip the entire GPU cascade and jump
+            # straight to cpu_execution.
+            strategies = [
+                # Below every rung that keeps a component whole, above the
+                # host ones. Tiling comes first of the two: cutting a
+                # component's OPS keeps it on the accelerator and keeps its
+                # dataflow intact, where layer_streaming cuts the component
+                # itself and cpu_* leaves the accelerator altogether.
+                ("op_level_tiling", self._try_op_level_tiling),
+                ("layer_streaming", self._try_layer_streaming),
+                ("cpu_execution", self._try_cpu_execution),
+                ("cpu_streaming", self._try_cpu_streaming),
+            ]
+        elif len(devices) == 1:
+            # Single-GPU shortcut: skip multi-GPU strategies (Apple Silicon,
+            # single NVIDIA, single RDNA, ...). Cascade ends in
+            # cpu_execution (R35).
+            strategies = [
+                ("single_gpu", self._try_single_gpu),
+                ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
+                ("lazy_sequential", self._try_lazy_sequential),
+                ("zero3", self._try_zero3),
+                # Below every rung that keeps a component whole, above the
+                # host ones. Tiling comes first of the two: cutting a
+                # component's OPS keeps it on the accelerator and keeps its
+                # dataflow intact, where layer_streaming cuts the component
+                # itself and cpu_* leaves the accelerator altogether.
+                ("op_level_tiling", self._try_op_level_tiling),
+                ("layer_streaming", self._try_layer_streaming),
+                ("cpu_execution", self._try_cpu_execution),
+                ("cpu_streaming", self._try_cpu_streaming),
+            ]
+        else:
+            strategies = [
+                ("single_gpu", self._try_single_gpu),
+                ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
+                ("component_placement", self._try_component_placement),
+                ("pipeline_parallel", self._try_pipeline_parallel),
+                ("block_scatter", self._try_block_scatter),
+                ("weight_sharding", self._try_weight_sharding),
+                ("component_placement_lazy", self._try_component_placement_lazy),
+                ("lazy_sequential", self._try_lazy_sequential),
+                ("zero3", self._try_zero3),
+                # Below every rung that keeps a component whole, above the
+                # host ones. Tiling comes first of the two: cutting a
+                # component's OPS keeps it on the accelerator and keeps its
+                # dataflow intact, where layer_streaming cuts the component
+                # itself and cpu_* leaves the accelerator altogether.
+                ("op_level_tiling", self._try_op_level_tiling),
+                ("layer_streaming", self._try_layer_streaming),
+                ("cpu_execution", self._try_cpu_execution),
+                ("cpu_streaming", self._try_cpu_streaming),
+            ]
+
+        # NBX_FORCE_STRATEGY: deterministic single-strategy selection for
+        # matrix validation and debugging. Filter the cascade down to the
+        # requested strategy; zero fallback if it cannot fit (the caller
+        # asked for X specifically, picking Y silently would hide bugs).
+        forced = os.environ.get("NBX_FORCE_STRATEGY", "").strip()
+        if forced:
+            # DERIVED from the cascade, never a second copy of it. This was a hardcoded
+            # literal and it had drifted: `layer_streaming`, `op_level_tiling` and
+            # `cpu_streaming` are rungs of the cascade and the door rejected all three —
+            #     NBX_FORCE_STRATEGY='layer_streaming' is invalid. Valid values: [...]
+            # — so the engine's own "deterministic single-strategy selection for matrix
+            # validation" could not reach three of the strategies it validates. Measured
+            # 2026-09-22 while trying to exercise the streamed path, which is unreachable by
+            # score on this rack (`lazy_sequential scored 260 ahead of layer_streaming`).
+            #
+            # The correct source was already three lines below, in the OTHER error message
+            # of this same block: `sorted(n for n, _ in strategies)`. One of the two read the
+            # cascade and the other held a copy, and the copy is the one that gated entry.
+            # Two different questions, and they had been collapsed into one literal:
+            #   "is this a real strategy name?"  -> STRATEGY_REGISTRY, whose own comment
+            #      says every name Prism can emit must have an entry there;
+            #   "is it available on THIS profile?" -> the cascade, checked just below.
+            # Keeping them apart preserves the better message for a multi-GPU strategy
+            # asked for on a single-GPU profile ("not available for this device count"),
+            # which a cascade-derived `valid` would have turned back into a bare "invalid".
+            try:
+                from neurobrix.core.strategies import STRATEGY_REGISTRY as _REG
+                valid = set(_REG.keys())
+            except Exception:  # noqa: BLE001 — registry unavailable: fall back to the cascade
+                valid = {n for n, _ in strategies}
+            if forced not in valid:
+                raise RuntimeError(
+                    f"NBX_FORCE_STRATEGY='{forced}' is invalid. "
+                    f"Valid values: {sorted(valid)}"
+                )
+            filtered = [(n, fn) for n, fn in strategies if n == forced]
+            if not filtered:
+                raise RuntimeError(
+                    f"NBX_FORCE_STRATEGY='{forced}' not available for "
+                    f"this device count (len(devices)={len(devices)}). "
+                    f"The single-GPU shortcut excludes multi-GPU-only "
+                    f"strategies — run on a multi-GPU profile or pick "
+                    f"one of: "
+                    f"{sorted(n for n, _ in strategies)}"
+                )
+            strategies = filtered
+            logging.getLogger(__name__).debug(
+                f"[Prism] NBX_FORCE_STRATEGY={forced} — forcing strategy, "
+                f"bypassing score cascade"
+            )
+
+        shard_sizes = container.get_shard_sizes()
+        # Every rung starts unsliced: `solve` re-enters here down the unified ladder, and a slicing
+        # the previous rung kept must not reach this rung's first pass before its cheaper cuts.
+        self._token_split = False
+        self._swap_values = False
+        self._later_rung_refusals = {}
+        candidates = self._evaluate_all_strategies(
+            strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
+        )
+        self._cfg_split = []
+        self._cfg_split_reason = ""
+        _split = self._split_guidance_batch(
+            candidates, container, neural_components, input_config, target_dtype_str, profile,
+            component_dtypes, strategies, devices, shard_sizes)
+        if _split is not None:
+            candidates, component_memory, input_config, devices = _split
+            sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
+        _sliced = self._split_token_axis(
+            candidates, container, neural_components, input_config, target_dtype_str, profile,
+            component_dtypes, strategies, devices, shard_sizes)
+        if _sliced is not None:
+            candidates, component_memory, input_config, devices = _sliced
+            sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
+        else:
+            _parked = self._park_values_between_pieces(candidates, strategies, sorted_components,
+                                                       component_memory, devices, shard_sizes, profile, container)
+            if _parked is None:
+                # the last stretch rung: a stretch encloses its same-axis neighbour and keeps the inputs it reads
+                # only in slices on the host (HAT-L at 2048 px on 16 GB, 2026-10-22)
+                _parked = self._park_values_between_pieces(candidates, strategies, sorted_components,
+                                                           component_memory, devices, shard_sizes, profile,
+                                                           container, beyond_walls=True)
+            if _parked is not None:
+                candidates = _parked
+
+        # When NBX_FORCE_STRATEGY is set and the strategy cannot fit, the
+        # rest of solve() would fall through to fp32 fallback or the final
+        # _fail_error path. Neither is desirable when the operator has
+        # explicitly requested one strategy — they need to see the plain
+        # "this strategy does not fit" signal without Prism retrying
+        # alternatives.
+        if forced and not candidates:
+            _why = (f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+                    if self._layer_streaming_declined else "")
+            for _rung, _w in (getattr(self, "_later_rung_refusals", {}) or {}).items():
+                _why += f"\n  layer_streaming with {_rung} declined: {_w}"
+            raise RuntimeError(
+                f"ZERO FALLBACK: NBX_FORCE_STRATEGY={forced} cannot fit "
+                f"the model on the given hardware profile. Remove the env "
+                f"var to let Prism's cascade select an alternative, or "
+                f"use a larger hardware profile.{_why}"
+            )
+
+        # Serve mode fallback: if hot mode failed, retry with cold budget
+        # User chose serve but hardware can't keep all weights resident →
+        # degrade gracefully to cold mode instead of crashing
+        if not candidates and serve_mode:
+            logging.getLogger(__name__).warning(
+                "[Prism] Serve mode: hot budget doesn't fit — falling back to cold mode.\n"
+                "The daemon will load/unload weights per request (not near-zero latency).\n"
+                "For hot serve, use a GPU with more VRAM or a multi-GPU setup."
+            )
+            self._serve_mode = False  # Retry with cold budgets
+            self._serve_cold_fallback = True
+            devices = self._prepare_devices(profile)
+            candidates = self._evaluate_all_strategies(
+                strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
+            )
+            self._serve_mode = serve_mode  # Restore for KV cache sizing
+
+        # FP32 fallback for BF16 models
+        if not candidates:
+            if self._try_fp32_fallback(container, profile):
+                target_dtype_str = "float32"
+                self._fell_back_fp32 = True
+                # And the SOLVER's record of it: the strategies re-evaluated below (layer
+                # streaming's KV reserve) read `self._target_dtype_str`, which stayed at the
+                # dtype that had just failed — the cache reserved at half its fp32 bytes.
+                self._target_dtype_str = target_dtype_str
+                component_memory = self._compute_memory(
+                    container, neural_components, input_config, target_dtype_str,
+                    profile=profile,
+                )
+                sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
+                devices = self._prepare_devices(profile)
+                candidates = self._evaluate_all_strategies(
+                    strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
+                )
+
+        if not candidates:
+            self._fail_error(sorted_components, devices, host_mb=self._host_budget_mb(profile))
+
+        # TILING BEATS OFFLOADING THE SAME COMPONENT.
+        #
+        # A strategy is scored by its NAME, not by where it actually put the
+        # work. Measured on real-esrgan-x8 at 1024x1024 once the estimators
+        # agreed: `lazy_sequential` scored 280 and placed the model on **cpu**,
+        # while `op_level_tiling` scored 60 and would have kept it on the card.
+        # The cascade preferred leaving the accelerator to cutting the ops.
+        #
+        # This is narrow on purpose. It compares only against the op-level
+        # tiling candidate, and only for a component that candidate keeps on an
+        # accelerator while the higher-scoring plan sends it to the host. A plan
+        # that routes a VAE to the host for its own reasons, with no tiling
+        # candidate to compare against, is untouched — re-scoring host placement
+        # in general changes plans across every model and belongs behind the
+        # battery, not in front of it.
+        _tiling = next((c for c in candidates if c[1] == "op_level_tiling"), None)
+        if _tiling is not None:
+            _t_alloc = _tiling[2] or {}
+            _on_host = self._allocation_on_host
+            _offloaded = {
+                name for name, a in _t_alloc.items() if not _on_host(a)}
+            _demoted = []
+            for i, cand in enumerate(candidates):
+                score, name, alloc, devs = cand
+                if name == "op_level_tiling" or score <= _tiling[0]:
+                    continue
+                sent_home = sorted(n for n, a in (alloc or {}).items()
+                                   if n in _offloaded and _on_host(a))
+                if sent_home:
+                    candidates[i] = (_tiling[0] - 1.0, name, alloc, devs)
+                    _demoted.append(f"{name} (sends {', '.join(sent_home)} to the host)")
+            if _demoted:
+                logging.getLogger(__name__).debug(
+                    "Prism: op-level tiling keeps %s on the accelerator, so %s "
+                    "no longer outrank it", ", ".join(sorted(_offloaded)),
+                    " and ".join(_demoted))
+
+        # Sort candidates by rank (the physical order), then by the measured time inside the rank (the estimate,
+        # when the profile carries measured facts), then by score — docs/design/prism-fastest-plan-that-fits.md §2b.
+        def _priced(group):
+            """`group` timed (`_estimate_times`), once what its best rank owes is measured (`owed_facts.measure_owed`)."""
+            OF.measure_owed(getattr(self, "_mode", "compiled"), group, container, profile)
+            return self._estimate_times(group, container, input_config, profile, target_dtype_str,
+                                        component_memory=component_memory, devices=devices)
+        self._time_estimates = _priced(order_candidates(candidates, {}))
+        ranked = order_candidates(candidates, self._time_estimates)
+        self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
+        self._rejected = []
+        self._state_policy = None
+
+        # Strategies ranked by score
+
+        # Pick best strategy, validating KV cache fits
+        allocations = None
+        chosen_strategy = None
+        kv_cache_plan = None
+        chosen_devices = None
+
+        # a rank reached once every better candidate is turned down is measured and timed before it is ordered
+        for best in OF.each_rank_priced(ranked, _priced, self._time_estimates):
+            score, strat_name, strat_allocs, strat_devices = best
+            _kv_only, self._kv_card_left, kv_growth_reserve = None, None, 0
+
+            if strat_name in self._host_declined:
+                self._rejected.append((strat_name, float(score), "its host side overshot the pool the profile declares (installed RAM less the engine's measured base), at this rung"))
+                continue
+
+            # THE ARENA DOOR, one for every strategy: a component held whole on one accelerator
+            # loads its weights as ONE allocation there (`ComponentArena`), and a device grants a
+            # single allocation only up to its largest (`max_allocation_mb`). The rungs that hold
+            # components whole decline it themselves; this door makes a rung that forgot unable to
+            # win — the plan names the component instead of the device refusing it at load.
+            _over = self._arena_door(container, strat_name, strat_allocs, strat_devices, component_memory)
+            if _over is not None:
+                self._rejected.append((strat_name, float(score), _over))
+                continue
+
+            if self._needs_kv_cache:
+                # KV cache is already included in LM activation_bytes — subtract to avoid double-counting
+                kv_already_counted = self._estimate_kv_cache_bytes(container, target_dtype_str)
+
+                # Strategy-aware capacity and allocation calculation
+                if strat_name in ("cpu_execution", "cpu_streaming"):
+                    # Host strategies: capacity = host RAM budget. `cpu_streaming` fell to the
+                    # summing branch below and judged a HOST cache against the GPUs' capacity. KV cache lives
+                    # in host RAM alongside weights and activations.
+                    # Through `_host_budget_mb`: the free reading rounded DOWN onto the
+                    # commercial ladder, honouring NBX_PRISM_BUDGET_MB. NOT a fraction of
+                    # installed RAM — that formula is gone, and this comment claimed it for
+                    # long enough that a reader took a measurement off it (the Mac, 9675411a).
+                    if profile.cpu and profile.cpu.ram_mb > 0:
+                        total_capacity = int(self._host_budget_mb(profile) * 1024 * 1024)
+                    else:
+                        # No CPU stats — accept unconditionally (runtime
+                        # will fail clean if RAM truly insufficient).
+                        total_capacity = 2**62
+                elif strat_name in ("single_gpu", "single_gpu_lifecycle"):
+                    # Single GPU: the largest device's RUNG (`_effective_capacity_mb`, what the
+                    # strategy was accepted against), less the driver/library overhead reserve
+                    # (PRISM_DEFAULTS["oom_reserve_mb"], 3 GiB measured over a 13 GiB live set).
+                    # The reserve is applied HERE ONLY: the acceptance gates no longer subtract it
+                    # (this comment claimed they did), and in serve mode the cache takes every byte
+                    # of `remaining`, so this is where an unreserved budget would bite. It read the
+                    # raw `capacity_mb`, which on a shared pool is above the rung.
+                    total_capacity = int(
+                        max(0.0, max(self._effective_capacity_mb(d) for d in strat_devices)
+                            - self.oom_reserve_mb) * 1024 * 1024)
+                elif strat_name == "layer_streaming":
+                    # The figure its segments were cut against: the usable part of the TARGET's
+                    # rung (`_usable_mb`), not the sum of every device's raw capacity. Judged
+                    # against the sum, a streamed LLM's KV cache was sized from memory the rung
+                    # does not grant — measured on the Mac's profile, serve mode:
+                    #   DeepSeek-Coder-V2-Lite  segments+resident 13 598.8 + KV 3 846.4 = 17 445 MB
+                    #   Qwen3-Coder-30B-A3B     segments+resident 11 966.3 + KV 8 394.4 = 20 361 MB
+                    # against a 16 384 MB rung, 15 073 usable, 17 277 capacity.
+                    # Cut against the drain floor (`_try_layer_streaming`'s second step): that
+                    # figure, the one the window was held to.
+                    total_capacity = int((self._whole_usable_mb(strat_devices[0])
+                                          if getattr(self, "_layer_stream_cut_against_floor", False)
+                                          else self._usable_mb(strat_devices[0])) * 1024 * 1024)
+                else:
+                    # Every other GPU strategy: the RUNGS of the cards the cache lives on — the decoder's
+                    # own (`_kv_devices`), not every card the strategy returned. Summed over every card, a
+                    # multi-card plan sized the cache from memory on cards other than the decoder's, and
+                    # the decoder's card was over-committed (the open defect of main, closed with the state
+                    # engine's price, docs/design/state-engine.md §4.2). Its resident figure below counts
+                    # the same cards only.
+                    _kv_cards = self._kv_devices(strat_allocs, profile)
+                    _cards = [d for d in strat_devices
+                              if _kv_cards is None or d.device_string in _kv_cards] or list(strat_devices)
+                    total_capacity = sum(int(self._effective_capacity_mb(d) * 1024 * 1024)
+                                         for d in _cards)
+                    # An expert store on a unified device (`_place_component` Strategy 2.5) is
+                    # accepted against the USABLE part of its device's rung, and its expert cache is
+                    # granted from that same figure after the cache (`_zero3_resident_budgets`). Sized
+                    # against the rung, a served cache took the difference between the two figures out
+                    # of the store's floor, and the grant refused the plan at every rung of the ladder:
+                    # DeepSeek-Coder-V2-Lite served on the Mac's profile descended 16 384 -> 4 096 and
+                    # streamed (usable 14 120 MB - held 13 154 MB with the cache = 965 MB of room).
+                    _store_devs = {(a[0] if isinstance(a, tuple) else a) for n, a in strat_allocs.items()
+                                   if self._unified_store_mb(strat_name, n, a[0] if isinstance(a, tuple) else a,
+                                                             profile) is not None}
+                    if _store_devs:
+                        total_capacity = min(total_capacity, sum(
+                            int(self._usable_mb(d) * 1024 * 1024)
+                            for d in strat_devices if d.device_string in _store_devs))
+                    # The same holds on a DISCRETE card for a component zero3 maps there: its residency (the
+                    # resident blocks, or an expert store's dense part and expert cache) is granted from the USABLE
+                    # part after the cache (`_zero3_resident_budgets`). Sized against the budget, a served cache took
+                    # the difference: Qwen3-Coder-30B-A3B served on two V100-32GB, 25 769 MB of cache against
+                    # 32 195 MB, left 763 MB of the 29 619 usable — under the store's floor, so every block streamed
+                    # from the host at every token (6.7 s a token, 2026-11-10).
+                    _z3_devs = {(a[0] if isinstance(a, tuple) else a).split(":", 1)[1] for a in strat_allocs.values()
+                                if isinstance((a[0] if isinstance(a, tuple) else a), str)
+                                and (a[0] if isinstance(a, tuple) else a).startswith("zero3:")}
+                    # ... and for a decoder whose weight files are dealt over several cards: its files were accepted
+                    # against the USABLE part of each card, and the cache lives beside them on the first (`_kv_devices`).
+                    # Granted from the whole rung, the cache took the margin: Qwen3-Coder-30B-A3B on two V100-32GB,
+                    # PyTorch engine — 29 016 MB of files + 3 084 MB of cache planned on a card of 32 195 MB, out of
+                    # memory at 31.7 GB in its first prefill (2026-11-11).
+                    _bounded = (_store_devs | _z3_devs | self._dealt_cache_cards(strat_allocs, _kv_cards)) & {d.device_string for d in _cards}
+                    # ... and on the Triton engine a card whose components are held WHOLE keeps the drain's floor
+                    # (`_kv_capacity_bytes`): never a cache granted on the hot loop's queue (2026-11-12)
+                    total_capacity = min(total_capacity, sum(self._kv_capacity_bytes(d, _bounded) for d in _cards))
+                    # ... and the cache, its floor included, only above the allocator's reserve where the capacity is the raw
+                    # rung (`_kv_growth_reserve_bytes`): a floor inside it refuses this strategy (`kv_cache_size`)
+                    _kv_only, kv_growth_reserve = _cards, self._kv_growth_reserve_bytes(_cards, _bounded)
+
+                if strat_name == "zero3":
+                    # Weights leave the device only where the host is a
+                    # DIFFERENT pool. On a unified device "offload to pinned
+                    # host memory" moves the bytes to the same memory they
+                    # already occupy — Metal's malloc_host hands back a shared
+                    # buffer and charges it to the same working set — so the
+                    # weights stay counted.
+                    #
+                    # This branch short-circuits the per-component loop below,
+                    # which is where the same rule was first written and where
+                    # it was therefore never reached for zero3. Measured:
+                    # TinyLlama at a 1000 MB budget was accepted for zero3
+                    # with 262.8 MB counted of 2385.7 MB resident.
+                    _unified = any(
+                        d.spec.has_unified_memory for d in strat_devices)
+                    if _unified:
+                        total_allocated = sum(m.total_bytes
+                                              for m in component_memory.values())
+                    else:
+                        total_allocated = sum(m.activation_bytes + m.overhead_bytes
+                                              for m in component_memory.values())
+                elif strat_name == "single_gpu_lifecycle":
+                    # the decoder's KV estimate comes out of ITS figures before any MAX (`_kv_stripped`)
+                    _mem = self._kv_stripped(component_memory, kv_already_counted)   # a local copy: the loop's figures stay whole
+                    persistent, transient = self._classify_lifecycle(container)
+                    # Persistent: all weights resident + peak activation
+                    persistent_weights = sum(
+                        m.weight_bytes for name, m in _mem.items()
+                        if name in persistent
+                    )
+                    persistent_max_act = max(
+                        (m.activation_bytes for name, m in _mem.items() if name in persistent),
+                        default=0
+                    )
+                    # Transient: max one at a time (weight + activation)
+                    max_transient = max(
+                        (m.total_bytes for name, m in _mem.items() if name in transient),
+                        default=0
+                    )
+                    total_allocated = persistent_weights + persistent_max_act + max_transient
+                elif strat_name == "single_gpu":
+                    # Hot/cold budget must match _try_single_gpu's decision; the decoder's KV estimate comes
+                    # out of ITS figures before any MAX (`_kv_stripped`)
+                    _mem = self._kv_stripped(component_memory, kv_already_counted)   # a local copy: the loop's figures stay whole
+                    serve_mode = getattr(self, '_serve_mode', False)
+                    if serve_mode:
+                        # Hot: all weights resident + peak activations
+                        total_weights = sum(m.weight_bytes for m in _mem.values())
+                        max_act = max((m.activation_bytes for m in _mem.values()), default=0)
+                        total_allocated = total_weights + max_act
+                    else:
+                        # Cold: peak of one component at a time
+                        total_allocated = max(m.total_bytes for m in _mem.values())
+                else:
+                    # Allocation-aware GPU residency: a component mapped to
+                    # zero3:* keeps its weights on CPU pinned memory — only
+                    # its activations (+overhead) occupy GPU. Counting the
+                    # offloaded weights as resident rejected valid mixed
+                    # plans (lazy_sequential mapping a 57GB LM to
+                    # zero3:cuda:0 was "over capacity" on a 32GB card → the
+                    # KV check failed → the cascade fell through to
+                    # cpu_execution on a GPU node).
+                    total_allocated = self._resident_bytes_for_kv_check(
+                        strat_name, strat_allocs, component_memory, profile, kv_already_counted,
+                        container=container, only_devices=self._kv_devices(strat_allocs, profile))
+
+
+                if strat_name == "zero3":
+                    # a SUM of every component: the decoder's estimate comes off it exactly. single_gpu and
+                    # its lifecycle took it out of the decoder's own figures above, before their MAX: taken
+                    # off the MAX, it came off another component's when that one was the largest (the open
+                    # defect of main, closed with the state engine's price).
+                    if self._lm_component_name is not None:
+                        total_allocated = max(total_allocated - kv_already_counted, 0)
+                elif strat_name == "layer_streaming":
+                    # What the cut itself holds beside the cache: its WINDOW — the whole components
+                    # live beside the segments (phase-exact, `_resident_beside_streamed`), the graph
+                    # constants and flow-read weights, one segment's peak — less the KV reserve the
+                    # segments were cut around, which is the cache this check sizes. The SUM above
+                    # counted every streamed component's segment peak at once and every whole
+                    # component of every phase, which no moment of the plan holds: Ming-Lite-Omni-1.5
+                    # on the Mac's profile, its vision tower and image denoiser streamed beside its
+                    # language model to make room, was then rejected for a 37 MB cache (2026-10-04).
+                    total_allocated = int(self._layer_stream_window_bytes
+                                          - self._layer_stream_kv_reserve_bytes)
+                # A SERVED cache takes what the model's full residency leaves, never the reverse (decided between
+                # the agents 2026-11-10 04:37; vLLM's order: weights first, the KV blocks from what remains): a
+                # component zero3 maps to a card the cache lives on keeps, before the window is sized, the residency
+                # its grant gives beside the session's floor cache — its weights at the device's cost, within the
+                # usable part. Sized first, the window (244 500 tokens, 23 GB) left Qwen3-Coder-30B-A3B's blocks 0-20
+                # on the host: 0.9 s a token served against 0.33 s run on the same two V100-32GB.
+                if getattr(self, "_serve_mode", False):
+                    total_allocated += self._served_residency_bytes(container, target_dtype_str, strat_allocs,
+                                                                    component_memory, strat_devices, profile,
+                                                                    total_allocated)
+                remaining = max(total_capacity - total_allocated, 0)
+                try:
+                    # `target_dtype_str`, the dtype after the fp32 fallback if it fired — the
+                    # pre-fallback `target_dtype` sized an fp32 plan's cache at 2 bytes.
+                    kv_plan = self._compute_kv_cache_plan(container, target_dtype_str, remaining, profile=profile,
+                        kv_devices=self._kv_devices(strat_allocs, profile), growth_reserve_bytes=kv_growth_reserve)
+                except RuntimeError as exc:
+                    # The whole-precision cache does not fit this rung: the state engine's policies are scored
+                    # (step 5, core/state/policy.py). An output-changing policy is taken only with a measured cost;
+                    # none is declared yet, so the decision is a refusal that names what was considered.
+                    try:
+                        decision = self._state_policy_for(
+                            container, target_dtype_str, remaining,
+                            discrete=not any(d.has_unified_memory for d in profile.devices),
+                            host_bytes=(profile.cpu.ram_mb << 20) if profile.cpu else 0)
+                    except RuntimeError as pexc:
+                        self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}; {pexc}"))
+                        continue
+                    self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}; policy "
+                                           f"{decision.name} has no runtime yet ({decision.reason})"))
+                    continue
+                kv_cache_plan = kv_plan
+                self._kv_card_left = self._kv_card_room(_kv_only, total_allocated, kv_plan)
+                if kv_plan is not None:
+                    from neurobrix.core.state.policy import PolicyDecision
+                    self._state_policy = PolicyDecision("pages", f"pages: the whole cache fits "
+                                                        f"({kv_plan.memory_bytes / 2**20:,.0f} MB)")
+
+            allocations = strat_allocs
+            chosen_strategy = strat_name
+            chosen_devices = strat_devices
+            self._selection_reason = self._explain_choice(
+                strat_name, score, ranked, profile)
+            # Point B (docs/design/prism-time-score.md), step 3: every ranked candidate's estimated time beside
+            # today's score — said, never deciding yet; nothing when the profile carries no measured facts
+            if not getattr(self, "_time_estimates", None):
+                self._time_estimates = self._estimate_times(ranked, container, input_config, profile, target_dtype_str)
+            if self._time_estimates:
+                _t = self._time_estimates
+                _best = min((v, k) for k, v in _t.items() if isinstance(v, float)) if any(
+                    isinstance(v, float) for v in _t.values()) else None
+                _mine = _t.get(strat_name)
+                if _best and isinstance(_mine, float) and _mine <= _best[0] * 1.01:
+                    _best = (_mine, strat_name)          # a tie within 1 % is today's choice, never a change
+                self._selection_reason += ("; estimated " + (f"{_mine:.3g} s" if isinstance(_mine, float)
+                                                             else str(_mine)) +
+                                           (f", fastest by estimate {_best[1]} {_best[0]:.3g} s" if _best else ""))
+            break
+
+        if allocations is None:
+            # Every candidate was REJECTED after scoring — the KV check. Say which and why, and why
+            # streaming declined, rather than only that nothing fit.
+            _why = "".join(f"\n  {n} rejected: {str(w).splitlines()[0][:200]}"
+                           for n, _s, w in self._rejected)
+            if self._layer_streaming_declined:
+                _why += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+            for _c, _w in (getattr(self, "_arena_declined", {}) or {}).items():
+                _why += f"\n  not held whole: {_w}"
+            raise RuntimeError(
+                "ZERO FALLBACK: No strategy can fit model + KV cache on "
+                "available hardware." + _why + "\n" + self._memory_verdict(devices)
+            )
+
+        devices = chosen_devices
+        assert chosen_strategy is not None, "Strategy must be selected"
+        assert devices is not None, "Devices must be allocated"
+
+        # Step 5: Resolve per-component dtypes
+        component_dtypes = self._resolve_component_dtypes(neural_components, profile, container)
+        self._component_dtypes = component_dtypes
+
+        # Step 7: Build plan
+        if chosen_strategy == "op_level_tiling" and getattr(self, "_op_tiling_priced", None):
+            # the tiled components at the figures the rung priced them at (`_tiled_peak_bytes`): the plan's memory,
+            # its host footprint and its door read what the TilingEngine will hold, not the untiled peak
+            import dataclasses as _dc
+            component_memory = {n: (_dc.replace(m, activation_bytes=self._op_tiling_priced[n][0],
+                                                peak_op_uid=self._op_tiling_priced[n][1])
+                                    if n in self._op_tiling_priced else m) for n, m in component_memory.items()}
+        plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
+        plan.kv_cache_plan = kv_cache_plan
+        _sp = getattr(self, "_state_policy", None) if kv_cache_plan is not None else None
+        if _sp is not None:
+            plan.state_policy, plan.state_policy_reason = _sp.name, _sp.reason
+            plan.selection_reason = f"{plan.selection_reason} — state policy {_sp.reason}"
+        self._zero3_resident_budgets(container, plan, devices, profile)
+        _held = {n: {b for c in a.expert_cards.values() for b in range(c["blocks"][0], c["blocks"][1] + 1)}
+                 for n, a in plan.components.items() if a.expert_cards}
+        _stores = {n: float(a.expert_cache_mb) for n, a in plan.components.items()
+                   if a.strategy == "expert_store" and not a.expert_files}
+        if (_held or _stores) and isinstance(plan.estimated_s, float):
+            # the chosen plan re-timed with the blocks its other cards hold whole (`_spread_experts`)
+            _again = self._estimate_times([(0.0, plan.strategy, allocations, chosen_devices)], container,
+                                          input_config, profile, target_dtype_str, held_blocks=_held,
+                                          store_cache_mb=_stores).get(plan.strategy)
+            if not isinstance(_again, float):
+                # the chosen plan cannot be timed without a fact it now needs (the routing's reuse curve): said, never
+                # guessed — the estimate before the cache was sized is not this plan's
+                plan.estimated_s = None
+                plan.time_estimates = {**(plan.time_estimates or {}), plan.strategy: str(_again)}
+                plan.selection_reason = f"{plan.selection_reason} — {_again}"
+            if isinstance(_again, float):
+                plan.estimated_s = _again
+                plan.time_estimates = {**(plan.time_estimates or {}), plan.strategy: _again}
+                plan.selection_reason = (f"{plan.selection_reason} — experts of {sum(len(v) for v in _held.values())} "
+                                         f"block(s) held whole on other cards: estimated {_again:.0f} s")
+        # The guidance split the cascade was re-run under (`_split_guidance_batch`): the CFG engines
+        # run these components' branches one pass each, the batch every figure above was priced at.
+        plan.cfg_split_components = list(self._cfg_split)
+        # The components whose fed items the vendor's reference runs in separate passes: priced per pass above, run
+        # per pass by the executor (the declaration is the container's, read through the request's flow bindings).
+        _flow = getattr(input_config, "flow", None)
+        plan.batch_split_components = (_flow.split_batches(list(plan.components)) if _flow is not None else {})
+        if self._cfg_split:
+            plan.selection_reason = (
+                f"{plan.selection_reason} — guidance branches of {', '.join(self._cfg_split)} run one "
+                f"pass each: {self._cfg_split_reason}")
+
+        # Component-level spatial tiling decided during placement (Strategy 3.5
+        # in _place_component) — keep only entries whose final allocation
+        # actually landed on a GPU (drop any stale flag from a rejected
+        # strategy attempt where the component ended up elsewhere).
+        if chosen_strategy == AllocationStrategy.SINGLE_GPU_LIFECYCLE.value:
+            plan.transient_components = list(getattr(self, "_lifecycle_transient", []) or [])
+
+        if chosen_strategy == "op_level_tiling":
+            # Only when this rung WON. `_op_tiling_plans` is left behind by every
+            # attempt, including rejected ones, and carrying a rejected attempt's
+            # tiling into another strategy's plan would hand the executor a
+            # reshaping nothing agreed to — the same trap `layer_streaming`'s
+            # partitions carry, and the same guard.
+            self._op_tiling_from_rung = dict(getattr(self, "_op_tiling_plans", {}) or {})
+
+        if chosen_strategy == "layer_streaming":
+            # Only when this rung WON. `_layer_stream_partitions` is left
+            # behind by every attempt, including rejected ones, and carrying a
+            # rejected attempt's boundaries into another strategy's plan would
+            # hand the executor segments nothing agreed to.
+            _parts = getattr(self, "_layer_stream_partitions", None) or {}
+            plan.layer_stream_plan = {
+                name: [[seg.first_op, seg.last_op] for seg in part.segments]
+                for name, part in _parts.items()}
+            plan.layer_stream_graph = dict(getattr(self, "_layer_stream_graphs", None) or {})
+            plan.layer_stream_moe = dict(getattr(self, "_layer_stream_moe", None) or {})
+            plan.layer_stream_chunks = {name: [dict(c) for c in part.chunks]
+                                        for name, part in _parts.items() if part.chunks}
+            plan.layer_stream_swapped = sorted(name for name, part in _parts.items() if part.swapped)
+            plan.layer_stream_resident = {name: list(part.resident) for name, part in _parts.items() if part.resident}
+            for _rn, _held in plan.layer_stream_resident.items():
+                _p = _parts[_rn]
+                _kept = sum(_p.segments[i].weight_bytes for i in _held)
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — {_rn}: {len(_held)} of {len(_p.segments)} pieces "
+                    f"({_kept / 2 ** 20:,.0f} MB) held between runs, "
+                    f"{(_p.total_weight_bytes - _kept) / 2 ** 20:,.0f} MB streamed per run")
+            if plan.layer_stream_swapped:
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — {', '.join(plan.layer_stream_swapped)}: the values between "
+                    f"pieces wait on the host, each piece holding only what it reads and makes")
+            if plan.layer_stream_chunks:
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — {', '.join(sorted(plan.layer_stream_chunks))} run "
+                    f"{sum(len(v) for v in plan.layer_stream_chunks.values())} stretch(es) in slices of "
+                    f"a token axis: no plan held the request on the accelerator otherwise")
+            plan.device_window_mb = int(self._layer_stream_window_bytes) / (1024 * 1024)
+            if getattr(self, "_layer_stream_cut_against_floor", False):
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — segments cut against the rung less the drain floor: "
+                    f"less the profile's drain cliff left no room for them, so the card drains its "
+                    f"dead tensors at the room the window leaves (the plan's drain cliff)")
+            # The components this rung kept resident by tiling them: their tiling is the plan's.
+            for _cn, _spec in (getattr(self, "_layer_stream_tilings", None) or {}).items():
+                self._component_tiling[_cn] = _spec
+            if not plan.layer_stream_plan:
+                raise RuntimeError(
+                    "layer_streaming was chosen and carries no segments: the "
+                    "plan and the rung disagree, which the executor cannot "
+                    "resolve. Refusing rather than running an unplanned cut.")
+
+        _ct = getattr(self, "_component_tiling", {}) or {}
+        if _ct:
+            # A vendor tiling is the vendor's reference cut: the component's function on any device, the host
+            # included; an engine tile only where a card computes it.
+            plan.component_tiling = {
+                cn: spec for cn, spec in _ct.items()
+                if cn in plan.components and not (isinstance(spec, dict) and spec.get("stream"))
+                and (not str(plan.components[cn].device).startswith("cpu")
+                     or (isinstance(spec, dict) and spec.get("vendor")))
+            }
+        # A host rung under the Triton engine computes its cpu-placed components on the card: the
+        # tilings that rung sized there are the plan's (`_size_host_placement_on_device`).
+        _host_t = (getattr(self, "_host_device_tilings", {}) or {}).get(chosen_strategy) or {}
+        if _host_t:
+            plan.component_tiling = dict(plan.component_tiling or {})
+            plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components
+                                          and not (isinstance(spec, dict) and spec.get("stream"))})
+        plan.tiling_exactness = {cn: dict(v) for cn, v in (getattr(self, "_tiling_exactness", {}) or {}).items()
+                                 if cn in plan.components}
+        # A component the layer-streaming rung runs in sliced stretches is run by its pieces over its WHOLE graph —
+        # what that rung priced; a temporal stream left by an earlier rung would run its chunk graphs whole instead
+        # (mochi-1-preview native at an 8 GB rung, 2026-10-27: the plan sliced the VAE along H/W at 7.4 GB and the run
+        # took the stream's 1-frame chunks whole, OOM at aten.convolution::33).
+        _sliced = set(getattr(plan, "layer_stream_chunks", None) or {})
+        plan.component_stream = {cn: dict(v) for cn, v in (getattr(self, "_component_stream", {}) or {}).items()
+                                 if cn in plan.components and cn not in _sliced}
+        plan.stream_declined = {cn: str(v) for cn, v in (getattr(self, "_stream_declined", {}) or {}).items()
+                                if cn in plan.components and cn not in plan.component_stream}
+        self._assign_drain_cliffs(container, plan, devices)
+        self._assign_attention_budgets(plan, profile)
+
+        # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
+        # intermediate tensor would OOM the assigned GPU. Decision happens
+        # AFTER strategies are picked (allocations known) so we know the per-
+        # component VRAM budget. Plan stored in plan.runtime_op_tiling for
+        # the runtime executor to wire as op_uid interceptors.
+        plan.runtime_op_tiling = self._detect_op_level_tiling_pairs(
+            container, neural_components, allocations, profile, input_config,
+            target_dtype_str,
+        )
+        # If the op_level_tiling RUNG won, its plans are the reason the component
+        # is on the accelerator at all, and they must survive this second look:
+        # the detector above re-derives from the final allocations and would
+        # otherwise be free to return nothing for a component whose placement only
+        # exists because tiling was promised.
+        # The rung's reason travels ON THE PLAN, because `explain_plan` is a
+        # module-level function that never sees the solver — which is why
+        # `_op_tiling_declined` was written three times and read nowhere.
+        plan.op_tiling_declined = getattr(self, "_op_tiling_declined", None)
+        if profile.devices:
+            plan.margin_mb = self._margin_mb(max(d.memory_mb for d in profile.devices))
+            plan.margin_reason = (f"{plan.margin_mb} MB, the allocator's reserve"
+                                  + (" (the vendor file's measured plan_reserve_mb)"
+                                     if getattr(self, "_vendor_plan_reserve_mb", None) else
+                                     " (PRISM_DEFAULTS oom_reserve_mb)"))
+        # THE EXECUTION DOOR (the owner, 2026-10-25 15:16): the plan was sized by each pool's declared fact; what is
+        # free NOW decides only whether it runs. A pool holding less than the plan places on it refuses by name — what
+        # holds the memory is said — and the plan is never traded for a slower one.
+        from neurobrix.triton.prism.memory_budget import execution_door as _door, DeviceReading as _DR
+        def _on_demand_peak_mb(_d) -> float:
+            """A plan that loads on demand holds ONE component at a time on `_d`: the dearest of them as it holds it
+            — a `zero3:` component its resident part and its activations (its blocks stream), an expert store its
+            dense part and cache (`_held_component_mb`), any other its whole cost."""
+            best = 0.0
+            for _n, _a in plan.components.items():
+                if _d.device_string not in (_a.devices or []) or _n not in plan.component_memory:
+                    continue
+                # as the plan holds it (a tiled component its tile, a streamed one a chunk, zero3 its resident part):
+                # mochi native's tiled VAE on an idle V100-16GB was read whole, 21 214 MB, and the door refused the
+                # plan the planner had accepted (gate ebm 16g, 2026-10-27 01:35)
+                _c = self._held_as_planned_mb(container, _n, plan.component_memory[_n], _d, _a,
+                                              tiling=(getattr(plan, "component_tiling", None) or {}).get(_n),
+                                              stream=(getattr(plan, "component_stream", None) or {}).get(_n))
+                best = max(best, _c)
+            return best
+        for _d in (chosen_devices or []):
+            # what the plan holds on this device at once: its placement, or — a plan that loads on demand places
+            # nothing up front (used 0) — its dearest phase (`_peak_loaded_bytes`); the door read nothing for those
+            # and a lazy plan ran into a card another process held (found with the busy-machine re-plan, 2026-10-26)
+            if plan.device_window_mb is not None:
+                # a streamed plan holds its WINDOW on the card (segments + what stays beside them, the figure it was
+                # cut against) — never every component it lists, which it never holds at once
+                _planned = float(plan.device_window_mb)
+            else:
+                _planned = float(_d.used_mb) if _d.used_mb > 0 else _on_demand_peak_mb(_d)
+            if getattr(_d, "live_free_mb", None) is None or _planned <= 0:
+                continue
+            _r = _DR(kind="device", capacity_mb=float(_d.capacity_mb), free_mb=float(_d.live_free_mb),
+                     unified=bool(getattr(getattr(_d, "spec", None), "has_unified_memory", False)),
+                     held_by_others_mb=float(getattr(_d, "external_used_mb", 0.0) or 0.0), measured=True,
+                     source=str(getattr(_d, "budget_note", "") or ""))
+            _why = _door(_r, _planned)
+            if _why:
+                plan.execution_door = f"{_d.device_string}: {_why}"
+                break
+        # The cards an expert store holds whole blocks on (`_spread_experts`) are not the plan's devices, and hold its
+        # blocks' experts and the live activations of their MoE ops: the same door, card by card.
+        _cards = {c: v for _a in plan.components.values() for c, v in (_a.expert_cards or {}).items()
+                  if c != _a.device}
+        if _cards and not plan.execution_door:
+            _by = {d.device_string: d for d in self._prepare_devices(profile)}
+            for _c, _v in sorted(_cards.items()):
+                _d = _by.get(_c)
+                if _d is None or getattr(_d, "live_free_mb", None) is None:
+                    continue
+                _owner = next(n for n, a in plan.components.items() if _c in (a.expert_cards or {}))
+                _r_mb = self._moe_op_reserve_mb(_owner, (self._expert_topology or {}).get(_owner).layers)
+                _planned = float(_v["cache_mb"]) + (_r_mb if _r_mb is not None
+                                                    else self._live_activation_mb(plan.component_memory[_owner]))
+                _r = _DR(kind="device", capacity_mb=float(_d.capacity_mb), free_mb=float(_d.live_free_mb),
+                         unified=False, held_by_others_mb=float(getattr(_d, "external_used_mb", 0.0) or 0.0),
+                         measured=True, source=str(getattr(_d, "budget_note", "") or ""))
+                _why = _door(_r, _planned)
+                if _why:
+                    plan.execution_door = f"{_c} (experts of blocks {_v['blocks']}): {_why}"
+                    break
+        _from_rung = getattr(self, "_op_tiling_from_rung", None)
+        if _from_rung:
+            plan.runtime_op_tiling = {**(plan.runtime_op_tiling or {}), **_from_rung}
+
+        # COHERENCE: a component that Strategy 3.5 already tiles at the
+        # COMPONENT level must not ALSO carry full-extent op-level tiling.
+        # The overflow analysis above ran on full-extent shapes, but the
+        # component executes on (T,)H,W tiles whose per-op extents are the
+        # tile fraction of full — Strategy 3.5's budget check already
+        # guaranteed the whole per-tile activation fits, so no per-op band
+        # streaming is needed or wanted. Stacking both produced H-band
+        # streaming INSIDE each spatial tile with non-integer band extents
+        # (Allegro native VAE: factor-64 bands over H=720 → ~11 px bands →
+        # the #30 horizontal-scanline artifact; frame-count-dependent because
+        # the interceptors only install when the NATIVE-extent profile
+        # overflows). Component-tiled components drop their op-tiling plan.
+        if plan.component_tiling and plan.runtime_op_tiling:
+            for _cn in list(plan.runtime_op_tiling.keys()):
+                if _cn in plan.component_tiling:
+                    del plan.runtime_op_tiling[_cn]
+                    _log.debug(f"   [OpTiling] {_cn}: dropped full-extent op-level "
+                               f"tiling (component-level tiling active — per-tile "
+                               f"extents fit without band streaming)")
+
+        # The same coherence for a stretch the plan runs in slices of a token axis
+        # (`layer_stream_chunks`): its ops run on slices, the partitioner budgeted the SLICE peak
+        # (`_chunk_regions`), and the overflow analysis above priced them at full extent. Their
+        # op-level tiling is dropped here, at the plan — the runtime refuses an op-level
+        # interceptor inside a sliced stretch (`ChunkedPiece.register_op_uid_interceptors`): it
+        # was proven on the whole graph's liveness, a slice is not the call it was written for.
+        if plan.layer_stream_chunks and plan.runtime_op_tiling:
+            _orders = getattr(self, "_layer_stream_orders", None) or {}
+            for _cn, _stretches in plan.layer_stream_chunks.items():
+                _op_plan = plan.runtime_op_tiling.get(_cn)
+                if _op_plan is None:
+                    continue
+                _order = _orders.get(_cn)
+                if not _order:
+                    raise RuntimeError(
+                        f"Prism: '{_cn}' runs sliced stretches and carries op-level tiling, and "
+                        f"the streaming rung recorded no execution order to tell them apart")
+                _at = {u: i for i, u in enumerate(_order)}
+                _inside = set()
+                for _c in _stretches:
+                    _inside.update(_order[_at[_c["first_op"]]:_at[_c["last_op"]] + 1])
+                _dropped = _op_plan.drop_ops(_inside)
+                if _dropped:
+                    _log.debug(f"   [OpTiling] {_cn}: dropped op-level tiling of {_dropped} op(s) "
+                               f"inside its sliced stretches (budgeted per slice)")
+                if _op_plan.is_empty():
+                    del plan.runtime_op_tiling[_cn]
+
+        # Step 7.9: what this plan holds in host memory on its engine — priced from the plan, per the
+        # runtime's own rules (host_footprint.py): what this process holds now (the parsed container
+        # included) + what the engine adds, this machine's measured value carried by the hardware profile
+        # (or absent and said to be) + what the plan holds and loads.
+        self._price_host_footprint(plan, profile, container, devices)
+
+        # Step 7.10: the routed working set, STATED beside the plan's figures (expert_topology.py) —
+        # the dense part, the experts a token reads, an expert cache on the profile's standard rung.
+        # Placement does not read this figure: an expert store is placed from the topology (`_expert_store_floor`).
+        plan.expert_working_set = self._expert_working_set(plan, profile)
+
+        # Step 8: Summary
+        self._print_summary(devices, plan, profile)
+        return plan
+
+    def _expert_working_set(self, plan, profile) -> Optional[Dict]:
+        """The routed working set of this plan's MoE components, priced on the standard rung of the
+        profile's smallest card (a dedicated card's own rung, `memory_budget.tile_rung_mb`, the
+        NBX_PRISM_BUDGET_MB door included); None when no component routes."""
+        topologies = getattr(self, "_expert_topology", None) or {}
+        if not topologies:
+            return None
+        from neurobrix.triton.prism.expert_topology import price_working_set
+        from neurobrix.triton.prism.memory_budget import DeviceReading, tile_rung_mb
+        cards = [d for d in (getattr(profile, "devices", None) or []) if getattr(d, "memory_mb", None)]
+        if cards:
+            card = min(cards, key=lambda d: d.memory_mb)
+            rung = tile_rung_mb(DeviceReading(kind="device", capacity_mb=float(card.memory_mb),
+                                              free_mb=float(card.memory_mb)))
+            source = f"the standard rung of {getattr(card, 'name', None) or 'the smallest card'} ({card.memory_mb} MB)"
+        else:
+            rung, source = 0, "no card in the profile"
+        reserved = sum(int(m.activation_bytes) for m in plan.component_memory.values())
+        if plan.kv_cache_plan is not None:
+            reserved += int(plan.kv_cache_plan.memory_bytes)
+        return price_working_set(topologies, {n: int(m.weight_bytes) for n, m in plan.component_memory.items()},
+                                 rung, reserved, source)
+
+    def _file_backed_experts(self, plan, profile) -> Dict[str, set]:
+        """{component: routed expert weight names} of each expert store the plan holds on a UNIFIED
+        device — weights its load never reads whole: the store maps them from the container's files
+        and copies a missed expert into a cache slot (`_place_component` Strategy 2.5). A discrete
+        card's store keeps its experts in pinned host memory, priced as zero3's."""
+        topologies = getattr(self, "_expert_topology", None) or {}
+        out: Dict[str, set] = {}
+        for name, alloc in plan.components.items():
+            if alloc.strategy != "expert_store" or not _device_is_unified(alloc.device, profile):
+                continue
+            topo = topologies.get(name)
+            names = {n for l in (topo.layers if topo else []) for n in l.expert_weight_names}
+            if not names:
+                raise RuntimeError(f"ZERO FALLBACK: '{name}' is an expert store on {alloc.device} and its "
+                                   f"topology names no routed expert weight")
+            out[name] = names
+        return out
+
+    def _price_host_footprint(self, plan, profile, container, devices) -> None:
+        """Step 7.9 of `_solve_at_rung`: the plan's host footprint on its engine, and the weight reader's ceiling it was
+        priced at (`plan.load_ceiling`, declared to the loaders)."""
+        from neurobrix.triton.prism.host_footprint import host_footprint, process_footprint_now
+        from neurobrix.triton.weight_loader import is_block_key   # torch-free
+        _engine = engine_of(self._mode)
+        _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
+        _args = (plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
+                 _base, _itemsize.itemsize_table(), is_block_key, self._stored_dtypes_by_component(container))
+        _kw = dict(resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
+                   device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan, devices)),
+                   file_backed=self._file_backed_experts(plan, profile),
+                   device_weight_bytes=self._peak_loaded_weight_bytes(container, plan, profile),
+                   **self._streamed_loads(plan))
+        # the weight reader's ceiling (its parallel reads grow by their own measure up to it, core.workspace): the most
+        # reads in flight whose host bytes this plan can hold, priced here as the loader would hold them
+        load_ceiling.settle(plan, profile, lambda k: host_footprint(*_args, **_kw, load_workers=k),
+                            self._unified_host_pool_mb, self._less_the_system_share)
+
+    def _streamed_loads(self, plan) -> Dict:
+        """The host estimate's view of what a plan loads at a time (`host_footprint.streamed_loads`), from the
+        partitions this plan won and the neural components whose graphs say which parameters they embed."""
+        return streamed_loads(plan, getattr(self, "_layer_stream_partitions", None),
+                              getattr(self, "_neural_components", None))
+
+    def _standalone_conv_tiles(self, graph, overflow_ops, pair_convs, card_bytes) -> Dict[str, int]:
+        """{conv uid: band factor} of the 2-D convolutions op-level tiling runs band by band on a card of `card_bytes`:
+        every overflowing conv (`ActivationProfile.overflow_ops`) a fusion pair did not take (`pair_convs`), but a
+        depthwise one (the cuDNN workspace estimator overshoots them — tiled, they diverged on 16 GB, per-op bit-diff
+        2026-05-13) and one whose input is not rank 4 (the spatial band wrappers tile [B, C, H, W] only: a conv3d or
+        a conv1d runs native); the factor `tiling_sizes.conv_band_factor` of its workspace and output. ONE decision for
+        the price (`_compute_memory`) and the plan (`_detect_op_level_tiling_pairs`).
+        `NBX_S5_SKIP_CONV_TILE=1` (diagnostic) tiles none."""
+        import os as _os_skipc
+        if _os_skipc.environ.get("NBX_S5_SKIP_CONV_TILE") == "1":
+            return {}
+        ops = graph.get("ops", {})
+        out: Dict[str, int] = {}
+        for op_uid, op_type, out_b, ws_b, _in_tids in overflow_ops:
+            if op_uid in pair_convs or "convolution" not in op_type:
+                continue
+            _in_shapes = (ops.get(op_uid) or {}).get("input_shapes", [])
+            if len(_in_shapes) >= 2 and len(_in_shapes[1]) == 4 and int(_in_shapes[1][1]) == 1:
+                continue                                    # depthwise
+            if _in_shapes and _in_shapes[0] is not None and len(_in_shapes[0]) != 4:
+                continue                                    # not a 2-D conv
+            out[op_uid] = _ts.conv_band_factor(ws_b + out_b, out_b, card_bytes)
+        return out
+
+    def _detect_op_level_tiling_pairs(
+        self, container, components, allocations, profile, input_config,
+        target_dtype_str: str,
+    ):
+        """For each component, scan the DAG for upsample→conv pairs whose
+        intermediate tensor exceeds the assigned GPU's safe VRAM budget.
+
+        Returns: Dict[comp_name, OpLevelTilingPlan]. Empty dict if no
+        component needs op-level tiling.
+        """
+        from neurobrix.core.module.tiling_engine import OpLevelTilingPlan
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        from neurobrix.triton.prism.memory_estimator import (
+            estimate_op_workspace_bytes,
+        )
+
+        result = {}
+        # Per-GPU capacity in bytes — pick the smallest assigned device for
+        # this component (op-level tiling only fires if the worst-case GPU
+        # can't hold the op).
+        device_caps = {dev.get_device_string(): int(dev.memory_mb * 1024 * 1024) for dev in profile.devices}
+
+        dtype_bytes = _itemsize.itemsize(target_dtype_str)
+
+        # a component the request never loads (`_unloaded_by_request`, empty with no container) runs no op to tile
+        unloaded = self._unloaded_by_request(container)
+        for comp in components:
+            if comp.graph is None or comp.name in unloaded:
+                continue
+            alloc = allocations.get(comp.name)
+            if alloc is None:
+                continue
+            assigned_dev_str = alloc[0] if isinstance(alloc, tuple) else alloc.device
+            comp_vram = device_caps.get(assigned_dev_str, 0)
+            if comp_vram == 0:
+                continue
+
+            profiler = ActivationProfiler(comp.graph)
+            ap = profiler.estimate_peak_memory(
+                input_config=input_config,
+                dtype_bytes=dtype_bytes,
+                vram_per_gpu_bytes=comp_vram,
+                mode="compiled",
+                safety=_ts.op_budget_fraction(),
+                # The component's weights sit on this card for the whole of its
+                # execution, so an op's transient has the op budget fraction of
+                # the card MINUS them, not that fraction of the card. Kept in step with the placement
+                # estimate below, which passes its own `weight_bytes`: these are
+                # the only two call sites that compute overflow_ops, and the
+                # tiling-aware estimator derives which upsamples become
+                # zero-size proxies from that set. If one site subtracts the
+                # weights and the other does not, they disagree about which
+                # upsamples are free, which is the desync
+                # `_tiling_aware_zero_alloc_uids` was written to prevent.
+                resident_bytes=int(getattr(alloc, "memory_mb", 0) * 1024 * 1024)
+                if not isinstance(alloc, tuple) else 0,
+            )
+            # S5: residual chains are detected unconditionally — even
+            # when no overflow_ops are reported on this hardware, the
+            # chain wrapper is structurally beneficial (it lowers the
+            # transient peak by 2-3× per chain, which is what the
+            # estimator's zero_uids relies on). When chains are detected
+            # we keep going to build the plan; otherwise the legacy
+            # short-circuit applies.
+            # conv3d chunking is a PLAN decision (decision 2, 2026-09-29): a rank-5 convolution whose
+            # one-shot peak (`tiling_sizes.conv3d_need`) exceeds the op budget — the op budget
+            # fraction of the card minus the component's resident weights, the budget above —
+            # streams its temporal output in chunks, registered as its op interceptor.
+            _c3_resident = (int(getattr(alloc, "memory_mb", 0) * 1024 * 1024)
+                            if not isinstance(alloc, tuple) else 0)
+            _c3_uids = self._conv3d_chunk_uids(comp, profiler, input_config, dtype_bytes,
+                                               _ts.op_budget_bytes(comp_vram, _c3_resident))
+            has_chains = bool(
+                self._identify_residual_chain_specs(comp.graph, input_config)
+            )
+            if not ap.overflow_ops and not has_chains and not (getattr(self, "_conv_tiles", None) or {}).get(comp.name):
+                # THE FIGURE A STRATEGY IS GATED ON IS THE FIGURE THE PLAN EXECUTES UNDER.
+                # `_compute_memory` prices this component's residual adds IN PLACE whenever it
+                # has candidates — also when nothing overflows, its in-place-only pass — and the
+                # strategy gates compare that figure. A plan that then installs nothing runs
+                # those adds out of place, holding a third buffer the gate never saw. Measured
+                # on the Mac, 2026-09-28: Sana_1600M_4Kpx_BF16 triton at 3072x4096, single_gpu
+                # accepted at 8 420 MB weights + 6 144 MB activation (+5 %) under a 16 384 MB
+                # rung; no op overflowed 0.85 of the card alone, so no interceptor was
+                # registered, and aten.add::86 ran full size — 3 x 3.2 GB — to an 18 157 MB
+                # footprint and an out-of-memory in the decode. So the adds the estimate
+                # assumed are installed with the plan: no band streaming, no fusion, only
+                # the add written into the buffer of its dead input (numerically the add).
+                _priced_in_place = self._identify_inplace_add_candidates_static(
+                    comp.graph, input_config=input_config)
+                if _priced_in_place or _c3_uids:
+                    _iplan = OpLevelTilingPlan(comp.name)
+                    _iplan.inplace_adds = []
+                    for _uid, _reuse in _priced_in_place:
+                        _iplan.add_inplace_add(_uid, _reuse)
+                    for _uid in _c3_uids:
+                        _iplan.add_conv3d_chunk(_uid)
+                    result[comp.name] = _iplan
+                continue
+
+            # Look for upsample→conv adjacency in execution_order
+            ops = comp.graph.get("ops", {})
+            order = comp.graph.get("execution_order", [])
+            # Graph-aware symbol map (name-driven video/time overrides) —
+            # same map estimate_peak_memory used to produce ap.overflow_ops.
+            comp_symbol_map = profiler.build_symbol_map(input_config)
+            uid_to_step = {uid: i for i, uid in enumerate(order)}
+            # Build consumer map: tensor_id -> list of (consumer_uid, step)
+            consumers = {}
+            for uid in order:
+                op = ops.get(uid, {})
+                for tid in op.get("input_tensor_ids", []):
+                    consumers.setdefault(tid, []).append((uid, uid_to_step[uid]))
+
+            plan = OpLevelTilingPlan(comp.name)
+            # The in-place adds this component is priced with (`_compute_memory`
+            # passes the same candidates to the estimate) are installed with the
+            # plan, at the request — the runtime refuses a plan without them.
+            plan.inplace_adds = []
+            for _uid, _reuse in self._identify_inplace_add_candidates_static(
+                    comp.graph, input_config=input_config):
+                plan.add_inplace_add(_uid, _reuse)
+            seen_pair_convs = set()
+            for uid in order:
+                op = ops.get(uid, {})
+                if "upsample" not in op.get("op_type", ""):
+                    continue
+                # Find the unique consumer
+                out_tids = op.get("output_tensor_ids", [])
+                if len(out_tids) != 1:
+                    continue
+                cons = consumers.get(out_tids[0], [])
+                if len(cons) != 1:
+                    continue  # not a single-consumer upsample → can't fuse
+                conv_uid, conv_step = cons[0]
+                conv_op = ops.get(conv_uid, {})
+                if "convolution" not in conv_op.get("op_type", ""):
+                    continue
+                if conv_uid in seen_pair_convs:
+                    continue
+                # Only fuse if the conv is in overflow_ops (i.e. it would OOM)
+                conv_overflow = any(o[0] == conv_uid for o in ap.overflow_ops)
+                # OR if the upsample output itself is large enough to OOM
+                up_in_tids = op.get("input_tensor_ids", [])
+                up_in_shape = []
+                for tid in up_in_tids[:1]:
+                    meta = comp.graph["tensors"].get(tid, {})
+                    up_in_shape.append(profiler._resolve_shape(
+                        meta, comp_symbol_map
+                    ))
+                up_out_meta = comp.graph["tensors"].get(out_tids[0], {})
+                up_out_shape = profiler._resolve_shape(
+                    up_out_meta, comp_symbol_map
+                )
+                up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta)
+                # Threshold: an upsample output over `op_level.upsample_overflow_card_fraction`
+                # of the card is worth fusing (nbxtensor/ops/tiling.yml).
+                up_overflow = _ts.upsample_overflows(up_out_bytes, comp_vram)
+                if not (conv_overflow or up_overflow):
+                    continue
+
+                # Compute tile_factor analytically. Each band materializes:
+                #   up_band         = up_out_bytes / tile_factor
+                #   cudnn_workspace = workspace_full_bytes / tile_factor
+                #   conv_band       = conv_out_bytes / tile_factor
+                # And the conv output (full resolution) stays allocated:
+                #   conv_out_full = conv_out_bytes
+                # Target: per-band transient + conv_out_full ≤ safety × VRAM
+                # → tile_factor ≥ (up_out + cudnn_ws + conv_out) /
+                #                  (budget − conv_out_full)
+                conv_in_shapes = []
+                for tid in conv_op.get("input_tensor_ids", []):
+                    meta = comp.graph["tensors"].get(tid, {})
+                    conv_in_shapes.append(profiler._resolve_shape(
+                        meta, comp_symbol_map
+                    ))
+                conv_out_shapes = []
+                conv_out_bytes = 0
+                for tid in conv_op.get("output_tensor_ids", []):
+                    meta = comp.graph["tensors"].get(tid, {})
+                    sh = profiler._resolve_shape(meta, comp_symbol_map)
+                    conv_out_shapes.append(sh)
+                    conv_out_bytes += profiler._compute_size(sh, meta)
+                cudnn_ws_bytes = estimate_op_workspace_bytes(
+                    "compiled", conv_op.get("op_type", ""),
+                    conv_in_shapes, conv_out_shapes, dtype_bytes,
+                    vram_per_gpu_bytes=comp_vram,
+                )
+                # Per-band budget: the conv band fraction of the card minus the conv
+                # output that stays full-resolution allocated (`tiling_sizes.conv_band_factor`).
+                tile_factor = _ts.conv_band_factor(
+                    up_out_bytes + cudnn_ws_bytes + conv_out_bytes, conv_out_bytes, comp_vram)
+
+                plan.add_upsample_conv_fusion(uid, conv_uid, tile_factor)
+                seen_pair_convs.add(conv_uid)
+
+            # Standalone conv overflow (no upsample to fuse) — tiled spatially so the workspace stays bounded per
+            # band; the convs a fusion pair took are skipped. The decision PRICED with the component
+            # (`_compute_memory`: the band each tiled conv holds is in its in-op figure and in the layer partition's
+            # op curve) is carried by the plan, by the same rule.
+            # A conv this card's scan tiles and the price did not (its weights read as resident here) keeps its tiling,
+            # as before the price knew bands; a priced conv keeps the priced factor.
+            _tiles = self._standalone_conv_tiles(comp.graph, ap.overflow_ops, seen_pair_convs, comp_vram)
+            _tiles.update((getattr(self, "_conv_tiles", None) or {}).get(comp.name) or {})
+            for op_uid, factor in _tiles.items():
+                if op_uid not in seen_pair_convs:
+                    plan.add_tiled_op(op_uid, ops[op_uid]["op_type"], factor)
+
+            # Custom rms_norm tiling — rms_norm normalizes along the last
+            # (channel) dim, so each H row is independent. Tile by H bands
+            # to bound the per-band materialized output. Fires on rms_norm
+            # ops whose output exceeds `op_level.rms_norm.overflow_card_fraction`
+            # of the card; the band factor is `tiling_sizes.rms_norm_band_factor`
+            # (nbxtensor/ops/tiling.yml carries each value's reason).
+            for uid in order:
+                op = ops.get(uid, {})
+                if op.get("op_type", "") != "custom::rms_norm":
+                    continue
+                out_tids = op.get("output_tensor_ids", [])
+                if not out_tids:
+                    continue
+                out_meta = comp.graph["tensors"].get(out_tids[0], {})
+                out_sh = profiler._resolve_shape(
+                    out_meta, comp_symbol_map
+                )
+                out_b = profiler._compute_size(out_sh, out_meta)
+                if not _ts.rms_norm_overflows(out_b, comp_vram):
+                    continue
+                plan.add_tiled_op(uid, "custom::rms_norm", _ts.rms_norm_band_factor(out_b, comp_vram))
+
+            # P-PRISM-NEVER-REFUSE v2 S5: residual chain detection.
+            # Add specs of detected chains to the plan so the runtime's
+            # `OpLevelTilingEngine.register_into_graph_executor` wires
+            # band-streaming interceptors on every chain op. Detection
+            # is structural (R34): only models that match the
+            # fork→linear-N≥3→merge signature with large intermediates
+            # get any chain spec; cheaper models pay nothing.
+            chain_specs = self._identify_residual_chain_specs(comp.graph, input_config)
+            for spec in chain_specs:
+                # Tile factor: bands of at most `residual_chain.band_target_bytes`
+                # at runtime, from the bf16 estimate (bytes_fp32 / 2).
+                spec_with_tf = dict(spec)
+                spec_with_tf["tile_factor"] = _ts.residual_chain_band_factor(spec.get("bytes_fp32", 0))
+                plan.add_residual_chain(spec_with_tf)
+
+            for _uid in _c3_uids:
+                plan.add_conv3d_chunk(_uid)
+            if not plan.is_empty():
+                result[comp.name] = plan
+
+        return result
+
+    def _conv3d_chunk_uids(self, comp, profiler, input_config, dtype_bytes: int,
+                           budget_bytes: int) -> List[str]:
+        """The component's rank-5 convolutions whose ONE-SHOT peak at this request exceeds the op
+        budget — the ones that stream their temporal output in chunks (`tiling_sizes.conv3d_need`)."""
+        g = comp.graph or {}
+        ops, tensors = g.get("ops", {}), g.get("tensors", {})
+        symbols = profiler.build_symbol_map(input_config)
+        out: List[str] = []
+        for uid in g.get("execution_order", []):
+            op = ops.get(uid, {})
+            if "convolution" not in op.get("op_type", ""):
+                continue
+            ins = op.get("input_tensor_ids") or []
+            if len(ins) < 2 or ins[0] not in tensors or ins[1] not in tensors:
+                continue
+            x = profiler._resolve_shape(tensors[ins[0]], symbols)
+            w = profiler._resolve_shape(tensors[ins[1]], symbols)
+            if len(w) != 5 or len(x) != 5:
+                continue
+            at = op.get("attributes") or {}
+            if at.get("transposed"):
+                continue
+            need, _frame = _ts.conv3d_need(x, w, at.get("stride", 1), at.get("padding", 0),
+                                           at.get("dilation", 1), dtype_bytes, dtype_bytes)
+            if need and need > budget_bytes:
+                out.append(uid)
+        return out
+
+    def _identify_residual_chain_specs(self, graph: Dict, input_config=None):
+        """Return raw residual-chain specs from a DAG dict. Wrapper around
+        `OpLevelTilingEngine._detect_residual_chains` that accepts a raw
+        graph dict so the solver does not depend on a live GraphExecutor.
+        S5 2026-05-13. Sized at `input_config` (`_request_shape_of`)."""
+        from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
+
+        class _DagWrap:
+            def __init__(self, d):
+                self._dag = d
+
+        return OpLevelTilingEngine._detect_residual_chains(
+            _DagWrap(graph), shape_of=self._request_shape_of(graph, input_config))
+
+    @staticmethod
+    def _request_shape_of(graph: Dict, input_config):
+        """{tensor_id -> extents at THIS request}, the sizing every structural
+        tiling decision (in-place adds, residual chains) is taken on — the
+        profiler's own resolution under the placement-floored symbol map the
+        estimate binds (`_compute_memory`), so the plan installs exactly what
+        the estimate priced. None when no request is given: the detectors then
+        read the DAG's built extents, which are the build's, not a request's
+        (Sana_1600M_4Kpx_BF16 rebuilt at a 7x10 latent, 2026-10-12: every
+        merge add fell under the in-place threshold for a 3072x4096 decode)."""
+        if input_config is None:
+            return None
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        profiler = ActivationProfiler(graph)
+        smap = profiler.build_symbol_map(input_config, placement_floor=True)
+        tensors = graph.get("tensors", {})
+
+        def shape_of(tid):
+            meta = tensors.get(tid)
+            if meta is None:
+                return None
+            return [int(d) for d in profiler._resolve_shape(meta, smap)]
+        return shape_of
+
+    def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
+                    mode: str = "compiled", replan: bool = True):
+        """The plan sized by the pool's facts; and when the machine is busy NOW (the execution door: what is free is
+        below what that plan places), the plan RE-SOLVED on what is really free — the owner, 2026-10-26 19:21: a user
+        who opened a browser gets a slower plan that runs, said in clear ("machine busy: X MB taken by other
+        applications, plan A -> plan B"), never a refusal while a plan fits, never a run that swaps. Only when no plan
+        fits the free memory is the request refused, naming the shortfall. The re-plan never reaches a census shadow
+        (its readings are the profile's) nor an imposed rung (`NBX_PRISM_BUDGET_MB`)."""
+        try:
+            plan = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+            door = getattr(plan, "execution_door", None)
+            if not door or not replan:
+                # `replan=False` (a dry --explain-plan): the plan of the pool's FACTS, the moment said beside it — a table
+                # of plans is reproducible on a loaded machine (the Mac's 4-job table read its own workers as other
+                # applications and re-planned 7 cells, 2026-10-26 23:27)
+                return plan
+            caps, host_free, held = self._busy_readings(profile)
+            if not caps and host_free is None:
+                return plan                      # nothing live to re-plan on: the door stands as it was said
+            first = (plan.strategy, float(plan.total_memory_mb or 0.0))
+            # The host pool is set against a plan's whole host side, the process's resident memory included; the free
+            # reading excludes what this process already holds, so that is given back to it (`_unified_host_pool_mb`).
+            resident_mb = int((plan.host_footprint or {}).get("resident_bytes", 0)) / (1 << 20)
+            self._busy_caps = caps
+            self._busy_host_pool_mb = None if host_free is None else host_free + resident_mb
+            self._settled_fp32 = bool(getattr(self, "_fell_back_fp32", False))
+            try:
+                busy = self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+            except RuntimeError as refusal:
+                raise RuntimeError(
+                    f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by other "
+                    f"applications) — no plan fits it either:\n{str(refusal).splitlines()[0]}") from refusal
+            finally:
+                self._busy_caps, self._busy_host_pool_mb, self._settled_fp32 = None, None, False
+            if getattr(busy, "execution_door", None):
+                raise RuntimeError(f"{door}\nRe-planned on the memory free now (machine busy: {held:.0f} MB taken by "
+                                   f"other applications) — the smaller plan does not fit either: {busy.execution_door}")
+            free_now = host_free if host_free is not None else min(caps.values())
+            # The supervisor's decision 2026-10-27 20:45 (Janus-Pro-7B triton, 300 MB short): no refusal, a CLEAR warning —
+            # what the fast plan lacks, both plans' honest times, and what the user can do about it.
+            _fp = plan.host_footprint or {}
+            _need = (int(_fp.get("total_bytes", 0)) - int(_fp.get("resident_bytes", 0))) / (1 << 20)
+            _short = max(0.0, _need - float(free_now))
+            _t = lambda x: (f"~{x:,.0f} s" if x < 3600 else f"~{x / 3600:.1f} h") if x is not None else "not estimated"
+            note = (f"machine busy: {held:.0f} MB taken by other applications — the fast plan {first[0]} "
+                    f"({_t(getattr(plan, 'estimated_s', None))}) lacks {_short:,.0f} MB of the {free_now:.0f} MB free now; "
+                    f"running {busy.strategy} instead ({_t(getattr(busy, 'estimated_s', None))}); close an application to "
+                    f"get the fast plan back")
+            logging.getLogger(__name__).warning("Prism: %s", note)
+            _log.debug(f"   [Prism] {note}")
+            busy.selection_reason = f"{note}; {busy.selection_reason}"
+            busy.busy_replan = {"from": first[0], "free_now_mb": free_now, "held_by_others_mb": held}
+            return busy
+        finally:
+            self.__dict__.pop("_declared_fusions", None)      # the fused graphs end with the planning (one graph each)
+
+    def _busy_readings(self, profile):
+        """({device: MB free now}, the host's MB free now for a unified pool or None, MB held by others) — the
+        readings a busy machine is re-planned on: each device's live free figure (`_prepare_devices`, the door's own
+        reading) and, on unified memory, the host's available memory (`host_memory.memory_state`). Empty under a
+        census shadow or an imposed rung: those readings are the profile's, never the moment's."""
+        if _census_shadow_active() or os.environ.get("NBX_PRISM_BUDGET_MB"):
+            return {}, None, 0.0
+        devs = self._prepare_devices(profile)
+        caps = {d.device_string: float(d.live_free_mb) for d in devs if getattr(d, "live_free_mb", None) is not None}
+        held = sum(max(0.0, float(d.budget_mb) - float(d.live_free_mb)) for d in devs
+                   if getattr(d, "live_free_mb", None) is not None)
+        host = memory_state()
+        unified = any(getattr(d, "has_unified_memory", False) for d in (profile.devices or []))
+        host_free = float(host.available_mb) if (unified and getattr(host, "measured", False)) else None
+        if host_free is not None:
+            held = max(held, self._unified_host_pool_mb(profile) - host_free)
+        return caps, host_free, held
+
+    # =========================================================================
+    # MEMORY COMPUTATION - Full Intelligence
+    # =========================================================================
+
+    def _identify_inplace_add_candidates_static(
+        self, graph: Dict, input_config=None,
+    ):
+        """THE in-place-add decision: `(op_uid, reuse_input_idx)` for residual
+        `aten::add` ops where one input has its last use at the add (so its
+        buffer can be reused as output), from `graph.json` `input_tensor_ids`.
+        Threshold: `tiling_sizes.inplace_min_bytes()` unless stated.
+        One list serves both ends: the estimate prices it
+        (`_compute_memory`) and the plan installs it
+        (`_detect_op_level_tiling_pairs` -> `OpLevelTilingPlan.inplace_adds`);
+        the runtime no longer re-detects (it refuses a plan without the
+        decision), so the estimate and the execution cannot diverge.
+        P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
+        Sized at `input_config` (`_request_shape_of`), never at the build.
+        """
+        threshold_bytes = _ts.inplace_min_bytes()
+        shape_of = self._request_shape_of(graph, input_config)
+        ops = graph.get("ops", {})
+        order = graph.get("execution_order", [])
+        output_ids = set(graph.get("output_tensor_ids", []))
+        consumers: Dict[str, List[str]] = {}
+        for uid in order:
+            op = ops.get(uid, {})
+            for tid in op.get("input_tensor_ids", []):
+                consumers.setdefault(tid, []).append(uid)
+        candidates: List[Tuple[str, int]] = []
+        for uid in order:
+            op = ops.get(uid, {})
+            if op.get("op_type") != "aten::add":
+                continue
+            in_tids = op.get("input_tensor_ids", [])
+            ishapes = op.get("input_shapes", [])
+            oshapes = op.get("output_shapes", [])
+            if len(in_tids) < 2 or len(ishapes) < 2 or not oshapes:
+                continue
+            if shape_of is not None:
+                _outs = op.get("output_tensor_ids", [])
+                if not _outs:
+                    continue
+                ishapes = [shape_of(in_tids[0]), shape_of(in_tids[1])]
+                oshapes = [shape_of(_outs[0])]
+                if ishapes[0] is None or ishapes[1] is None or oshapes[0] is None:
+                    continue
+            sh_a = ishapes[0]
+            sh_b = ishapes[1]
+            sh_o = oshapes[0]
+            if sh_a != sh_b or len(sh_a) != 4:
+                continue
+            elems = 1
+            for d in sh_o:
+                elems *= max(1, int(d))
+            out_bytes = elems * 4  # fp32 conservative — matches runtime helper
+            if out_bytes < threshold_bytes:
+                continue
+            a_consumers = consumers.get(in_tids[0], [])
+            b_consumers = consumers.get(in_tids[1], [])
+            a_last = (len(a_consumers) == 1
+                      and a_consumers[0] == uid
+                      and in_tids[0] not in output_ids)
+            b_last = (len(b_consumers) == 1
+                      and b_consumers[0] == uid
+                      and in_tids[1] not in output_ids)
+            if a_last:
+                candidates.append((uid, 0))
+            elif b_last:
+                candidates.append((uid, 1))
+        return candidates
+
+    def _identify_residual_chain_proxy_uids(self, graph: Dict, input_config=None):
+        """Identify the chain-intermediate op_uids that
+        `OpLevelTilingEngine._detect_residual_chains` will band-stream at
+        runtime. Each intermediate writes a band-sized buffer at any
+        given moment, not the full-resolution buffer it would otherwise.
+        The estimator approximates this by treating the chain
+        intermediates as zero-alloc, which gives a slightly optimistic
+        peak; the existing 3 GiB reserve (PRISM_DEFAULTS["oom_reserve_mb"])
+        in `_try_single_gpu`
+        absorbs the residual band transient comfortably (band size ≪
+        full intermediate at tile_factor ≥ 4 on 4 GiB-class tensors).
+        P-PRISM-NEVER-REFUSE v2 S5 2026-05-13.
+
+        The fork op (the producer of `T_base`) and the merge op (the
+        final `aten::add`) are NOT in the returned set — both keep
+        their full buffer at runtime. The wrapper sees them as
+        legitimate live tensors throughout the band loop.
+
+        Routes through `OpLevelTilingEngine._detect_residual_chains`
+        via a lightweight DAG wrapper so the structural signature
+        stays in one place (avoids the drift risk noted above for
+        `_identify_pixel_shuffle_chain_proxy_uids`).
+        """
+        from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
+
+        class _DagWrap:
+            def __init__(self, d):
+                self._dag = d
+
+        chains = OpLevelTilingEngine._detect_residual_chains(
+            _DagWrap(graph), shape_of=self._request_shape_of(graph, input_config))
+        proxy_uids: set = set()
+        for c in chains:
+            for uid in c.get("chain_uids", []):
+                proxy_uids.add(uid)
+        return proxy_uids
+
+    def _pixel_shuffle_chain_proxy_uids_of_the_engine(self, graph: Dict) -> set:
+        """The expand / clone / view uids of every `expand -> clone -> view -> pixel_shuffle` chain the TilingEngine
+        intercepts (`OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains`, the detector the runtime wires its
+        proxies from), never a replica of it."""
+        from types import SimpleNamespace
+        from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
+        out = set()
+        for spec in OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains(SimpleNamespace(_dag=graph)) or []:
+            out.update(spec[k] for k in ("expand_uid", "clone_uid", "view_uid") if spec.get(k))
+        return out
+
+    def _identify_pixel_shuffle_chain_proxy_uids(self, graph: Dict):
+        """Identify expand/clone/view op_uids that are part of an
+        `expand → clone → view → pixel_shuffle` chain that
+        `OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains` will
+        intercept at runtime. The expand returns a stride-0 view (no
+        allocation), clone returns a `BroadcastClonePyroxy` sentinel,
+        and view is a pass-through — none of these materialize a real
+        tensor at runtime. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE
+        2026-05-11.
+
+        Note: the pixel_shuffle output IS materialized at runtime (its
+        broadcast-aware kernel allocates a real output), so the
+        pixel_shuffle uid is NOT in the returned set.
+
+        Replicates the detection pattern from
+        `tiling_engine.py:_detect_pixel_shuffle_broadcast_chains:469`
+        exactly: same chain structure (single-consumer adjacency
+        expand→clone→view→pixel_shuffle), same broadcast-dim detection
+        (in_shape[d]==1 → out_shape[d]>1, exactly one such d). Mismatch
+        with the runtime detection → estimator zeroes ops that
+        runtime won't intercept → over-optimistic peak.
+        """
+        proxy_uids = set()
+        ops = graph.get("ops", {})
+        order = graph.get("execution_order", [])
+        # Build consumer map from input_tensor_ids (the runtime version
+        # walks `attributes.args` for tensor refs; the post-import
+        # graph.json's `input_tensor_ids` is the canonical equivalent).
+        consumers: Dict[str, List[str]] = {}
+        for uid in order:
+            op = ops.get(uid, {})
+            for tid in op.get("input_tensor_ids", []):
+                consumers.setdefault(tid, []).append(uid)
+        for uid in order:
+            op = ops.get(uid, {})
+            if op.get("op_type") != "aten::expand":
+                continue
+            in_shapes = op.get("input_shapes", [])
+            out_shapes = op.get("output_shapes", [])
+            if not in_shapes or not out_shapes:
+                continue
+            in_sh = in_shapes[0]
+            out_sh = out_shapes[0]
+            if len(in_sh) != len(out_sh):
+                continue
+            broadcast_dim = -1
+            for d in range(len(in_sh)):
+                if in_sh[d] == 1 and out_sh[d] > 1:
+                    if broadcast_dim != -1:
+                        broadcast_dim = -1
+                        break
+                    broadcast_dim = d
+            if broadcast_dim == -1:
+                continue
+            expand_out_tids = op.get("output_tensor_ids", [])
+            if not expand_out_tids:
+                continue
+            expand_consumers = consumers.get(expand_out_tids[0], [])
+            if len(expand_consumers) != 1:
+                continue
+            clone_uid = expand_consumers[0]
+            clone_op = ops.get(clone_uid, {})
+            if clone_op.get("op_type") != "aten::clone":
+                continue
+            clone_out_tids = clone_op.get("output_tensor_ids", [])
+            if not clone_out_tids:
+                continue
+            clone_consumers = consumers.get(clone_out_tids[0], [])
+            if len(clone_consumers) != 1:
+                continue
+            view_uid = clone_consumers[0]
+            view_op = ops.get(view_uid, {})
+            if view_op.get("op_type") != "aten::view":
+                continue
+            view_out_tids = view_op.get("output_tensor_ids", [])
+            if not view_out_tids:
+                continue
+            view_consumers = consumers.get(view_out_tids[0], [])
+            if len(view_consumers) != 1:
+                continue
+            ps_uid = view_consumers[0]
+            ps_op = ops.get(ps_uid, {})
+            if ps_op.get("op_type") != "aten::pixel_shuffle":
+                continue
+            # Chain confirmed — expand/clone/view are zero-alloc at runtime.
+            proxy_uids.add(uid)
+            proxy_uids.add(clone_uid)
+            proxy_uids.add(view_uid)
+        return proxy_uids
+
+    def _identify_fusion_upsample_uids(
+        self, graph: Dict, overflow_ops, input_config: InputConfig,
+        dtype_bytes: int, comp_vram_bytes: int,
+    ):
+        """Identify upsample op_uids that will be fused with their consumer
+        conv by `_detect_op_level_tiling_pairs` at runtime — replicates the
+        same eligibility logic exactly (`conv_overflow OR up_overflow`,
+        same `tiling_sizes.upsample_overflows` threshold) so the tiling-aware activation
+        estimate and the runtime tiling plan agree on which upsamples are
+        materialized as `FusionUpsampleProxy` (size=0).
+
+        P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE: critical to keep the
+        threshold formula synced with `_detect_op_level_tiling_pairs` (one function now).
+        Mismatch → estimator and runtime disagree about which upsamples
+        are "free" → estimate says "fits" but runtime won't fuse.
+        """
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        if comp_vram_bytes <= 0:
+            return set()
+        profiler = ActivationProfiler(graph)
+        ops = graph.get("ops", {})
+        order = graph.get("execution_order", [])
+        consumers: Dict[str, List[str]] = {}
+        for uid in order:
+            op = ops.get(uid, {})
+            for tid in op.get("input_tensor_ids", []):
+                consumers.setdefault(tid, []).append(uid)
+        overflow_conv_uids = set()
+        if overflow_ops:
+            overflow_conv_uids = {o[0] for o in overflow_ops}
+        symbol_map = profiler.build_symbol_map(input_config)
+        fusion_uids = set()
+        for uid in order:
+            op = ops.get(uid, {})
+            if "upsample" not in op.get("op_type", ""):
+                continue
+            out_tids = op.get("output_tensor_ids", [])
+            if len(out_tids) != 1:
+                continue
+            cons = consumers.get(out_tids[0], [])
+            if len(cons) != 1:
+                continue  # not single-consumer upsample — can't fuse
+            conv_uid = cons[0]
+            conv_op = ops.get(conv_uid, {})
+            if "convolution" not in conv_op.get("op_type", ""):
+                continue
+            # Eligibility: conv would overflow OR the upsample output overflows
+            # (`tiling_sizes.upsample_overflows`, as in _detect_op_level_tiling_pairs).
+            conv_overflow = conv_uid in overflow_conv_uids
+            up_out_meta = graph["tensors"].get(out_tids[0], {})
+            up_out_shape = profiler._resolve_shape(up_out_meta, symbol_map)
+            up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta)
+            up_overflow = _ts.upsample_overflows(up_out_bytes, comp_vram_bytes)
+            if conv_overflow or up_overflow:
+                fusion_uids.add(uid)
+        return fusion_uids
+
+    def _compute_memory(
+        self, container: "NBXContainer", components: List["ComponentData"],
+        input_config: InputConfig, target_dtype_str: str,
+        profile: Optional["PrismProfile"] = None,
+        component_dtypes: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, ComponentMemory]:
+        """Compute Total = Weights + Activations + Overhead with full intelligence.
+
+        When `profile` is passed, the activation estimation becomes
+        **tiling-aware** via a two-pass flow per component:
+
+        1. First pass with `vram_per_gpu_bytes = smallest_GPU_in_profile`
+           (worst-case budget): identify overflow_ops at the standard
+           op-budget threshold (`tiling_sizes.op_budget_fraction()`).
+        2. Detect which upsample → conv adjacencies would be intercepted
+           as fusion pairs by `_detect_op_level_tiling_pairs` at runtime.
+        3. Second pass with `fusion_upsample_uids` set: re-estimate peak
+           with upsample outputs in fusion pairs zeroed (matches runtime
+           FusionUpsampleProxy sentinel behavior).
+
+        The result is a realistic peak_bytes that lets the strategy
+        cascade accept configs where the runtime tiling makes the model
+        fit. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-10.
+        Without `profile` (legacy callers): worst-case full-materialization
+        behaviour preserved.
+
+        Caveat: when the profile has mixed-size GPUs, picking the smallest
+        as the tiling-aware budget is conservative — a component placed
+        on the larger GPU may have its peak under-counted (no harm) but
+        a component flagged for tiling may have its estimate biased toward
+        more fusion than strictly needed. For POINT 9 scope (v100-16g and
+        v100-16g-x2-01 — both uniform 16 GiB), this caveat does not apply.
+        """
+        result = {}
+        shard_sizes = container.get_shard_sizes()
+        manifest = container.get_manifest()
+        assert manifest is not None, "Container manifest must be present"
+
+        # Family-driven flags (set by solve() before calling us)
+        category = getattr(self, '_model_category', 'diffusion')
+        needs_kv_cache = getattr(self, '_needs_kv_cache', False)
+
+        # Identify which component is the language model (for KV cache budgeting)
+        lm_component_name = self._lm_component_name = None
+        if needs_kv_cache:
+            lm_config = self._read_lm_config(container)
+            if lm_config:
+                lm_component_name = lm_config.get("component_name")
+            if not lm_component_name:
+                # The component the flow decodes with, read from the flow (`lm_facts.decode_lm_component`):
+                # an omni model's thinker (`thinker.model`) carried the KV plan under no name, so the plan
+                # charged its KV cache to nobody and the expert store's grant took that room
+                # (Qwen3-Omni-30B 32g triton, 2026-10-13). The historical names stay as the last reading.
+                from neurobrix.core.runtime.lm_facts import decode_lm_component
+                comp_names = [c.name for c in components]
+                lm_component_name = decode_lm_component(self._flow_topology(container), comp_names)
+                if not lm_component_name:
+                    for candidate in ("language_model", "model", "llm"):
+                        if candidate in comp_names:
+                            lm_component_name = candidate
+                            break
+
+        # Kept: the post-scoring KV check must know which component's estimate carries the cache.
+        self._lm_component_name = lm_component_name
+        # {component: ExpertTopology} of the routed components sized below (`expert_topology.py`).
+        self._expert_topology = {}
+        self._executed_graphs = {}
+        # A component the request never loads (`_unloaded_by_request`) runs no activation: its walk would bind symbols
+        # the request does not state (a VLM's vision tower on a text request: no height) and price nothing that runs.
+        unloaded = self._unloaded_by_request(container)
+        for comp in components:
+            source_dtype = comp.get_dominant_dtype()
+            # Per-component runtime dtype (the dtype this component ACTUALLY
+            # runs at), not the model-wide worst-case. Falls back to the
+            # model-level dtype for legacy callers / the fp32 fallback path.
+            comp_dtype_str = (component_dtypes or {}).get(
+                comp.name, target_dtype_str)
+            dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)
+            # the same stored -> executed factor sizes this component's streamed pieces (`_try_layer_streaming_against`)
+            self.__dict__.setdefault("_weight_dtype_mult", {})[comp.name] = dtype_mult
+            if os.environ.get("NBX_DTYPE_RESOLVE_DIAG"):
+                # Default-off diagnostic (rules/debugging-and-known-issues.md): the two
+                # strings that decide the weight multiplier, printed where they are USED.
+                # `compute_dtype_factor` once defaulted a miss to source=2/target=4 (2.0 for ANY
+                # pair); a name config/dtypes.yml does not carry is now refused by name.
+                _log.debug(f"[DTYPE_RESOLVE] {comp.name}: source_dtype={source_dtype!r} "
+                           f"comp_dtype_str={comp_dtype_str!r} -> dtype_mult={dtype_mult} "
+                           f"| target_dtype_str={target_dtype_str!r} "
+                           f"| component_dtypes={component_dtypes!r}")
+
+            # Weight memory. Sized by what the ENGINE LOADS, which is the
+            # weights this graph consumes — not by the bytes on disk.
+            #
+            # `get_shard_sizes()` reports file sizes, and a shard holds every
+            # parameter the export wrote, including any no op reads. The
+            # engines skip those — both of them since 2026-09-13; until then
+            # only the triton loader did, and a plan sized here was executed
+            # under another memory model by the compiled one
+            # (GraphExecutor.consumed_weight_names): on
+            # DeepSeek-Coder-V2-Lite that is 11781 MB of 30638, MoE experts
+            # the build never routed to. Sizing by the file made Prism plan
+            # against 30638 MB while execution needed 18857 — the announced
+            # budget and the executed one differing by 62%, in the direction
+            # that REFUSES a model which fits.
+            #
+            # Falls back to the file bytes when the graph cannot answer,
+            # which over-estimates rather than under-estimates: the safe
+            # direction, and it is the previous behaviour exactly.
+            _executed = self._graph_as_executed(comp, container)
+            weight_bytes = _consumed_weight_bytes(_executed, dtype_mult)
+            # The routed experts inside those bytes (expert_topology.py): read from the same graph as
+            # executed, in the same units, stated by the plan — never read to place.
+            if isinstance(getattr(_executed, "graph", None), dict):
+                from neurobrix.triton.prism.expert_topology import read_expert_topology
+                _lm = self._read_lm_config(container)
+                _topo = read_expert_topology(
+                    comp.name, _executed.graph,
+                    getattr(_executed, "weights_index", None) or getattr(_executed, "weight_index", None),
+                    dtype_mult, _lm,
+                    (_lm or {}).get("component_name") or (self._read_defaults(container) or {}).get("lm_component"))
+                if _topo is not None:
+                    self._expert_topology[comp.name] = _topo
+                    # the graph its fused MoE ops live in, for what a card running one of them holds (`_moe_op_reserve_mb`)
+                    self.__dict__.setdefault("_executed_graphs", {})[comp.name] = _executed.graph
+            if weight_bytes is None:
+                weight_bytes = sum(int(s * dtype_mult)
+                                   for s in shard_sizes.get(comp.name, {}).values())
+            # The arena the Triton loader allocates for it whole, and for an expert store's dense part: the library's
+            # layout at the loader's held dtypes (COST.md section 2), never the weights times a multiplier.
+            arena_bytes = dense_arena_bytes = None
+            from neurobrix.triton.prism.host_footprint import engine_of as _engine_of
+            if _engine_of(getattr(self, "_mode", "compiled")) == "triton":
+                from nbxtensor.memory.layout import arena_layout
+                _held = _held_weight_sizes(_executed, comp_dtype_str)
+                arena_bytes = None if _held is None else arena_layout(_held).total_bytes
+                _topo = self._expert_topology.get(comp.name)
+                if _topo is not None:
+                    _held = _held_weight_sizes(_executed, comp_dtype_str, exclude=frozenset(
+                        n for l in _topo.layers for n in l.expert_weight_names))
+                    dense_arena_bytes = None if _held is None else arena_layout(_held).total_bytes
+
+            # Activation memory
+            activation_bytes = 0
+            peak_op_uid = ""
+            peak_step = 0
+            activation_profiled = False
+            _kept = None                      # the ActivationProfile the activation figure is kept from
+            attn_per_block = 0
+            attn_dominates = False
+
+            if comp.graph is not None and comp.name not in unloaded:
+                try:
+                    profiler = ActivationProfiler(comp.graph)
+                    dtype_bytes = _itemsize.itemsize(comp_dtype_str)
+                    # Tiling-aware budget: smallest GPU in the profile.
+                    # When profile is None (legacy callers), this stays 0
+                    # and the two-pass logic short-circuits to worst-case.
+                    smallest_gpu_bytes = 0
+                    if profile is not None and getattr(profile, "devices", None):
+                        smallest_gpu_bytes = min(
+                            int(d.memory_mb * 1024 * 1024) for d in profile.devices
+                        )
+                    # the device allocator's pool the walk is replayed through (Triton engines; None: none)
+                    _pool_rules = self._pool_rules(profile)
+                    # First pass: worst-case + overflow_ops detection.
+                    #
+                    # THE WIDTH EACH ACTIVATION IS EXECUTED AT. A graph built
+                    # in fp32 runs mostly at the compute dtype, not wholly: the
+                    # engines keep AMP_FP32 outputs, fp32 matmul stores and
+                    # whatever a wider operand reaches in fp32 unless the
+                    # component's precision contract narrows them. Levelling
+                    # every float to the compute dtype (the former
+                    # `force_compute_dtype_for_fp`) planned Sana 4Kpx's VAE at
+                    # 6 144 MB for a 3072x4096 decode that held 15 360 MB of
+                    # activations when it ran out of memory (2026-09-28). The
+                    # widths come from the engine's own rules
+                    # (triton/prism/runtime_widths).
+                    widths = self._activation_widths(
+                        comp, container, profiler, input_config, comp_dtype_str, profile)
+                    # The Triton engines read a transposed weight in place; the compiled engine's
+                    # estimate keeps its bytes (profiler.weight_transposes_read_in_place says why) except for
+                    # the component its flow runs with AMP off — the text generation head.
+                    _in_place = profiler.weight_transposes_free(getattr(self, "_mode", "compiled"), input_config, comp.name)
+                    ap = profiler.estimate_peak_memory(
+                        input_config=input_config,
+                        dtype_bytes=dtype_bytes,
+                        vram_per_gpu_bytes=smallest_gpu_bytes or None,
+                        # Same correction as the detector: an op's transient is
+                        # budgeted against what is LEFT of the card once this
+                        # component's weights are on it. Both sites must pass a
+                        # weights figure or neither -- see the note there.
+                        resident_bytes=weight_bytes or 0,
+                        widths=widths,
+                        # PLACEMENT estimate: no symbol binds below its
+                        # witnessed build extent (the audio-tower
+                        # seq_len-misbinding class, D7 scoping note
+                        # 2026-08-10). Per-request paths keep the
+                        # unfloored map.
+                        placement_floor=True,
+                        in_place_weight_reads=_in_place,
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
+                    )
+                    self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
+                    # The request's symbols, compute width AND each activation's runtime width, for
+                    # every other place that sizes this component's activations (the layer
+                    # partitioner): one resolver, one request, one width rule.
+                    self.__dict__.setdefault("_request_sizing", {})[comp.name] = (
+                        dict(ap.symbol_map or {}), int(dtype_bytes), widths or {})   # its operand casts kept
+                    # Second pass (tiling-aware) only when first pass found
+                    # overflow_ops AND we have a real budget to reason about.
+                    # this request's decision only: a component priced again starts with no tiled conv
+                    self.__dict__.setdefault("_conv_tiles", {})[comp.name] = {}
+                    self.__dict__.setdefault("_conv_band_bytes", {})[comp.name] = {}
+                    if smallest_gpu_bytes > 0 and ap.overflow_ops:
+                        fusion_uids = self._identify_fusion_upsample_uids(
+                            comp.graph, ap.overflow_ops, input_config,
+                            dtype_bytes, smallest_gpu_bytes,
+                        )
+                        # Also zero out F2a pixel_shuffle broadcast-aware
+                        # chain ops (expand/clone/view return stride-0
+                        # views or sentinel proxies at runtime — see
+                        # tiling_engine.py:_detect_pixel_shuffle_broadcast_chains
+                        # and the BroadcastClonePyroxy interceptor wiring).
+                        # The chain's proxies avoid the allocation only where the TilingEngine's interceptor
+                        # wraps an NBXTensor (the Triton engines): on a torch tensor (compiled, sequential) its
+                        # clone is a real `clone(contiguous)` (tiling_engine `_clone_proxy`). Priced at zero for
+                        # every engine, Sana 4K's VAE peaked IN aten.clone::5 at 24 928 MB on the sequential
+                        # engine for an in-op figure of 13 066 (2026-10-22). The chains are the TilingEngine's own
+                        # detection (`_detect_pixel_shuffle_broadcast_chains`): one function for both.
+                        f2a_uids = (self._pixel_shuffle_chain_proxy_uids_of_the_engine(comp.graph)
+                                    if _engine_of(getattr(self, "_mode", "compiled")) == "triton" else set())
+                        # S5 gate: include chain intermediates in
+                        # zero_alloc so Prism's cascade accepts
+                        # single_gpu on 16g and routes VAE to GPU
+                        # under the residual-chain wrapper.
+                        chain_uids = self._identify_residual_chain_proxy_uids(
+                            comp.graph, input_config
+                        )
+                        zero_uids = fusion_uids | f2a_uids | chain_uids
+                        # The standalone convs op-level tiling runs band by band (the fusion pairs' convs excepted:
+                        # each pair's conv is its upsample's one consumer) — decided HERE, once, and carried to the
+                        # plan (`_detect_op_level_tiling_pairs`); each holds its largest band beside its whole output,
+                        # priced in its in-op figure and in the layer partition's op curve (`_conv_band_bytes`).
+                        _cons = {t: u for u, o in (comp.graph.get("ops") or {}).items()
+                                 for t in (o.get("input_tensor_ids") or [])}
+                        _pair_convs = {_cons.get(t) for u in fusion_uids
+                                       for t in ((comp.graph.get("ops") or {}).get(u) or {}).get("output_tensor_ids", [])}
+                        conv_tiles = self._standalone_conv_tiles(comp.graph, ap.overflow_ops, _pair_convs,
+                                                                 smallest_gpu_bytes)
+                        self.__dict__.setdefault("_conv_tiles", {})[comp.name] = dict(conv_tiles)
+                        _gops = comp.graph.get("ops") or {}
+                        self.__dict__.setdefault("_conv_band_bytes", {})[comp.name] = {
+                            u: profiler.tiled_conv_band_bytes(_gops[u], dict(ap.symbol_map or {}), widths, dtype_bytes, f)
+                            for u, f in conv_tiles.items()}
+                        # In-place residual adds: detected statically by the
+                        # same liveness logic the runtime engine uses. The
+                        # add's output buffer = one input's buffer at runtime
+                        # (no new allocation). The profiler aliases the output
+                        # tid to the reused input tid, which extends that
+                        # input's lifetime through downstream consumers and
+                        # zero-allocates the output.
+                        inplace_adds = self._identify_inplace_add_candidates_static(
+                            comp.graph, input_config=input_config
+                        )
+                        if zero_uids or inplace_adds or conv_tiles:
+                            ap_tiled = profiler.estimate_peak_memory(
+                                input_config=input_config,
+                                dtype_bytes=dtype_bytes,
+                                zero_alloc_uids=zero_uids,
+                                inplace_adds=inplace_adds,
+                                widths=widths,
+                                # The fused-upsample proxies and the broadcast
+                                # chain's expand/clone/view CARRY their input to
+                                # their consumer: its buffer lives until then.
+                                # The residual-chain sentinels carry nothing.
+                                source_holding_uids=fusion_uids | f2a_uids,
+                                in_place_weight_reads=_in_place,
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
+                                tiled_convs=conv_tiles,
+                            )
+                            activation_bytes = ap_tiled.peak_bytes
+                            _kept = ap_tiled
+                            peak_op_uid = ap_tiled.peak_op_uid
+                            peak_step = ap_tiled.peak_step
+                        else:
+                            activation_bytes = ap.peak_bytes
+                            _kept = ap
+                            peak_op_uid = ap.peak_op_uid
+                            peak_step = ap.peak_step
+                    else:
+                        # No overflow ops at this budget — also try in-place
+                        # add detection alone (relevant for shapes where
+                        # in-place adds dominate even without upsample fusion).
+                        inplace_adds = self._identify_inplace_add_candidates_static(
+                            comp.graph, input_config=input_config
+                        )
+                        if inplace_adds:
+                            ap_tiled = profiler.estimate_peak_memory(
+                                input_config=input_config,
+                                dtype_bytes=dtype_bytes,
+                                inplace_adds=inplace_adds,
+                                widths=widths,
+                                in_place_weight_reads=_in_place,
+                        attention_scratch=self._attention_scratch(profile, comp_dtype_str), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype_str), op_workspace=self._op_workspace(profile), pool=_pool_rules,
+                                tiled_convs=conv_tiles,
+                            )
+                            activation_bytes = ap_tiled.peak_bytes
+                            _kept = ap_tiled
+                            peak_op_uid = ap_tiled.peak_op_uid
+                            peak_step = ap_tiled.peak_step
+                        else:
+                            activation_bytes = ap.peak_bytes
+                            _kept = ap
+                            peak_op_uid = ap.peak_op_uid
+                            peak_step = ap.peak_step
+                    activation_profiled = True
+                    if os.environ.get("NBX_PRISM_ESTIMATE_DIAG") == "1":
+                        # The estimate as the plan consults it, said per component: the
+                        # symbol map the profiler bound for this request, the first-pass
+                        # peak and its op, every overflow op, and the figure retained
+                        # after the tiling-aware pass. The instrument for an
+                        # estimator-against-ATen gap (Wan T2V, 2026-09-21: 19.7 GB
+                        # planned, 24.8 GB asked at one conv). Default off, one env read.
+                        try:
+                            _smap = profiler.build_symbol_map(input_config, placement_floor=True)
+                        except Exception as _e:   # diagnostic only: say it, never hide it
+                            _smap = f"<build_symbol_map failed: {type(_e).__name__}: {_e}>"
+                        _log.debug(f"[PrismEstimate] {comp.name}: request={input_config} symbols={_smap} dtype_bytes={dtype_bytes} "
+                                   f"weights={weight_bytes / 2**20:.0f} MB budget={smallest_gpu_bytes / 2**20:.0f} MB")
+                        _log.debug(f"[PrismEstimate] {comp.name}: first pass peak={ap.peak_bytes / 2**30:.2f} GiB "
+                                   f"at {ap.peak_op_uid} (step {ap.peak_step}); overflow ops={len(ap.overflow_ops or [])}; "
+                                   f"retained activation={activation_bytes / 2**30:.2f} GiB at {peak_op_uid}")
+                        for _ov in (ap.overflow_ops or [])[:12]:
+                            _log.debug(f"[PrismEstimate]   overflow {_ov[0]} ({_ov[1]}) out={_ov[2] / 2**30:.2f} GiB "
+                                       f"ws={_ov[3] / 2**30:.2f} GiB")
+                except MissingRuntimeValue:
+                    raise
+                except Exception as exc:
+                    # `int(weight_bytes * 0.5)` stood here. A coefficient is not
+                    # a measurement: this is the very estimate the per-cell
+                    # memory gate consults, and it is what let hat-s-x4 through
+                    # to hold 8408 MB live and take the machine to 127 MB. A
+                    # plan that cannot be computed refuses by name.
+                    raise PlanNotComputable(
+                        f"activation profiling failed for component "
+                        f"{comp.name!r} ({type(exc).__name__}: {exc}). The plan "
+                        f"will not substitute a coefficient for a measurement — "
+                        f"the number would then be consulted by the memory gate "
+                        f"as if it had been measured."
+                    ) from exc
+            else:
+                if category == "diffusion":
+                    raise PlanNotComputable(
+                        f"component {comp.name!r} is a diffusion component with "
+                        f"no graph to profile, so its activation footprint is "
+                        f"unknown. `weight_bytes * 0.5` stood here; half the "
+                        f"weights is a guess wearing a measurement's clothes.")
+                # llm/image_vq without graph: no activation estimate (KV cache added below)
+
+            # The graph records BUILD literals, not symbols: measured 2026-09-17,
+            # all four image models on this rack declare height/width symbols in
+            # `symbolic_context` and ZERO of their tensors use them
+            #   real-esrgan-x2 0/1800   hat-s-x4 0/4660
+            #   swin2SR        0/5163   swinir   0/4175
+            # so the profiler sizes every activation at the build, whatever was
+            # asked. hat-s-x4 planned the SAME 278 MB for a 448x448 request and a
+            # 160x112 one — 22.4x the pixels, not one byte of difference — and the
+            # per-cell gate was fed that number.
+            #
+            # The runtime executes at the REQUEST size regardless (real-esrgan
+            # renders 320x224 correctly from a 112x80 build), so the estimate is
+            # scaled by the pixel ratio the two sizes imply. Derived from the
+            # graph's own declared trace_value and the request; no per-model data.
+            # A component that never runs: no activation, and that zero is exact, not a figure nobody walked — no
+            # `overhead_factor` on its weights (`_overhead_bytes`), no size of the request to follow.
+            activation_bytes, activation_profiled = (0, True) if comp.name in unloaded else (
+                self._scale_activations_to_request(comp, activation_bytes, input_config), activation_profiled)
+            if activation_profiled and _kept is not None and _kept.live_before_op:
+                # What is ALREADY live as each op begins, at its largest, on the profile this figure was kept
+                # from (tiling-aware where it was), scaled as the figure is: an op-level tile cuts an op's own
+                # output and workspace, never what earlier ops hold — the floor `_try_op_level_tiling` reads.
+                _op, _live = max(_kept.live_before_op.items(), key=lambda kv: kv[1])
+                self.__dict__.setdefault("_live_floor", {})[comp.name] = (
+                    int(self._scale_activations_to_request(comp, _live, input_config)), _op)
+
+            # Add KV cache to activation budget for the LM component
+            kv_estimate = 0
+            if needs_kv_cache and lm_component_name and comp.name == lm_component_name:
+                kv_estimate = self._estimate_kv_cache_bytes(container, target_dtype_str)
+                activation_bytes += kv_estimate
+
+            # Attention correction for transformer components
+            if any(n in comp.name.lower() for n in ('transformer', 'dit', 'diffusion')):
+                activation_bytes, attn_per_block, attn_dominates = self._apply_attention_correction(
+                    comp, activation_bytes, manifest, target_dtype_str, activation_profiled
+                )
+
+            overhead_bytes = self._overhead_bytes(weight_bytes, activation_bytes, activation_profiled)
+            # What the Triton allocator holds at its peak, the walk replayed through its pool and its deferred queue
+            # (`ActivationProfile.held_peak_bytes`), beside the component's arena: stated, read by no decision yet.
+            held_peak_bytes = None
+            if _kept is not None and _kept.held_peak_bytes is not None:
+                held_peak_bytes = int(_kept.held_peak_bytes) + int(arena_bytes or 0)
+            # what the pool alone holds over the walked live set (every dead tensor freed at once): stated beside the
+            # device's measured arena factor it is to replace once a measured cell of each kind agrees with it (M3)
+            pool_ratio = None
+            if _kept is not None and _kept.held_live_bytes is not None and _kept.peak_bytes > 0:
+                pool_ratio = max(1.0, _kept.held_live_bytes / _kept.peak_bytes)
+
+            result[comp.name] = ComponentMemory(
+                component_name=comp.name,
+                weight_bytes=weight_bytes,
+                activation_bytes=activation_bytes,
+                overhead_bytes=overhead_bytes,
+                peak_op_uid=peak_op_uid,
+                peak_step=peak_step,
+                activation_profiled=activation_profiled,
+                attention_per_block_bytes=attn_per_block,
+                attention_dominates=attn_dominates,
+                arena_bytes=arena_bytes,
+                dense_arena_bytes=dense_arena_bytes,
+                held_peak_bytes=held_peak_bytes,
+                pool_ratio=pool_ratio,
+                kv_bytes=int(kv_estimate),
+            )
+
+        return result
+
+    def _overhead_bytes(self, weight_bytes: int, activation_bytes: int, profiled: bool) -> int:
+        """The buffer added beside a component's weights and activations: none where the activation figure is the
+        walk of the live set op by op (`activation_profiled`) — the weights are counted exactly from the index, and the
+        walk holds what the run holds: Janus-Pro-7B triton whole on a V100-16GB peaked 14 151 MB for 14 100 of weights +
+        activations (rack, 2026-10-28), the compiled engine's per-op V100 build of Open-Sora-v2's VAE stayed within
+        0.38 GB of the walk at every op (2026-10-23). The `overhead_factor` stays on a figure nobody walked."""
+        if profiled:
+            return 0
+        return int((weight_bytes + activation_bytes) * self.overhead_factor)
+
+    def _read_defaults(self, container) -> Optional[Dict]:
+        """Read defaults.json from cache."""
+        if not container.cache_path:
+            return None
+        p = container.cache_path / "runtime" / "defaults.json"
+        if not p.exists():
+            return None
+        with open(p) as f:
+            return json.load(f)
+
+    def _activation_widths(self, comp, container, profiler, input_config,
+                           compute_dtype: str, profile, seams=None, tiling=None) -> Dict[str, int]:
+        """{tensor_id: bytes per element} this component's activations are EXECUTED at,
+        under the engine this plan is for (`self._mode`) — triton/prism/runtime_widths.
+
+        What the pass needs and where it comes from here:
+          * the compute dtype: the component's plan dtype;
+          * the engine: `self._mode`, recorded by `solve` before any rung runs;
+          * `has_native_bf16`: the profile's (the Triton matmul store reads it). With no
+            profile it is taken False — fp16 matmuls then store fp32, the WIDER answer;
+          * `attention_operands`: the profile's devices' declaration (an SDPA whose operands
+            disagree stores in the aligned q's dtype). With no profile, "widest" — the WIDER
+            answer, as above;
+          * the precision contract: `plan_time_contract`, the runtime's own functions over
+            the container's record (see there for what the plan cannot read and prices
+            wider). A container with no cache path has no record to read: conservative;
+          * the op-level tiling plan: NOT KNOWN here — it is detected after placement
+            (`_detect_op_level_tiling_pairs`). `tiling=None`: every structurally eligible
+            fused / tiled op is priced at the wider of its tiled and untiled width;
+          * the request's shapes, for the matmul store's M <= 4 rule: the profiler's own
+            resolution under the placement-floored symbol map this estimate uses."""
+        from neurobrix.triton.prism.runtime_widths import (
+            conservative_contract, plan_time_contract, runtime_widths)
+        cache_path = getattr(container, "cache_path", None)
+        if cache_path:
+            contract = plan_time_contract(cache_path, comp.name, comp.graph, compute_dtype, input_config.flow)
+        else:
+            contract = conservative_contract("the container has no cache path to read a record from")
+        native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
+        # Whether the engine priced holds float64 / complex128: its OWN branch's reader over the
+        # profile (Triton: `triton_stores_fp64`; compiled: `device_supports_fp64`), which refuses
+        # no profile. A profile with no device places every component on the host
+        # (`cpu_execution`) and Triton has no host compute backend
+        # (`strategies/triton/cpu_execution.py`): the host's own answer is priced, on either branch.
+        from neurobrix.triton.prism.runtime_widths import TRITON_ENGINES
+        if self._mode in TRITON_ENGINES and profile is not None and profile.devices:
+            from neurobrix.triton.dtype import profile_triton_stores_fp64
+            stores_fp64 = profile_triton_stores_fp64(profile)
+        else:
+            from neurobrix.core.dtype.config import profile_device_supports_fp64
+            stores_fp64 = profile_device_supports_fp64(profile)
+        operands = profile.attention_operands if profile is not None else "widest"
+        tensors = comp.graph.get("tensors", {})
+        symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
+        return runtime_widths(
+            comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
+            attention_operands=operands, contract=contract, stores_fp64=stores_fp64, tiling=tiling,
+            shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map), seams=seams)
+
+    def _graph_as_executed(self, comp, container):
+        """The component as the engines will run it: with the declared-MoE
+        fusion applied to a ROUTED component (one holding a topk router)
+        when the package declares num_experts > 1 — the flows apply the
+        same pass at execute and the executor then loads what it adds.
+        Sized on the un-fused graph, a MoE LM under a non-llm family
+        budgeted only the experts the build routed to while the fused
+        kernel reads them all — Qwen3-Omni's thinker at 5.2 GB planned,
+        57 GB executed (2026-09-13). Weight bytes only: the activation
+        profile and the layer partition still read the container's graph
+        (noted in the ledger). The copy is fused, never the container's
+        graph."""
+        graph = getattr(comp, "graph", None)
+        if not isinstance(graph, dict):
+            return comp
+        _moe = self._moe_declaration(graph, container)
+        if _moe is None:
+            return comp
+        from types import SimpleNamespace
+        return SimpleNamespace(
+            graph=self._fused_as_declared(graph, _moe),
+            weights_index=getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None),
+            name=getattr(comp, "name", None))
+
+    def _fused_as_declared(self, graph, norm_topk_prob: bool):
+        """A copy of `graph` with the declared-MoE fusion applied (the flows' pass at execute), made once per graph a
+        plan reads: the weight sizing (`_graph_as_executed`) and the layer cut (`_try_layer_streaming`) read this one
+        object, never the container's graph — each fused its own deep copy, 2 x (14.5 s copy + the fusion) of
+        Qwen3-30B-A3B's 115 419 ops on one core (py-spy, 2026-10-30). norm_topk_prob does not change which weights
+        the fused op reads; the declared value is passed so the sizing and the cut fuse identically."""
+        # a served session's raise is ONE planning (`served_prefill.solve_served`): its solves share one memo, kept
+        memo = self.__dict__.setdefault("_kept_fusions" if getattr(self, "keeps_fusions", False) else "_declared_fusions", {})
+        hit = memo.get(id(graph))
+        if hit is None or hit[0] is not graph or hit[1] != norm_topk_prob:
+            from neurobrix.core.optim.passes.normalize import graph_copy
+            from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+            hit = (graph, norm_topk_prob,
+                   detect_and_fuse_moe(graph_copy(graph), "declared", norm_topk_prob=norm_topk_prob, declared=True))
+            memo[id(graph)] = hit
+        return hit[2]
+
+    def _moe_declaration(self, graph, container) -> Optional[bool]:
+        """The declaration the runtime fuses this graph's experts on, as the `norm_topk_prob` the
+        fused op carries, or None: the package declares `lm_config.num_experts > 1`, the graph
+        holds a router (`aten::topk`) and is not fused yet. One rule for the weight sizing
+        (`_graph_as_executed`) and the layer cut (`_try_layer_streaming`), so a plan sizes and
+        cuts the same graph. A declared MoE without `norm_topk_prob` is refused, as the flows
+        refuse it."""
+        lm = self._read_lm_config(container) or {}
+        n = lm.get("num_experts")
+        if n is None or int(n) <= 1:
+            return None
+        ops = (graph.get("ops") or {}).values()
+        if any(op.get("op_type") == "custom::moe_fused" for op in ops):
+            return None
+        if not any(op.get("op_type") == "aten::topk" for op in ops):
+            return None
+        if lm.get("norm_topk_prob") is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: norm_topk_prob missing from lm_config for a MoE model — the "
+                "flows refuse it at execute, and a plan cannot cut a fusion it cannot describe.")
+        return bool(lm["norm_topk_prob"])
+
+    def _read_lm_config(self, container) -> Optional[Dict]:
+        """The LM facts of the decoder this container's flow runs, or None when it runs none: the
+        package's `lm_config`, else — for a flow that opens a decode session — the facts that
+        session builds its cache from (`core.runtime.lm_facts`, one reader for the plan and both
+        engines). A next-token-diffusion package carries no `lm_config`, and its KV-cached decoder
+        ran unplanned (VibeVoice, 2026-09-29: 714 MiB)."""
+        from neurobrix.core.runtime.lm_facts import decode_lm_component, lm_config_of
+        defaults = self._read_defaults(container)
+        if not defaults:
+            return None
+        if defaults.get("lm_config"):
+            return defaults.get("lm_config")
+        topology = self._flow_topology(container)
+        lm = decode_lm_component(topology, list((topology.get("components") or {}).keys()))
+        if lm is None:
+            return None
+        return {**lm_config_of(defaults, topology, lm), "component_name": lm}
+
+    def _kv_sequences(self, container) -> int:
+        """How many sequences the decode cache holds at once (`lm_facts.decode_sequences`): the
+        guidance batch of an image-AR generation, the negative context of a next-token diffusion."""
+        from neurobrix.core.runtime.lm_facts import decode_sequences
+        manifest = container.get_manifest() or {}
+        return decode_sequences(self._flow_topology(container), self._read_defaults(container) or {},
+                                family=manifest.get("family"))
+
+    def _kv_declared(self, container):
+        """(decoder, its declared KV state) — the container's `state` section (core/state/price.py) — or None when the
+        flow decodes nothing. Refused by name when it decodes with a component the container declares no KV for."""
+        from neurobrix.core.state.price import kv_declaration
+        topology = self._flow_topology(container)
+        return kv_declaration(topology, list((topology.get("components") or {}).keys()))
+
+    def _kv_token_bytes(self, container, dtype_str: str) -> int:
+        """Bytes one cached position costs across every sequence the cache holds (core/state/price.py), 0 when the flow
+        decodes nothing."""
+        from neurobrix.core.state.price import kv_token_bytes
+        declared = self._kv_declared(container)
+        if declared is None:
+            return 0
+        return kv_token_bytes(declared[1], dtype_str, self._kv_sequences(container))
+
+
+    #: How a declared symbol's NAME maps onto the request that will be run.
+    #: A symbol the request cannot answer for is left alone rather than guessed.
+    _SYMBOL_TO_REQUEST = {
+        "height": "height",
+        "width": "width",
+        "batch": "batch_size",
+        "batch_size": "batch_size",
+        "seq_len": "seq_len",
+        "sequence_length": "seq_len",
+        "num_frames": "num_frames",
+        "frames": "num_frames",
+        # The video VAEs call their temporal axis `time`, not `num_frames`:
+        # CogVideoX-2b, mochi-1-preview and Wan2.1 all declare
+        # `time  source=input::z::dim_2`, the latent tensor's temporal dim.
+        # It was absent here, so the scaler skipped it and the plan did not
+        # follow the frame count at all — measured 2026-09-18, CogVideoX plans
+        # the SAME 22 993 MB at 8 frames (which runs) and at 9 (which OOMs at
+        # `aten.convolution::90` asking 4.29 GiB on a 16 G card).
+        "time": "num_frames",
+    }
+
+    #: The UNIT a declared symbol counts in, as an `input_config` field holding
+    #: the conversion from the request's unit to the symbol's. A symbol's NAME
+    #: does not carry its unit: `height` in Sana's transformer counts LATENT
+    #: rows and `height` in the request counts PIXELS, and dividing one by the
+    #: other compares two different quantities. Read from the container (the
+    #: VAE's own compression), never per model.
+    _SYMBOL_UNIT = {
+        "height": "vae_scale",
+        "width": "vae_scale",
+        "num_frames": "temporal_compression",
+        "frames": "temporal_compression",
+        # `time` is the video VAEs' own name for the temporal axis and it counts
+        # LATENT frames, so it needs the compression exactly as the others do.
+        # Adding it to the request map without adding it here left 33 frames
+        # reading 33/9 = 3.67 instead of 1.0 — the unit half of the same defect.
+        "time": "temporal_compression",
+    }
+
+    def _scale_activations_to_request(self, comp, activation_bytes, input_config):
+        """Scale a build-sized activation estimate to the request actually made.
+
+        Graph tensor shapes are BUILD values — measured on this rack, all four
+        image models declare height/width symbols and ZERO of their tensors use
+        them (real-esrgan-x2 0/1800, hat-s-x4 0/4660, swin2SR 0/5163, swinir
+        0/4175) — while op arguments carry the symbolic expressions. So the
+        profiler sizes every activation at the build whatever was asked, and
+        hat-s-x4 planned the same 278 MB for a 448x448 request and a 160x112 one.
+
+        EVERY declared symbol carrying a build value is followed, not only
+        height and width: a sequence length or a frame count that differs
+        between build and request scales the estimate exactly as a spatial
+        dimension does.
+
+        Refuses by name rather than swallowing: a bare `except Exception:
+        return activation_bytes` stood here, which would have turned any bug in
+        this method back into the build-sized estimate that caused the problem.
+        """
+        from neurobrix.core.runtime_values import MissingRuntimeValue
+
+        graph = getattr(comp, "graph", None) or {}
+        syms = ((graph.get("symbolic_context") or {}).get("symbols") or {})
+        if not isinstance(syms, dict) or not syms:
+            return activation_bytes                    # nothing declared: nothing to scale
+
+        # WHAT THE PROFILER ALREADY FOLLOWED IS NOT SCALED AGAIN.
+        #
+        # This method was written under a census that said the tensors do not
+        # carry their symbols — "real-esrgan-x2 0/1800" and so on. That census
+        # looked for a symbol NAME inside `shape`, which is concrete, and inside
+        # `symbolic_shape` treated as a list of strings. It is neither: it is
+        # `{"dims": [{"type":"mul","left":{"type":"symbol","id":"s1","trace":112},
+        # "right":2,"trace":224}, ...]}`, a structured expression, and every one
+        # of the 1801 tensors carries one. The premise was false, and I made the
+        # same mistake re-checking it before believing the Mac's measurement.
+        #
+        # So once `build_symbol_map` binds a spatial symbol to the request, the
+        # profiler's peak is ALREADY at the requested extent and multiplying by
+        # build->request here applies the same correction twice. Measured on
+        # real-esrgan-x8 at 1024x1024 the moment the binding was fixed: the
+        # profiler answered 16 384 MiB, this method multiplied by
+        # (1024/112)x(1024/80) = 117.03, and the plan read 1 917 396 MB of
+        # activations — 1.87 TB for a model with 32 MB of weights.
+        #
+        # A symbol the map leaves at its build value is still followed here:
+        # that is the case this method exists for and it is unchanged.
+        # The discriminator is whether the TENSORS carry the symbol, not whether
+        # the map binds it. A bound symbol that no tensor uses changes nothing in
+        # the profiler's peak, and skipping the scale for it would leave the
+        # estimate at its build size — which is the defect this method exists to
+        # remove. So: walk the structured `symbolic_shape` and collect the symbol
+        # ids that actually appear in a dimension.
+        def _symbol_ids_in(dim, into):
+            if isinstance(dim, dict):
+                if dim.get("type") == "symbol" and dim.get("id"):
+                    into.add(dim["id"])
+                for key in ("left", "right", "base", "value", "operand"):
+                    if key in dim:
+                        _symbol_ids_in(dim[key], into)
+                for v in dim.get("args", []) or []:
+                    _symbol_ids_in(v, into)
+            elif isinstance(dim, (list, tuple)):
+                for v in dim:
+                    _symbol_ids_in(v, into)
+            elif isinstance(dim, str):
+                for _sid in syms:
+                    if re.search(rf"\b{re.escape(_sid)}\b", dim):
+                        into.add(_sid)
+
+        used_by_tensors = set()
+        for _t in (graph.get("tensors") or {}).values():
+            ss = (_t or {}).get("symbolic_shape")
+            dims = ss.get("dims") if isinstance(ss, dict) else ss
+            _symbol_ids_in(dims, used_by_tensors)
+
+        bound_to_request = set()
+        try:
+            from neurobrix.triton.prism.profiler import ActivationProfiler as _AP
+            _map = _AP(graph).build_symbol_map(input_config)
+            for _sid, _spec in syms.items():
+                if not isinstance(_spec, dict) or _sid not in used_by_tensors:
+                    continue          # no tensor carries it: the peak is at build
+                _t = _spec.get("trace_value")
+                _m = _map.get(_sid)
+                if isinstance(_m, int) and isinstance(_t, int) and _m != _t:
+                    bound_to_request.add(_sid)
+            # a symbol the request's FLOW binds (`FlowBindings.overrides`: a VACE control pair, an encoder's length) is
+            # followed by the profiler whatever its value — equal to its build, it was scaled again here
+            if getattr(input_config, "flow", None) is not None:
+                bound_to_request.update(input_config.flow.overrides(graph, input_config))
+        except Exception as _e:
+            # Said, not swallowed: without this set the scaler would double every
+            # dimension the profiler resolved, and a silent fallback here is the
+            # failure mode the method's own docstring refuses.
+            logging.getLogger(__name__).warning(
+                "Prism: could not read the profiler's symbol map for %s (%s: %s); "
+                "the estimate may be scaled for dimensions it already follows",
+                getattr(comp, "name", "?"), type(_e).__name__, _e)
+
+        ratio = 1.0
+        followed = []
+        # One DIMENSION contributes once, however many times it is declared.
+        # PixArt-XL-1024's transformer declares `seq_len` at two symbol ids, and
+        # the product over declarations made a request of 300 against a build of
+        # 120 read as x6.25 instead of x2.5 — a dimension counted twice, which is
+        # how an over-estimate becomes a refusal of a model that runs. Height and
+        # width are DIFFERENT dimensions and still contribute one factor each,
+        # which is why hat-s-x4 reads x22.4 = (448/112)x(448/80).
+        seen_dims = set()
+        for sym_id, spec in syms.items():
+            if not isinstance(spec, dict):
+                raise MissingRuntimeValue(
+                    f"the graph declares symbol {sym_id!r} as {type(spec).__name__}, "
+                    f"not a specification with a build-time value; the estimate cannot "
+                    f"be scaled against a symbol it cannot read")
+            built = spec.get("trace_value")
+            name = spec.get("name")
+            if built in (None, 0) or not name:
+                continue                               # declared without a build value
+            if sym_id in bound_to_request:
+                continue                               # the profiler already followed it
+            attr = self._SYMBOL_TO_REQUEST.get(name)
+            if attr is None:
+                # SAY IT. A symbol carrying a build value that this map does not
+                # know is a dimension the estimate silently stops following, and
+                # that silence is how the plan read the same 22 993 MB at 8 and
+                # 9 frames while one ran and the other died.
+                logging.getLogger(__name__).debug(
+                    "Prism: %s declares symbol %r (build-time value %s) that no request "
+                    "field answers for — the estimate does not follow it",
+                    getattr(comp, "name", "?"), name, built)
+                continue
+            actual = getattr(input_config, attr, None)
+            if actual in (None, 0):
+                continue
+            # The guidance batch is the LOOP's (`flow_bindings`: the CFG engine batches [uncond, cond] for the loop
+            # components and nothing else; an iterative flow encodes the negative prompt as a pass of its own and decodes
+            # the one guided latent). A component outside the loop is scaled against the request's own batch: against the
+            # doubled one, Sana 4K's VAE was priced at twice its walk (39 520 MB for 19 760, 2026-10-22).
+            if attr == "batch_size" and getattr(input_config, "guidance_passes", None):
+                _flow = getattr(getattr(input_config, "flow", None), "flow", None) or {}
+                if (_flow.get("type") == "iterative_process"
+                        and getattr(comp, "name", None) not in ((_flow.get("loop") or {}).get("components") or [])):
+                    actual = int(actual) // int(input_config.guidance_passes)
+            # Put the request into the SYMBOL's unit before dividing. A model
+            # with a VAE declares its spatial symbols in latent rows/columns:
+            # measured 2026-09-17, Sana-1600M declares height/width with a build
+            # value of 32 and a `build_resolution` of 1024 — the symbol counts
+            # latents, the request counts pixels, and 1024/32 is the VAE's own
+            # compression, not a change of size. Taken raw it multiplied the
+            # estimate by 32 per axis and Prism then refused a model that runs:
+            # "This model cannot run on this machine" for a Sana-1600M that had
+            # rendered on a 16 GB card that morning. The upscalers declare no
+            # vae_scale, their symbols are already pixels, and the factor is 1.
+            unit_attr = self._SYMBOL_UNIT.get(name)
+            unit = getattr(input_config, unit_attr, None) if unit_attr else None
+            if unit in (None, 0):
+                unit = 1
+            if unit_attr == "temporal_compression" and unit != 1:
+                # A temporal axis counts LATENT frames, and the engine's own
+                # arithmetic is (n - 1) // ratio + 1, not n / ratio. Plain
+                # division under-counts exactly where it matters: 9 frames at
+                # ratio 4 is 3 latent frames, not 2.25, and 9 is the first count
+                # that needs a third — which is the step the 16 G card dies on.
+                comparable = float((int(actual) - 1) // int(unit) + 1)
+            else:
+                comparable = float(actual) / float(unit)
+            if comparable <= 0:
+                continue
+            if attr in seen_dims:
+                continue                               # already counted this dimension
+            seen_dims.add(attr)
+            ratio *= comparable / float(built)
+            followed.append(f"{name} {built}->{comparable:g}"
+                            + (f" (request {actual} / unit {unit})" if unit != 1 else ""))
+
+        if ratio <= 1.0:
+            return activation_bytes                    # never promise LESS than measured
+        # SAY IT. This multiplies the estimate the per-cell memory gate consults —
+        # x22.4 on hat-s-x4 at 448x448 — and `followed` was built and thrown away,
+        # so the decision changed the plan and left no line behind. An unflushed
+        # list is the silence-by-construction family: indistinguishable from not
+        # having run at all.
+        logging.getLogger(__name__).debug(
+            "Prism: %s activations x%.3g to the request (%s)",
+            getattr(comp, "name", "?"), ratio, ", ".join(followed))
+        return int(activation_bytes * ratio)
+
+
+    def _estimate_kv_cache_bytes(self, container, target_dtype_str: str) -> int:
+        """The KV bytes a strategy is priced for before the cache is sized (core/state/price.py): max_tokens + margin
+        positions, else the declared window, at the compute dtype, across every sequence. 0 when the flow decodes
+        nothing. The cache itself is sized later by `_compute_kv_cache_plan`, within the remaining budget."""
+        from neurobrix.core.state.price import kv_estimate_tokens, DEFAULT_PROMPT_MARGIN
+        declared = self._kv_declared(container)
+        if declared is None:
+            return 0
+        defaults = self._read_defaults(container) or {}
+        tokens = kv_estimate_tokens(declared[1], self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
+        return tokens * self._kv_token_bytes(container, target_dtype_str)
+
+    def _kv_min_tokens(self, container) -> int:
+        """The fewest cache positions a plan is accepted with (core/state/price.kv_min_tokens): one turn, two when
+        serving, 64 without max_tokens. One authority: `_try_layer_streaming` reserves at least this beside its
+        segments, or the plan it cuts is refused."""
+        from neurobrix.core.state.price import kv_min_tokens, DEFAULT_PROMPT_MARGIN
+        defaults = self._read_defaults(container) or {}
+        return kv_min_tokens(self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
+                             bool(self._serve_requested))
+
+    def _request_max_tokens(self, defaults) -> int:
+        """The tokens the KV floor and estimate are priced for: a run's own request (`InputConfig.max_tokens`, the
+        CLI's --max-tokens) when it names one, else the package's declared max_tokens; serving always the package's.
+        The cache is still sized up to the package's bound when the room affords it (`_compute_kv_cache_plan`). The
+        Mac, 2026-10-19: Qwen3-30B-A3B-Thinking asked 32 tokens was priced at its declared 32 768 (3.2 GB of KV), its
+        expert store refused for it, and it ran layer_streaming at 0.02 tok/s."""
+        ic = getattr(self, "_input_config", None)
+        asked = getattr(ic, "max_tokens", None) if ic is not None else None
+        if asked and not bool(getattr(self, "_serve_requested", False)):
+            return int(asked)
+        return int(defaults.get("max_tokens") or 0)
+
+    def _kv_min_bytes(self, container, dtype_str: str) -> int:
+        """`_kv_min_tokens` in bytes, at the per-position cost `_compute_kv_cache_plan` uses."""
+        return self._kv_min_tokens(container) * self._kv_token_bytes(container, dtype_str)
+
+    def _state_policy_for(self, container, target_dtype: str, room_bytes: int, discrete: bool = False,
+                          host_bytes: int = 0):
+        """The state engine's policy when the whole cache does not fit (core/state/policy.py): candidates priced from
+        the container's declared KV at the minimum the request needs. `pages` at full precision; `offload` only on a
+        DISCRETE device (on unified memory the host is the same pool); output-changing ones carry the quality cost the
+        vendor file measures for them (memory.state_policy_costs), None when unmeasured, so they are never taken."""
+        from neurobrix.core.state.policy import PolicyCandidate, choose_policy
+        need = self._kv_min_bytes(container, target_dtype)
+        costs = getattr(self, "_state_policy_costs", None) or {}
+        cands = [PolicyCandidate("pages", need, exact=True),
+                 PolicyCandidate("quantize_kv", need // 2, exact=False,
+                                 quality_cost=(costs.get("quantize_kv") or {}).get("cost"),
+                                 cost_source=(costs.get("quantize_kv") or {}).get("source", ""))]
+        if discrete and need <= int(host_bytes):
+            # the whole cache on the host, one layer's positions on the device at a time, double-buffered so the next
+            # layer's copy overlaps this layer's attention: exact, slower by the copies
+            layers = int(self._kv_declared(container)[1]["layers"])
+            cands.append(PolicyCandidate("offload", 2 * -(-need // layers), exact=True))
+        return choose_policy(cands, int(room_bytes))
+
+    def _served_residency_bytes(self, container, target_dtype: str, strat_allocs: Dict, component_memory: Dict,
+                                strat_devices, profile, allocated_bytes: int) -> int:
+        """What the zero3 components on the cards a SERVED cache lives on keep resident before the window is sized: on
+        each such card, the usable part less what the plan already holds there and the session's floor cache, capped
+        at the component's weights at the device's cost. 0 where no zero3 component shares a card with the cache, or
+        the cache's state declares nothing."""
+        declared = self._kv_declared(container)
+        if declared is None:
+            return 0
+        from neurobrix.core.state.price import kv_min_tokens, DEFAULT_PROMPT_MARGIN
+        defaults = self._read_defaults(container) or {}
+        floor_bytes = kv_min_tokens(defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
+                                    True) * self._kv_token_bytes(container, target_dtype)
+        kv_cards = self._kv_devices(strat_allocs, profile)
+        mib = 1024 * 1024
+        reserved = 0
+        for name, a in strat_allocs.items():
+            dev = a[0] if isinstance(a, tuple) else a
+            if not (isinstance(dev, str) and dev.startswith("zero3:")) or name not in component_memory:
+                continue
+            card = dev.split(":", 1)[1]
+            if kv_cards is not None and card not in kv_cards:
+                continue
+            d = next((x for x in strat_devices if x.device_string == card), None)
+            if d is None or d.spec is None or getattr(d.spec, "has_unified_memory", False):
+                continue
+            weights = int(component_memory[name].weight_bytes * self._cost_multiplier_on(card, name, container, profile))
+            room = int(self._usable_mb(d) * mib) - int(allocated_bytes) - int(floor_bytes) - reserved
+            reserved += max(0, min(weights, room))
+        return reserved
+
+    def _compute_kv_cache_plan(
+        self, container, target_dtype: str, remaining_vram_bytes: int, profile=None, kv_devices=None, growth_reserve_bytes: int = 0,
+    ) -> Optional[KVCachePlan]:
+        """The decode cache, sized from the container's declared KV state (core/state/price.py) within the remaining
+        budget: as many positions as it affords, bounded by the request (run) or the declared window (serve), never
+        beyond the window. None when the flow decodes nothing; refused by name below the minimum. ZERO FALLBACK."""
+        from neurobrix.core.state.price import kv_cache_size, DEFAULT_PROMPT_MARGIN
+        declared = self._kv_declared(container)
+        if declared is None:
+            return None
+        decoder, entry = declared
+        defaults = self._read_defaults(container) or {}
+        per_token_bytes = self._kv_token_bytes(container, target_dtype)
+        common = (entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
+        room = {"remaining_bytes": remaining_vram_bytes, "growth_reserve_bytes": growth_reserve_bytes}
+        size = kv_cache_size(*common, bool(getattr(self, "_serve_mode", False)), floor_max_tokens=self._request_max_tokens(defaults), **room)
+        # what a serving session would hold in the same room — the same reserve kept: a reach past what a served cache
+        # is granted would promise positions it cannot hold — bounded by the declared window: the context a request can
+        # reach on this class (the derived census keys a prompt up to it). No window, or no session floor in the room:
+        # None, stated by the record, never a guess.
+        session_reach = None
+        if entry.get("window"):
+            try:
+                session_reach = int(kv_cache_size(*common, True, **room)["max_cache_len"])
+            except RuntimeError:            # StateUndeclared included: it is a RuntimeError
+                session_reach = None
+        plan = KVCachePlan(
+            max_cache_len=size["max_cache_len"],
+            num_layers=int(entry["layers"]),
+            num_kv_heads=int(entry["kv_heads"]),
+            k_head_dim=int(entry["k_dim"]),
+            v_head_dim=int(entry["v_dim"]),
+            dtype=target_dtype,
+            memory_bytes=size["memory_bytes"],
+            per_token_bytes=per_token_bytes,
+            initial_cache_len=size["initial_cache_len"],
+            session_reach=session_reach,
+        )
+        plan.prefill_chunk, plan.prefill_chunk_reason = self._prefill_chunk(container, plan, defaults, profile,
+                                                                            kv_devices)
+        return plan
+
+    def _prefill_chunk(self, container, kv: "KVCachePlan", defaults, profile, kv_devices) -> Tuple[Optional[int], str]:
+        """A serving session's prefill chunk C and its reason (triton/prism/prefill_chunk.py): the candidates
+        (`price.prefill_chunk_candidates`, whole pages of the session cache up to the prefill rows the plan prices a
+        session at), each priced from the certified times of its derived census keys on the decoder's card class."""
+        from neurobrix.triton.prism import prefill_chunk as PC
+        from neurobrix.triton.prism.runtime_widths import TRITON_ENGINES
+        from neurobrix.core.state import price as P
+        from neurobrix.core.config.loader import get_vendor_config
+        if kv.session_reach is None:
+            return None, "no serving session is planned (no session reach): one chunk per request"
+        # the phrase `served_prefill` reads a chunk chosen without certified times by: its constant, never restated
+        from neurobrix.triton.prism.served_prefill import UNTIMED
+        untimed = self._mode not in TRITON_ENGINES
+        if untimed and not getattr(self, "_serve_requested", False):
+            # a run prices its prefill at its own request's rows (`InputConfig.seq_len`): its one pass is priced
+            return None, (f"one chunk per turn: the {self._mode} engine keeps {UNTIMED} to price a "
+                          f"chunk from, and a run's prefill is priced at its own rows")
+        if profile is None or not kv_devices or getattr(container, "cache_path", None) is None:
+            return None, "one chunk per turn: the plan names no decoder card to price a chunk on"
+        # On a unified card the host and the card are ONE memory pool: `_kv_devices` names the host beside it for the
+        # memory accounting, and that entry is the same cache, priced by the card's kernels.
+        cards, unified = set(), any(":" in str(d) and _device_is_unified(str(d), profile) for d in kv_devices)
+        for d in kv_devices:
+            if ":" not in str(d):
+                if untimed or unified:
+                    continue                # the host side of the cache prices no chunk; the cards' page does
+                return None, f"one chunk per turn: the decoder's cache lives on {d}, which certifies no kernel time"
+            idx = int(str(d).rsplit(":", 1)[1])
+            spec = next((x for x in profile.devices if int(x.index) == idx), None)
+            if spec is None:
+                return None, f"one chunk per turn: the profile states no device {d}"
+            cards.add(PC.card_tables(spec))     # the chip's VENDOR PROFILE's tables, never its architecture field
+        if len(cards) != 1 or None in next(iter(cards)):
+            return None, f"one chunk per turn: the decoder's cards are of several classes {sorted(map(str, cards))}"
+        vendor, arch, cls = cards.pop()
+        from nbxtensor.ops.tiling_sizes import PAGED_DECODE_TILE_CANDIDATES
+        page, _ = P.paged_cache_params(kv.num_kv_heads, kv.k_head_dim, kv.v_head_dim, str(kv.dtype),
+                                       get_vendor_config(vendor, arch).get("memory"), int(kv.memory_bytes),
+                                       PAGED_DECODE_TILE_CANDIDATES)
+        rows = P.session_prefill_rows(defaults)
+        if untimed:
+            # the rows this plan PRICES a served turn's prefill at: the request's when it states them (`served_prefill`
+            # raises them while the plan holds), else the container's prompt margin
+            rows = int(getattr(getattr(self, "_input_config", None), "seq_len", 0) or 0) or rows
+            # No certified time to price a chunk on this engine: a served turn runs in chunks of the rows the plan
+            # prices a session's prefill at (whole pages), never as one pass the plan did not price — on the compiled
+            # engine a 79 931-token turn of Qwen3-Coder-30B-A3B served on two V100-32GB asked its 5.95 GiB causal mask
+            # in one pass and ran out of memory (2026-11-10). Decided between the agents 07:51; a chunk sized by memory
+            # beyond the priced rows is the next step.
+            C = P.prefill_chunk_candidates(page, rows)[-1]
+            return C, (f"chunks of {C} rows: the rows the plan prices a served turn's prefill at (whole pages of "
+                       f"{page}); the {self._mode} engine keeps {UNTIMED} to choose among them")
+        record = PC.chunk_record(Path(str(container.cache_path)), vendor, arch, cls,
+                                 "triton" if self._mode == "triton" else "triton-sequential")
+        return PC.choose(record, P.prefill_chunk_candidates(page, rows), rows, PC.certified_times(vendor, arch, cls))
+
+    def _apply_attention_correction(
+        self, comp, activation_bytes: int, manifest: dict, dtype_str: str, profiled: bool
+    ) -> Tuple[int, int, bool]:
+        """Apply quadratic attention memory correction for transformers."""
+        vae_blocks = manifest.get('components', {}).get('vae', {}).get('blocks')
+        attrs = comp.attributes if hasattr(comp, 'attributes') else None
+
+        if not vae_blocks or not attrs:
+            return activation_bytes, 0, False
+
+        h = attrs.get('state_extent_0')
+        w = attrs.get('state_extent_1')
+        head_dim = attrs.get('attention_head_dim')
+        channels = attrs.get('state_channels')
+
+        if not all([h, w, head_dim, channels]):
+            return activation_bytes, 0, False
+
+        patch = PRISM_DEFAULTS.get("default_patch_size", 2)
+        build_seq = (h // patch) * (w // patch)
+        runtime_seq = build_seq  # Same resolution for now
+
+        num_blocks = manifest.get('components', {}).get('transformer', {}).get('blocks', 20)
+        num_heads = max(1, channels * 2)
+        batch = PRISM_DEFAULTS.get("default_batch_size", 2)
+        dtype_bytes = _itemsize.itemsize(dtype_str)
+        hidden_dim = channels * num_heads
+
+        # Attention = seq² × heads × batch + QKV
+        attn_matrix = runtime_seq * runtime_seq * num_heads * batch * dtype_bytes
+        qkv = 3 * runtime_seq * hidden_dim * batch * dtype_bytes
+        attn_per_block = int(attn_matrix + qkv)
+        block_accum = num_blocks ** 0.5
+        peak_attn = int(attn_per_block * block_accum)
+
+        attn_dominates = False
+        if not profiled and peak_attn > activation_bytes:
+            activation_bytes = peak_attn
+            attn_dominates = True
+
+        # Resolution and safety scaling
+        raw_scale = runtime_seq / build_seq if build_seq > 0 else 1.0
+        resolution_scale = max(1.0, raw_scale ** 0.7)
+        safety = 1.2
+        total_mult = resolution_scale * safety
+        activation_bytes = int(activation_bytes * total_mult)
+
+        return activation_bytes, attn_per_block, attn_dominates
+
+    # =========================================================================
+    # DEVICE PREPARATION
+    # =========================================================================
+
+    def _device_reading(self, dev, capacity: float, host, profile=None) -> "DeviceReading":
+        """The one reading the law is applied to, for this device (memory_budget.py).
+
+        A unified device is shared with the host by its nature: its free figure is the host's
+        available memory. A discrete card is asked, through the vendor seam, whether it drives
+        a display and what other processes hold on it; a card the seam cannot read is treated
+        as shared. A census shadow (`kernels/census.py`) sees no card and carries the machine's
+        plan, not the room's: its reading is the profile's capacity as a dedicated card, or the
+        rung the NBX_PRISM_BUDGET_MB door names (the census enumerating every rung)."""
+        try:
+            from neurobrix.kernels import census as _census
+            shadow = _census.active()
+        except Exception:  # noqa: BLE001
+            shadow = False
+        if shadow:
+            if dev.has_unified_memory:
+                return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(dev.memory_mb),
+                                     source="census shadow: the profile's capacity")
+            # a dedicated card in the shadow: the card AS A RUN READS IT, from the profile's measured runtime facts —
+            # the plan the census derives keys from is the plan the run makes (rule 4: the coverage check's plan)
+            total, ctx = getattr(dev, "runtime_total_mb", None), getattr(dev, "runtime_context_mb", None)
+            if total is None or ctx is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: the census shadow plans {dev.get_device_string()} as a run reads it, and the profile "
+                    f"carries no measured runtime_total_mb / runtime_context_mb for it (the profile is generated with them "
+                    f"by autodetect on the machine; a run reads them live)")
+            return DeviceReading(kind="device", capacity_mb=float(total), free_mb=float(total) - float(ctx),
+                                 own_context_mb=float(ctx), measured=True,
+                                 source="census shadow: the profile's measured runtime total and context")
+        if dev.has_unified_memory:
+            free = float(host.available_mb) if getattr(host, "measured", False) else float(capacity)
+            # A plan taken under a PROFILE may not assume more host memory than that profile
+            # declares. The live reading is this machine's; the profile's `cpu.ram_mb` is the
+            # machine the plan is FOR, and on a unified device that figure IS the pool.
+            #
+            # Without this bound a foreign profile is not reproducible, which is the premise
+            # the whole census rests on — the cascade reads the profile, not the card.
+            # Measured 2026-09-22: Flex.1-alpha under the Mac's `default-9f169c79`
+            # (memory_mb 18 186, cpu.ram_mb 24 576) planned on THIS rack at
+            # `budget_mb=131072` — the 128 GB rung of a 251 GB host — and took `single_gpu`
+            # with its four components summing to 30 327 MB against a capacity of 17 277 MB.
+            # The Mac, planning the same container under the same profile, refuses.
+            #
+            # `_host_budget_mb` already applies exactly this bound, `min(free, installed)`;
+            # this path did not, so the two halves of the same law disagreed.
+            # On a machine planning under its OWN profile the two figures agree and nothing
+            # moves; a busy machine still lowers, which is the 2026-09-10 repair.
+            declared_host = self._less_the_system_share(
+                profile, float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0))
+            if declared_host > 0 and declared_host < free:
+                free = declared_host
+            # AND never more than the device itself can hold. On unified memory the device's
+            # pool is a SUBSET of the machine's RAM, so a reading taken from host memory has
+            # to be capped by the device's own capacity or the budget exceeds the thing it is
+            # a budget for. Measured 2026-09-22 on the Mac's profile: capacity 17 276.7 MB,
+            # budget 24 576.0 — the profile's cpu.ram_mb, straight through. A plan budgeted
+            # at 24 GB against a 17 GB device accepts plans that cannot run, which is the
+            # same failure as the 131 072 MB reading this bound was added to remove, just
+            # smaller. Both halves are needed: the host bound stops another machine's RAM
+            # leaking in, this one stops the machine's RAM exceeding its own GPU.
+            #
+            # Still a CEILING, not a replacement: a busy host lowers below capacity, which
+            # is the 2026-09-10 repair, and `min` preserves that.
+            if capacity > 0:
+                free = min(free, float(capacity))
+            # The pool a plan is budgeted against (`memory_budget.budget_mb` reads `capacity_mb`): the declared working
+            # set, never above what the system leaves of the installed RAM — the same figure as the host pool's.
+            pool = float(dev.memory_mb)
+            if declared_host > 0:
+                pool = min(pool, declared_host)
+            return DeviceReading(kind="device", capacity_mb=pool, free_mb=min(free, pool), unified=True,
+                                 measured=bool(getattr(host, "measured", False)), source=str(getattr(host, "source", "")))
+        from nbxtensor.device import NoGpuRuntime
+        try:
+            r = read_device_sharing(dev.index)          # a driver that refuses raises DeviceQueryError: the plan refused
+            # A card this process has not touched yet holds no context of ours, and the run creates one there the
+            # moment it places anything on it: the profile's measured runtime context (the figure the census shadow
+            # reads). Read as 0, every card but the first was budgeted 306 MB over what the run gets — the 4-card
+            # pass (2026-10-27) planned Qwen3-30B-A3B triton weight_sharding at 15 867 MB per V100-16GB the shadow
+            # (15 845 MB usable) refuses.
+            ctx = getattr(dev, "runtime_context_mb", None)
+            if ctx is None and r.measured:
+                # Rule 1 (the profile is the machine's identity card): a fact the plan needs and the profile does not
+                # declare is refused by name, never read as 0. Read as 0 here, the card the process has not touched yet
+                # was budgeted its whole pool: Qwen3-Coder-30B-A3B on `v100-32g-x2-nvlink` held 32 257 MB of experts on
+                # a card with 32 192 MB free once its context existed, the door re-planned, and the fallback plans
+                # crashed (weight_sharding) or streamed the whole model at every token (serve, 6.7 s a token;
+                # 2026-11-10).
+                raise ProfileFactMissing(
+                    f"ZERO FALLBACK: the hardware profile declares no runtime_context_mb (nor runtime_total_mb) for "
+                    f"{dev.get_device_string()} — the runtime's own context on that card, which a plan for it must leave "
+                    f"free. A profile generated on the machine carries both (delete it and run without --hardware to "
+                    f"regenerate it), or add the two measured figures to the profile's device entry")
+            if ctx is not None and r.measured and r.own_context_mb < float(ctx):
+                missing = float(ctx) - r.own_context_mb
+                r = dataclasses.replace(r, own_context_mb=float(ctx), free_mb=max(0.0, r.free_mb - missing))
+            # the PROFILE's card as a run reads it (its measured runtime total), never a bigger card it runs on (rule 1;
+            # a 16 GB profile on a 32 GB V100 planned Janus's LM whole, 2026-11-02); a smaller or busier card still lowers
+            total = getattr(dev, "runtime_total_mb", None)
+            if total is not None and r.measured and r.capacity_mb > float(total):
+                over = r.capacity_mb - float(total)
+                r = dataclasses.replace(r, capacity_mb=float(total), free_mb=max(0.0, r.free_mb - over))
+            return r
+        except NoGpuRuntime:              # a plan for a target profile on a host with no GPU runtime: its card, unmeasured
+            return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
+                                 measured=False, source="no GPU runtime on this host: the profile's capacity, unmeasured")
+
+    @staticmethod
+    def _less_the_system_share(profile, installed: float) -> float:
+        """The installed RAM less the system's own share MEASURED calm (`host_measured.system_share_mb`: installed less
+        the calm available memory, tools/profile_facts.py) — the OS and its resident apps hold it whatever the run. ONE
+        figure for both halves of a unified pool: the device reading (`_device_reading`) and the host pool
+        (`_unified_host_pool_mb`). With the share off the host pool only, the device budget stayed at the declared
+        18 186 MB on the M4 Pro and Prism accepted a lazy_sequential plan whose host side (18 562 MB) overran the
+        17 582 MB pool (2026-10-26). Absent: nothing measured, nothing taken; no installed figure: 0 stays 0."""
+        share = float(((getattr(profile, "host_measured", None) or {}).get("system_share_mb")) or 0)
+        return installed - share if (share > 0 and installed > 0) else installed
+
+    def _unified_host_pool_mb(self, profile) -> float:
+        """The whole pool a plan may fill on a unified machine: the profile's installed RAM less the engine's
+        measured base for this mode (`cpu.runtime_base_mb`), a fact of the profile; without an installed figure,
+        the device's declared capacity. Never the moment's free reading."""
+        installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+        base = 0.0
+        try:
+            base = float(((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
+                          if profile.cpu and getattr(self, "_mode", None) else 0) or 0)
+        except Exception:  # noqa: BLE001 — no measured base: nothing subtracted, nothing invented
+            base = 0.0
+        # The device's declared working set bounds the pool: the system keeps its own share of the installed RAM
+        # (the Mac M4 Pro: 24 576 MB installed, 18 186 MB declared; at 24 403 MB MiniCPM-o-4_5 planned 20 852 MB
+        # under triton that the door refused at every reading this machine has, 2026-10-26).
+        declared = float(max((getattr(d, "memory_mb", 0) or 0 for d in profile.devices if getattr(d, "has_unified_memory", False)),
+                             default=0) or 0)
+        if installed <= 0:
+            installed = float(max((d.memory_mb for d in profile.devices), default=0))
+        # The system's own share of the installed RAM, MEASURED calm (`host_measured.system_share_mb`: installed less
+        # the calm available memory, tools/profile_facts.py) — the OS and its resident apps hold it whatever the run
+        # does; without it the door decided by luck at the calm-free edge (Ming 16 462 MB and Qwen3-VL 16 648 MB of
+        # host side against 16 711-17 506 MB calm free on the Mac, 2026-10-26). Absent: nothing measured, nothing taken.
+        installed = self._less_the_system_share(profile, installed)
+        if declared > 0:
+            installed = min(installed, declared)
+        busy = getattr(self, "_busy_host_pool_mb", None)
+        if busy is not None:
+            # a busy machine: what is free now, less the engine's measured base it has yet to hold (`solve_smart`)
+            return max(0.0, min(installed, float(busy)) - base)
+        return max(0.0, installed - base)
+
+    def _host_budget_mb(self, profile) -> float:
+        """Host RAM through the same law: the free reading rounded down onto the ladder; without a
+        reading, the installed figure rounded down (never the raw figure, never a fraction of it)."""
+        installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+        from neurobrix.triton.prism.memory_budget import budget_mb, host_reading
+        # THE DOOR, first. `NBX_PRISM_BUDGET_MB` imposes a rung on every pool, and the device
+        # reading already honours it through `budget_mb`. This path did not, so a census
+        # enumerating rungs left the HOST budget at the machine's real free RAM: the rungs
+        # where layer_streaming must fire were never reached, and the strategy went uncensused
+        # at exactly the sizes it exists for (the Mac, 9675411a).
+        r = host_reading()
+        door = budget_mb(r)
+        import os
+        if os.environ.get("NBX_PRISM_BUDGET_MB"):
+            # The door models a smaller CARD. On a unified-memory profile the host IS the card's
+            # memory, and the door caps it (the Mac's 9675411a: the rungs where layer_streaming
+            # fires). On a discrete profile the host is the profile's own installed RAM — never
+            # the door and never a live reading the census cannot share: the door capped the host
+            # at the card's rung, so the census refused Allegro at the 16 GB top rung
+            # (cpu_streaming needs 89 148 MB of host for its VAE) where the live card plans
+            # cpu_streaming as its last resort (2026-09-29, the supervisor's decision 3).
+            devices = list(getattr(profile, "devices", None) or [])
+            if installed <= 0 or any(d.has_unified_memory for d in devices):
+                return float(door)
+            return float(rung_down_mb(installed))
+        if any(getattr(d, "has_unified_memory", False) for d in (getattr(profile, "devices", None) or [])):
+            # a unified machine: the host pool is the declared one (the fact); the moment is the door (solve_smart)
+            return float(rung_down_mb(self._unified_host_pool_mb(profile)))
+        figure = min(r.free_mb, installed) if (r.measured and installed > 0) else (r.free_mb if r.measured else installed)
+        return float(rung_down_mb(figure))
+
+    def _prepare_devices(self, profile: PrismProfile) -> List[DeviceState]:
+        """Prepare GPUs sorted by capacity DESC.
+
+        `dev.memory_mb` is what the hardware RECOMMENDS, and on a unified
+        device that is not a measure of what is AVAILABLE: this M4 Pro reports
+        18 186 MB and does not lower it by one byte while another process
+        holds a third of the machine. A plan sized against the recommendation
+        is accepted and then killed by the system mid-execution — measured
+        2026-09-10, an artefact of 12 298 MB accepted at `single_gpu` and
+        killed at step 3 of 20 with 10 099 MB actually free, when its largest
+        component (6 120 MB) would have fitted a lower rung comfortably.
+
+        So the machine is measured HERE, at the one place capacity is born,
+        and the cascade descends on the true number by itself — that is the
+        whole repair. The refusal that fires when no rung fits is the last
+        resort, not the mechanism.
+
+        Only where device memory comes out of host RAM: on a discrete card the
+        two pools are disjoint and host pressure constrains nothing.
+        `has_unified_memory` is the profile's own answer, already written.
+        """
+        host = memory_state()
+        devices = []
+        for dev in profile.devices:
+            recommended = float(dev.memory_mb)          # the device's declared figure, no coefficient
+            capacity = recommended
+            # A census SHADOW carries the machine's plan, not the room's — the same rule
+            # `_device_reading` already applies one call later. Without it the shadow's
+            # capacity, and therefore every tile a tiled family derives from it, is a
+            # function of whatever else was running: the same model at the same imposed rung
+            # logged 8 659 MB in one shadow and 7 604 MB in the next, minutes apart
+            # (Apple M4 Pro, 2026-09-22). A census that is not reproducible is not a census.
+            if dev.has_unified_memory and host.measured and not _census_shadow_active():
+                # The reading is the machine's free memory itself: the memory law rounds it DOWN onto the
+                # ladder (memory_budget.budget_mb), and that rounding is the margin — the owner's rule, 13 GB
+                # free gives the 12 GB rung, never all of it. A safety factor taken BEFORE the rounding
+                # (dd9acdc1, 2026-09-10, written before the ladder law of 2026-09-20 and never removed when it
+                # came) reduced twice: 11 581 MB free became 11 002 and rounded to the 8 192 rung instead of
+                # 11 264 (the Mac, 2026-10-03 — granite, Janus, Flex cut against 7.5 GB windows).
+                # On a unified device the run's own host side lives in the same pool. What this process holds
+                # NOW is already out of the reading (it is taken inside the process); what the engine's device
+                # work adds once it starts — its modules, context, the libraries the first ops load: the
+                # profile's MEASURED cpu.runtime_base_mb for this engine — is not, and is taken off first. Read,
+                # not a factor (the Mac, 23:00: the 11 264 rung on 11 581 free left ~300 MB for it).
+                _base = ((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
+                         if profile.cpu and getattr(self, "_mode", None) else None) or 0
+                # The pool's FACTS size the plan (the owner, 2026-10-25 15:16): what the device recommends less the
+                # engine's measured base on this host; the moment's free reading is the execution door
+                # (`memory_budget.execution_door`), never the budget - a plan is reproducible from one run to the next.
+                # The pool is the declared working set within what the system leaves of the installed RAM
+                # (`_less_the_system_share`), the host pool's own figure.
+                _ram = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+                _pool = min(recommended, self._less_the_system_share(profile, _ram)) if _ram > 0 else recommended
+                capacity = max(0.0, _pool - float(_base))
+                # What the compiled engine's backend holds OUTSIDE torch's allocations on this device (MPS: compiled
+                # graphs, kernel temporaries; "other allocations" in its OOM line), a vendor fact
+                # (memory.compiled_private_reserve_mb): never in a component's price, so it is taken off the room before
+                # any schedule is chosen. Absent = none declared (0).
+                # When the compiled engine's growth during a run is a FACT on this device (measured for this model, or the
+                # vendor's envelope — `_runtime_growth_fact`), that fact IS the reserve and is taken off the budget there:
+                # the private reserve is not taken a second time (mochi-1-preview on the M4 Pro, 2026-11-08: the MPS cache
+                # reached 9.2 GB beyond the live tensors where the declared reserve was 3 900 MB).
+                if getattr(self, "_mode", None) and not str(self._mode).startswith("triton") \
+                        and self._runtime_growth_fact(dev) is None:
+                    from neurobrix.core.config.loader import vendor_config_for_device
+                    _res = ((vendor_config_for_device(dev.brand.value, dev.architecture, dev.compute_capability,
+                                                      model=getattr(dev, "name", None)).get("memory") or {})
+                            .get("compiled_private_reserve_mb") or 0)
+                    capacity = max(0.0, capacity - float(_res))
+                # A lower rung imposed by solve() when the plan's host side did not fit the reading.
+                if getattr(self, "_unified_rung_cap_mb", None):
+                    capacity = min(capacity, float(self._unified_rung_cap_mb))
+                if capacity < recommended:
+                    # the budget's note (every unified run): the busy re-plan is the warning a user reads
+                    logging.getLogger(__name__).debug(
+                        "%s: unified memory — planning against %.0f MB actually "
+                        "free, not the %.0f MB this device recommends (%s)",
+                        dev.get_device_string(), capacity, recommended,
+                        host.describe())
+            elif dev.has_unified_memory and not host.measured:
+                logging.getLogger(__name__).warning(
+                    "%s: unified memory, but the machine's real availability "
+                    "could not be measured (%s) — planning against the "
+                    "device's recommendation alone, which is what gets a "
+                    "render killed mid-execution when the machine is busy",
+                    dev.get_device_string(), host.source)
+            # A DISCRETE card is measured here too — the driver's free figure,
+            # read through the tensor library's own door (no torch, R33). What
+            # another process holds becomes `used_mb`, so `free_mb` is the
+            # reading the ladder rounds and the picker compares. Unreadable
+            # (no runtime, a CPU host) → the recommendation alone, as before.
+            reading = self._device_reading(dev, capacity, host, profile)
+            note = _describe_budget(reading)
+            logging.getLogger(__name__).debug("%s: memory budget — %s", dev.get_device_string(), note)
+            # ONE figure every rung plans against: the law's budget for this device (`memory_budget.budget_mb` —
+            # a dedicated card less the runtime's own context, a unified pool's declared figure less the engine's
+            # base, the census rung when the door imposes one), never above the capacity. `capacity_mb` and
+            # `budget_mb` used to differ — the declared pool here, the rung there — and every rung that read
+            # `capacity_mb` or `free_mb` planned past the imposed rung: CogVideoX-5b's 13 455 MB transformer held
+            # whole on an 8 192 MB rung (2026-10-25). What another process holds of the card is no longer taken
+            # off the budget either (`external_used_mb` was capacity less the live free reading): the moment is the
+            # execution door (the owner, 15:16), never the plan's size.
+            budget = float(_capped_budget_mb(reading, capacity))
+            # What the runtime itself grows to on the card during a run, beyond the context read at the plan's entry:
+            # the engine's measured fact (`_runtime_growth`); stated in the budget's note, said when unmeasured.
+            _growth, _gnote = self._runtime_growth(dev)
+            budget = max(0.0, budget - _growth)
+            note = f"{note}; {_gnote}" if _gnote else note
+            _busy = (getattr(self, "_busy_caps", None) or {}).get(dev.get_device_string())
+            if _busy is not None:
+                budget = min(budget, float(_busy))      # a busy machine re-planned on what is free now (`solve_smart`)
+            # The rung a tiled or streamed component sizes its pieces from follows a rung LOWERED below the facts — the
+            # unified descent or a busy re-plan: left at the device's nominal rung, mochi-1-preview's VAE kept its
+            # [1,2,2] temporal chunks down to the 4 096 MB rung and the busy re-plan refused where 1-frame chunks ran
+            # (the Mac, 2026-10-27 01:21). The facts' plan keeps the device's own rung.
+            _tile_rung = int(_tile_rung_mb(reading))
+            if _busy is not None or getattr(self, "_unified_rung_cap_mb", None):
+                _tile_rung = min(_tile_rung, int(rung_down_mb(budget)))
+            devices.append(DeviceState(
+                device_string=dev.get_device_string(),
+                capacity_mb=budget,
+                external_used_mb=0.0,
+                # A BUDGET CAN NEVER EXCEED THE CAPACITY IT BUDGETS. The law rounds a
+                # reading onto the commercial ladder, and the nearest rung can sit ABOVE
+                # the device: a V100-16GB reads capacity 15 564.8 MB (16 384 x 0.95) and
+                # came out with budget 16 384.0 — over the capacity, and over the card's
+                # real driver_total of 16 151 MB. A plan sized against it is accepted and
+                # then cannot run; measured on the class-1 MoE models, whose segments were
+                # cut against 16 384 and OOM'd by ~286 MB at execution.
+                #
+                # e55e5c9e capped the UNIFIED reading by capacity. This is the same
+                # invariant one level out, where it holds for every device kind: the ladder
+                # may round a reading, it may not round it past the hardware.
+                budget_mb=budget,
+                tile_rung_mb=_tile_rung,
+                budget_note=note,
+                spec=dev,
+                recommended_mb=recommended,
+                host_memory=host,
+                live_free_mb=(float(reading.free_mb) if (reading.measured and not _census_shadow_active()) else None),
+            ))
+        devices.sort(key=lambda d: (-d.capacity_mb, d.device_string))
+        return devices
+
+    def _fresh_devices(self, devices: List[DeviceState]) -> List[DeviceState]:
+        """Create fresh device copies for strategy testing."""
+        return [
+            DeviceState(
+                device_string=d.device_string,
+                capacity_mb=d.capacity_mb,
+                used_mb=0.0,
+                external_used_mb=d.external_used_mb,
+                components=[],
+                spec=d.spec,
+                recommended_mb=d.recommended_mb,
+                host_memory=d.host_memory,
+                live_free_mb=d.live_free_mb,
+                budget_mb=d.budget_mb,
+                tile_rung_mb=d.tile_rung_mb,
+                budget_note=d.budget_note,
+            )
+            for d in devices
+        ]
+
+    # =========================================================================
+    # STRATEGIES
+    # =========================================================================
+
+    def _try_single_gpu(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """All components on largest GPU.
+
+        Budget depends on serve_mode:
+        - Hot (serve): sum(all_weights) + max(activations) — all weights resident
+        - Cold (run): max(component_weights + component_activations) — one at a time
+        """
+        if not devices:
+            return None
+
+        largest = devices[0]
+        serve_mode = getattr(self, '_serve_mode', False)
+
+        if serve_mode:
+            # Hot mode: all weights resident + peak activation of any single component
+            total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
+            max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
+            total_required = total_weights_mb + max_activation_mb
+        else:
+            # Cold mode. The budget has to be the one this strategy is
+            # EXECUTED under, not the most generous one available.
+            # SingleGPUStrategy is eager (AllocationStrategy.SINGLE_GPU is in
+            # _EAGER_STRATEGIES): `execute_component` adds each component to
+            # `self._loaded_components` and never unloads it, so once every
+            # component has run they are all resident. Budgeting the largest
+            # component alone accepted plans that then hold the SUM -- on a
+            # 24 GB device an image pipeline was accepted on a 16663 MB peak
+            # and executes at 28380 MB, an OOM the planner had declared safe.
+            #
+            # Weights are what stay; only one component's ACTIVATION is live
+            # at a time, since components run one after another. So the budget
+            # is sum(weights) + max(activation) -- the same shape as hot mode.
+            # Where the sum fits, nothing changes; where it does not,
+            # single_gpu now declines and the cascade falls through to
+            # lazy_sequential, which budgets a peak AND executes lazily.
+            total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
+            max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
+            total_required = total_weights_mb + max_activation_mb
+
+        needs_kv = getattr(self, '_needs_kv_cache', False)
+        overhead_pct = 0.0 if needs_kv else 0.05
+        total_required += total_required * overhead_pct
+
+        # Held against the RUNG (`_effective_capacity_mb`). This gate subtracted the flat
+        # `oom_reserve_mb` until the 2026-09-21 memory law, which it was written to answer: Sana 4Kpx
+        # on 1x V100 16 GiB runtime-OOM'd at conv::62 on a plan that fit the estimator. The law
+        # removed the reserve from acceptance (a dedicated card is used whole less its own
+        # context). OPEN, the owner's call: nothing re-measured that Sana case under the law.
+        effective_capacity = self._effective_capacity_mb(largest)
+        if total_required > effective_capacity:
+            return None
+        # Every component is held whole here, each its own arena: one over the device's largest
+        # allocation is a plan the device refuses at its first load.
+        if any(self._arena_over_allocation(container, n, m, largest) for n, m in sorted_comps):
+            return None
+
+        allocations = {}
+        fresh = self._fresh_devices(devices)
+
+        for comp_name, _ in sorted_comps:
+            shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (largest.device_string, shard_map)
+            fresh[0].components.append(comp_name)
+
+        return allocations, fresh
+
+    def _classify_lifecycle(self, container) -> Tuple[set, set]:
+        """Classify components as persistent (loop-resident) or transient (used once).
+
+        Lifecycle classification per family:
+
+        LLM / image_vq (autoregressive):
+        - Persistent: language_model + gen_head + gen_embed + gen_aligner (every token)
+        - Transient: vision_model, gen_vision_model, aligner (used once)
+
+        Diffusion (iterative_process):
+        - Persistent: transformer/dit (called N times in denoising loop)
+        - Transient: text_encoder(s), VAE (used once per request)
+
+        Audio (encoder-decoder / transducer):
+        - Persistent: decoder, predictor, joiner (autoregressive / streaming)
+        - Transient: encoder (used once per utterance)
+
+        Source: topology.json flow config.
+        """
+        topology_path = container.cache_path / "topology.json" if container.cache_path else None
+        flow_config = {}
+        if topology_path and topology_path.exists():
+            with open(topology_path) as f:
+                topo = json.load(f)
+                flow_config = topo.get("flow", {})
+
+        manifest = container.get_manifest() or {}
+        all_comps = set(manifest.get("components", {}).keys())
+        category = getattr(self, '_model_category', 'diffusion')
+        persistent = set()
+
+        if category in ("llm", "image_vq"):
+            # Autoregressive: generation loop components are persistent
+            gen_config = flow_config.get("generation", {})
+            for key in ("lm_component", "head_component", "embed_component", "aligner_component"):
+                comp = gen_config.get(key)
+                if comp:
+                    persistent.add(comp)
+            # Fallback by name convention
+            if not persistent:
+                for name in all_comps:
+                    if name in ("language_model", "model", "llm") or \
+                       (name.startswith("gen_") and name != "gen_vision_model"):
+                        persistent.add(name)
+
+        elif category == "diffusion":
+            # Diffusion: loop components (transformer/dit) are persistent
+            loop_comps = flow_config.get("loop", {}).get("components", [])
+            persistent.update(loop_comps)
+            # Fallback by name convention
+            if not persistent:
+                for name in all_comps:
+                    if any(k in name.lower() for k in ("transformer", "dit", "unet", "diffusion")):
+                        persistent.add(name)
+
+        else:
+            # Audio: decoder/predictor/joiner are persistent (autoregressive output)
+            for name in all_comps:
+                if any(k in name.lower() for k in ("decoder", "predictor", "joiner", "language_model")):
+                    persistent.add(name)
+
+        # If no classification succeeded, treat all as persistent (safe default)
+        if not persistent:
+            persistent = all_comps
+
+        return persistent, all_comps - persistent
+
+    def _try_single_gpu_lifecycle(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Lifecycle-aware single GPU: persistent components loaded together, transient on-demand.
+
+        Peak = sum(all persistent weights + max persistent activation) + max(one transient at a time).
+        Works for ALL families — _classify_lifecycle handles per-family classification.
+        """
+        if not devices:
+            return None
+
+        largest = devices[0]
+        persistent, transient = self._classify_lifecycle(container)
+        # Kept for the plan: the budget below is only honest if the executor
+        # is told which components it may release.
+        self._lifecycle_transient = sorted(transient)
+
+        persistent_mb = sum(
+            comp_mem[n].weight_mb + comp_mem[n].activation_mb
+            for n in persistent if n in comp_mem
+        )
+        transient_peaks = [
+            comp_mem[n].weight_mb + comp_mem[n].activation_mb
+            for n in transient if n in comp_mem
+        ]
+        max_transient = max(transient_peaks) if transient_peaks else 0
+
+        peak = persistent_mb + max_transient
+
+        # HISTORY — the reserve this records is no longer applied here: since the 2026-09-21
+        # memory law this gate holds the peak against the rung (`_effective_capacity_mb`), with no
+        # `oom_reserve_mb`. The case below is the one that motivated the reserve; measured
+        # 2026-09-24 it no longer reaches this gate (DeepSeek-Coder-V2-Lite's component is now
+        # 32 392.9 MB, over a V100-32GB's 31 129.6 rung, so it plans lazy_sequential), but a
+        # resident set in [rung - 3 GiB, rung] is accepted eager unguarded — the owner's call.
+        # This gate used to compare peak against the RAW 0.95-margined
+        # capacity — the only single-GPU acceptance without the reserve —
+        # so a model whose resident set lands in the [capacity − reserve,
+        # capacity] window slipped through here after `_try_single_gpu`
+        # correctly rejected it. DeepSeek-Coder-V2-Lite (29.96 GiB weights,
+        # tiny LLM build-time activations): peak 30,575 MB vs raw capacity
+        # 31,130 MB → accepted eager on one 32 GiB V100 → runtime OOM with
+        # ~3 GiB eaten by CUDA context + workspaces + fragmentation. With
+        # the reserve the cascade degrades to a multi-GPU strategy at
+        # solve time, as designed.
+        effective_capacity = self._effective_capacity_mb(largest)
+        if peak > effective_capacity:
+            return None
+        if any(self._arena_over_allocation(container, n, m, largest) for n, m in sorted_comps):
+            return None
+
+        allocations = {}
+        fresh = self._fresh_devices(devices)
+        for comp_name, _ in sorted_comps:
+            shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (largest.device_string, shard_map)
+            fresh[0].components.append(comp_name)
+
+        return allocations, fresh
+
+    def _try_component_placement(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Distribute whole components across GPUs."""
+        if len(devices) < 2:
+            return self._decline("component_placement", "one device only: nothing to spread over")
+
+        fresh = self._fresh_devices(devices)
+        allocations = {}
+        last_device = None
+
+        for comp_name, mem in sorted_comps:
+            required = mem.weight_mb + mem.activation_mb
+
+            # Attention components need 20% headroom
+            is_attn = any(n in comp_name.lower() for n in ('transformer', 'dit', 'diffusion'))
+            if is_attn:
+                min_required = max(required * 1.20, 20000)
+                target = self._find_pipeline_device(min_required, fresh, last_device, profile)
+                if target is None:
+                    return self._decline("component_placement", f"{comp_name} ({min_required:.0f} MB with its activation and the attention headroom) fits no card whole" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+            else:
+                target = self._find_pipeline_device(required, fresh, last_device, profile)
+
+            if target is None:
+                return self._decline("component_placement", f"{comp_name} ({required:.0f} MB with its activation) fits no card whole" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+
+            target.allocate(comp_name, required)
+            shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (target.device_string, shard_map)
+            last_device = target
+
+        # Need at least 2 devices used
+        used = set(a[0] for a in allocations.values())
+        if len(used) < 2:
+            return self._decline("component_placement", "every component landed on one card: that is single_gpu, not a placement")
+
+        return allocations, fresh
+
+    def _decline(self, strategy: str, why: str):
+        """A strategy that returns no plan says why (ZERO FALLBACK: a refusal names its cause): kept per solve in
+        `_declined`, printed by explain-plan beside the refused list and by the force door's error. Returns None."""
+        d = getattr(self, "_declined", None)
+        if d is None:
+            d = self._declined = {}
+        if strategy not in d:
+            d[strategy] = why
+            logging.getLogger(__name__).debug("Prism: %s declined — %s", strategy, why)
+        return None
+
+    def _try_block_scatter(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Block scatter: spread transformer blocks across GPUs using best-fit-decreasing."""
+        if len(devices) < 2:
+            return self._decline("block_scatter", "one device only: nothing to spread over")
+
+        # Heterogeneity fix (2026-08-11, D7 scoping note): the FGP gate
+        # compares against the LARGEST device — a component that still
+        # fits whole on the biggest GPU does not need scattering; the
+        # former devices[0] read made the first-listed device decide for
+        # a mixed 16G/32G rig.
+        capacity_threshold = max(d.capacity_mb for d in devices) * 0.80
+        needs_fgp = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
+
+        if not needs_fgp:
+            return self._decline("block_scatter", "every component fits a card whole: nothing to scatter")
+
+        fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
+        # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
+        # fgp_target is applied as per-block inflation, not capacity reduction.
+        packing_overhead = 1.0 / fgp_target  # ~1.087x per-block inflation
+        fresh = [
+            DeviceState(
+                device_string=d.device_string,
+                capacity_mb=d.capacity_mb,
+                used_mb=0.0, external_used_mb=getattr(d, "external_used_mb", 0.0), components=[], spec=d.spec
+            )
+            for d in devices
+        ]
+
+        # Per-device activation reserve (2026-08-11, the 2026-08-08 OOM
+        # class): any device that hosts weights must keep headroom for
+        # the largest single-component forward transient of the model —
+        # at runtime ANY component's forward may execute while scattered
+        # weights sit resident, and the uniform act/n_blocks spreading
+        # under-reserves devices packed with many small blocks
+        # (block_scatter filled a V100-16G to 15.77 GiB of weights; the
+        # audio-encoder forward then failed a 20 MiB alloc). Data-driven
+        # from the same profiles the packing already consumes — no
+        # constant.
+
+        allocations = {}
+        current_dev_idx = 0
+
+        for comp_name, mem in needs_fgp:
+            blocks = self._parse_blocks(container, comp_name)
+            if not blocks['blocks']:
+                return self._decline("block_scatter", f"{comp_name}: no repeating block structure found in its weights (nothing to scatter block by block)")
+
+            model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
+
+            n_blocks = len(blocks['blocks'])
+            act_per_block = mem.activation_mb / n_blocks
+            # The room a card keeps beside this component's blocks is THIS component's live activation — not the
+            # largest activation of any component of the model (mochi's VAE decode, 20 GB, was reserved on every
+            # card beside every transformer block, and the scatter declined on four cards that hold the model;
+            # 2026-10-25, registres/journaux/prism_choices_2026_10_25.tsv).
+            act_reserve_mb = mem.activation_mb
+
+            shard_map = {}
+
+            # Allocate non-block weights
+            if blocks['non_block_mb'] > 0:
+                while current_dev_idx < len(fresh):
+                    dev = fresh[current_dev_idx]
+                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * packing_overhead
+                    if dev.can_fit(real_size + act_reserve_mb):
+                        dev.used_mb += real_size
+                        dev.components.append(f"{comp_name}.non_block")
+                        for key in blocks['non_block_keys']:
+                            shard_map[key] = dev.device_string
+                        break
+                    current_dev_idx += 1
+                if current_dev_idx >= len(fresh):
+                    return self._decline("block_scatter", f"{comp_name}: its non-block weights ({blocks['non_block_mb']:.0f} MB) beside its activation ({act_reserve_mb:.0f} MB) fit no card" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+
+            # Allocate blocks - best-fit across GPUs with topology preference
+            last_dev = None
+            for block_num in sorted(blocks['blocks'].keys()):
+                block_keys = blocks['blocks'][block_num]
+                base_block = blocks['block_sizes'][block_num]
+
+                # Heterogeneity fix: the dtype-conversion cost of a block
+                # is a property of the CANDIDATE device (bf16 on a
+                # non-bf16 card costs differently) — evaluate per device,
+                # never via fresh[0]. The reserve keeps forward headroom
+                # on every packed device.
+                def _block_cost(d):
+                    return (d.get_real_block_size(base_block, model_dtype)
+                            + act_per_block) * packing_overhead
+
+                fit_devs = [d for d in fresh
+                            if d.can_fit(_block_cost(d) + act_reserve_mb)]
+                if not fit_devs:
+                    return self._decline("block_scatter", f"{comp_name}: block {block_num} ({_block_cost(fresh[0]):.0f} MB) beside the component's activation ({act_reserve_mb:.0f} MB) fits no card" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+
+                # Topology-aware: prefer same group as last block (minimize cross-device transfers)
+                target = None
+                if last_dev is not None and profile.topology:
+                    last_idx = self._get_device_index(last_dev.device_string)
+                    same_group = []
+                    other = []
+                    for d in fit_devs:
+                        d_idx = self._get_device_index(d.device_string)
+                        if d_idx == last_idx or profile.topology.devices_have_fast_interconnect([last_idx, d_idx]):
+                            same_group.append(d)
+                        else:
+                            other.append(d)
+                    # Prefer: same device (free space) > same NVLink group > any device
+                    if same_group:
+                        target = max(same_group, key=lambda d: d.free_mb)
+                    elif other:
+                        target = max(other, key=lambda d: d.free_mb)
+
+                if target is None:
+                    target = max(fit_devs, key=lambda d: d.free_mb)
+
+                target.used_mb += _block_cost(target)
+                target.components.append(f"{comp_name}.block.{block_num}")
+                for key in block_keys:
+                    shard_map[key] = target.device_string
+                last_dev = target
+
+            devices_used = set(shard_map.values())
+            allocations[comp_name] = (f"fgp:{','.join(sorted(devices_used))}", shard_map)
+
+        # Allocate regular components
+        regular = sorted(
+            [(n, m) for n, m in sorted_comps if n not in allocations],
+            key=lambda x: x[1].weight_mb + x[1].activation_mb
+        )
+
+        for comp_name, mem in regular:
+            required = mem.weight_mb + mem.activation_mb
+            # Reserve applies here too: a regular component's device may
+            # also execute OTHER components' forwards (the reserve is
+            # model-wide, not per-component).
+            target = next(
+                (d for d in fresh if d.can_fit(required)),          # `required` holds the component's own activation
+                None)
+            if target is None:
+                return self._decline("block_scatter", f"{comp_name} whole ({required:.0f} MB with its activation) fits no card beside the scattered blocks" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+            target.allocate(comp_name, required)
+            shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (target.device_string, shard_map)
+
+        return allocations, fresh
+
+    def _try_pipeline_parallel(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Pipeline parallel: per-layer sequential fill across GPUs.
+
+        Like Accelerate device_map="auto": layers 0..N on GPU0, N+1..M on GPU1, etc.
+        Only N-1 boundary crossings for N GPUs. Greedy sequential fill — each layer
+        goes to the current GPU until it's full, then moves to the next.
+
+        This is the optimal strategy for large LLMs across multiple GPUs with
+        fast interconnect, producing minimal cross-device transfers.
+        """
+        if len(devices) < 2:
+            return self._decline("pipeline_parallel", "one device only: nothing to spread over")
+
+        # Find components that need splitting (too large for single GPU)
+        capacity_threshold = devices[0].capacity_mb * 0.80
+        needs_split = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
+
+        if not needs_split:
+            return self._decline("pipeline_parallel", "every component fits a card whole: nothing to scatter")
+
+        fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
+        # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
+        # fgp_target is applied as per-block inflation, not capacity reduction.
+        packing_overhead = 1.0 / fgp_target  # ~1.087x per-block inflation
+        fresh = [
+            DeviceState(
+                device_string=d.device_string,
+                capacity_mb=d.capacity_mb,
+                used_mb=0.0, external_used_mb=getattr(d, "external_used_mb", 0.0), components=[], spec=d.spec
+            )
+            for d in devices
+        ]
+
+        allocations = {}
+        current_dev_idx = 0
+
+        for comp_name, mem in needs_split:
+            blocks = self._parse_blocks(container, comp_name)
+            if not blocks['blocks']:
+                return self._decline("pipeline_parallel", f"{comp_name}: no repeating block structure found in its weights (nothing to scatter block by block)")
+
+            model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
+
+            n_blocks = len(blocks['blocks'])
+            act_per_block = mem.activation_mb / n_blocks
+
+            # _parse_blocks reports ON-DISK sizes (safetensors header dtype, e.g.
+            # F32 for Wan = 65.6GB), but the runtime loads each weight at the
+            # COMPUTE dtype (fp16 on V100 = 32.8GB). Scale the block/non-block
+            # estimates to the compute size so the fit matches what is actually
+            # loaded — weight_sharding already uses the compute-dtype mem.weight_mb
+            # (31.27GB); pipeline_parallel must be consistent, otherwise a model
+            # whose F32 shards exceed 2x a GPU is wrongly rejected ("cannot fit")
+            # though its fp16 weights fit with headroom (Wan-I2V-14B: 32.8GB F32/2
+            # = 16.4GB/GPU fits, but the F32 estimate 65.6/2=32.8 > 30.4 rejected).
+            # Data-driven, no-op when disk dtype == compute dtype (scale ~1.0).
+            _disk_mb = sum(blocks['block_sizes'].values()) + blocks['non_block_mb']
+            _dtype_scale = (mem.weight_mb / _disk_mb) if _disk_mb > 0 else 1.0
+
+            shard_map = {}
+
+            # Activation headroom reserve (computed BEFORE any placement so
+            # both the non_block and the block fills enforce it per device).
+            # CFG doubles the activation batch; the capacity floor also reserves
+            # for the triton autotune workspace, which the activation profile
+            # does not model. Data-driven (peak activation) with a
+            # hardware-universal floor.
+            # The room beside this component's blocks is its own live activation (profiled), not a doubled
+            # figure nor a share of the card (both were literals: ZERO HARDCODE).
+            act_reserve_mb = mem.activation_mb
+
+            # Allocate non-block weights on current device (same per-device
+            # activation headroom as the block fill below).
+            if blocks['non_block_mb'] > 0:
+                while current_dev_idx < len(fresh):
+                    dev = fresh[current_dev_idx]
+                    real_size = dev.get_real_block_size(blocks['non_block_mb'] * _dtype_scale, model_dtype) * packing_overhead
+                    if dev.can_fit(real_size + act_reserve_mb):
+                        dev.used_mb += real_size
+                        dev.components.append(f"{comp_name}.non_block")
+                        for key in blocks['non_block_keys']:
+                            shard_map[key] = dev.device_string
+                        break
+                    current_dev_idx += 1
+                if current_dev_idx >= len(fresh):
+                    return self._decline("pipeline_parallel", f"{comp_name}: its non-block weights fit no card in the order the cards were filled" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+
+            # BALANCED PIPELINE FILL: contiguous layer ranges, spread EVENLY so
+            # each GPU keeps headroom for runtime activations + triton autotune
+            # workspace (neither fully modeled in the build-time activation peak).
+            # A greedy "pack GPU0 to capacity" fill leaves the first GPU with no
+            # room and OOMs/stalls under CFG batch=2 (Wan-I2V-14B: 27 GB weights on
+            # cuda:2, ~2 GB free). Pick the minimum #GPUs whose EVEN weight share
+            # leaves a headroom reserve, then fill each to its even share (the last
+            # pipeline GPU takes the remainder). Still a pipeline: one cross-device
+            # transfer per GPU boundary, not per op.
+            total_block_mb = sum(blocks['block_sizes'].values()) * _dtype_scale
+            n_pp = len(fresh)
+            for ng in range(1, len(fresh) + 1):
+                if (total_block_mb / ng) * packing_overhead + act_reserve_mb <= fresh[ng - 1].capacity_mb:
+                    n_pp = ng
+                    break
+            target_per_gpu = total_block_mb / n_pp if n_pp > 0 else total_block_mb
+
+            gpu_weight_mb = 0.0
+            for block_num in sorted(blocks['blocks'].keys()):
+                block_keys = blocks['blocks'][block_num]
+                base_block = blocks['block_sizes'][block_num] * _dtype_scale
+                real_block = fresh[0].get_real_block_size(base_block, model_dtype)
+                total_block = (real_block + act_per_block) * packing_overhead
+
+                while current_dev_idx < len(fresh):
+                    dev = fresh[current_dev_idx]
+                    # Advance to the next GPU once this one has its even share
+                    # (never on the last pipeline GPU, which holds the remainder).
+                    over_share = (gpu_weight_mb + real_block > target_per_gpu
+                                  and current_dev_idx < n_pp - 1)
+                    # PER-DEVICE activation headroom: the reserve is an
+                    # ABSOLUTE working-set floor (hidden states + attention
+                    # workspace + triton arena/autotune overhead are the same
+                    # wherever the segment lives — they do NOT scale with card
+                    # size). The comment above always stated "each GPU keeps
+                    # headroom"; the reserve was only used to pick n_pp, so a
+                    # 16 GB card could be packed to 13.1/16 GB of weights and
+                    # the resident segment OOMed at its SDPA under the triton
+                    # arena (Wan2.2 transformer_2 block 36 on cuda:0,
+                    # 2026-07-03). Enforce it in the per-device fit test.
+                    if dev.can_fit(total_block + act_reserve_mb) and not over_share:
+                        dev.used_mb += total_block
+                        gpu_weight_mb += real_block
+                        dev.components.append(f"{comp_name}.block.{block_num}")
+                        for key in block_keys:
+                            shard_map[key] = dev.device_string
+                        break
+                    # GPU full or even share reached — move to next
+                    current_dev_idx += 1
+                    gpu_weight_mb = 0.0
+                else:
+                    # No GPU can fit this block
+                    return self._decline("pipeline_parallel", f"{comp_name}: block {block_num} fits no card after the cards before it were filled in order (the pipeline keeps its blocks in sequence)" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+
+            devices_used = set(shard_map.values())
+            allocations[comp_name] = (f"fgp:{','.join(sorted(devices_used))}", shard_map)
+
+        # Allocate regular components on remaining capacity
+        regular = sorted(
+            [(n, m) for n, m in sorted_comps if n not in allocations],
+            key=lambda x: x[1].weight_mb + x[1].activation_mb
+        )
+
+        for comp_name, mem in regular:
+            required = mem.weight_mb + mem.activation_mb
+            target = next((d for d in fresh if d.can_fit(required)), None)
+            if target is None:
+                return self._decline("pipeline_parallel", f"{comp_name} whole ({required:.0f} MB with its activation) fits no card beside the pipelined blocks" + " — free per card: " + ", ".join(f"{d.device_string} {d.free_mb:.0f} MB" for d in fresh))
+            target.allocate(comp_name, required)
+            shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (target.device_string, shard_map)
+
+        return allocations, fresh
+
+    def _try_weight_sharding(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Weight sharding: distribute weight files across GPUs (round-robin).
+
+        Weight files distributed via shard_map across GPUs.
+        CompiledSequence multi-device path handles cross-device execution
+        with automatic device alignment at op boundaries.
+        """
+        if len(devices) < 2:
+            return None
+
+        largest_cap = devices[0].capacity_mb
+        needs_tp = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > largest_cap]
+
+        if not needs_tp:
+            return None
+
+        fresh = self._fresh_devices(devices)
+        allocations = {}
+        tp_used = set()
+
+        for comp_name, mem in needs_tp:
+            available = [d for d in fresh if d.device_string not in tp_used]
+
+            if not available:
+                return None
+
+            model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
+
+            # Sharding distributes WEIGHT FILES; a component held in fewer than two cannot be split by it, and no file
+            # split moves an op's activations off the card that runs it (Sana_1600M_4Kpx's VAE, one file and 20 GB of
+            # activations, was placed whole on one card of 16 GB under the 4-card profile, its activations "divided" by
+            # 4 — the 4-card coverage, 2026-10-27, met a 16 GB rms_norm no card can run)
+            if len(shard_sizes.get(comp_name, {}) or {}) < 2:
+                return None
+
+            # Determine if attention dominates (for smarter sharding)
+            attn_per_block_mb = mem.attention_per_block_bytes / (1024 * 1024) if mem.attention_dominates else 0
+
+            # The fewest cards whose SPLIT holds: the weight files dealt greedily (largest first, to the least loaded
+            # card) and each card's actual bytes, at the device's cost, beside the activations of the ops it runs, judged
+            # against the part one component may hold (`_usable_mb`, the authority every placement reads). It read the
+            # raw budget with a 0.1 hedge and booked an even split: Qwen3-Coder-30B-A3B on two V100-32GB planned
+            # 28 854 MB a card and its head on the first, and ran out of memory on that card in its first prefill
+            # (2026-11-10 03:23, 31.7 GB in use).
+            cost_mult = available[0].get_cost_multiplier(model_dtype)
+            act_per_gpu = attn_per_block_mb if attn_per_block_mb > 0 else mem.activation_mb
+            comp_shards = sorted(shard_sizes.get(comp_name, {}).items(), key=lambda x: x[1], reverse=True)
+            mib = 1024 * 1024
+            chosen = None
+            for n in range(2, len(available) + 1):
+                group = available[:n]
+                if profile.topology:
+                    for start in range(len(available) - n + 1):
+                        g = available[start:start + n]
+                        if profile.topology.devices_have_fast_interconnect([self._get_device_index(d.device_string)
+                                                                            for d in g]):
+                            group = g
+                            break
+                loads = [0.0] * n
+                shard_map = {}
+                for shard_name, shard_bytes in comp_shards:
+                    i = loads.index(min(loads))
+                    shard_map[shard_name] = group[i].device_string
+                    loads[i] += shard_bytes / mib * cost_mult
+                if all(loads[i] + act_per_gpu <= self._usable_mb(group[i]) - group[i].used_mb for i in range(n)):
+                    chosen = (group, loads, shard_map)
+                    break
+            if chosen is None:
+                return None
+            tp_gpus, loads, shard_map = chosen
+            for gpu, load in zip(tp_gpus, loads):
+                gpu.allocate(comp_name, load + act_per_gpu)
+                tp_used.add(gpu.device_string)
+            allocations[comp_name] = (f"tp:{','.join(g.device_string for g in tp_gpus)}", shard_map)
+
+        # Allocate regular components: on a card the split leaves free, else beside a shard — each against the part
+        # one component may hold, less what the plan already puts on that card
+        remaining = [d for d in fresh if d.device_string not in tp_used] + [d for d in fresh if d.device_string in tp_used]
+        regular = [(n, m) for n, m in sorted_comps if n not in allocations]
+
+        for comp_name, mem in regular:
+            required = mem.weight_mb + mem.activation_mb
+            target = next((d for d in remaining if required <= self._usable_mb(d) - d.used_mb), None)
+            if target is None:
+                return None
+            target.allocate(comp_name, required)
+            shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (target.device_string, shard_map)
+
+        return allocations, fresh
+
+    def _try_lazy_sequential(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """
+        Lazy sequential: load one component at a time.
+        Peak memory = max(single component), not sum(all components).
+
+        Each component is placed using the recursive cascade:
+        _place_component() tries single_gpu → fgp → zero3 for the component.
+        """
+        if not devices:
+            return None
+
+        # Reset component-tiling flags for this placement pass so a rejected
+        # attempt never leaves stale entries (the chosen pass repopulates).
+        self._component_tiling = {cn: sp for cn, sp in (getattr(self, "_component_tiling", {}) or {}).items()
+                                  if isinstance(sp, dict) and sp.get("vendor")}      # the vendor's reference cut
+        self._tiling_exactness = {}
+        self._component_stream = {cn: sp for cn, sp in (getattr(self, "_component_stream", {}) or {}).items()
+                                  if sp.get("reference") == "vendor"}
+        # Likewise the expert stores this pass places on a unified device ({component: dense + floor
+        # MB}, `_place_component` Strategy 2.5), read by the KV check and `_build_plan`.
+        self._unified_expert_stores = {}
+
+        fresh = self._fresh_devices(devices)
+        allocations = {}
+
+        for comp_name, mem in sorted_comps:
+            result = self._place_component(
+                container, comp_name, mem, devices, shard_sizes, profile
+            )
+            if result is None:
+                return None
+            allocations[comp_name] = result
+
+        # THE FLOW'S PHASES on a dedicated card: each component was placed alone against the usable part, but the flow
+        # holds some together (a language model and its head while it decodes, `core/flow/base.resident_together`).
+        # The dearest phase, every component as the plan holds it, must fit the same part. Unchecked on a card,
+        # MiniCPM-o-4_5 triton on a V100-16GB planned its decode phase at 15 477 MB (model 14 218 + head 1 259) against
+        # a 14 321 MB part and died loading the head (gate ebm 16g, 2026-10-27; zero3 ran it before 83b1c3d9).
+        # A unified device reads its phases in the host-side check (`_peak_loaded_bytes`).
+        mem_of = dict(sorted_comps)
+        for dev in devices:
+            if getattr(getattr(dev, "spec", None), "has_unified_memory", False):
+                continue
+            # an allocation here is (device string, shard map): "cuda:0" a component held on the card, "zero3:cuda:0"
+            # one whose blocks stream (it holds its activations); any other form (an expert store, shards) has its
+            # resident part settled only when the plan is built — the phases are then not judged here
+            costs, judged = {}, True
+            for n, a in allocations.items():
+                where = a[0] if isinstance(a, tuple) else str(a)
+                if where == dev.device_string:
+                    tiling, stream = (self._component_tiling or {}).get(n), (self._component_stream or {}).get(n)
+                    if tiling is not None:
+                        held = self._tiled_component_mb(container, n, mem_of[n], dev, tiling)
+                    elif stream is not None:
+                        held = (mem_of[n].weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, n))
+                                + float(stream["activation_bytes"]) / (1024 * 1024))
+                    else:
+                        held = self._whole_component_mb(container, n, mem_of[n], dev)
+                    costs[n] = int(held * 1024 * 1024)
+                elif where == f"zero3:{dev.device_string}":
+                    costs[n] = int(self._live_activation_mb(mem_of[n]) * 1024 * 1024)
+                elif dev.device_string in where:
+                    judged = False
+            if not judged or len(costs) < 2:
+                continue
+            peak_mb = self._phase_peak_carried_mb(container, costs)
+            # the card's budget less the smallest drain the Triton hot loop keeps (`_deferred_drain_floor_mb`, 0 under
+            # compiled): both facts. Measured 2026-10-27 on an idle V100-16GB (budget 15 845, floor 256 -> 15 589):
+            # MiniCPM-o-4_5 decode phase 15 477 + 296 MB of tower outputs carried = 15 773 (the run needed ~15 859:
+            # OOM) declines; Janus-Pro-7B's 15 034 (the run held 14 717) stays lazy. The single-component part
+            # (`_usable_mb`, 12 670) declined Janus too and made it 3.7x slower under zero3.
+            room = float(dev.budget_mb) - self._deferred_drain_floor_mb(dev)
+            if peak_mb > room:
+                logging.getLogger(__name__).debug(
+                    "Prism: lazy_sequential declined on %s — the flow's dearest phase holds %.0f MB (its components "
+                    "as placed, the outputs carried into it) over the card's %.0f MB less the drain floor",
+                    dev.device_string, peak_mb, room)
+                return None
+
+        return allocations, fresh
+
+    # =========================================================================
+    # RECURSIVE CASCADE — Component & Block Level
+    # =========================================================================
+
+    def _tile_extent_lattice(self) -> int:
+        """The unit a tiled spatial extent is snapped down onto before the kernels see it:
+        the PLANNED profile's `tiling.extent_lattice` (`Profile.tile_extent_lattice` — the
+        hardware the plan is for, never the planning process's, stage B P3), or the
+        NBX_PRISM_TILE_ALIGN override for a measurement; 0 when neither says."""
+        env = os.environ.get("NBX_PRISM_TILE_ALIGN")
+        if env:
+            return int(env)
+        return self._planned_profile.tile_extent_lattice
+
+    def _tiling_decline(self, comp_name: str, why: str) -> None:
+        """Record WHY the tiling engine gave `comp_name` no tile, and return None. Read by the refusal
+        (`_fail_error`), which said "no tiling fits" whatever the reason: Allegro-TI2V's encoder was
+        refused with that line while the tiling arithmetic beside it said 39 tiles fit, because its
+        time map was never read (2026-10-04). Kept per component, the last attempt's reason."""
+        self.__dict__.setdefault("_tiling_declined", {})[comp_name] = why
+        return None
+
+    def _snapshot_tiling_declines(self, rung: str, comps) -> None:
+        """Keep, for the rung that records an overflow, the tiling reasons of ITS components as they
+        stand now — the per-component record is overwritten by the next rung's attempt (sized at
+        another card or rung), and the refusal printed one rung's overflow beside another's reason
+        (the doctrine review of 2ba2c40e, 2026-10-04)."""
+        now = getattr(self, "_tiling_declined", {}) or {}
+        self.__dict__.setdefault("_tiling_declined_by_rung", {})[rung] = {
+            c: now[c] for c in comps if c in now}
+
+    def _record_rung_tiling_decline(self, rung: str, card: str, usable_mb: float, comp_name: str) -> None:
+        """A rung that does not size host placements on the card (the compiled engine's component placement,
+        layer streaming under either engine) keeps ITS components' tiling reasons as they stand when it gives
+        up on the tile, beside the figure they were held to — as the Triton host-sizing rungs do
+        (`_snapshot_tiling_declines`). The compiled refusal read the last-written reason, which the next
+        rung's attempt overwrites (the doctrine review of 64c24b13, 2026-10-04)."""
+        why = (getattr(self, "_tiling_declined", {}) or {}).get(comp_name)
+        if why is None:
+            return
+        self.__dict__.setdefault("_tiling_declined_by_rung", {}).setdefault(rung, {})[comp_name] = why
+        self.__dict__.setdefault("_tiling_rung_figure", {})[rung] = (card, float(usable_mb))
+
+    def _stream_driver_limit(self, comp_name: str):
+        """(ratio, limit bytes) when the compiled engine's device declares a measured driver/price ratio for this
+        component's family (`memory.compiled_stream_driver_over_price`): the limit is the device's declared memory
+        less the engine's measured base on this host. None otherwise (another engine, no unified/GPU device, a vendor
+        that declares null or no row for the family): the chunk is priced at its tensors, as before."""
+        if str(getattr(self, "_mode", "compiled")).startswith("triton"):
+            return None
+        profile = getattr(self, "_profile", None)
+        devs = [d for d in (getattr(profile, "devices", None) or []) if getattr(d, "memory_mb", 0)]
+        if not devs:
+            return None
+        dev = devs[0]
+        from neurobrix.core.config.loader import vendor_config_for_device
+        mem = (vendor_config_for_device(dev.brand.value, dev.architecture, dev.compute_capability,
+                                        model=getattr(dev, "name", None)).get("memory") or {})
+        table = mem.get("compiled_stream_driver_over_price")
+        row = (table or {}).get(comp_name)
+        if not row:
+            return None
+        ratio = float(row["ratio"] if isinstance(row, dict) else row)
+        base = float(((getattr(profile.cpu, "runtime_base_mb", None) or {}).get("compiled")
+                      if getattr(profile, "cpu", None) else 0) or 0)
+        return ratio, int((float(dev.memory_mb) - base) * 1024 * 1024)
+
+    def _stream_declaration(self, container, comp_name: str):
+        """The component's temporal stream declaration with its two graphs (`temporal_stream.load`), read once per
+        solve; None when the container carries none."""
+        from neurobrix.triton.prism import temporal_stream as _ts
+        cache_path = getattr(container, "_cache_path", None)
+        if cache_path is None:
+            return None
+        memo = self.__dict__.setdefault("_stream_decls", {})
+        key = (str(cache_path), comp_name)
+        if key not in memo:
+            memo[key] = _ts.load(cache_path, comp_name)
+        return memo[key]
+
+    def _temporal_stream(self, container, comp_name: str, room_bytes: Optional[int]):
+        """The temporal stream `comp_name` runs this request in, or None (the reason recorded in
+        `_stream_declined`): its vendor's chunks when its declaration carries them, else the exact schedule of the
+        longest chunk whose activations fit `room_bytes` (None: no fit asked — the vendor's chunks are its function).
+
+        Priced as a whole component is: the activation profiler on each chunk graph, its time symbol bound to the
+        chunk (`InputConfig.chunk_frames`), at the widths the engine executes; plus the clip's input and output the
+        chunks read and fill, and the states carried between chunks."""
+        import dataclasses
+        import json as _json
+        from types import SimpleNamespace
+        from neurobrix.triton.prism import temporal_stream as _ts
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        decl = self._stream_declaration(container, comp_name)
+        if decl is None:
+            return None
+        declined = self.__dict__.setdefault("_stream_declined", {})
+        if decl.get("coupling") and not decl.get("vendor_chunks"):
+            declined[comp_name] = (f"its time is coupled ({decl['coupling']['why']} at {decl['coupling']['op']}) "
+                                   f"and its vendor's reference does not chunk it")
+            return None
+        ic = self._input_config
+        cache_path = getattr(container, "_cache_path")
+        clip = _json.loads((cache_path / "components" / comp_name / "graph.json").read_text())
+        smap = ActivationProfiler(clip).build_symbol_map(ic)
+        frames = smap.get(decl["symbol"])
+        if not isinstance(frames, int) or frames < 1:
+            declined[comp_name] = f"the request binds no frame count to its time symbol {decl['symbol']}"
+            return None
+        comp_dtype = self._run_dtype(comp_name)
+        dtype_bytes = _itemsize.itemsize(comp_dtype)
+
+        # The carried states. Inside a chunk they are its graph's outputs and inputs: the runner HANDS the states
+        # and the chunk to the run that reads them, which frees each at its last use (`GraphExecutor.
+        # _consumed_input_tids`), so the chunk's profile counts its inputs from before its first op to their last
+        # use (`handed_inputs`). Uncounted, mochi's 5 GB of states — held by the run for the whole chunk then — were
+        # missing from a 13.1 GB price measured at 18.2 GB (2026-10-17). Between two chunks the runner copies each
+        # state out of the run that made it (`temporal_stream_runner`), so the states then exist twice beside that
+        # chunk's output.
+        # Every tensor at the width the engine runs it at, read on the first chunk's graph (the clip plus its state
+        # outputs: the clip's input and output are its tensors): a state holds the dtype its producer runs at and
+        # enters the next chunk as a SEAM in that dtype (the container builder marks it so) — mochi's fp32 states under an fp16 VAE
+        # were priced at the compute dtype's half (2026-10-17).
+        profile = getattr(self, "_profile", None)
+        first_dag = decl["dags"]["first"]
+        first_prof = ActivationProfiler(first_dag)
+        state_out = {first_dag["tensors"][t].get("output_name"): t for t in first_dag.get("output_tensor_ids", [])}
+        missing = [s["name"] for s in decl["states"] if s["name"] not in state_out]
+        if missing:
+            raise RuntimeError(f"ZERO FALLBACK: {comp_name}'s first chunk graph outputs no state {missing[0]!r}")
+        first_w = self._activation_widths(SimpleNamespace(name=comp_name, graph=first_dag), container, first_prof,
+                                          dataclasses.replace(ic, chunk_frames=1), comp_dtype, profile)
+        # (no widths: every tensor at the built dtype, the profiler's own `widths=None` convention)
+        width = (lambda tid: first_w[tid]) if first_w is not None else (lambda tid: dtype_bytes)
+
+        def tensor_bytes(dag, tid):
+            from neurobrix.core.runtime import symexpr as _symexpr
+            n = 1
+            for d in dag["tensors"][tid]["symbolic_shape"]["dims"]:
+                n *= int(_symexpr.evaluate(d, lambda sid, _n: smap[sid], _symexpr.SHAPE))
+            return n * width(tid)
+
+        # Held for the whole stream: the clip's input the chunks are sliced from and the clip's output they fill.
+        held = (tensor_bytes(clip, decl["output"])
+                + sum(tensor_bytes(clip, t) for t in clip.get("input_tensor_ids", [])
+                      if t in clip["tensors"] and not clip["tensors"][t].get("is_parameter")))
+        seams = ({f"input::{s['name']}": first_w.dtypes[state_out[s["name"]]] for s in decl["states"]}
+                 if first_w is not None else None)
+        states = sum(_ts.state_bytes({"states": [s]}, smap, width(state_out[s["name"]])) for s in decl["states"])
+        if seams is not None:
+            # A fixed point: the next chunk, fed its states in those dtypes, makes its own in the same ones — the
+            # third chunk then reads what the second read. A dtype that moves is a chain the price does not hold.
+            nxt = decl["dags"]["next"]
+            nxt_w = self._activation_widths(SimpleNamespace(name=comp_name, graph=nxt), container,
+                                            ActivationProfiler(nxt), dataclasses.replace(ic, chunk_frames=1),
+                                            comp_dtype, profile, seams=seams)
+            nxt_out = {nxt["tensors"][t].get("output_name"): t for t in nxt.get("output_tensor_ids", [])}
+            moved = [(s["name"], seams[f"input::{s['name']}"], nxt_w.dtypes.get(nxt_out.get(s["name"])))
+                     for s in decl["states"] if nxt_w.dtypes.get(nxt_out.get(s["name"])) != seams[f"input::{s['name']}"]]
+            if moved:
+                raise RuntimeError(f"ZERO FALLBACK: {comp_name}'s state {moved[0][0]} enters the next chunk as "
+                                   f"{moved[0][1]} and leaves it as {moved[0][2]}: its chunks do not carry one dtype")
+        peaks: Dict[tuple, int] = {}
+        # Parked (strategy D, Hocine Benkelaya 2026-10-27 11:01): between two chunks each state waits in host memory and comes
+        # back right before the op that first reads it (`GraphExecutor` ParkedTensor) — live on the card from that
+        # op, never the whole chunk; and copied out to the host, it no longer exists twice beside the chunk's output.
+        parked_inputs = frozenset(f"input::{s['name']}" for s in decl["states"])
+
+        def peak(kind: str, length: int, parked: bool = False) -> int:
+            if (kind, length, parked) not in peaks:
+                dag = decl["dags"][kind]
+                prof = ActivationProfiler(dag)
+                cic = dataclasses.replace(ic, chunk_frames=int(length))
+                widths = self._activation_widths(SimpleNamespace(name=comp_name, graph=dag), container, prof, cic,
+                                                 comp_dtype, profile, seams=seams if kind == "next" else None)
+                deferred = frozenset(t for t in parked_inputs if t in dag["tensors"]) if parked else None
+                outs = {dag["tensors"][t].get("output_name"): t for t in dag.get("output_tensor_ids", [])}
+                parked_out = frozenset(outs[s["name"]] for s in decl["states"] if s["name"] in outs) if parked else None
+                peaks[(kind, length, parked)] = int(prof.estimate_peak_memory(
+                    input_config=cic, dtype_bytes=dtype_bytes, widths=widths,
+                    attention_scratch=self._attention_scratch(profile, comp_dtype), conv3d_workspace=self._conv3d_workspace(profile, comp_dtype), op_workspace=self._op_workspace(profile), handed_inputs=True,
+                    deferred_inputs=deferred, parked_outputs=parked_out).peak_bytes)
+            return peaks[(kind, length, parked)]
+
+        def chunk_out(kind: str, length: int) -> int:
+            return tensor_bytes(clip, decl["output"]) * _ts.output_frames(decl, kind, length) // max(
+                1, _ts.clip_output_frames(clip, decl, smap))
+
+        def cost(sched, parked: bool = False) -> int:
+            per = [(peak("first" if i == 0 else "next", n, parked), chunk_out("first" if i == 0 else "next", n))
+                   for i, n in enumerate(sched)]
+            c = held + max(max(p, y + (1 if parked else 2) * states) for p, y in per)
+            if os.environ.get("NBX_PRISM_STREAM_DIAG") == "1":
+                _log.debug(f"[PRISM-STREAM-DIAG] {comp_name}: schedule {sched}{' parked' if parked else ''} held {held / 2**20:,.0f} MB, states "
+                           f"{states / 2**20:,.0f} MB, chunk peaks {[round(p / 2**20) for p, _ in per]} MB -> "
+                           f"{c / 2**20:,.0f} MB")
+            return c
+
+        fits_cost = (room_bytes if callable(room_bytes) else
+                     (lambda c: c <= room_bytes) if room_bytes is not None else (lambda c: True))
+        # Decision C1 (the supervisor, 2026-10-27 07:30): on the compiled engine a chunk holds on the device what its
+        # DRIVER holds — its price times the family's measured driver/price ratio (the vendor file's
+        # memory.compiled_stream_driver_over_price, the allocator's heaps and other allocations inside it) — checked
+        # against the device's own limit less the engine's base, the private reserve not taken again.
+        _driver = self._stream_driver_limit(comp_name) if room_bytes is not None else None
+        if _driver is not None:
+            _ratio, _limit = _driver
+            fits_cost = (lambda c, r=_ratio, L=_limit: c * r <= L)
+        # the states stay on the card when a chunk fits so (no transfer); parked only when nothing fits otherwise
+        parked = False
+        sched = _ts.choose(decl, frames, lambda sc: fits_cost(cost(sc)))
+        if sched is None and decl["states"]:
+            parked = True
+            sched = _ts.choose(decl, frames, lambda sc: fits_cost(cost(sc, True)))
+        if sched is None:
+            least = _ts.exact_schedule(decl, frames, 1)
+            declined[comp_name] = (f"no exact chunk of its {frames} frames fits the card (the shortest chunks need "
+                                   f"{cost(least, parked) / 2**20:,.0f} MB, states parked on the host)" if least else
+                                   f"no exact schedule of its {frames} frames")
+            return None
+        bad = _ts.broken(decl, sched)
+        if bad:
+            declined[comp_name] = f"its vendor's chunks {sched} are not exact for its derived graphs: {bad}"
+            return None
+        vc = decl.get("vendor_chunks")
+        spec = {"schedule": list(sched), "frames": frames, "reference": "vendor" if vc else "clip",
+                "source": (vc or {}).get("source") or "derived from the clip graph by the container builder",
+                "activation_bytes": cost(sched, parked), "states": len(decl["states"]), "park_states": parked}
+        if room_bytes is not None and not fits_cost(spec["activation_bytes"]):
+            declined[comp_name] = (f"its vendor's chunks {sched} need {spec['activation_bytes'] / 2**20:,.0f} MB, "
+                                   f"over what the rung leaves it")
+            return None
+        declined.pop(comp_name, None)
+        return spec
+
+    def _vendor_tiling_declaration(self, comp_name: str):
+        """The component's vendor tiling declaration (`temporal_stream.load_vendor_tiling`), read once per solve."""
+        from neurobrix.triton.prism import temporal_stream as _ts
+        container = getattr(self, "_container_for_cuts", None)
+        cache_path = getattr(container, "_cache_path", None) if container is not None else None
+        if cache_path is None:
+            return None
+        memo = self.__dict__.setdefault("_vendor_tiling_decls", {})
+        key = (str(cache_path), comp_name)
+        if key not in memo:
+            memo[key] = _ts.load_vendor_tiling(cache_path, comp_name)
+        return memo[key]
+
+    def _vendor_tiling(self, container, comp_name: str, room_bytes: Optional[int]):
+        """The vendor's own tiled run of `comp_name` (`core/module/vendor_tiling.py`) priced for this request, or
+        None (the reason recorded): one tile's run — whole, or in the component's temporal stream when it carries
+        one — at the tile's extent, plus the clip's input and output and the decoded tiles the vendor keeps until
+        it blends them. `room_bytes` None: no fit asked (the vendor has no other path)."""
+        import dataclasses
+        import json as _json
+        from types import SimpleNamespace
+        from neurobrix.triton.prism import temporal_stream as _ts
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        from neurobrix.core.runtime import symexpr as _symexpr
+        decl = self._vendor_tiling_declaration(comp_name)
+        ic = self._input_config
+        cache_path = getattr(container, "_cache_path")
+        clip = _json.loads((cache_path / "components" / comp_name / "graph.json").read_text())
+        prof = ActivationProfiler(clip)
+        smap = prof.build_symbol_map(ic)
+        syms = {v.get("name"): k for k, v in (clip.get("symbolic_context") or {}).get("symbols", {}).items()}
+        tile = _ts.vendor_tile_extent(decl)
+        cut = {}
+        for axis, n in tile.items():                  # a tile never exceeds the request's own extent
+            have = smap.get(syms.get(axis))
+            cut[axis] = min(int(n), int(have)) if isinstance(have, int) else int(n)
+        tic = dataclasses.replace(ic, cut_extents=cut)
+        comp_dtype = self._run_dtype(comp_name)
+        dtype_bytes = _itemsize.itemsize(comp_dtype)
+
+        def tensor_bytes(tid, binding):
+            n = 1
+            for d in clip["tensors"][tid]["symbolic_shape"]["dims"]:
+                n *= int(_symexpr.evaluate(d, lambda sid, _n: binding[sid], _symexpr.SHAPE))
+            return n * dtype_bytes
+
+        out_bytes = tensor_bytes(clip["output_tensor_ids"][0], smap)
+        in_bytes = sum(tensor_bytes(t, smap) for t in clip.get("input_tensor_ids", [])
+                       if not clip["tensors"][t].get("is_parameter"))
+        # ramp_crop keeps every decoded tile until it blends: the output once more, times the overlap's share
+        if decl["method"] == "ramp_crop":
+            ov = 1.0
+            for k, (t_, s_) in enumerate(zip(decl["tile"], decl["stride"])):
+                ov *= t_ / s_
+            kept = int(out_bytes * ov)
+        else:
+            kept = 0
+        stream_spec = None
+        saved_ic = self._input_config
+        try:
+            self._input_config = tic
+            if self._stream_declaration(container, comp_name) is not None:
+                stream_spec = self._temporal_stream(container, comp_name, None)
+                if stream_spec is None:
+                    return self._tiling_decline(comp_name, f"its vendor tile cannot run its temporal stream: "
+                                                           f"{self._stream_declined.get(comp_name)}")
+                tile_cost = int(stream_spec["activation_bytes"])
+            else:
+                tprof = ActivationProfiler(clip)
+                widths = self._activation_widths(SimpleNamespace(name=comp_name, graph=clip), container, tprof, tic,
+                                                 comp_dtype, getattr(self, "_profile", None))
+                tile_cost = int(tprof.estimate_peak_memory(
+                    input_config=tic, dtype_bytes=dtype_bytes, widths=widths,
+                    attention_scratch=self._attention_scratch(getattr(self, "_profile", None), comp_dtype),
+                    conv3d_workspace=self._conv3d_workspace(getattr(self, "_profile", None)),
+                    op_workspace=self._op_workspace(getattr(self, "_profile", None))).peak_bytes)
+        finally:
+            self._input_config = saved_ic
+        cost = tile_cost + out_bytes + in_bytes + kept
+        if room_bytes is not None and cost > room_bytes:
+            return self._tiling_decline(comp_name, f"its vendor's tiles ({decl['method']}) need {cost / 2**20:,.0f} "
+                                                   f"MB of the {room_bytes / 2**20:,.0f} MB the rung leaves")
+        spec = {"vendor": decl["method"], "source": decl["source"],
+                "tiled_activation_bytes": cost, "tile_extent": tile}
+        if stream_spec is not None:
+            spec["tile_stream"] = stream_spec["schedule"]
+            spec["tile_stream_park"] = bool(stream_spec.get("park_states"))
+        return spec
+
+    def _run_dtype(self, comp_name: str) -> str:
+        """The dtype `comp_name` RUNS at under this solve (`_resolve_component_dtypes`, the map the executor
+        receives) — never the container's declared one: mochi's VAE, declared fp32 and run fp16 on a V100, had its
+        chunks priced at fp32 widths, where the fp16 run's operand casts are (2026-10-17)."""
+        dtypes = getattr(self, "_component_dtypes", None) or {}
+        container = getattr(self, "_container_for_cuts", None)
+        profile = getattr(self, "_profile", None)
+        if comp_name not in dtypes and container is not None and profile is not None:
+            # a cut priced outside a whole solve (a rung asked directly): the same resolution the solve makes
+            dtypes = self._component_dtypes = self._resolve_component_dtypes(
+                container.get_neural_components(), profile, container)
+        if comp_name not in dtypes:
+            raise RuntimeError(f"ZERO FALLBACK: no run dtype is resolved for {comp_name!r} in this solve "
+                               f"(resolved: {sorted(dtypes)}); its cut cannot be priced at a dtype it may not run")
+        return dtypes[comp_name]
+
+    def _declared_streams(self, container, component_memory, profile) -> None:
+        """Every component whose stream declares its vendor's chunks runs in them at every request — that chunked
+        function IS its reference (CogVideoX's `_decode`, decision 2026-10-16 21:30) — so its activations are
+        one chunk's, before any rung prices it."""
+        self._profile = profile
+        self._container_for_cuts = container
+        from neurobrix.triton.prism.served_prefill import price_chunk_mask   # a session's chunk mask over the cached keys
+        price_chunk_mask(component_memory, self._kv_declared(container), getattr(self, "_input_config", None),
+                         self._mode, self._overhead_bytes)
+        for name, mem in component_memory.items():
+            vt = self._vendor_tiling_declaration(name)
+            if vt is not None:          # a declaration IS the vendor's reference cut (none says "memory")
+                spec = self._vendor_tiling(container, name, None)
+                if spec is None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: {name}'s vendor reference is tiled and its tiles are not read for this "
+                        f"request: {self._tiling_declined.get(name)}")
+                self._component_tiling[name] = spec
+                mem.activation_bytes = int(spec["tiled_activation_bytes"])
+                mem.overhead_bytes = self._overhead_bytes(mem.weight_bytes, mem.activation_bytes,
+                                                          mem.activation_profiled)
+                continue
+            decl = self._stream_declaration(container, name)
+            if decl is None or not decl.get("vendor_chunks"):
+                continue
+            spec = self._temporal_stream(container, name, None)
+            if spec is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: {name}'s vendor runs it in temporal chunks (its declared reference), and no "
+                    f"schedule of them is read for this request: {self._stream_declined.get(name)}")
+            self._component_stream[name] = spec
+            mem.activation_bytes = int(spec["activation_bytes"])
+            mem.overhead_bytes = self._overhead_bytes(mem.weight_bytes, mem.activation_bytes, mem.activation_profiled)
+
+    def _tile_only_if_exact(self, comp_name: str, graph: Dict[str, Any], profile_j: Dict[str, Any],
+                            full_act: int, rung_mb: int):
+        """None when a spatial tile of `comp_name` is the untiled component (no op couples its spatial extent, or its
+        vendor's own reference is tiled and declared so); else what stops the tile — and then the plan never tiles it
+        (owner, 2026-10-16 18:40: Prism chooses only exact cuts, exactness read from the graph, never from a model list).
+
+        The record goes into the plan (`ExecutionPlan.tiling_exactness`). A coupled component is never tiled: Prism
+        descends the ladder of EXACT strategies for it (Hocine Benkelaya, 2026-10-16 18:42) and refuses only at its bottom
+        (`machine_cannot_run`)."""
+        from neurobrix.triton.prism.profiler import spatial_coupling
+        declared = self._vendor_tiling_declaration(comp_name)
+        if declared:
+            # The vendor's reference itself tiles: the declaration, with its source, written by the container builder from the
+            # registry, is the one exception — and then the cut is the vendor's (`_vendor_tiling`), never a size
+            # Prism chooses.
+            self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {
+                "exact": True, "why": f"its vendor's reference tiles ({'; '.join(declared.get('source') or [])})"}
+            return None
+        coupled = spatial_coupling(graph)
+        if coupled is None:
+            self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {"exact": True, "why": "no op couples space"}
+            return None
+        uid, what = coupled
+        why = (f"a spatial tile is not the untiled component: {what}" + (f" at {uid}" if uid else "")
+               + " — every position of a tile would read the tile, not the whole extent")
+        self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {"exact": False, "op": uid or None, "why": why}
+        return why
+
+    def _spatial_component_tiling(
+        self, container: "NBXContainer", comp_name: str,
+        mem: ComponentMemory, tile_rung_mb: int, dev: Optional["DeviceState"] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a TilingEngine spec when a spatial component (4D/5D input +
+        scale config) overflows `budget_bytes` untiled but fits when its
+        decode runs on overlapping spatial tiles — else None.
+
+        REUSES the R31 TilingEngine brick: here Prism only SIZES the tile so
+        the per-tile activation fits, then keeps the component on GPU instead
+        of routing it to host RAM (the CogVideoX-5b VAE at 480x720x49 frames
+        peaks at ~82 GB untiled — 5 live full-res feature maps — and was being
+        offloaded to cpu). The runtime instantiates a TilingEngine from this
+        spec. Activation scales ~quadratically with the tiled spatial area, so
+        tile_size = sqrt(latent_area * budget / full_activation).
+        """
+        import json, math
+        cache_path = getattr(container, "_cache_path", None)
+        ic = getattr(self, "_input_config", None)
+        self._container_for_cuts = container             # the vendor declarations are read from its files
+        self.__dict__.setdefault("_tiling_declined", {}).pop(comp_name, None)
+        if cache_path is None or ic is None:
+            return self._tiling_decline(comp_name, "the plan holds no container path or no request")
+        gpath = cache_path / "components" / comp_name / "graph.json"
+        ppath = cache_path / "components" / comp_name / "profile.json"
+        if not gpath.exists() or not ppath.exists():
+            return self._tiling_decline(comp_name, "its graph.json or profile.json is absent")
+        # Declined before its graph is read again from disk (4.9 s for Qwen3-30B-A3B's) when no branch below can
+        # apply: no stream, no vendor cut, and no rank-4 or rank-5 input in the graph the container holds.
+        held = (getattr(container, "_components", None) or {}).get(comp_name)
+        if (isinstance(getattr(held, "graph", None), dict)
+                and comp_name not in self.__dict__.get("_component_stream", {})
+                and self._stream_declaration(container, comp_name) is None
+                and self._vendor_tiling_declaration(comp_name) is None
+                and _spatial_input(held.graph)[0] is None):
+            return self._tiling_decline(comp_name, "its graph has no rank-4 or rank-5 input to tile")
+        try:
+            with open(gpath) as _gf:
+                graph = json.load(_gf)
+            with open(ppath) as _pf:
+                profile_j = json.load(_pf)
+        except Exception as exc:
+            # `return None` stood here: an unreadable or malformed graph.json
+            # became "no tiling needed", which is a decision, not an absence.
+            raise PlanNotComputable(
+                f"the component's graph or profile could not be read "
+                f"({gpath.name} / {ppath.name}: {type(exc).__name__}: {exc}), so "
+                f"its build-time size is unknown and no tiling decision can be taken "
+                f"for it."
+            ) from exc
+
+        # A temporal stream is an exact cut of a component that does not fit whole, wherever a rung asks for one
+        # (the card's placement, the layer-streaming rung, a host rung's card): its chunks, priced like the
+        # component held whole, within the rung. The plan carries it in `component_stream`.
+        streams = self.__dict__.setdefault("_component_stream", {})
+        if comp_name not in streams and self._stream_declaration(container, comp_name) is not None:
+            # the part of the rung one component held whole may occupy (`_part_of_rung_mb`, the rule `_usable_mb` reads —
+            # the fraction where no device's facts are given;
+            # the caller still checks the chunk and the weights against its device's own figure), the overhead as a
+            # component held whole prices it (`_overhead_bytes`)
+            part = int(self._part_of_rung_mb(int(tile_rung_mb), dev.spec if dev is not None else None) * 1024 * 1024)
+            weights = int(mem.weight_bytes)
+            stream = self._temporal_stream(container, comp_name,
+                                           lambda c: c + weights + self._overhead_bytes(weights, c, mem.activation_profiled) <= part)
+            if stream is not None:
+                streams[comp_name] = stream
+                return {"stream": True, "tiled_activation_bytes": int(stream["activation_bytes"]),
+                        "schedule": list(stream["schedule"])}
+        elif comp_name in streams and not self._vendor_tiling_declaration(comp_name):
+            return {"stream": True, "tiled_activation_bytes": int(streams[comp_name]["activation_bytes"]),
+                    "schedule": list(streams[comp_name]["schedule"])}
+
+        # A vendor whose reference tiles: its own cut, priced per tile — never a tile Prism sizes.
+        if self._vendor_tiling_declaration(comp_name) is not None:
+            self._tile_only_if_exact(comp_name, graph, profile_j, 0, int(tile_rung_mb))   # records the exception
+            return self._vendor_tiling(container, comp_name, int(int(tile_rung_mb) * 1024 * 1024))
+
+        # Spatial input: 4D NCHW or 5D NCDHW; build_size = H (index -2).
+        tensors = graph.get("tensors", {})
+        build_size, in_spatial_w = _spatial_input(graph)          # H, and the W beside it for the scale derivation
+        if not build_size:
+            return self._tiling_decline(comp_name, "its graph has no rank-4 or rank-5 input to tile")
+
+        # Downsampler guard (data-driven, no name/family match): a component
+        # whose OUTPUT spatial extent is smaller than its INPUT (a VAE *encoder*:
+        # image -> compressed latent) is NOT a component-tiling target. The
+        # TilingEngine accumulate path assembles tiles at the UPSCALE
+        # (output > input); a downsampler's small encoded tiles cannot fill an
+        # upscale-sized accumulator -> runtime shape mismatch (CogVideoX-5b-I2V
+        # vae_encoder: 264 vs 4 at the W axis). A downsampler's peak is its
+        # input-resolution conv, owned by op-level tiling, not this path. The
+        # encoder also aliases the VAE module, so its ComponentMemory carries the
+        # decode-side activation — exactly what would (wrongly) trip the budget
+        # test below. Mirror of the TilingEngine.from_component_config guard.
+        out_spatial = None
+        out_spatial_w = None         # likewise: a uniform upscale must agree on both
+        for oid in graph.get("output_tensor_ids", []):
+            osh = tensors.get(str(oid), {}).get("shape", [])
+            if isinstance(osh, list) and len(osh) in (4, 5):
+                out_spatial = osh[-2]
+                out_spatial_w = osh[-1]
+                break
+        # HOCINE'S TILING STANDARD (2026-09-21): the tile is derived from the RUNG by a fixed
+        # rule, never from a raw reading — a dedicated card's nominal rung, a shared pool's free
+        # rung (memory_budget.tile_rung_mb) — so the tile is a pure function of (component, rung)
+        # and a census can enumerate every rung up to a card's capacity. The tile budget is 0.40
+        # OF THE RUNG (the CogVideoX-measured transient allowance documented at the call site).
+        #
+        # Derived HERE, before either branch reads it. It stood below the encoder branch, which
+        # passed `budget_bytes` down before it existed: every 5-D encoder that reached this point
+        # raised UnboundLocalError (test_the_encoder_tiling_path_is_reachable.py).
+        rung_mb = int(tile_rung_mb)
+        budget_bytes = int(rung_mb * 0.40 * 1024 * 1024)
+
+        if out_spatial is not None and out_spatial < build_size:
+            # D2-ENCODER: the guard is lifted ONLY for the class the engine
+            # can tile exactly — 5D encoders whose temporal map is
+            # LINEAR-DOWN (t_out = t_in / r on the r-lattice, no causal
+            # first-frame offset) and whose profiled activation overflows
+            # the budget. Everything else (4D downsamplers, causal encoders,
+            # encoders that fit untiled) keeps the original decline: their
+            # peak is the input-resolution conv owned by op-level tiling,
+            # and causal maps cannot be tiled mid-clip (identical doctrine
+            # to the decode-side AFFINE decline).
+            return self._encode_component_tiling(
+                comp_name, graph, profile_j, mem, budget_bytes, rung_mb,
+                build_size, out_spatial)
+
+        # Scale factor: what the graph MEASURES first — its built input and output extents —
+        # then a declared upscale, then the block-count heuristic. The heuristic
+        # 2^(len(block_out_channels)-1) counts one 2x upsample per block, which is not every
+        # VAE's shape: SANA-Video's declares decoder_block_out_channels [256, 512, 1024]
+        # (heuristic 4) while its graph maps 14x22 latents to 448x704 pixels (32). Sized at 4,
+        # the tiled decode stitched a 160x64 canvas for a 1280x512 request, in both engines, on
+        # every card where the VAE tiled (32 GB lazy_sequential, 2026-09-27). Over the whole
+        # cache the two disagree on that one container only.
+        config = profile_j.get("config", {})
+        scale_factor = None
+        if out_spatial and build_size:
+            # THE GRAPH SAYS IT, so ask the graph. Every upscaler in this
+            # machine's cache carries an EMPTY `config` in profile.json --
+            # real-esrgan x2/x4/x8, swin2SR-x4, hat-l-x4, all of them -- and
+            # each states its factor exactly in its own shapes:
+            #
+            #   real-esrgan-x8   in [1,3,112,80] -> out [1,3,896,640]   8 and 8
+            #   real-esrgan-x4   in [1,3,112,80] -> out [1,3,448,320]   4 and 4
+            #   swin2SR-x4       in [1,3,112,80] -> out [1,3,448,320]   4 and 4
+            #
+            # Both axes must agree and the ratio must be exact: a component
+            # that scales H and W differently, or by a fraction, is not a
+            # uniform spatial upscale and this sizing does not describe it.
+            _ih, _iw = build_size, in_spatial_w
+            _oh, _ow = out_spatial, out_spatial_w
+            if _ih and _iw and _oh and _ow and _oh % _ih == 0 and _ow % _iw == 0:
+                _rh, _rw = _oh // _ih, _ow // _iw
+                if _rh == _rw and _rh > 1:
+                    scale_factor = _rh
+        declared = config.get("upscale")
+        if declared is not None and scale_factor is not None and int(declared) != int(scale_factor):
+            raise ValueError(
+                f"ZERO FALLBACK: {comp_name} declares upscale {declared} and its graph measures "
+                f"{scale_factor} (build-time {build_size}x{in_spatial_w} -> {out_spatial}x{out_spatial_w}); "
+                f"a tile plan cannot choose between a declaration and a measurement that disagree")
+        if scale_factor is None:
+            scale_factor = declared
+        if scale_factor is None:
+            # VAE configs spell the block list as decoder_block_out_channels
+            # (Sana/DC-AE) OR the generic block_out_channels (most diffusers VAEs).
+            db = (config.get("decoder_block_out_channels")
+                  or config.get("block_out_channels"))
+            if db:
+                scale_factor = 2 ** (len(db) - 1)
+        if not scale_factor:
+            return self._tiling_decline(comp_name, "neither its graph nor its profile states a spatial scale")
+
+        full_act = mem.activation_bytes
+        # The rung sizes the tile (`rung_mb`, `budget_bytes`, derived above); the LIVE reading
+        # keeps the feasibility check at the call site — the rung sizes, the truth validates.
+        _log.debug(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB rung={rung_mb}MB "
+                   f"budget={budget_bytes/1024**3:.2f}GB -> {'TILE' if full_act > budget_bytes else 'native'}")
+        if full_act <= budget_bytes or full_act <= 0:
+            return None  # fits untiled — no tiling needed
+        inexact = self._tile_only_if_exact(comp_name, graph, profile_j, full_act, rung_mb)
+        if inexact is not None:
+            return self._tiling_decline(comp_name, inexact)
+
+        # Runtime latent spatial extent (the input space the tiles cover).
+        # `or 8` and `or 1024` stood here: a tiling decision taken against an
+        # invented 1024x1024 at an invented VAE scale is a decision about a
+        # request nobody made. If this point is reached without them, the plan
+        # cannot size a tile and says so.
+        vae_scale = getattr(ic, "vae_scale", None)
+        _h, _w = getattr(ic, "height", None), getattr(ic, "width", None)
+        if not (_h and _w):
+            from neurobrix.core.runtime_values import MissingRuntimeValue
+            raise MissingRuntimeValue(
+                f"tiling was required for this component but the request's "
+                f"extent is not known: height={_h!r}, width={_w!r}. Declare them "
+                f"in the container's runtime/defaults.json or the family config.")
+        if vae_scale:
+            latent_h = max(1, _h // vae_scale)
+            latent_w = max(1, _w // vae_scale)
+        else:
+            # NO VAE, SO NO LATENT GRID -- and that is legitimate, not missing.
+            # `InputConfig`'s own docstring says so: "absent is legitimate only
+            # for a dimension the model does not have: no VAE, no vae_scale."
+            # An upscaler reads pixels and writes pixels; the space its tiles
+            # cover IS the request's own, at scale 1.
+            #
+            # Demanding a vae_scale here refused every upscaler in the cache.
+            # `real-esrgan-x8` at 1024x1024 raised MissingRuntimeValue from this
+            # line telling the operator to declare a VAE scale for a model that
+            # has no VAE -- and the request went to the host instead of being
+            # cut into pieces it fits in. A refusal that asks for a thing the
+            # model cannot have is not a refusal, it is a wrong question.
+            latent_h, latent_w = _h, _w
+
+        window_alignment = config.get("window_size", 1) or 1
+        # The fixed rule: the activation per latent pixel is the component's own constant (the
+        # estimate at this request divided by its latent area), and the tile is the largest
+        # square whose activation fits the rung's tile budget — independent of the request's
+        # extent, which only clamps a request smaller than the tile to its native size.
+        frac = budget_bytes / full_act
+        bytes_per_pixel = full_act / float(max(1, latent_h * latent_w))
+        tile_size = int(math.sqrt(budget_bytes / bytes_per_pixel))
+        if window_alignment > 1:
+            tile_size = (tile_size // window_alignment) * window_alignment
+        # THE LADDER'S OTHER HALF (2026-09-21): the extent handed to the kernels is snapped
+        # DOWN onto the vendor profile's tile lattice (`tiling.extent_lattice`, 16 on Volta —
+        # the measurement is beside the value in volta.yml: 457 → 717.9 s, 448 → 40.9 s under
+        # static configs, and 2 066 s of sweeps against 20 s cold under production autotune).
+        # The memory reading rounds down onto whole-GB rungs for determinism; alignment buys
+        # back the performance determinism alone does not, for 3.9 % of the tile's area.
+        # Nothing else downstream is rounded. A profile without the value keeps the extent as
+        # computed; NBX_PRISM_TILE_ALIGN overrides it for a measurement.
+        _align = self._tile_extent_lattice()
+        if _align > 1 and tile_size >= _align:
+            # DOWN onto the lattice, as the comment above says. A tile the budget sized BELOW one
+            # unit has nothing to snap down to and keeps its size: `max(_align, …)` stood here and
+            # rounded a 12-latent tile UP to 16 over the budget, the function then returned None and
+            # the component was sent to the host — CogVideoX-2b / -5b-I2V at 352x720x49 on a 16 GB
+            # V100 decoded 45 minutes on the CPU (regression matrix, 2026-09-27). Alignment is a
+            # performance nicety; it never trades a tile that fits for host execution.
+            tile_size = (tile_size // _align) * _align
+        tile_size = max(window_alignment if window_alignment > 1 else 8,
+                        min(tile_size, latent_h, latent_w))
+
+        # ── D2: balanced (T, H, W) tiling for 5D video VAEs with a LINEAR
+        # temporal map — else spatial-only (the pre-D2 law, byte-identical).
+        #
+        # CORRECTNESS GATE — read from the graph symbolics, never a model
+        # name: the component's temporal input->output map must be LINEAR
+        # (t_out = a * t_in, e.g. Allegro 4*s1) for independent temporal
+        # tiles to place exactly (out = a*pos, same law as spatial). The
+        # affine causal class (a*(t-1)+1: CogVideoX/Wan/Mochi — the first
+        # latent frame decodes to ONE pixel frame) canNOT be temporally
+        # tiled: a mid-clip tile re-applies the clip-start semantics and
+        # misaligns by a-1 frames. That class needs conv-cache streaming
+        # (DETTE), so it keeps the spatial-only path.
+        #
+        # SIZING POLICY (linear class): spatial-only collapse minimizes tile
+        # area and maximizes seam count (Allegro native: 26-latent tiles =
+        # 32 patches of 208px, full T each). The vendor practice tiles T
+        # together with space (small temporal windows, large spatial
+        # patches). Balance the shrink across the three axes — cube-root of
+        # the needed volume fraction per axis — then re-derive the spatial
+        # tile from what the temporal tile leaves. Data-driven, no
+        # per-model constants.
+        t_spec = None
+        tmap = self._temporal_affine_map(graph)
+        num_frames = getattr(ic, "num_frames", None)
+        if tmap is not None and tmap[1] == 0 and tmap[0] > 1 and num_frames:
+            t_a = tmap[0]
+            t_lat = max(1, int(round(num_frames / t_a)))
+            frac = budget_bytes / full_act
+            if t_lat > 2 and frac < 1.0:
+                g = frac ** (1.0 / 3.0)
+                t_tile = max(2, int(t_lat * g))
+                if t_tile < t_lat:
+                    t_overlap = max(1, _ts.temporal_halo(t_tile))
+                    # Spatial fraction left after the temporal shrink
+                    sp_frac = frac / (t_tile / float(t_lat))
+                    sp_tile = int(math.sqrt(latent_h * latent_w * min(1.0, sp_frac)))
+                    if window_alignment > 1:
+                        sp_tile = (sp_tile // window_alignment) * window_alignment
+                    sp_tile = max(window_alignment if window_alignment > 1 else 8,
+                                  min(sp_tile, latent_h, latent_w))
+                    t_act = full_act * (sp_tile * sp_tile) / float(latent_h * latent_w) \
+                        * t_tile / float(t_lat)
+                    if t_act <= budget_bytes:
+                        t_spec = {
+                            "tile_size": int(sp_tile),
+                            "t_tile": int(t_tile),
+                            "t_overlap": int(t_overlap),
+                            "t_scale": int(t_a),
+                            "tiled_activation_bytes": int(t_act),
+                        }
+
+        overlap_src = t_spec["tile_size"] if t_spec else tile_size
+        overlap = _ts.spatial_overlap(overlap_src)
+        if window_alignment > 1:
+            overlap = ((overlap + window_alignment - 1) // window_alignment) * window_alignment
+
+        tiled_act = full_act * (tile_size * tile_size) / float(latent_h * latent_w)
+
+        spec = {
+            "tile_size": int(tile_size),
+            "scale_factor": int(scale_factor),
+            "overlap": int(overlap),
+            "window_alignment": int(window_alignment),
+            "trace_size": int(build_size),
+            "tiled_activation_bytes": int(tiled_act),
+            # the rung this sizing stood on, so the plan's own record says
+            # which one and a reader can rederive every number above
+            "budget_rung_mb": int(rung_mb),
+        }
+        if t_spec is not None:
+            spec.update(t_spec)
+            return spec
+
+        if tiled_act <= budget_bytes:
+            return spec
+
+        # spatial-only insufficient; causal/4D class — no temporal axis
+        return self._tiling_decline(
+            comp_name, f"its smallest spatial tile ({tile_size} wide) still holds "
+                       f"{tiled_act / 2 ** 20:,.0f} MB over its {budget_bytes / 2 ** 20:,.0f} MB tile "
+                       f"budget, and no temporal tile was taken")
+
+    def _encode_component_tiling(
+        self, comp_name: str, graph: Dict, profile_j: Dict, mem: ComponentMemory,
+        budget_bytes: int, rung_mb: int, build_size: int, out_spatial: int,
+    ) -> Optional[Dict[str, Any]]:
+        """D2-ENCODER: TilingEngine spec for a DOWNSAMPLING component (VAE
+        encoder: pixel video -> compressed latent) that overflows the budget
+        untiled — else None (the downsampler guard's decline, unchanged for
+        every component outside the class).
+
+        Geometry (mirror of the decode law, downscale direction):
+        - Tiles live in the component's INPUT (pixel) space; the input-space
+          overlap is the receptive-field halo. Tile sizes, strides and
+          positions are kept on the compression-ratio lattice so every
+          tile's latent output lands EXACTLY on the global latent grid
+          (output position = input position / ratio, the same placement law
+          as decode's `* ratio`).
+        - Each tile encodes fully; outputs accumulate into a latent-space
+          buffer and the final divide averages the (small) latent overlap —
+          the decode accumulate/divide brick reused verbatim, only the
+          placement direction changes.
+        - Sizing reuses the decode cube-root balanced (T, H, W) policy on
+          the activation profile, computed on the INPUT extents (activation
+          scales with the pixel volume a tile covers).
+
+        Gates (all data-driven, no model/family names):
+        - temporal map must be LINEAR-DOWN (see temporal_downscale_ratio);
+          causal ((t-1)/r + 1) declines — a mid-clip tile would re-apply
+          the clip-start semantics, identical doctrine to the decode gate.
+        - spatial ratio from the profile's block channel list
+          (2^(len-1), the same law as decode) and verified against the
+          graph builds (trace_in / trace_out must equal it exactly).
+        - runtime extents must sit on the lattices the tiles are placed on:
+          the spatial ratio always, the frame ratio only for the linear
+          class (the causal class carries the whole clip in every tile).
+        """
+        import math
+        from neurobrix.triton.prism.profiler import (temporal_causal_downscale_ratio, temporal_downscale_ratio,
+                                                   temporal_map_unread)
+
+        ic = getattr(self, "_input_config", None)
+        if ic is None:
+            return self._tiling_decline(comp_name, "no request is bound")
+
+        full_act = mem.activation_bytes
+        if full_act <= budget_bytes or full_act <= 0:
+            return None  # fits untiled — guard's decline stands
+
+        # A spatial tile is the untiled encoder only where every op is local in space. An attention,
+        # a softmax, a reduction or a group norm over the spatial extent reads every position of it,
+        # so on a tile each position reads the tile instead (`spatial_coupling`): the latents differ
+        # everywhere, most at the seams, and a conditioning latent carries that error into every
+        # step that reads it (Wan2.2-I2V at 17 frames on a 16 GB card, 2026-10-16: the tiled encode
+        # 0.54% from the untiled one, 2.8% on a seam; the transformer's first projection 10x the
+        # untiled run's error, the step-1 velocity 3.4% from the float32 vendor against 0.3%).
+        inexact = self._tile_only_if_exact(comp_name, graph, profile_j, full_act, rung_mb)
+        if inexact is not None:
+            return self._tiling_decline(comp_name, inexact)
+
+        tmap = temporal_downscale_ratio(graph)
+        causal = False
+        if tmap is None:
+            # The causal class (1 + (t-1)//r): no temporal tile, ever — but a spatial tile carrying
+            # the whole clip is exact in time, the vendor's own tiled encode for these VAEs. The
+            # Wan encoders built as one causal pass (2026-09-26) need it: at 81 frames of 352x832
+            # the first activation alone is 8.5 GiB, and the plan declined, so the run died.
+            tmap = temporal_causal_downscale_ratio(graph)
+            if tmap is None:
+                return self._tiling_decline(comp_name, temporal_map_unread(graph))
+            causal = True
+        t_ratio, t_axis_out = tmap
+
+        config = profile_j.get("config", {})
+        blocks = (config.get("encoder_block_out_channels")
+                  or config.get("block_out_channels")
+                  or config.get("decoder_block_out_channels"))
+        if blocks:
+            sp_ratio = 2 ** (len(blocks) - 1)
+        elif out_spatial and build_size % out_spatial == 0:
+            # No block list in this component's profile: an ENCODE alias of the VAE (Wan's
+            # `vae_encoder`, module=vae, method=encode) whose configuration was written on the
+            # decode component. The ratio is then the graph's own built in/out extent — a fact of
+            # this graph, which the check below would have held the config to anyway.
+            sp_ratio = build_size // out_spatial
+        else:
+            return self._tiling_decline(
+                comp_name, f"no block list in its profile, and its build-time extents {build_size} -> "
+                           f"{out_spatial} do not divide")
+        # Build coherence: the graph's own in/out spatial builds must agree
+        # with the config-derived ratio, else decline (never guess geometry).
+        if sp_ratio <= 1 or build_size % sp_ratio != 0 \
+                or build_size // sp_ratio != out_spatial:
+            return self._tiling_decline(
+                comp_name, f"its profile's spatial ratio {sp_ratio} disagrees with its build-time extents "
+                           f"{build_size} -> {out_spatial}")
+
+        height = getattr(ic, "height", None)
+        width = getattr(ic, "width", None)
+        num_frames = getattr(ic, "num_frames", None)
+        if not height or not width or not num_frames:
+            return self._tiling_decline(
+                comp_name, f"the request binds height={height!r} width={width!r} frames={num_frames!r}")
+        # The spatial lattice binds every tile: each one's latent lands at its pixel position / ratio.
+        # The FRAME lattice binds only a tile taken in time — the linear class, whose temporal tiles
+        # land at frame / ratio. The causal class never tiles time: every tile carries the whole clip
+        # and holds the latent frames the graph computes for that clip, whatever its count, exactly
+        # as the untiled encoder does. `(num_frames - 1) % t_ratio` stood here and asked that class a
+        # question no tile of it depends on. The integer map 1 + (t-1)//r is also ceil(t/r): it is
+        # what a stride-2 slice `[::2]` records (Allegro-TI2V's encoder, `((t+1)//2+1)//2`, read
+        # here as causal r=4), and the gate refused that encoder at its own 88 frames — the
+        # request the vendor encodes — so the plan had no tile for it (2026-10-04).
+        if height % sp_ratio or width % sp_ratio or (not causal and num_frames % t_ratio):
+            return self._tiling_decline(
+                comp_name, f"the request {num_frames}x{height}x{width} is off the lattice its tiles are "
+                           f"placed on ({sp_ratio} pixels" + ("" if causal else f", {t_ratio} frames") + ")")
+
+        window_alignment = config.get("window_size", 1) or 1
+        # Spatial tile lattice: multiples of the compression ratio (latent
+        # grid exactness) and of any window alignment.
+        lat = sp_ratio * window_alignment // math.gcd(sp_ratio, window_alignment)
+
+        frac = budget_bytes / full_act
+
+        def _snap_down(v: int, unit: int, floor: int) -> int:
+            return max(floor, (int(v) // unit) * unit)
+
+        # Balanced cube-root split across (T, H, W) — decode's sizing policy
+        # applied in INPUT (pixel) space.
+        g = frac ** (1.0 / 3.0)
+        t_tile = _snap_down(int(num_frames * g), t_ratio, 2 * t_ratio)
+        t_tile = min(t_tile, num_frames)
+        if causal:
+            t_tile = num_frames  # the whole clip in every tile: space is tiled, time never
+            sp_frac = frac
+        elif t_tile < num_frames:
+            sp_frac = min(1.0, frac / (t_tile / float(num_frames)))
+        else:
+            t_tile = num_frames  # temporal axis carried whole
+            sp_frac = frac
+        sp_tile = _snap_down(int(math.sqrt(height * width * sp_frac)),
+                             lat, 2 * lat)
+        sp_tile = min(sp_tile, _snap_down(min(height, width), sp_ratio, sp_ratio))
+
+        def _tiled_act(sp: int, tt: int) -> float:
+            return (full_act * (sp * sp) / float(height * width)
+                    * tt / float(num_frames))
+
+        # Floor effects can leave the estimate above budget — shrink on the
+        # lattice, spatial first (cheapest seams), then temporal. Bounded.
+        while _tiled_act(sp_tile, t_tile) > budget_bytes and sp_tile > 2 * lat:
+            sp_tile -= lat
+        while not causal and _tiled_act(sp_tile, t_tile) > budget_bytes \
+                and t_tile > 2 * t_ratio:
+            t_tile -= t_ratio
+        tiled_act = _tiled_act(sp_tile, t_tile)
+        if tiled_act > budget_bytes:
+            return self._tiling_decline(
+                comp_name, f"its smallest lattice tile still holds {tiled_act / 2 ** 20:,.0f} MB over its "
+                           f"{budget_bytes / 2 ** 20:,.0f} MB tile budget")
+
+        # Input-space halos on the ratio lattices (stride = tile - overlap
+        # stays lattice-exact so every position maps to an integral latent
+        # position). Same proportional law as decode (`tiling_sizes.spatial_halo`,
+        # min one lattice step).
+        overlap = max(sp_ratio,
+                      ((_ts.spatial_halo(sp_tile) + sp_ratio - 1) // sp_ratio) * sp_ratio)
+        if overlap >= sp_tile:
+            overlap = sp_ratio
+        spec: Dict[str, Any] = {
+            "tile_size": int(sp_tile),
+            "scale_factor": int(sp_ratio),
+            "overlap": int(overlap),
+            "window_alignment": int(window_alignment),
+            "trace_size": int(build_size),
+            "tiled_activation_bytes": int(tiled_act),
+            "budget_rung_mb": int(rung_mb),
+            "downscale": True,
+            "t_axis_out": int(t_axis_out),
+        }
+        if t_tile < num_frames:
+            t_overlap = max(t_ratio, (_ts.temporal_halo(t_tile) // t_ratio) * t_ratio)
+            if t_overlap >= t_tile:
+                t_overlap = t_ratio
+            spec.update({
+                "t_tile": int(t_tile),
+                "t_overlap": int(t_overlap),
+                "t_scale": int(t_ratio),
+            })
+        return spec
+
+    @staticmethod
+    def _temporal_affine_map(graph: Dict) -> Optional[Tuple[int, int]]:
+        """Read the component's temporal input->output map from the graph
+        symbolics as an affine form (a, b): t_out = a * t_in + b.
+
+        Returns None when the graph has no rank-5 input with a symbolic T
+        (dim 2), no rank-5 output, or the output T expression is not affine
+        in the input's temporal symbol (multi-symbol / non-linear trees).
+        DATA-DRIVEN: this is the discriminator between the linear class
+        (b == 0, independent temporal tiles valid) and the causal class
+        (b != 0, first-frame-special — declined).
+        """
+        tensors = graph.get("tensors", {})
+
+        def _dims(tid) -> List:
+            return (tensors.get(str(tid), {})
+                    .get("symbolic_shape", {}).get("dims", []) or [])
+
+        t_symbol = None
+        for iid in graph.get("input_tensor_ids", []):
+            dims = _dims(iid)
+            if len(dims) == 5 and isinstance(dims[2], dict) \
+                    and dims[2].get("type") == "symbol":
+                t_symbol = dims[2].get("id")
+                break
+        if t_symbol is None:
+            return None
+
+        def _affine(node) -> Optional[Tuple[float, float]]:
+            # (a, b) such that node == a * t_symbol + b; None if not affine
+            # in t_symbol alone.
+            if isinstance(node, (int, float)):
+                return (0.0, float(node))
+            if not isinstance(node, dict):
+                return None
+            ntype = node.get("type")
+            if ntype == "symbol":
+                return (1.0, 0.0) if node.get("id") == t_symbol else None
+            left = _affine(node.get("left"))
+            right = _affine(node.get("right"))
+            if left is None or right is None:
+                return None
+            if ntype == "add":
+                return (left[0] + right[0], left[1] + right[1])
+            if ntype == "mul":
+                if left[0] == 0.0:   # const * affine
+                    return (left[1] * right[0], left[1] * right[1])
+                if right[0] == 0.0:  # affine * const
+                    return (left[0] * right[1], left[1] * right[1])
+                return None          # symbol * symbol — non-linear
+            return None
+
+        for oid in graph.get("output_tensor_ids", []):
+            dims = _dims(oid)
+            if len(dims) != 5:
+                continue
+            aff = _affine(dims[2])
+            if aff is not None and aff[0] > 0 \
+                    and aff[0] == int(aff[0]) and aff[1] == int(aff[1]):
+                return (int(aff[0]), int(aff[1]))
+        return None
+
+    def _place_component(
+        self,
+        container: "NBXContainer",
+        comp_name: str,
+        mem: ComponentMemory,
+        devices: List[DeviceState],
+        shard_sizes: Dict,
+        profile: "PrismProfile",
+    ) -> Optional[Tuple[str, Dict[str, str]]]:
+        """
+        Recursive cascade for a single component.
+        Same logic as model-level strategies, applied to one component.
+
+        Cascade order:
+        1. single_gpu — component fits on largest GPU
+        2. fgp — distribute blocks across GPUs
+        3. zero3 — shard everything to CPU, stream to GPU for compute
+
+        Returns (device_string, shard_map) or None if placement impossible.
+        """
+        model_dtype = self._get_component_dtype(container, comp_name)
+        largest = max(devices, key=lambda d: d.capacity_mb)
+        cost_mult = largest.get_cost_multiplier(model_dtype)
+        real_weight = mem.weight_mb * cost_mult
+        required = self._whole_component_mb(container, comp_name, mem, largest)
+        usable = self._usable_mb(largest)
+
+        # Strategy 1: single_gpu — the component fits whole on the largest GPU: its whole cost
+        # against the part of the rung a WHOLE component may hold (`_whole_usable_mb`: the
+        # whole-component fraction of PRISM_DEFAULTS, less the smallest drain the plan may leave
+        # the Triton hot loop; the device then drains at the room left, `_assign_drain_cliffs`). No flat `oom_reserve_mb` is subtracted here — this comment said so
+        # until 2026-09-24 and the code never did; the fraction is the only headroom. And its
+        # weights are ONE arena, within the device's largest allocation (`_arena_over_allocation`).
+        if (required <= self._whole_usable_mb(largest)
+                and self._arena_over_allocation(container, comp_name, mem, largest) is None):
+            shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
+            return (largest.device_string, shard_map)
+
+        # Strategy 2: fgp — distribute blocks across GPUs
+        fgp_result = self._place_component_fgp(
+            container, comp_name, mem, devices, model_dtype
+        )
+        if fgp_result is not None:
+            return fgp_result
+
+        # Strategy 2.5: an expert store on a UNIFIED device. A routed component's fused MoE op reads
+        # `top_k` experts per token, not its whole layer, so held whole it is priced at its dense
+        # part plus the widest layer's `top_k` experts (`_expert_store_floor`) beside its live
+        # activations; the routed experts stay in the container's mapped shards, the one pool's file
+        # pages, and the runtime copies the experts each call routes to into a cache on the device.
+        # zero3 frees nothing here (one pool) and is refused below; layer streaming cut such a
+        # component into segments that each hold whole layers — 128 experts of 9 MB for the 8 a token
+        # reads (Qwen3-30B-A3B-Thinking-2507 on the Mac's M4 Pro, 2026-10-12: segments re-read from
+        # disk per token, or refused where one layer's 1 152 MB exceeds a segment). The cache beyond
+        # the floor is granted with the plan (`_zero3_resident_budgets`), after the KV cache.
+        if _device_is_unified(largest.device_string, profile):
+            # The graph's constants are loaded beside the store (`_graph_constant_bytes`) and the
+            # store's cache takes the rest of the room: unpriced, they sat over the usable rung —
+            # DeepSeek-Coder-V2-Lite's 1 080 MB of RoPE tables beside a store granted to the byte.
+            consts_mb = self._graph_constants_mb(container, comp_name, largest)
+            store = self._expert_store_budget(comp_name, real_weight,
+                                              usable - self._live_activation_mb(mem, largest) - consts_mb, cost_mult)
+            cap = self._max_allocation_mb(largest)
+            if store is not None and (cap is None or store[0] <= cap):
+                dense_mb, floor_mb, _ = self._expert_store_floor(comp_name, real_weight, cost_mult)
+                self.__dict__.setdefault("_unified_expert_stores", {})[comp_name] = dense_mb + floor_mb + consts_mb
+                shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
+                return (largest.device_string, shard_map)
+
+        # Strategy 3: zero3 — CPU offload of weights, GPU for compute only.
+        # Works only when activations fit on the largest GPU (with the
+        # same driver-overhead reserve as Strategy 1) — AND only where the
+        # offload frees anything: on a unified device host and device are
+        # the same bytes, the budget already counts the weights
+        # (_device_is_unified, 2026-09-09), and SELECTING zero3 there is a
+        # plan accepted under one memory model and executed under another —
+        # it then dies in zero3's CUDA machinery before an op runs
+        # (Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21).
+        # Selection consults the same device door the budget does.
+        if (self._live_activation_mb(mem, largest) <= usable
+                and not _device_is_unified(largest.device_string, profile)):
+            shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+            return (f"zero3:{largest.device_string}", shard_map)
+
+        # Strategy 3.5: spatial component tiling — keep a spatial-overflow
+        # component (4D/5D input + scale config) on GPU by tiling its decode
+        # (reuses the R31 TilingEngine) instead of offloading compute to host
+        # RAM. Fires ONLY when the untiled activation fits no GPU even with
+        # zero3, but the per-tile activation does — strictly additive
+        # (non-spatial components, and ones that already fit, never reach
+        # here). The CogVideoX-5b VAE (82 GB untiled at 480x720x49) stays on
+        # GPU as overlapping spatial tiles instead of cpu.
+        # Budget the tile conservatively (0.40 of the GPU): the quadratic
+        # area-scaling estimate undercounts the true per-tile live set (the
+        # resnet keeps several full-res feature maps live), and the triton
+        # arena's live watermark runs ~1.3x the compiled caching allocator
+        # for the same tile. CogVideoX-5b at 0.85 sized tile=39 → 24 GB
+        # compiled (fit) but 31 GB+ triton (OOM at conv::90); 0.40 sizes a
+        # tile that fits both. tiled_activation re-checked below.
+        # The READING goes in whole; the rung and the 0.40 fraction are
+        # derived inside (`memory_ladder_rung_mb`), so the tile is a pure
+        # function of (request, rung) and the spec names the rung it stood on.
+        # The live reading itself: the rung inside rounds it ONCE (the law
+        # forbids a second rounding of an already-quantised figure).
+        # Strategy 3.4: a temporal stream — the component in exact time chunks carrying its causal states
+        # (derived by the container builder from its graph, `triton/prism/temporal_stream.py`). Above spatial tiling: every chunk
+        # is the clip's function exactly (or the vendor's own), and the card keeps the whole component.
+        streams = self.__dict__.setdefault("_component_stream", {})
+        if comp_name not in streams and self._stream_declaration(container, comp_name):
+            import dataclasses as _dc
+
+            def held_whole_at(activation: int) -> bool:
+                # a chunk is the component held whole at the chunk's activations: the whole rule decides
+                # (the rung's whole part, the Triton arena's factor, the device's largest allocation)
+                m = _dc.replace(mem, activation_bytes=int(activation),
+                                overhead_bytes=self._overhead_bytes(mem.weight_bytes, int(activation),
+                                                                    mem.activation_profiled))
+                return self._holds_whole(container, comp_name, m, largest)
+            stream = self._temporal_stream(container, comp_name, held_whole_at)
+            if stream is not None:
+                streams[comp_name] = stream
+                shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
+                return (largest.device_string, shard_map)
+        tiling = self._spatial_component_tiling(
+            container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb), largest)
+        if tiling is not None:
+            tiled_total_mb = self._tiled_component_mb(container, comp_name, mem, largest, tiling)
+            if tiled_total_mb <= usable:
+                self._component_tiling[comp_name] = tiling
+                shard_map = {s: largest.device_string
+                             for s in shard_sizes.get(comp_name, {})}
+                return (largest.device_string, shard_map)
+            self._tiling_decline(comp_name, f"its tile and weights still need {tiled_total_mb:,.0f} MB")
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            # The Triton branch below records this placement's overflow and its reasons per rung; the
+            # compiled one goes to the host, and its refusal must still say why the card got no tile.
+            self._record_rung_tiling_decline("a component's placement", largest.device_string, usable,
+                                             comp_name)
+
+        # Strategy 4: cpu — both weights AND compute on CPU.
+        # Last-resort placement for a single component whose activations
+        # don't fit any GPU even with zero3 weight offload. Used by
+        # `lazy_sequential` to route the largest component (e.g. Sana 4Kpx
+        # VAE on V100 16 GiB) to host RAM while smaller components stay
+        # on GPU. Validates that the component fits in 70% of host RAM
+        # (matches `_try_cpu_execution`'s budget formula).
+        #
+        # NEVER on a UNIFIED device (2026-09-21): host and device are the
+        # same bytes, so moving a component to the host frees no device
+        # memory — the same finding as zero3-on-unified (cafaf799). The
+        # trigger measured on CogVideoX/PixArt was asymmetric accounting:
+        # the GPU checked against the live-free reading (~10.7 GB, VM up)
+        # while the CPU checked against the profile's 24 GB, so the
+        # text_encoder "fit CPU" though it "did not fit GPU" on ONE pool,
+        # and was offloaded to a host that could not run the GPU-only
+        # kernels (the census shadow died there). On unified the honest
+        # outcomes are TILE (tried just above) or REFUSE; the caller
+        # (lazy_sequential / the model cascade) then refuses by arithmetic,
+        # which is what a model too big for this machine's memory IS.
+        # Discrete cards are byte-unchanged (the offload frees real device
+        # memory there). Selection consults the same device door the budget
+        # and zero3 do.
+        if _device_is_unified(largest.device_string, profile):
+            return None
+        # NEVER under the Triton engine: there a `cpu` placement keeps the weights on the host and
+        # COMPUTES ON THE CARD (`_size_host_placement_on_device`), and a component reaching this line
+        # fits the card neither whole (zero3, above) nor tiled (3.5, above) — the run would fail at it.
+        # Declined, and recorded for the refusal (`_fail_error`), which names `--compiled`: Wan2.1-VACE
+        # at 720x1280 fell to lazy_sequential with its transformer here (2026-09-29).
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            store = self.__dict__.setdefault("_host_device_overflow", {})
+            prev = store.get("a component's host placement")
+            comps = dict(prev[2]) if prev else {}
+            comps[comp_name] = self._live_activation_mb(mem, largest)
+            store["a component's host placement"] = (largest.device_string, usable, comps)
+            self._snapshot_tiling_declines("a component's host placement", comps)
+            return None
+        #
+        # When `profile.cpu` is missing (some older or hand-written
+        # profile YAMLs without a `cpu:` section), accept unconditionally
+        # per Doctrine R35 — Prism never refuses on hardware that exposes
+        # CPU at the OS level. The runtime will fail clean if RAM is
+        # truly insufficient, with a clearer signal than an OOM-at-conv.
+        # P-PRISM-NEVER-REFUSE v2 B.4 — Doctrine R35 cascade per-component.
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            if mem.total_mb <= self._host_budget_mb(profile):
+                shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+                return ("cpu", shard_map)
+            # RAM accounted and insufficient → genuinely can't place
+            return None
+
+        # No CPU stats → accept (R35 default; runtime validates real RAM)
+        shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+        return ("cpu", shard_map)
+
+    def _place_component_fgp(
+        self,
+        container: "NBXContainer",
+        comp_name: str,
+        mem: ComponentMemory,
+        devices: List[DeviceState],
+        model_dtype: str,
+    ) -> Optional[Tuple[str, Dict[str, str]]]:
+        """
+        FGP placement for a single component: distribute blocks across GPUs.
+
+        If a single block is too large for any GPU, falls back to block-level
+        cascade (_place_block_across_gpus) which splits the block's keys.
+
+        Returns (device_string, shard_map) or None.
+        """
+        blocks = self._parse_blocks(container, comp_name)
+        if not blocks['blocks']:
+            return None
+
+        fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
+        block_devices = [
+            DeviceState(
+                device_string=d.device_string,
+                capacity_mb=d.capacity_mb * fgp_target,
+                used_mb=0.0, external_used_mb=getattr(d, "external_used_mb", 0.0), components=[], spec=d.spec
+            )
+            for d in self._fresh_devices(devices)
+        ]
+
+        # Check total FGP capacity
+        cost_mult = block_devices[0].get_cost_multiplier(model_dtype)
+        real_weight = mem.weight_mb * cost_mult
+        total_capacity = sum(d.capacity_mb for d in block_devices)
+        if real_weight + mem.activation_mb > total_capacity:
+            return None
+
+        n_blocks = len(blocks['blocks'])
+        act_per_block = mem.activation_mb / n_blocks
+        non_block_keys = blocks.get('non_block_keys', [])
+        non_block_mb = blocks.get('non_block_mb', 0)
+
+        # Reserve non-block space on largest-capacity GPU BEFORE blocks
+        primary = max(block_devices, key=lambda d: d.capacity_mb)
+        real_non_block = primary.get_real_block_size(non_block_mb, model_dtype) * 1.05
+        primary.used_mb += real_non_block
+
+        # Allocate blocks across GPUs (best-fit)
+        shard_map: Dict[str, str] = {}
+        for block_num in sorted(blocks['blocks'].keys()):
+            block_keys = blocks['blocks'][block_num]
+            base_block = blocks['block_sizes'][block_num]
+            real_block = block_devices[0].get_real_block_size(base_block, model_dtype)
+            total_block = (real_block + act_per_block) * 1.05
+
+            # Try to fit entire block on one GPU
+            candidates = [d for d in block_devices if d.can_fit(total_block)]
+            if candidates:
+                target = max(candidates, key=lambda d: d.free_mb)
+                target.used_mb += total_block
+                target.components.append(f"{comp_name}.block.{block_num}")
+                for key in block_keys:
+                    shard_map[key] = target.device_string
+            else:
+                # Block-level cascade: block too large for any single GPU
+                # Split the block's keys across multiple GPUs by individual key size
+                placed = self._place_block_across_gpus(
+                    comp_name, block_num, block_keys,
+                    blocks.get('key_sizes', {}), act_per_block,
+                    block_devices, model_dtype
+                )
+                if not placed:
+                    return None
+                shard_map.update(placed)
+
+        # Assign non-block keys to primary
+        for key in non_block_keys:
+            shard_map[key] = primary.device_string
+
+        return (primary.device_string, shard_map)
+
+    def _place_block_across_gpus(
+        self,
+        comp_name: str,
+        block_num: int,
+        block_keys: List[str],
+        key_sizes: Dict[str, int],
+        act_budget_mb: float,
+        devices: List[DeviceState],
+        model_dtype: str,
+    ) -> Optional[Dict[str, str]]:
+        """
+        Block-level cascade: distribute a single block's keys across GPUs.
+
+        When a block is too large for any single GPU (rare but possible for
+        very large MoE blocks or oversized attention layers), split the block's
+        individual weight keys across GPUs using best-fit.
+
+        Args:
+            comp_name: Component name (for logging)
+            block_num: Block index
+            block_keys: Weight keys belonging to this block
+            key_sizes: Dict of key → size in bytes (from _parse_blocks)
+            act_budget_mb: Activation budget per block in MB
+            devices: Available GPU states
+            model_dtype: Model dtype string
+
+        Returns:
+            Dict of key → device_string, or None if placement impossible.
+        """
+        n_keys = len(block_keys)
+        act_per_key = act_budget_mb / max(n_keys, 1)
+        shard_map: Dict[str, str] = {}
+
+        # Sort keys by size descending (best-fit-decreasing)
+        sorted_keys = sorted(
+            block_keys,
+            key=lambda k: key_sizes.get(k, 0),
+            reverse=True,
+        )
+
+        for key in sorted_keys:
+            key_bytes = key_sizes.get(key, 0)
+            key_mb = key_bytes / (1024 * 1024)
+            real_key = devices[0].get_real_block_size(key_mb, model_dtype)
+            total_key = (real_key + act_per_key) * 1.05
+
+            candidates = [d for d in devices if d.can_fit(total_key)]
+            if not candidates:
+                return None
+
+            target = max(candidates, key=lambda d: d.free_mb)
+            target.used_mb += total_key
+            target.components.append(f"{comp_name}.block.{block_num}.key")
+            shard_map[key] = target.device_string
+
+        return shard_map
+
+    def _get_component_dtype(self, container: "NBXContainer", comp_name: str) -> str:
+        """The dominant dtype of a component the container declares.
+
+        A name the container does not declare is REFUSED. It returned "bfloat16" here — a dtype
+        invented for a component nobody described, which then set the device's cost multiplier
+        for every whole-component decision (`_whole_component_mb`) on a guess."""
+        names = []
+        for comp in container.get_neural_components():
+            if comp.name == comp_name:
+                return comp.get_dominant_dtype()
+            names.append(comp.name)
+        raise RuntimeError(
+            f"ZERO FALLBACK: no neural component named {comp_name!r} in this container "
+            f"(it declares {names}); its dtype cannot be read and will not be invented")
+
+    # =========================================================================
+    # SCORE-BASED STRATEGY EVALUATION
+    # =========================================================================
+
+    @staticmethod
+    def _allocation_on_host(alloc) -> bool:
+        """True when a strategy's allocation of one component is the host's (the CPU computes it,
+        or — under the Triton engine — holds its weights while a card computes it)."""
+        dev = alloc[0] if isinstance(alloc, tuple) else getattr(alloc, "device", alloc)
+        return isinstance(dev, str) and dev.startswith("cpu")
+
+    def _holds_on_accelerator(self, candidate) -> bool:
+        """A candidate that keeps every component on an accelerator."""
+        allocs = candidate[2] or {}
+        return bool(allocs) and not any(self._allocation_on_host(a) for a in allocs.values())
+
+    #: Strategies whose weights do not stay on the card while it computes: they cross the host
+    #: link during every pass (a block window, or zero3's per-block fetch).
+    _STREAMED_STRATEGIES = ("layer_streaming", "zero3")
+
+    def _residency_class(self, candidate) -> int:
+        """Where a candidate keeps the weights it computes with: 2 every component resident on a
+        card, 1 weights streamed to the card per pass (`layer_streaming`, `zero3` — the model's or
+        one component's `zero3:` allocation), 0 a component on the host. `_split_guidance_batch`
+        compares the class of the plan each request would run."""
+        if not self._holds_on_accelerator(candidate):
+            return 0
+        if candidate[1] in self._STREAMED_STRATEGIES:
+            return 1
+        for alloc in (candidate[2] or {}).values():
+            dev = alloc[0] if isinstance(alloc, tuple) else getattr(alloc, "device", alloc)
+            if isinstance(dev, str) and dev.startswith("zero3:"):
+                return 1
+        return 2
+
+    #: What each residency class says in a plan's reason.
+    _CLASS_WORDS = {-1: "places nothing", 0: "computes a component on the host",
+                    1: "streams its weights to the card each pass",
+                    2: "holds every component resident on the card"}
+
+    def _plan_class(self, candidates) -> int:
+        """The residency class of the candidate the cascade would choose (the highest score), -1
+        when nothing places."""
+        return self._residency_class(max(candidates, key=lambda c: c[0])) if candidates else -1
+
+    #: Solver state a rung writes while it is evaluated. `_split_guidance_batch` re-evaluates the
+    #: cascade on another request and puts these back when it does not keep the result, so a
+    #: declined split leaves the plan exactly as the guidance batch made it.
+    _RUNG_STATE = (
+        "_strategies_tried", "_layer_streaming_declined", "_rejected", "_component_tiling", "_component_stream",
+        "_stream_declined",
+        "_host_device_tilings", "_host_device_overflow", "_host_device_card", "_tiling_declined",
+        "_tiling_declined_by_rung", "_arena_declined", "_tiling_rung_figure", "_input_config",
+        "_output_elements", "_op_tiling_declined", "_op_tiling_plans", "_op_tiling_from_rung", "_op_tiling_priced",
+        "_layer_stream_partitions", "_layer_stream_graphs", "_layer_stream_moe",
+        "_layer_stream_tilings", "_layer_stream_window_bytes", "_layer_stream_kv_reserve_bytes",
+        "_layer_stream_constant_bytes", "_lifecycle_transient", "_request_sizing",
+        "_unified_rung_cap_mb", "_layer_stream_orders", "_layer_stream_cost",
+    )
+
+    def _split_guidance_batch(self, candidates, container, neural_components, input_config,
+                              target_dtype_str, profile, component_dtypes, strategies, devices,
+                              shard_sizes):
+        """Re-plan the request with the guidance branches run one pass each, when that holds its
+        weights closer to the card than the guidance batch can. Returns (candidates, component memory,
+        request, devices) to plan with, or None to keep the guidance batch.
+
+        Classifier-free guidance concatenates [uncond, cond] on the batch axis and runs the loop
+        denoiser once on both (`CFGEngine._execute_batched_cfg`). Every op of a denoiser is
+        per-sample, so running the two halves of that same prepared batch one after the other is
+        the same computation at half the live activations: the cut that is EXACT where a spatial
+        or token tile of a global-attention transformer is not. SANA-Video at its derived request
+        on a 16 GB V100: the transformer's live set peaks at 18 774 MB at batch 2 (residual, q, k, v
+        at [2, 155 232, 2 240] fp32 alive together — no single op dominates), over the 15 072 MB
+        layer-streaming budget; the host rungs cannot size it on the card either, so every strategy
+        refused. One branch at a time is the batch the refusal said it needed.
+
+        Taken whenever it raises the residency class of the plan that runs (`_residency_class`):
+        weights resident beat weights streamed per pass, which beat the host. Allegro at its derived
+        request on a 16 GB V100: the transformer's FFN intermediate at the guidance batch is
+        [2, 79 200, 9 216] fp32, 5 569 MB for gelu's input and as much for its output, so at
+        batch 2 the Triton engine could only stream it in layer windows (and died at aten.gelu::16
+        with 11 050 MB live), and Allegro-TI2V's compiled plan put it on zero3; one branch per pass
+        holds the transformer whole on the card in both engines. A plan whose class the split does
+        not raise keeps the guidance batch (one pass, the faster schedule) — every plan that holds
+        its components resident today is unchanged."""
+        passes = getattr(input_config, "guidance_passes", None)
+        flow = getattr(input_config, "flow", None)
+        if not passes or flow is None:
+            return None
+        batch_class = self._plan_class(candidates)
+        if batch_class == 2:
+            return None
+        # [] also when the scale is embedded: the flow runs no guidance batch
+        loop = self._guidance_loop(input_config, container, neural_components)
+        if not loop:
+            return None
+        import copy
+        import dataclasses
+        saved = {k: copy.deepcopy(self.__dict__[k]) for k in self._RUNG_STATE if k in self.__dict__}
+        absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
+        split_ic = dataclasses.replace(input_config, flow=flow.split_guidance(loop))
+        self._input_config = split_ic
+        memory = self._compute_memory(
+            container, neural_components, split_ic, target_dtype_str,
+            profile=profile, component_dtypes=component_dtypes)
+        # the vendor's declared cuts hold at every request, the split pass's included (`_solve_at_rung` applies them
+        # to its own memory): without them CogVideoX-5b-I2V's VAE was priced whole, 69 705 MB, the moment a busy
+        # Mac took this path, and the plan's door refused 86 230 MB (the Mac, 2026-10-26 23:27)
+        self._declared_streams(container, memory, profile)
+        ranked = sorted(memory.items(), key=lambda x: -x[1].total_bytes)
+        split_devices = self._prepare_devices(profile)
+        split = self._evaluate_all_strategies(
+            strategies, ranked, memory, split_devices, shard_sizes, profile, container)
+        if self._plan_class(split) > batch_class:
+            self._cfg_split = sorted(loop)
+            self._cfg_split_reason = (
+                f"at the guidance batch the plan {self._CLASS_WORDS[batch_class]}, one branch per "
+                f"pass {self._CLASS_WORDS[self._plan_class(split)]}")
+            logging.getLogger(__name__).debug(
+                "Prism: one pass per guidance branch holds %s %s; its %d guidance branches run one "
+                "pass each", ", ".join(self._cfg_split),
+                ("resident on the accelerator" if self._plan_class(split) == 2
+                 else "on the accelerator"), int(passes))
+            return split, memory, split_ic, split_devices
+        self.__dict__.update(saved)
+        for k in absent:
+            self.__dict__.pop(k, None)
+        return None
+
+    def _split_token_axis(self, candidates, container, neural_components, input_config,
+                          target_dtype_str, profile, component_dtypes, strategies, devices,
+                          shard_sizes):
+        """Re-plan with a streamed component's over-budget stretches run in slices of a token axis
+        (`LayerPartitioner._chunk_regions`), when no candidate holds the request on the accelerator
+        after the cuts that cost nothing — between ops, and the guidance branches one pass each
+        (`_split_guidance_batch`). Returns (candidates, component memory, request, devices) to plan
+        with, or None to keep the plan as it is.
+
+        A sliced stretch is exact: its ops are per token or additive over the axis
+        (triton/prism/chunked_region.py), and its later passes RECOMPUTE the per-token tensors they read
+        rather than hold them whole — the one cost the cuts before it do not pay, so it is the last
+        cut tried on the accelerator, and the host rungs, slower still, come after it. SANA-Video at
+        its derived request on the 16 GB V100 at the 8 192 rung, one guidance branch: the
+        transformer's activations peak at 9 486.7 MB in its ReLU linear attention, every tensor
+        [1, 155 232, ...], over the rung — and that attention is per token but for two contractions.
+
+        The request it slices is the one the guidance split chose when it could (one branch is the
+        smaller live set); a declined slice puts the rung state back, so a plan that places today
+        does not change."""
+        if any(self._holds_on_accelerator(c) for c in candidates):
+            return None
+        import copy
+        import dataclasses
+        saved = {k: copy.deepcopy(self.__dict__[k]) for k in self._RUNG_STATE if k in self.__dict__}
+        absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
+        saved_split = list(self._cfg_split)
+        saved_reason = self._cfg_split_reason
+        request = input_config
+        loop = self._guidance_loop(input_config, container, neural_components)
+        if loop and not self._cfg_split:
+            request = dataclasses.replace(input_config, flow=input_config.flow.split_guidance(loop))
+        self._input_config = request
+        self._token_split = True
+        memory = self._compute_memory(
+            container, neural_components, request, target_dtype_str,
+            profile=profile, component_dtypes=component_dtypes)
+        ranked = sorted(memory.items(), key=lambda x: -x[1].total_bytes)
+        sliced_devices = self._prepare_devices(profile)
+        sliced = self._evaluate_all_strategies(
+            strategies, ranked, memory, sliced_devices, shard_sizes, profile, container)
+        # kept only where a stretch IS sliced: a placement the slices did not make is the cascade's
+        # without them, and the rungs after this one (the host's, the fp32 pass) are its to try
+        sliced_any = any(getattr(p, "chunks", None)
+                         for p in (self.__dict__.get("_layer_stream_partitions") or {}).values())
+        if sliced_any and any(self._holds_on_accelerator(c) for c in sliced):
+            if request is not input_config:
+                self._cfg_split = sorted(loop)
+                self._cfg_split_reason = ("no plan held the guidance batch on the accelerator, and "
+                                          "the token-axis slices run one branch per pass")
+            logging.getLogger(__name__).debug(
+                "Prism: no plan holds the request on the accelerator with cuts between ops%s; "
+                "stretches of a streamed component run in slices of a token axis",
+                " and the guidance branches one pass each" if self._cfg_split else "")
+            return sliced, memory, request, sliced_devices
+        self.__dict__.setdefault("_later_rung_refusals", {})["token-axis slices"] = str(
+            self.__dict__.get("_layer_streaming_declined") or "no streamed component was sliced")
+        self.__dict__.update(saved)
+        for k in absent:
+            self.__dict__.pop(k, None)
+        self._cfg_split = saved_split
+        self._cfg_split_reason = saved_reason
+        self._token_split = False
+        return None
+
+    def _park_values_between_pieces(self, candidates, strategies, sorted_components, component_memory, devices,
+                                    shard_sizes, profile, container, beyond_walls: bool = False):
+        """The rung after the token-axis slices: the values between a streamed component's pieces wait on the
+        host (`LayerPartitioner._greedy_swapped`), each piece holding only its weights, the inputs it reads and
+        what it produces. Tried only when no plan holds the request on the accelerator otherwise — a parked
+        value crosses the host link twice — and kept only where a streamed component IS parked and the plan then
+        holds; a declined attempt puts the rung state back, so a plan that places today does not change."""
+        if any(self._holds_on_accelerator(c) for c in candidates):
+            return None
+        import copy
+        saved = {k: copy.deepcopy(self.__dict__[k]) for k in self._RUNG_STATE if k in self.__dict__}
+        absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
+        self._swap_values = True
+        self._token_split = True              # with the stretches in slices too: the rung before this one declined alone
+        self._regions_beyond_walls = beyond_walls
+        parked = self._evaluate_all_strategies(
+            strategies, sorted_components, component_memory, self._prepare_devices(profile), shard_sizes,
+            profile, container)
+        parked_any = any(getattr(p, "swapped", False)
+                         for p in (self.__dict__.get("_layer_stream_partitions") or {}).values())
+        if parked_any and any(self._holds_on_accelerator(c) for c in parked):
+            logging.getLogger(__name__).debug(
+                "Prism: no plan holds the request on the accelerator otherwise; the values between a streamed "
+                "component's pieces wait on the host")
+            return parked
+        rung = ("values parked on the host, stretches enclosing their neighbours and reading from the host"
+                if beyond_walls else "values parked on the host")
+        self.__dict__.setdefault("_later_rung_refusals", {})[rung] = str(
+            self.__dict__.get("_layer_streaming_declined") or "no streamed component was parked")
+        self.__dict__.update(saved)
+        for k in absent:
+            self.__dict__.pop(k, None)
+        self._swap_values = False
+        self._token_split = False
+        self._regions_beyond_walls = False
+        return None
+
+    def _guidance_loop(self, input_config, container, neural_components):
+        """The loop components a guidance split runs one branch per pass, or [] when the request
+        runs no guidance batch (`_split_guidance_batch`'s conditions, ONE reading for both)."""
+        if not getattr(input_config, "guidance_passes", None) or getattr(input_config, "flow", None) is None:
+            return []
+        topology = self._flow_topology(container)
+        from neurobrix.triton.cfg.engine import guidance_embedding_component
+        if guidance_embedding_component(topology) is not None:
+            return []
+        return [c for c in ((topology.get("flow") or {}).get("loop") or {}).get("components") or []
+                if c in {n.name for n in neural_components}]
+
+    def _evaluate_all_strategies(
+        self, strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
+    ) -> List[Tuple[float, str, Dict, List]]:
+        """Try ALL strategies and return scored candidates."""
+        # What was actually tried, for the refusal to name — never a hand-kept list.
+        self._strategies_tried = [name for name, _ in strategies]
+        self._declined = {}
+        candidates = []
+        for strategy_name, strategy_fn in strategies:
+            result = strategy_fn(sorted_components, component_memory, devices, shard_sizes, profile, container)
+            if result is not None:
+                allocations, used_devices = result
+                score = self._score_strategy(strategy_name, allocations, profile)
+                candidates.append((score, strategy_name, allocations, used_devices))
+        return candidates
+
+    def _estimate_times(self, ranked, container, input_config, profile, dtype: str,
+                        held_blocks: Optional[Dict[str, set]] = None,
+                        store_cache_mb: Optional[Dict[str, float]] = None,
+                        component_memory: Optional[Dict[str, Any]] = None, devices=None) -> Dict[str, Any]:
+        """{strategy: estimated seconds for the request, or why it cannot be estimated} for every ranked candidate
+        (`triton/prism/time_estimate.py`); {} when no device of the profile carries measured facts. `held_blocks`:
+        {routed component: the blocks whose experts a card holds whole} (`_spread_experts`) — those blocks' experts
+        cross no host link (the hidden state's seam to that card is a few KB per token, under the link terms' noise)."""
+        from neurobrix.triton.prism import time_estimate as TE
+        from neurobrix.triton.prism.work import component_work
+        if not any(getattr(d, "measured", None) for d in profile.devices):
+            return {}
+        plan_devices = devices          # the planner's device objects (the residency's), before the facts below
+        devices = {}
+        for d in profile.devices:
+            if getattr(d, "measured", None):
+                f = TE.device_facts(d.measured, f"device {d.index}")
+                for prefix in ("cuda", "mps", "hip", "xpu"):
+                    devices[f"{prefix}:{d.index}"] = (dataclasses.replace(f, unified=True)
+                                                      if _device_is_unified(f"{prefix}:{d.index}", profile) else f)
+        try:
+            host = TE.host_facts(getattr(profile, "host_measured", None))
+        except TE.MissingFact:
+            host = None
+        flow = self._flow_topology(container).get("flow") or {}
+        out: Dict[str, Any] = {}
+        # the request's token bound when it states one; else the package's declared max_tokens (runtime/defaults.json) —
+        # the same source that sizes the cache (an image, video or audio request carries no text bound by construction)
+        tokens = (getattr(input_config, "decode_tokens", None) or getattr(input_config, "max_tokens", None)
+                  or (self._read_defaults(container) or {}).get("max_tokens"))
+        try:
+            uses = TE.uses_per_request(flow, getattr(input_config, "steps", None), tokens,
+                                       components=[c.name for c in (getattr(self, "_neural_components", []) or [])])
+        except TE.MissingFact as exc:
+            return {name: f"not estimated: {exc}" for _s, name, _a, _d in ranked}
+        works, runs, prompt = {}, {}, {}
+        # a component the request never loads (`_unloaded_by_request`) does no work in it
+        unloaded = self._unloaded_by_request(container)
+        for comp in (c for c in getattr(self, "_neural_components", []) or [] if c.name not in unloaded):
+            prof = ActivationProfiler(comp.graph)
+            kind, n = uses.get(comp.name, ("once", 1))
+            w = component_work(prof, prof.build_symbol_map(input_config))
+            if kind == "token":                               # the prompt pass once, then one token per run
+                one = copy.copy(input_config)
+                one.seq_len = 1
+                prompt[comp.name], w = w, component_work(prof, prof.build_symbol_map(one))
+            # a routed component served off the card reads its experts over the host link at every use
+            topo = (getattr(self, "_expert_topology", None) or {}).get(comp.name)
+            if topo is not None and getattr(topo, "layers", None):
+                _held = (held_blocks or {}).get(comp.name) or set()
+                _left = [l for l in topo.layers if l.block not in _held]
+                per_token = sum(int(l.top_k) * int(l.expert_bytes) for l in _left)
+                if comp.name in (store_cache_mb or {}) and _left:
+                    # the home cache's misses, at the routing's measured reuse (`expert_topology.routing_reuse`): the
+                    # experts a token routes cross the host link only when the cache does not hold them
+                    from neurobrix.triton.prism.expert_topology import routing_reuse, hit_rate
+                    _curve = routing_reuse(getattr(container, "cache_path", None), comp.name)
+                    if not _curve:
+                        return {name: f"not estimated: {comp.name}'s expert cache misses need the routing's reuse curve "
+                                      f"(components/{comp.name}/profile.json routing_reuse), which the artifact does not state"
+                                for _s, name, _a, _d in ranked}
+                    _slot_mb = _left[0].expert_bytes / 2 ** 20 * getattr(self, "_expert_mult", {}).get(comp.name, 1.0)
+                    _slots = float(store_cache_mb[comp.name]) / _slot_mb / len(_left)
+                    per_token = int(sum(int(l.top_k) * int(l.expert_bytes) for l in _left) * (1.0 - hit_rate(_curve, _slots)))
+                w.expert_bytes_per_use = per_token
+                if comp.name in prompt:
+                    plen = int(getattr(input_config, "seq_len", 0) or 0)
+                    prompt[comp.name].expert_bytes_per_use = min(int(topo.routed_bytes), plen * per_token) if plen else int(topo.routed_bytes)
+            works[comp.name], runs[comp.name] = w, n
+        # The device links, from the profile's interconnect (and its stated PCIe fallback): bytes/s per pair.
+        links = {}
+        if getattr(profile, "topology", None) is not None:
+            idx = [d.index for d in profile.devices]
+            for a in idx:
+                for b in idx:
+                    if a != b:
+                        gbps = profile.topology.get_bandwidth(a, b)
+                        if gbps:
+                            for prefix in ("cuda", "mps", "hip", "xpu"):
+                                links[(f"{prefix}:{a}", f"{prefix}:{b}")] = float(gbps) * 1e9
+        # the share of a streamed component's weights the layer_streaming candidate holds between runs (`Partition.resident`):
+        # loaded once, never reloaded — as a fraction of its stored bytes, applied to the work's weight bytes
+        held = {}
+        for _cn, _p in (getattr(self, "_layer_stream_partitions", None) or {}).items():
+            if _p.resident and _p.total_weight_bytes:
+                held[_cn] = sum(_p.segments[i].weight_bytes for i in _p.resident) / _p.total_weight_bytes
+        # a strategy that loads on demand loads a component once per run of consecutive flow phases holding it (it is
+        # released when the next phase does not hold it): the flow's own phases, 1 where the flow declares none
+        loads_per_run = {}
+        for _comp in works:
+            _held, _n = False, 0
+            for _ph in (self._flow_phases(container) or [set(works)]):
+                _n += int(_comp in _ph and not _held)
+                _held = _comp in _ph
+            loads_per_run[_comp] = max(_n, 1)
+        for _s, name, allocs, _d in ranked:
+            try:
+                resident = self._residency_priced(container, name, allocs, component_memory, plan_devices, profile)
+                out[name] = float(TE.plan_seconds(name, allocs, works, runs, devices, host, str(dtype), prompt=prompt,
+                                                  resident=resident,
+                                                  phases=loads_per_run,
+                                                  links=links, engine=engine_of(getattr(self, "_mode", "compiled")),
+                                                  stored=self._stored_dtype_major(container),
+                                                  held=held if name == "layer_streaming" else None))
+                if name == "layer_streaming":
+                    out[name] += self._sliced_stretch_seconds(allocs, runs, devices, host, str(dtype))
+            except (TE.MissingFact, RuntimeError) as exc:
+                out[name] = f"not estimated: {exc}"
+        return out
+
+    def _residency_priced(self, container, strategy: str, allocs, component_memory, devices, profile) -> Dict[str, float]:
+        """{component: MB of its weights the card keeps resident} for each component the candidate streams from host
+        memory (`zero3:`), as its plan would be granted them — the one arithmetic the plan is built with
+        (`_build_plan` then `_zero3_resident_budgets`, on a provisional plan) — for its time estimate. Priced with no
+        resident weights, a zero3 component re-reads every block at every use: Janus-Pro-7B native on the 16 GB
+        profile, its language model in zero3, was estimated at 1 062 s by lazy_sequential and ran 223 s with 11 605 MB
+        of its 12 380 kept on the card (2026-11-03). Empty when the candidate streams nothing from the host."""
+        zero3 = [n for n, a in allocs.items() if isinstance(a, tuple) and str(a[0]).startswith("zero3:")]
+        if not zero3 or not component_memory or not devices:
+            return {}
+        kept = {k: copy.copy(self.__dict__[k]) for k in ("_zero3_residency", "_expert_mult") if k in self.__dict__}
+        try:
+            plan = self._build_plan(allocs, component_memory, devices, getattr(self, "_component_dtypes", None) or {},
+                                    profile, strategy)
+            self._zero3_resident_budgets(container, plan, devices, profile)
+        finally:
+            for k in ("_zero3_residency", "_expert_mult"):
+                self.__dict__.pop(k, None)
+            self.__dict__.update(kept)
+        return {n: float(plan.components[n].resident_weight_mb) for n in zero3
+                if plan.components[n].strategy == "zero3"}
+
+    def _sliced_stretch_seconds(self, allocs, runs, devices, host, dtype: str) -> float:
+        """What running stretches in slices adds to a layer-streaming plan (`Partition.chunks`), per use of each component
+        that runs them: (1) each slice recomputes its halo — the stretch's own work (`component_work` over its ops)
+        times the share its slices read beyond their rows (`slice_reads`), at the device's roofline; (2) a stretch whose
+        inputs wait on the host cuts its slices from host tensors and assembles its outputs (`host_moved_bytes`), at the
+        host's measured slab rate (`host_slab_gbps`) — refused by name without it. Measured on mochi-1-preview's VAE at an
+        8 GB rung on the M4 Pro (the Mac, 2026-10-28, results/s6_price_2026_10_28/MEASURE.md): the halo +2.7 s, the two
+        host-read stretches +3.3 / +3.6 s of cuts and assembly; MPS convolutions on slabs run as fast as whole."""
+        from neurobrix.triton.prism import time_estimate as TE
+        from neurobrix.triton.prism.chunked_region import slice_reads
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        from neurobrix.triton.prism.work import component_work
+        total_s = 0.0
+        comps = {c.name: c for c in (getattr(self, "_neural_components", None) or [])}
+        for comp_name, part in (getattr(self, "_layer_stream_partitions", None) or {}).items():
+            if not part.chunks or comp_name not in comps:
+                continue
+            dev = TE._device_of(allocs.get(comp_name)) if comp_name in allocs else None
+            if dev not in devices:
+                raise TE.MissingFact(f"{comp_name} runs sliced stretches on {dev!r}, whose facts are not measured")
+            sizing = (self.__dict__.get("_request_sizing") or {}).get(comp_name)
+            if sizing is None:
+                raise TE.MissingFact(f"{comp_name}: no activation sizing at this request to price its slices")
+            graph = comps[comp_name].graph
+            order = list(graph.get("execution_order") or [])
+            at = {u: i for i, u in enumerate(order)}
+            prof = ActivationProfiler(graph)
+            smap = sizing[0]
+            per_use = 0.0
+            for c in part.chunks:
+                ops = set(order[at[c["first_op"]]: at[c["last_op"]] + 1]) if c["first_op"] in at else set()
+                total = int(smap.get(c["symbol"], 0)) // max(1, int(c["unit"]))
+                if not ops or total <= 0:
+                    continue
+                reads = slice_reads(total, int(c["count"]), int(c.get("margin", 0)), bool(c.get("cyclic")))
+                widen = sum(r[3] for r in reads) / total - 1.0
+                w = component_work(prof, smap, widths=sizing[2] or None, ops=ops)
+                per_use += widen * TE.compute_seconds(w, devices[dev], dtype)
+                moved = int(c.get("host_moved_bytes", 0) or 0)
+                if moved:
+                    if host is None or not host.slab_bps:
+                        raise TE.MissingFact(f"{comp_name} cuts sliced stretches from host tensors and the profile "
+                                             f"carries no measured `host_slab_gbps`")
+                    per_use += moved * (1.0 + widen) / host.slab_bps
+            total_s += per_use * int(runs.get(comp_name, 1))
+        return total_s
+
+    def _explain_choice(self, chosen: str, chosen_score: float,
+                        ranked: List, profile: "PrismProfile") -> str:
+        """One line saying why this strategy won, and what it beat.
+
+        Prism does not pick the first strategy that fits — it scores every
+        viable one on estimated throughput and takes the best. That is
+        invisible to the user unless it is said, and an unexplained choice is
+        indistinguishable from a wrong one.
+        """
+        viable = [name for _, name, _, _ in ranked]
+        runners_up = [n for n in viable if n != chosen][:3]
+        parts = [f"{chosen} scored {chosen_score:.0f}"]
+        if runners_up:
+            parts.append("ahead of " + ", ".join(runners_up))
+        else:
+            parts.append("the only viable strategy")
+        card = (getattr(self, "_host_device_card", {}) or {}).get(chosen)
+        if card:
+            # Under the Triton engine a host rung keeps the WEIGHTS on the host and computes on the
+            # card it was sized on (`_size_host_placement_on_device`): say so — "WILL run" hid it.
+            parts.append(f"— no GPU strategy fitted: weights stay on the host and stream to "
+                         f"{card}, which computes each component (slow)")
+        elif chosen == "cpu_streaming":
+            parts.append(
+                "— no GPU strategy fitted, so components stream from disk one "
+                "at a time: this WILL run, and it will be slow (expect minutes "
+                "to hours rather than seconds)")
+        elif chosen == "cpu_execution":
+            threads = getattr(getattr(profile, "cpu", None), "compute_threads", None)
+            parts.append("— no GPU strategy fitted; running on CPU"
+                         + (f" ({threads} compute threads of the profile's {profile.cpu.cores} cores)" if threads else ""))
+        if chosen.startswith("cpu_") and getattr(profile, "refused_devices", None):
+            parts.append("— refused by name (device refused): " + ", ".join(
+                f"{d['model']} ({d.get('pci_id') or d.get('brand')})" for d in profile.refused_devices))
+        elif chosen == "zero3":
+            parts.append("— weights offloaded to host RAM between uses")
+        return " ".join(parts)
+
+    def _score_strategy(self, strategy_name: str, allocations: Dict, profile: PrismProfile) -> float:
+        """
+        Score a strategy by estimated relative throughput (higher = better).
+
+        Factors:
+        - Base score by strategy type (single_gpu best, zero3 worst)
+        - Transfer penalty weighted by actual interconnect bandwidth from profile
+        - Boundary count penalty (fewer boundaries = better)
+        - Topology completeness (partial interconnection = lower score)
+        - Serve mode: eager strategies get boost (user wants near-zero latency)
+        - Zero3: penalty scales with PCIe bandwidth + CPU cores from profile
+        - Lazy loading overhead penalty
+        """
+        BASE_SCORES = {
+            "single_gpu": 1000,
+            "single_gpu_lifecycle": 900,
+            "pipeline_parallel": 850,
+            "component_placement": 750,
+            "block_scatter": 700,
+            "weight_sharding": 680,
+            "component_placement_lazy": 400,
+            "lazy_sequential": 300,
+            "zero3": 100,
+            # R35 last-resort: CPU execution. Very low score so any
+            # successful GPU strategy beats it; only chosen when nothing
+            # else fits OR when the profile has no GPUs.
+            "cpu_execution": 10,
+            # The last rung: one component resident at a time, streaming from
+            # disk. Scored below everything so it is only ever chosen when
+            # nothing else fits — but it is ALWAYS there, so Prism guarantees
+            # execution instead of refusing (P-PRISM-NEVER-REFUSE).
+            # Below every strategy that keeps a component whole, above the
+            # host ones. That ordering IS the inertia: on a card where
+            # single_gpu or zero3 is viable, this loses by 950 or 50 points
+            # and is never chosen. It is not gated on a vendor or a size.
+            # Between zero3 and layer_streaming. It keeps the component on the
+            # accelerator AND keeps its dataflow whole — it only cuts the ops that
+            # overflow — so it is preferable to cutting the component into layer
+            # segments, and far preferable to leaving the accelerator. It still
+            # loses to every rung that needs no cutting at all: on a card where
+            # single_gpu or zero3 is viable this is behind by 940 or 40 points and
+            # is never chosen. That ordering is the inertia; there is no gate.
+            "op_level_tiling": 60,
+            "layer_streaming": 50,
+            "cpu_streaming": 5,
+        }
+        base = float(BASE_SCORES.get(strategy_name, 500))
+        rank = STRATEGY_RANK.get(strategy_name)
+        if rank is None:
+            raise RuntimeError(f"ZERO FALLBACK: strategy {strategy_name!r} has no rank in STRATEGY_RANK — "
+                               "a strategy is placed in the physical order before it can be scored")
+        _in_rank = [BASE_SCORES.get(n, 500) for n, r in STRATEGY_RANK.items() if r == rank]
+        _span = float(max(_in_rank) - min(_in_rank))
+        # today's order inside the rank, spread over the rank's window so that the penalties below (a lazy load's
+        # 20 points a component, zero3's PCIe share) order within it and never invert it: without measured facts
+        # lazy_sequential (300) stays above layer_streaming (50) for a model of several components (the Mac, 17:18)
+        def _offset(b: float) -> float:
+            return ((b - min(_in_rank)) / _span) * (RANK_FLOOR_SPAN - 9.0) if _span > 0 else 0.0
+        offset = _offset(base)
+        score = RANK_BASE[rank] + offset
+        rank_floor = RANK_BASE[rank] - RANK_FLOOR_SPAN
+        # Without measured facts the order inside a rank is today's base order and nothing else: a penalty below
+        # separates strategies of ONE base and never takes one under the next base beneath it. The spread alone did
+        # not hold it: Janus's 7 components cost lazy_sequential 140 points and it fell under layer_streaming (324
+        # against 400; the Mac, 2026-10-25 17:37, Ming, Qwen3-Omni, CogVideoX-5b, Flex.1, VACE the same) — the tie
+        # without facts falls on the plan that re-reads the LEAST (the owner, 17:40).
+        _below = [b for b in _in_rank if b < base]
+        base_floor = RANK_BASE[rank] + _offset(max(_below)) + 1.0 if _below else rank_floor
+
+        # Count unique devices used
+        device_strings = set()
+        for alloc in allocations.values():
+            dev_str = alloc[0] if isinstance(alloc, tuple) else alloc
+            for prefix in ("zero3:", "fgp:", "tp:"):
+                if dev_str.startswith(prefix):
+                    dev_str = dev_str[len(prefix):]
+                    break
+            for d in dev_str.split(","):
+                d = d.strip()
+                # Was cuda:/hip:/xpu: — omitting mps:, so n_devices counted
+                # 0 on Apple. LATENT rather than live: the penalty below is
+                # gated on `n_devices > 1`, which is false either way on a
+                # single-device machine. Corrected so it stays true of a
+                # multi-device backend that is not one of those three.
+                if names_accelerator(d):
+                    device_strings.add(d)
+
+        n_devices = len(device_strings)
+
+        # Bandwidth reference from profile (not hardcoded)
+        ref_bw = profile.topology.default_bandwidth_gbps if profile.topology else 32.0
+
+        # Bandwidth-weighted transfer penalty for multi-GPU strategies
+        if n_devices > 1 and profile.topology:
+            device_indices = sorted(int(d.split(':')[-1]) for d in device_strings)
+
+            # Get minimum pairwise bandwidth (bottleneck)
+            min_bw = profile.get_min_pairwise_bandwidth(device_indices)
+
+            # Topology completeness
+            all_connected = profile.topology.devices_have_fast_interconnect(device_indices)
+
+            # Boundary count estimation by strategy type
+            if strategy_name == "pipeline_parallel":
+                n_boundaries = n_devices - 1  # Sequential: N-1 crossings
+            elif strategy_name == "component_placement":
+                n_boundaries = len(allocations)
+            elif strategy_name == "block_scatter":
+                # Count actual cross-device boundaries from allocation
+                dev_sequence = []
+                for alloc in allocations.values():
+                    dev = alloc[0] if isinstance(alloc, tuple) else alloc
+                    if dev.startswith("fgp:"):
+                        dev_sequence.extend(dev[4:].split(","))
+                n_boundaries = max(len(set(dev_sequence)) - 1, n_devices)
+            elif strategy_name == "weight_sharding":
+                n_boundaries = n_devices * 20  # Many copies per forward pass
+            else:
+                n_boundaries = n_devices
+
+            # Transfer penalty: inversely proportional to actual bandwidth
+            transfer_penalty = n_boundaries * 15.0 * (ref_bw / max(min_bw, 1.0))
+            score -= transfer_penalty
+
+            # Partial topology penalty
+            if not all_connected:
+                score -= 200.0
+
+        # Serve mode: eager strategies are much more valuable (near-zero latency)
+        serve_mode = getattr(self, '_serve_mode', False)
+        if serve_mode:
+            eager_values = {s.value for s in AllocationStrategy if s.is_eager}
+            if strategy_name in eager_values:
+                score += 100.0  # Boost eager strategies in serve mode
+            else:
+                score -= 50.0   # Penalize lazy strategies in serve mode
+
+        # Zero3: penalty scales with actual PCIe bandwidth and CPU capability
+        if strategy_name == "zero3":
+            # Base penalty adjusted by PCIe bandwidth
+            # Fast PCIe (Gen5 64GB/s) = less penalty, slow (Gen3 16GB/s) = more penalty
+            pcie_factor = ref_bw / 32.0  # Normalize to Gen4 baseline
+            base_zero3_penalty = 200.0 / max(pcie_factor, 0.5)  # Better PCIe = less penalty
+
+            # CPU cores adjustment: more cores = faster CPU-side compute
+            if not profile.cpu:
+                raise RuntimeError("ZERO FALLBACK: the hardware profile declares no cpu: section — zero3's host "
+                                   "side cannot be priced without its cores")
+            cpu_cores = profile.cpu.cores
+            core_factor = min(cpu_cores / 16.0, 2.0)  # Normalize to 16-core baseline, cap at 2x
+            base_zero3_penalty /= max(core_factor, 0.5)  # More cores = less penalty
+
+            score -= base_zero3_penalty
+
+        # Lazy loading penalty: each component load/unload adds latency
+        if "lazy" in strategy_name:
+            n_components = len(allocations)
+            score -= 20.0 * n_components
+
+        # HOST COMPUTE IS THE LAST RESORT (the owner, 2026-09-27 14:27): a plan that computes any
+        # component on the host ranks below every plan that computes all of them on an accelerator,
+        # and above the all-host rungs. lazy_sequential's host placement (Strategy 4) scored 240
+        # against layer_streaming's 50 and won SANA-Video at 1280x512 on 16 GB with the transformer
+        # on the host (365 s native, triton past its cap) while streaming it on the card was viable.
+        # A `zero3:` placement computes on the card and is not host compute.
+        if strategy_name not in ("cpu_execution", "cpu_streaming") and any(
+                str(a[0] if isinstance(a, tuple) else a).startswith("cpu") for a in allocations.values()):
+            return min(max(score, 1.0), BASE_SCORES["cpu_execution"] + 0.5)
+        # The rank's floor: penalties order the strategies INSIDE their rank and never across ranks — nor across
+        # the bases inside the rank (`base_floor`).
+        score = max(score, rank_floor, base_floor)
+
+        # INVARIANT: a GPU-compute strategy never ranks below the R35
+        # last-resort cpu_execution, no matter how harsh its penalties.
+        # (Absent profile CPU/PCIe stats crushed zero3 from base 100 to the
+        # 1.0 floor, letting cpu_execution (10) win on a GPU node — a 57GB
+        # model fell to CPU with two valid GPU plans on the table.)
+        if strategy_name != "cpu_execution":
+            return max(score, BASE_SCORES["cpu_execution"] + 1.0)
+        return max(score, 1.0)
+
+    # =========================================================================
+    # LAZY / OFFLOAD STRATEGIES
+    # =========================================================================
+
+    def _try_component_placement_lazy(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """
+        Component placement with lazy weight swap between phases.
+        Distribute component GROUPS across N GPUs.
+        Each GPU lazily loads/unloads its assigned components.
+        Peak per GPU = max(component in group), not sum(all in group).
+        """
+        if len(devices) < 2:
+            return None
+
+        fresh = self._fresh_devices(devices)
+        n_gpus = len(fresh)
+
+        # Group components into N bins (greedy best-fit decreasing)
+        bins: List[List[Tuple[str, Any]]] = [[] for _ in range(n_gpus)]
+        bin_peaks = [0.0] * n_gpus
+
+        for comp_name, mem in sorted_comps:
+            # Find best GPU where peak stays within capacity (best-fit). The component's whole
+            # cost and the card's usable part of its rung are the same two figures
+            # `_place_component` and `_try_layer_streaming` read (`_whole_component_mb`,
+            # `_usable_mb`): this site held `capacity_mb * 0.92` — a second literal of the same
+            # fraction, on the raw capacity instead of the rung — and a `model_dtype or
+            # "bfloat16"` default for a component the container does not name.
+            best_gpu = None
+            best_headroom = float('inf')
+            required = 0.0
+            for i in range(n_gpus):
+                required = self._whole_component_mb(container, comp_name, mem, fresh[i])
+                new_peak = max(bin_peaks[i], required)
+                capacity = self._whole_usable_mb(fresh[i])
+                if new_peak <= capacity and self._arena_over_allocation(
+                        container, comp_name, mem, fresh[i]) is None:
+                    headroom = capacity - new_peak
+                    if headroom < best_headroom:
+                        best_gpu = i
+                        best_headroom = headroom
+
+            if best_gpu is None:
+                return None
+
+            bins[best_gpu].append((comp_name, mem))
+            bin_peaks[best_gpu] = max(bin_peaks[best_gpu],
+                                      self._whole_component_mb(container, comp_name, mem, fresh[best_gpu]))
+
+        # Build allocations
+        allocations = {}
+        for gpu_idx, gpu_comps in enumerate(bins):
+            for comp_name, mem in gpu_comps:
+                shard_map = {s: fresh[gpu_idx].device_string for s in shard_sizes.get(comp_name, {})}
+                allocations[comp_name] = (fresh[gpu_idx].device_string, shard_map)
+
+        return allocations, fresh
+
+    def _try_zero3(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """
+        ZeRO-3 CPU offload: weights on CPU pinned memory, GPU for compute only.
+        Peak GPU = activations only (weights streamed block-by-block).
+        Succeeds if at least 1 GPU can hold the largest activation footprint
+        AND CPU has enough RAM to hold all weights.
+        """
+        if not devices:
+            return None
+
+        fresh = self._fresh_devices(devices)
+        largest = max(fresh, key=lambda d: d.capacity_mb)
+        # The same unified-device guard the COMPONENT path carries. On a unified device host
+        # and device are the same bytes, so offloading frees nothing the budget has not
+        # already counted, and selecting zero3 there hands the executor a plan accepted under
+        # one memory model and run under another — it dies in zero3's CUDA machinery before a
+        # single op runs. The component path has refused this since 2026-09-09; this global
+        # path never did (the Mac, 9675411a).
+        if _device_is_unified(largest.device_string, profile):
+            return None
+        allocations = {}
+
+        # Validate CPU RAM budget: the weights must fit the host budget, which is the free
+        # reading rounded down onto the ladder (`_host_budget_mb`) — not 70 % of installed RAM.
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            total_weight_mb = sum(mem.weight_mb for _, mem in sorted_comps)
+            available_ram_mb = self._host_budget_mb(profile)
+            if total_weight_mb > available_ram_mb:
+                return None
+
+        for comp_name, mem in sorted_comps:
+            # Zero3: only activations need GPU memory — against the same usable figure
+            # `_place_component`'s zero3 rung reads (it held `capacity_mb * 0.92`, a second
+            # literal of the fraction, on the raw capacity instead of the rung).
+            if mem.activation_mb > self._usable_mb(largest):
+                return None
+
+            shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (f"zero3:{largest.device_string}", shard_map)
+
+        return allocations, fresh
+
+    def _try_cpu_execution(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """CPU-only execution — Doctrine R35 last-resort cascade.
+
+        Place EVERY component on `cpu`. The compiled engine computes it on the host (the
+        ATen CPU dispatcher; `sequential_dispatcher` and CompiledSequence are device-aware).
+        The Triton engine never falls back to PyTorch: with a card, a `cpu`-placed component
+        keeps its weights on the host and computes on the card (sized there by
+        `_size_host_placement_on_device`); without one, it needs the upstream `triton-cpu`
+        (`triton/cpu_backend.py`), and refuses by name when that is absent.
+
+        Activation budget: `sum(component peaks) <= _host_budget_mb(profile)` — the host's
+        free reading rounded down onto the commercial ladder, which is where the headroom
+        for the OS, the interpreter and unmodelled activations now comes from. It is NOT a
+        0.7 fraction of installed RAM; that formula no longer exists in this file.
+        For profiles without a `cpu` config or with `ram_mb == 0`, accept
+        unconditionally — the doctrine says Prism never refuses, and the
+        runtime will fail clean if RAM is genuinely insufficient. This
+        keeps the strategy useful on profiles where CPU stats weren't
+        captured.
+
+        Wall-time is intentionally unbounded — the strategy may take
+        minutes or hours for large diffusion models at high resolution.
+        Doctrine R35: performance is free, availability comes first.
+
+        R34 model-agnostic: discrimination only by hardware-profile
+        (`cpu.ram_mb`) and graph-derived component memory. No model
+        names, no families. P-PRISM-NEVER-REFUSE v2 — 2026-05-12.
+        """
+        # Validate CPU RAM if a cpu config is present
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            total_required_mb = sum(mem.total_mb for _, mem in sorted_comps)
+            available_ram_mb = self._host_budget_mb(profile)
+            if total_required_mb > available_ram_mb:
+                # Genuinely insufficient RAM. Return None so the cascade
+                # can emit a clear error message at _fail_error level —
+                # explicitly mentions hardware (more RAM) instead of
+                # silently failing inside the runtime.
+                return None
+
+        allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
+        for comp_name, _mem in sorted_comps:
+            shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = ("cpu", shard_map)
+        if not self._size_host_placement_on_device("cpu_execution", sorted_comps, devices, container, profile):
+            return None
+
+        # CPU-only "fresh devices" list. Used downstream by the executor
+        # factory for context; an empty list is the historical signal
+        # for "no GPU used". We preserve that signal.
+        fresh = self._fresh_devices(devices)
+        return allocations, fresh
+
+    def _size_host_placement_on_device(self, strategy: str, sorted_comps, devices, container,
+                                       profile=None) -> bool:
+        """Under the Triton engine a component placed on `cpu` keeps its WEIGHTS on the host and
+        COMPUTES on the card (the weight loader's zero3 convention for an all-`cpu` shard map);
+        the compiled engine computes it on the host. So under Triton a host rung is sized on the
+        card: a component fits whole when its live activations do (zero3's figure — its blocks
+        stream), else it is tiled there (`_spatial_component_tiling` at that card's rung, priced as
+        Strategy 3.5 prices it, `_tiled_component_mb`); on a unified device the weights share the
+        pool, so the whole figure is the component's. Returns False — the rung is not viable — when
+        a component fits neither: that run fails at that component, so it is never planned (the
+        supervisor's decision, 2026-09-29 11:33); the refusal says the arithmetic and that the
+        compiled engine computes it on the host (`_fail_error`).
+
+        Kept per rung, never in `_component_tiling`, which rejected attempts leave behind. Before
+        this, the plan dropped every tiling of a cpu-placed component and said `cpu_streaming`
+        "WILL run": Wan2.1-VACE at 720x1280 on a 16 GB card ran its encoder untiled on cuda:0 and
+        died on a 57 GB convolution (2026-09-29)."""
+        tilings_by_rung = self.__dict__.setdefault("_host_device_tilings", {})
+        overflow_by_rung = self.__dict__.setdefault("_host_device_overflow", {})
+        card_by_rung = self.__dict__.setdefault("_host_device_card", {})
+        for d in (tilings_by_rung, overflow_by_rung, card_by_rung):
+            d.pop(strategy, None)
+        cards = [d for d in devices if not str(d.device_string).startswith("cpu")]
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton" or not cards:
+            return True
+        largest = max(cards, key=lambda d: d.capacity_mb)
+        usable = self._usable_mb(largest)
+        whole_usable = self._whole_usable_mb(largest)    # "fits as it is": the whole figure
+        unified = profile is not None and _device_is_unified(largest.device_string, profile)
+        tilings: Dict[str, Dict[str, Any]] = {}
+        overflow: Dict[str, float] = {}
+        for comp_name, mem in sorted_comps:
+            whole = (self._whole_component_mb(container, comp_name, mem, largest) if unified
+                     else self._live_activation_mb(mem, largest))
+            if whole <= whole_usable:
+                continue
+            tiling = self._spatial_component_tiling(
+                container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb), largest)
+            tiled_mb = (self._tiled_component_mb(container, comp_name, mem, largest, tiling)
+                        if tiling is not None else None)
+            if tiled_mb is not None and tiled_mb <= usable:
+                tilings[comp_name] = tiling
+            else:
+                if tiled_mb is not None:
+                    self._tiling_decline(comp_name, f"its tile and weights still need {tiled_mb:,.0f} MB")
+                overflow[comp_name] = whole
+        card_by_rung[strategy] = largest.device_string
+        tilings_by_rung[strategy] = tilings
+        if overflow:
+            overflow_by_rung[strategy] = (largest.device_string, usable, overflow)
+            self._snapshot_tiling_declines(strategy, overflow)
+            return False
+        return True
+
+    def _tiled_component_mb(self, container, comp_name, mem, dev, tiling) -> float:
+        """A tiled component's cost on `dev`: its weights at the card's cost multiplier and one
+        tile's activations — Strategy 3.5's figure, the one question asked once."""
+        cost_mult = dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+        return mem.weight_mb * cost_mult + tiling["tiled_activation_bytes"] / (1024 * 1024)
+
+    def _try_op_level_tiling(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Tile an activation-dominated component's ops so it fits the accelerator.
+
+        The rung this cascade did not have. `runtime_op_tiling` existed, but it was
+        computed at `solve` AFTER a strategy had been chosen, against the
+        allocations that strategy produced — so a component the cascade had already
+        sent to the host was looked at with `device_caps.get("cpu") == 0` and
+        skipped. Tiling could therefore never be the REASON a component stayed on
+        the accelerator; it could only decorate a component that was already there.
+
+        Measured on both machines the same day, `real-esrgan-x8` at 1024x1024:
+        **17237 MB planned**, 16.4 GB of it activations against 32 MB of weights,
+        and both printing `tiling none planned`. On Apple the cascade exhausted and
+        `_fail_error` refused; on CUDA `cpu_streaming` accepted and won by score.
+        Neither machine asked whether the work could be cut.
+
+        What this rung does NOT do is invent a plan shape. It asks the existing
+        detector — `_detect_op_level_tiling_pairs`, which knows how to find the
+        upsample->conv pairs the runtime can actually intercept — the question it
+        was never asked: not "is this GPU-placed component overflowing?" but "would
+        this component fit a GPU IF its overflowing ops were tiled?". A rung that
+        claimed a tiling the runtime cannot execute would be worse than the refusal
+        it replaced.
+
+        Inert by construction where it is not needed: it declines unless a
+        component actually overflows, unless that overflow is ACTIVATIONS rather
+        than weights (weights are paid in full by every tile, so no tile count
+        reaches them), and unless the detector returns a plan.
+        """
+        if not devices:
+            return self._decline("op_level_tiling", "no device")
+        largest = devices[0]
+        effective_mb = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
+        if effective_mb <= 0:
+            return self._decline("op_level_tiling", f"the card leaves no room after its margin ({largest.capacity_mb:.0f} MB less {self._margin_mb(largest.capacity_mb)} MB)")
+
+        total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
+        # The weights this rung must hold are the ones resident WHILE EACH COMPONENT RUNS — the flow's release
+        # schedule (`core/flow/residency`, the rule both engines' flows release by: a pre-loop component unloaded
+        # after its run, the loop ones before the post-loop stage); a flow with no stated schedule, or serve mode,
+        # holds every component at once. The rung used to demand every component's weights resident TOGETHER
+        # ("the weights alone do not fit the room") and so refused Sana 4K's tiled VAE on the Mac's 11 021 MB room
+        # for 11 411 MB of weights of which 303 run beside the VAE (the Mac, 2026-10-25 17:56 / 18:06).
+        from neurobrix.core.flow.residency import resident_beside
+        _topology = self._flow_topology(container)
+        _serve = bool(getattr(self, "_serve_mode", False))
+        _by_name = dict(sorted_comps)
+
+        def held_of(name: str) -> float:
+            beside = resident_beside(_topology, name, _serve)
+            if beside is None:
+                return total_weights_mb
+            return _by_name[name].weight_mb + sum(_by_name[b].weight_mb for b in beside if b in _by_name)
+
+        _heaviest = max((n for n, _ in sorted_comps), key=held_of)
+        if held_of(_heaviest) >= effective_mb:
+            _with = ("alone" if held_of(_heaviest) == total_weights_mb and len(sorted_comps) == 1 else
+                     f"resident while {_heaviest} runs")
+            return self._decline("op_level_tiling", f"the weights {_with} ({held_of(_heaviest):.0f} MB) do not fit the room ({effective_mb:.0f} MB): tiling cuts activations, not weights")
+        arena_refused = [r for r in (self._arena_over_allocation(container, n, m, largest)
+                                     for n, m in sorted_comps) if r]
+        if arena_refused:
+            self._op_tiling_declined = arena_refused[0]
+            return self._decline("op_level_tiling", str(arena_refused[0]))
+
+        def room_of(name: str) -> float:
+            return effective_mb - held_of(name)
+
+        blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_of(n)]
+        if not blocking:
+            return self._decline("op_level_tiling", "no component's activation overflows the room it runs in: a whole-component rung serves it")
+        # A tile cuts an op's own output and workspace; what earlier ops hold when it begins stays whole. Where that
+        # alone is over the room, no band count fits the component (`_compute_memory` records it, tiling-aware):
+        # HAT-S at 2048 px on 16 GB was claimed with 143 convolutions in bands and 126 787 MB of activations, the
+        # window attention's scores whole (2026-10-21).
+        floors = getattr(self, "_live_floor", None) or {}
+        for _n, _m in blocking:
+            live, at = floors.get(_n, (0, ""))
+            if live / (1024 * 1024) > room_of(_n):
+                self._op_tiling_declined = (
+                    f"{_n}: {live / (1024 * 1024):.0f} MB are live before {at} whatever its bands, over the "
+                    f"{room_of(_n):.0f} MB the card leaves beside the weights resident while it runs — an op-level "
+                    f"tile cuts an op's own output and workspace, never what earlier ops hold")
+                return self._decline("op_level_tiling", str(self._op_tiling_declined))
+
+        components = getattr(self, "_neural_components", None)
+        input_config = getattr(self, "_input_config", None)
+        dtype_str = getattr(self, "_target_dtype_str", None)
+        if not components or dtype_str is None:
+            self._op_tiling_declined = (
+                "the solver did not stash the components or the target dtype, so the "
+                "detector could not be asked")
+            return self._decline("op_level_tiling", str(self._op_tiling_declined))
+
+        # The hypothetical placement: every component on the accelerator. This is
+        # the question the post-hoc call cannot ask, because by then the answer has
+        # already been decided.
+        hypothetical = {n: (largest.device_string, {}) for n, _ in sorted_comps}
+        try:
+            plans = self._detect_op_level_tiling_pairs(
+                container, components, hypothetical, profile, input_config, dtype_str)
+        except Exception as e:
+            # A bare `except: return None` here is the silent-failure class this
+            # repository catalogues: the rung would decline for a reason nobody
+            # could read, and the plan would say "tiling none planned" whether the
+            # detector had nothing to offer or had raised. Measured the first time
+            # it mattered — real-esrgan-x8 at 1024, where the pattern the detector
+            # looks for DOES exist (3 upsample -> single-consumer-conv pairs, and
+            # conv::349 is fed by upsample_nearest2d::2) and the rung still declined.
+            self._op_tiling_declined = f"the detector raised {type(e).__name__}: {e}"
+            return self._decline("op_level_tiling", self._op_tiling_declined)
+        if not plans:
+            self._op_tiling_declined = untiled_reason(blocking, components)
+            return self._decline("op_level_tiling", self._op_tiling_declined)
+
+        # Only claim the components the detector can actually tile.
+        if any(n not in plans for n, _ in blocking):
+            self._op_tiling_declined = "the detector found no tileable op in " + ", ".join(n for n, _ in blocking if n not in plans)
+            return self._decline("op_level_tiling", self._op_tiling_declined)
+
+        # The plan the detector offers is PRICED before it is claimed: the component's peak with every fused
+        # upsample a proxy, every fused and standalone conv in bands, the chains streamed and the adds in place —
+        # the profile `_compute_memory` keeps, under the plan's own view of the widths. A rung that claimed the
+        # floor alone handed the footprint a 27.6 GB VAE on an 11 GB room and the solve descended for nothing
+        # (Sana 4K on the Mac, 2026-10-25 18:5x: accepted here, declined by its host side two rungs later).
+        priced = {}
+        for n, _m in blocking:
+            peak_b, at = self._tiled_peak_bytes(container, n, plans[n], profile, input_config)
+            room = room_of(n)
+            if peak_b / (1024 * 1024) > room:
+                pl = plans[n]
+                self._op_tiling_declined = (
+                    f"{n}: tiled as the detector offers ({len(pl.fusion_pairs)} fused pairs, {len(pl.tiled_ops)} tiled ops, "
+                    f"{len(pl.residual_chains)} chains), its activations still hold {peak_b / (1024 * 1024):.0f} MB at {at} "
+                    f"over the {room:.0f} MB room")
+                return self._decline("op_level_tiling", self._op_tiling_declined)
+            priced[n] = (int(peak_b), str(at))
+        self._op_tiling_priced = priced
+        self._op_tiling_plans = plans
+        allocations = {}
+        fresh = self._fresh_devices(devices)
+        for comp_name, _ in sorted_comps:
+            shard_map = {sh: largest.device_string for sh in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (largest.device_string, shard_map)
+            fresh[0].components.append(comp_name)
+        return allocations, fresh
+
+    def _tiled_peak_bytes(self, container, comp_name: str, tplan, profile, input_config):
+        """A component's activation peak UNDER an op-level tiling plan, at the request: the profiler's figure with
+        the plan's fused upsamples priced as the proxies they become, its fused and standalone convolutions in
+        their bands, the TilingEngine's residual chains streamed and the adds it runs in place — the figures the
+        runtime holds (`_compute_memory` keeps the same profile for the plan's memory) — under the widths the
+        plan's own tiling view gives. Returns (bytes, the op the peak sits at)."""
+        from neurobrix.triton.prism.profiler import ActivationProfiler
+        from neurobrix.triton.prism.runtime_widths import TilingView
+        comp = next(c for c in (getattr(self, "_neural_components", None) or []) if c.name == comp_name)
+        comp_dtype = (getattr(self, "_component_dtypes", None) or {}).get(comp_name) or self._target_dtype_str
+        dtype_bytes = _itemsize.itemsize(comp_dtype)
+        profiler = ActivationProfiler(comp.graph)
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        fusion = {u for u, _c, _f in tplan.fusion_pairs}
+        # a fused pair's conv reads its upsample through the proxy (zero-alloc, source-holding) and writes its whole
+        # output band by band: priced as the whole output it fills; the band factors apply to the STANDALONE tiled ops
+        # (`_standalone_conv_tiles`, the convs `_compute_memory` prices in bands) — the same split as there
+        tiled = {uid: f for uid, t, f in tplan.tiled_ops if "convolution" in str(t)}
+        f2a = self._pixel_shuffle_chain_proxy_uids_of_the_engine(comp.graph) if engine == "triton" else set()
+        chains = set(self._identify_residual_chain_proxy_uids(comp.graph, input_config) or ())
+        inplace = self._identify_inplace_add_candidates_static(comp.graph, input_config=input_config)
+        widths = self._activation_widths(comp, container, profiler, input_config, comp_dtype, profile,
+                                         tiling=TilingView.from_plan(tplan))
+        ap = profiler.estimate_peak_memory(
+            input_config=input_config, dtype_bytes=dtype_bytes, zero_alloc_uids=fusion | f2a | chains,
+            inplace_adds=inplace, widths=widths, source_holding_uids=fusion | f2a,
+            in_place_weight_reads=profiler.weight_transposes_free(engine, input_config, comp.name), attention_scratch=self._attention_scratch(profile, comp_dtype),
+            conv3d_workspace=self._conv3d_workspace(profile, comp_dtype), op_workspace=self._op_workspace(profile),
+            tiled_convs=tiled)
+        return int(self._scale_activations_to_request(comp, ap.peak_bytes, input_config)), str(ap.peak_op_uid or "")
+
+    def _try_layer_streaming(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """The layer-streaming rung, its segments cut in two steps (merge-queue-25, option B for a
+        streamed plan): first against the rung's usable part net of the PROFILE's drain cliff
+        (`_usable_mb`), so every plan that cut there keeps its full queue; only when that cut
+        declines — the forced 1 024 MB rung of a V100-16GB: 942 - 1 907 < 0 — against the part net
+        of the drain FLOOR (`_whole_usable_mb`). The second cut is a priced choice written in the
+        plan: its window is a cost held on the card (`_assign_drain_cliffs`), so the card drains at
+        min(profile cliff, part - window), at least the floor, and the plan's why says so. Under it,
+        the refusal stands, named. The compiled engine has no queue: one cut, as before."""
+        self._layer_stream_cut_against_floor = False
+        got = self._try_layer_streaming_against(
+            sorted_comps, comp_mem, devices, shard_sizes, profile, container,
+            self._usable_mb(devices[0]) if devices else 0.0)
+        if got is not None or not devices:
+            return got
+        floor_part = self._whole_usable_mb(devices[0])
+        if floor_part <= self._usable_mb(devices[0]):
+            return got                     # no queue priced (compiled, host) or the door pins it
+        first = self._layer_streaming_declined
+        got = self._try_layer_streaming_against(
+            sorted_comps, comp_mem, devices, shard_sizes, profile, container, floor_part)
+        if got is None:
+            self._layer_streaming_declined = (
+                f"{first}; and cut against the rung less the drain floor ({floor_part:.0f} MB): "
+                f"{self._layer_streaming_declined}")
+            return None
+        self._layer_stream_cut_against_floor = True
+        return got
+
+    def _try_layer_streaming_against(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container, usable_mb: float
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Stream a component at LAYER granularity, on the accelerator, its segments cut against
+        `usable_mb` (`_try_layer_streaming` chooses it).
+
+        The rung below every rung that keeps a component whole. `lazy_sequential`
+        drops the requirement from sum(components) to max(component);
+        `cpu_streaming` does the same on the host. Neither helps a model that is
+        ONE component larger than the budget, and that is not a corner case:
+        DeepSeek-Coder-V2-Lite is a single `model` component of 17777 MB of
+        live weights.
+
+        Here the component itself comes apart. `LayerPartitioner` cuts it where
+        its DATAFLOW comes apart — activations produced before a point and read
+        after it — and each segment holds only the weights its own ops read.
+        The requirement drops from max(component) to max(segment) + activations.
+
+        INERT BY CONSTRUCTION on a machine that does not need it. This rung is
+        scored below every strategy that keeps components whole, so whenever
+        one of those is viable it wins and this is never chosen. It is not
+        gated on a vendor, a device count or a memory size — it simply loses.
+
+        Viable when every component either fits whole, or partitions into
+        segments that fit — a whole component that crowds the segments is
+        streamed too. When one does not, this returns None and the cascade's
+        refusal stands, with the partitioner's own arithmetic available to say
+        why.
+        """
+        from neurobrix.triton.prism.layer_partition import LayerPartitioner
+
+        # WHY this rung declined, in numbers, for the refusal to print. It returned None at eight
+        # places and said nothing: 62 of the Mac's 242 refusals (4a3658d7) listed every strategy
+        # tried except this one, so a model with 65 271 MB of weights and 16 MB of activations
+        # (Ming) was refused at every rung with no word on why streaming could not serve it.
+        self._layer_streaming_declined = None
+
+        def _decline(reason: str):
+            self._layer_streaming_declined = reason
+            return None
+
+        if not devices:
+            return _decline("the profile has no accelerator to stream onto")
+        target = devices[0]
+        # The RUNG — `_effective_capacity_mb`, the one figure every rung above this one is
+        # measured against — both to decide which component is streamed and to size its
+        # segments. This rung used the raw `capacity_mb` for both, and a component landing
+        # between the two was served by nothing:
+        #
+        #   PixArt-XL-2-1024-MS at 2048x1024, Apple M4 Pro, the Mac 2026-09-24 (e904da83)
+        #     text_encoder   9 630 MB
+        #     rung           8 192 MB   free 10 638 rounded down onto the ladder
+        #     capacity      10 638 MB
+        #   granite-speech-3.3-8b, same profile: language_model 16 769.6 against 16 384 / 17 277
+        #
+        #   Every rung above refused the component against the rung. This one found nothing over
+        #   the capacity, had nothing to cut, declined — and the plan refused (PixArt) or fell to
+        #   `cpu_streaming` (granite-speech), on a device that holds the component.
+        #
+        # A component larger than the rung is STREAMED ON THE CARD, and its segments are cut
+        # against the same rung: cutting them against the capacity would announce a peak
+        # above the rung, a function of the live reading — the one thing rounding the reading
+        # down exists to prevent.
+        #
+        # Where this moves a plan: wherever the rung is below the capacity — a unified device,
+        # a discrete card another process holds or a display drives, a card whose sharing
+        # could not be read, and any device behind the NBX_PRISM_BUDGET_MB door (uncapped by
+        # design). Moving from the capacity to the RUNG moved nothing on a measured dedicated card
+        # (budget min(driver total less its own context, capacity) == capacity on this rack's
+        # V100-16GB, 306 MB context: DeepSeek-Coder-V2-Lite's cut identical, both modes).
+        # Moving from the rung to its USABLE part (below) moves segments on EVERY device, dedicated
+        # included — DeepSeek on that card: still 3 segments, boundaries moved. That is the
+        # intended cost of holding a streamed peak to the whole-component standard; the plans
+        # it moved across the cache are in the commit that made it.
+        #
+        # KNOWN GAP, not closed here: a reading UNDER the ladder's lowest rung leaves
+        # `budget_mb` at 0, which `DeviceState` also uses for "no reading was taken", and
+        # `_effective_capacity_mb` then derives the dedicated law from the state — on a
+        # unified device, its whole capacity. This rung inherits that answer exactly as every
+        # rung above it does. Closing it makes every rung decline and, with host RAM at rung 0
+        # too, the plan refuse (measured: TinyLlama, Mac profile, 3 000 MB free — main plans
+        # lazy_sequential at 2 850, the closed sentinel refuses), which collides with "Prism
+        # never refuses"; that trade is the owner's call.
+        #
+        # And the figure is the rung's USABLE part (`_usable_mb`), the same one `_place_component`
+        # holds a whole component to. Streaming against the rung itself while placing whole against
+        # 0.92 x rung left a band where a component was too big to place whole and too small to
+        # stream (PixArt's text_encoder at a 9 700 MB rung went to cpu_streaming on the Mac's
+        # profile); and cutting segments against the rung would hold a streamed peak to a looser
+        # standard than a whole component, and would fit such a component in ONE segment, which
+        # this rung then declines. One figure for both decisions closes the band.
+        budget_bytes = int(usable_mb * 1024 * 1024)
+        if budget_bytes <= 0:
+            return _decline(f"the usable part of {target.device_string}'s rung is "
+                            f"{usable_mb:.0f} MB: nothing to cut against")
+
+        graphs = {}
+        try:
+            for comp in (container.get_neural_components() or []):
+                g = getattr(comp, "graph", None)
+                if isinstance(g, dict):
+                    graphs[comp.name] = g
+        except Exception as exc:  # noqa: BLE001 — said, not swallowed
+            return _decline(f"the component graphs could not be read "
+                            f"({type(exc).__name__}: {exc})")
+        if not graphs:
+            return _decline("no component carries a graph to cut")
+
+        # A piece holds its weights as the engine LANDS them, the stored bytes times the factor the component's weights
+        # are priced at (`_compute_memory`'s `dtype_mult`): mochi-1-preview's text encoder, stored F32 and run in fp16,
+        # was cut against its stored bytes, twice what its pieces hold — three pieces where two hold (2026-10-28).
+        _wmult = self.__dict__.get("_weight_dtype_mult") or {}
+        sizes_by_comp = {name: ({k: int(v * _wmult[name]) for k, v in sizes.items()} if name in _wmult else sizes)
+                         for name, sizes in self._weight_sizes_by_component(container).items()}
+
+        allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
+        partitions = {}
+        fingerprints: Dict[str, str] = {}
+        orders: Dict[str, List[str]] = {}
+        moe_declared: Dict[str, bool] = {}
+        dev_str = target.spec.get_device_string()
+
+        # A streamed component does not get the whole device: every component
+        # that stays WHOLE is resident beside it. Partitioning against the
+        # full budget announced a peak that could not be held — measured,
+        # TinyLlama at 1000 MB: a 992.5 MB segment plus a 264.1 MB lm_head
+        # against 950 MB of capacity. Same defect as sizing segments without
+        # reserving the activations, one level up.
+        # A component over the rung that SPATIAL TILING brings under it stays resident, tiled, instead
+        # of being classed as streamed: a VAE that fits in tiles must not veto streaming the transformer
+        # that needs it (SANA-Video at 1280x512 on 16 GB: VAE 208 GB untiled, 6.1 GB tiled at tile 17).
+        # The same tiling the spatial rung computes (`_spatial_component_tiling`, the same rung), costed
+        # the same way (weights at the device's cost + the tiled activations); it joins the plan's
+        # component tiling only if this rung wins.
+        tiled: Dict[str, Dict[str, Any]] = {}
+        cost: Dict[str, int] = {}
+        self.__dict__.setdefault("_tiling_declined_by_rung", {}).pop("layer_streaming", None)
+        # A component whose weights are ONE arena over the device's largest allocation is not held
+        # whole however much the rung holds, and tiling does not shrink its arena: it is streamed,
+        # its pieces cut below that allocation (`max_arena_bytes`, below).
+        # Held whole by the same figure every whole placement reads (`_whole_usable_mb`), so a
+        # component the other rungs hold whole is never the one streamed here.
+        _usable_whole_mb = self._whole_usable_mb(target)
+        # A component the request never loads (`_unloaded_by_request`) is neither tiled nor streamed:
+        # it stays whole, never loaded, and is priced nowhere.
+        held_whole = {name for name, mem in sorted_comps
+                      if self._holds_whole(container, name, mem, target, usable_mb=_usable_whole_mb)
+                      } | self._unloaded_by_request(container)
+        for name, mem in sorted_comps:
+            cost[name] = int(mem.total_bytes)
+            if name in held_whole:
+                continue
+            _t = (self._spatial_component_tiling(
+                container, name, mem, target.tile_rung_mb or rung_down_mb(target.free_mb), target)
+                if self._arena_over_allocation(container, name, mem, target) is None else None)
+            if _t is not None:
+                _w = mem.weight_mb * target.get_cost_multiplier(self._get_component_dtype(container, name))
+                _tiled_bytes = int(_w * 1024 * 1024) + int(_t["tiled_activation_bytes"])
+                if _tiled_bytes <= budget_bytes:
+                    tiled[name] = _t
+                    cost[name] = _tiled_bytes
+                else:
+                    # A tile exists and its weights take it over the rung: said, as the placement rungs say it.
+                    # Nothing was recorded here, and the refusal was silent exactly where it should speak.
+                    self._tiling_decline(name, f"its tile and weights still need {_tiled_bytes / 2 ** 20:,.0f} MB")
+            if name not in tiled:
+                self._record_rung_tiling_decline("layer_streaming", target.device_string,
+                                                 budget_bytes / 2 ** 20, name)
+        self._layer_stream_tilings = tiled
+        # What each component holds while it runs under this rung — its tiled figure where tiling
+        # keeps it resident — read by the plan's peak across phases (`_peak_loaded_bytes`).
+        self._layer_stream_cost = dict(cost)
+        streamed = {name for name, _ in sorted_comps if name not in tiled and name not in held_whole}
+        _lm_kv = None
+        if getattr(self, "_needs_kv_cache", False):
+            # The cache's owner as the flow names it (core/runtime/lm_facts — the same reading that decided a
+            # cache is needed), the solver's own LM name otherwise.
+            from neurobrix.core.runtime.lm_facts import decode_lm_component, session_lm_name
+            _topo = self._flow_topology(container)
+            _gen = (_topo.get("flow") or {}).get("generation") or {}
+            _lm_kv = (decode_lm_component(_topo, list(graphs))
+                      or (session_lm_name(_gen, list(graphs)) if _gen.get("lm_component") in graphs else None)
+                      or self._lm_component_name)
+        if not streamed and _lm_kv in graphs and _lm_kv not in tiled:
+            # Every component fits the rung ALONE, yet this rung is being asked: the whole-component
+            # strategies were refused because the language model's KV cache does not fit beside it whole.
+            # The language model — the cache's owner — streams its layers inside the rung; the others stay
+            # whole. Before, nothing was offered ("the streamed []") and the solve refused: orpheus on a 24 GB
+            # Mac with 10.4 GB usable (the Mac, 2026-10-03 22:00), MiniCPM-o on the idle Mac. Only the KV
+            # owner: a component that fits whole is never the one streamed otherwise
+            # (test_no_component_falls_between_placing_whole_and_streaming).
+            streamed = {_lm_kv}
+        # But only what is live AT THE SAME TIME as the streamed component's segments.
+        # A whole component of another phase holds nothing beside it (this plan is lazy:
+        # `_resident_beside_streamed`); its ACTIVATIONS are live only while it runs, and
+        # the flow says which components run together: `core/flow/base.py
+        # resident_together` (the iterative handlers of both engines unload each pre_loop
+        # component after it runs and the loop's before post_loop). Reserving every
+        # component's activation peak beside the streamed one priced PixArt-XL-2-1024-MS's
+        # VAE decode (5 120 MB at 1024x2048 once its fp32 widths are counted) beside its
+        # TEXT ENCODER's segments, which run in another phase, and refused a plan that
+        # streams on the Mac (2026-09-28). A flow that declares no phases keeps every
+        # component concurrent — the TinyLlama case above, lm_head beside the model, is
+        # one — and reserves exactly what it did.
+        #
+        # A COMPONENT THAT CROWDS THE SEGMENTS IS STREAMED TOO. The whole components concurrent with
+        # the streamed one can fill the rung by themselves — Ming-Lite-Omni-1.5's flow declares no
+        # phases, and 24 115 MB of components that each fit whole (its vision tower among them) were
+        # reserved beside its 62 GB language model against a 15 073 MB usable rung, so the plan
+        # refused on an 18 GB device that runs it one segment at a time (the Mac, 2026-10-04). The
+        # owner's rule is that the engine never refuses while streaming can run it: when the
+        # segments do not fit, the whole component whose reserve weighs most beside them is
+        # streamed as well — a streamed component holds nothing between its own runs — and the cut
+        # is taken again, until it fits or no whole component's streaming would free a byte.
+        # Inert where the cut fits: nothing is promoted and the plan is the one it was.
+        _mb = 1024 * 1024
+        _normalized: Dict[str, Any] = {}
+        _cap_mb = self._max_allocation_mb(target)
+        _parked_mb = self._parked_cap_mb(target, profile)
+        _fit_slack = None if _parked_mb is None else _nbx_memory.pool_fit_slack(*_vendor_arch(target.spec))
+
+        def _no(reason: str, crowded: bool = False, comp: Optional[str] = None):
+            return None, reason, (crowded, comp)
+
+        def _cut(streamed, promoted):
+            resident_beside = self._resident_beside_streamed(container, sorted_comps, streamed, cost=cost)
+            # And the graph's CONSTANTS, which are resident beside every segment and
+            # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
+            # baked into graph.json is not a component, so it was invisible here while
+            # being the first thing the executor allocates.
+            #
+            # Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct on a 16 GB V100
+            # (`NBX_MALLOC_TRACE`, one run): 2160 MB live before the first segment
+            # loads, every byte of it from `_load_constant_triton` — 54 RoPE tables
+            # declared `[163840, 64]` bfloat16, `max_position_embeddings` materialised
+            # in full for a request of 8 tokens, and held twice. The partition cut
+            # against 15 539 MB while execution offered 13 680 MB; the segment asked
+            # 13 966 MB and missed by 286 MB. Subtracting the constants cuts smaller
+            # segments that fit, instead of a plan that cannot run.
+            _stores_fp64 = self._constants_store_fp64(target)
+            constant_bytes = sum(_graph_constant_bytes(graphs.get(name), _stores_fp64)
+                                 for name in streamed)
+            # And the weights a FLOW reads by name outside the graph — every non-block weight of a
+            # streamed component (the token embedding, a head, the norms, `is_block_key`): its base
+            # executor holds them resident beside every piece
+            # (`LayerStreamingStrategy._ensure_flow_reads`), the way a whole executor holds them, and
+            # a piece that consumes one BORROWS it — one copy, reserved here once, and the pieces
+            # are sized without them below. Stored bytes, as the partitioner sizes the pieces.
+            # Before, the base held none (the Mac's 30 "requires embed_tokens weight") and every
+            # piece loaded all of them, in no budget.
+            # Only for a component a flow reads by name (`flow_reads_by_name`: its graph takes
+            # `inputs_embeds`, or it is the VLM's `head_component`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
+            # holding their non-block weights (most of a VAE: `mid_block.resnets.N` is not a block
+            # key) would pin the component the rung exists to stream (SANA-Video's VAE, 4 663 MB).
+            from neurobrix.triton.prism.layer_partition import flow_reads_by_name
+            from neurobrix.triton.weight_loader import is_block_key   # torch-free
+            _topology = self._flow_topology(container)
+            _read = [name for name in streamed
+                     if flow_reads_by_name(name, graphs.get(name), _topology)]
+            _unsized = [name for name in _read if not sizes_by_comp.get(name)]
+            if _unsized:
+                return _no(
+                    f"{_unsized} must be streamed and their weights index gives no sizes: the weights "
+                    f"their flow reads by name, held beside the pieces, cannot be reserved")
+            flow_read_bytes = sum(int(size) for name in _read
+                                  for key, size in sizes_by_comp[name].items()
+                                  if not is_block_key(key))
+            # The base's flow-read weights are themselves ONE arena per streamed component, held
+            # beside every piece: over the device's largest allocation, no cut of the blocks helps.
+            if _cap_mb is not None:
+                for name in _read:
+                    _base_mb = (sum(int(size) for key, size in sizes_by_comp[name].items()
+                                    if not is_block_key(key)) / _mb
+                                * target.get_cost_multiplier(self._get_component_dtype(container, name)))
+                    if _base_mb > _cap_mb:
+                        return _no(f"'{name}' streamed holds the weights its flow reads by name as one "
+                                   f"arena of {_base_mb:,.0f} MB beside its pieces, over the {_cap_mb:,} MB "
+                                   f"{target.device_string} grants in a single allocation (the profile's "
+                                   f"max_allocation_mb)", comp=name)
+            # And the KV CACHE, for the same reason and with the same blind spot. It is
+            # inside the streamed component's `total_bytes` — which is why that component
+            # is correctly classified as streamed — but the PARTITIONER sizes segments from
+            # `_bytes_for` (weights) less the graph's own activation curve, and the cache is
+            # in neither: the session allocates it, outside the graph, before the first
+            # segment loads, and it stays resident for every one of them.
+            #
+            # Measured 2026-09-22, Qwen3-Coder-30B-A3B-Instruct on a 16 GB V100, one run of
+            # `NBX_MALLOC_TRACE` — every live block at the failure, by site:
+            #     593.5 MB  memory_pool ComponentArena   (lm_head — resident_beside DOES see this)
+            #     771.0 MB  triton/kv_cache.py __init__  (24 blocks — resident_beside does NOT)
+            # and the allocator's own figure at the OOM was `live_tracked=1365MB`, which is
+            # 593.5 + 771.0 to the megabyte. Segment 1 asked 14 855 MB against 14 086 MB of
+            # free memory and missed by 769 — the cache, within two megabytes.
+            #
+            # `_estimate_kv_cache_bytes` already exists and is already what the component
+            # estimate uses; this is the same number, reserved one level down where the
+            # segments are cut. A model with no cache estimates zero and nothing changes.
+            kv_bytes = kv_in_window = 0
+            if getattr(self, "_needs_kv_cache", False):
+                # The dtype `solve` decided (`_target_dtype_str`), the one the post-scoring KV check
+                # sizes the cache with. It read `getattr(..., "float16")`: a dtype invented when the
+                # decision was absent, sizing the reserve at 2 bytes whatever the plan ran at.
+                if not hasattr(self, "_target_dtype_str"):
+                    raise RuntimeError(
+                        "ZERO FALLBACK: layer_streaming must reserve the KV cache at the dtype the "
+                        "solver decided, and no dtype was decided (_target_dtype_str unset); refusing "
+                        "rather than sizing it at an invented one")
+                kv_bytes, kv_in_window = self._kv_reserve_beside(container, sorted_comps, streamed,
+                                                                 resident_beside, cost)
+            segment_budget = budget_bytes - resident_beside - constant_bytes - flow_read_bytes - kv_bytes
+            if segment_budget <= 0:
+                return _no(
+                    f"no room for a single segment: the usable {budget_bytes / _mb:.0f} MB of the "
+                    f"rung is filled by what stays resident beside the streamed "
+                    f"{sorted(streamed)} — whole components {resident_beside / _mb:.0f} MB, graph "
+                    f"constants {constant_bytes / _mb:.0f} MB, flow-read weights "
+                    f"{flow_read_bytes / _mb:.0f} MB, KV reserve {kv_bytes / _mb:.0f} MB", crowded=True)
+            partitions, fingerprints, moe_declared = {}, {}, {}
+            for comp_name, mem in sorted_comps:
+                if comp_name not in streamed:
+                    continue
+                graph = graphs.get(comp_name)
+                if graph is None:
+                    return _no(f"'{comp_name}' must be streamed and carries no graph to cut")
+                # Cut the graph the EXECUTOR will run, not the one the container holds. Each
+                # sequence rewrites the graph in place before running it, so a boundary chosen on
+                # the raw graph can name an op the fusions have already folded away — measured:
+                # the swiglu fusion takes `aten.silu::843` and `aten.silu::890`, the two boundary
+                # ids the Mac saw for one model at two rungs. Re-partitioning at execution is
+                # design-rejected (the Plan dataclass), so the graph is normalized HERE instead
+                # and both sides then speak about the same ops.
+                from neurobrix.core.optim.passes.normalize import (graph_fingerprint,
+                                                                   normalize_for_branch)
+                # The family lives in the MANIFEST, not the topology — checked, because reading
+                # the wrong file returned "" and silently skipped the MoE fusion, which is the
+                # single largest rewrite (11 722 ops -> 2 678 on DeepSeek) and therefore the one
+                # that moves the boundaries most.
+                _family = ""
+                try:
+                    _family = str(getattr(container, "family", "") or "")
+                    for _attr in ("manifest", "_manifest"):
+                        if _family:
+                            break
+                        _man = getattr(container, _attr, None) or {}
+                        if isinstance(_man, dict):
+                            _family = str(_man.get("family") or "")
+                    if not _family:
+                        _topo = getattr(container, "topology", None) or {}
+                        _family = str(_topo.get("family") or "")
+                except Exception:  # noqa: BLE001 — a container without a family still plans
+                    _family = ""
+                # A MoE LM packaged under another family is fused by the runtime once its flow
+                # declares it (`GraphExecutor.set_moe_config`); the plan must cut that fused graph —
+                # Qwen3-Omni's thinker, 12 132 ops -> 4 300. The same rule the weight sizing applies
+                # (`_declares_moe`), so a plan sizes and cuts one graph.
+                _moe = self._moe_declaration(graph, container)
+                if _moe is not None:
+                    moe_declared[comp_name] = _moe
+                if comp_name not in _normalized:
+                    # a declared MoE is cut from the graph the weight sizing fused (`_fused_as_declared`, the same
+                    # declared fusion normalize_for_branch would apply): only the branch's rewrites are left
+                    _normalized[comp_name] = (
+                        normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family) if _moe is None
+                        else normalize_for_branch(self._fused_as_declared(graph, _moe), getattr(self, "_mode", "compiled")))
+                graph = _normalized[comp_name]
+                # A piece borrows the non-block weights the base holds (reserved above), so it is
+                # sized over its block weights: a non-block weight counts 0 here, not its bytes a
+                # second time (and not the graph's own size for it, the partitioner's fallback).
+                _piece_sizes = ({k: (v if is_block_key(k) else 0)
+                                 for k, v in sizes_by_comp[comp_name].items()}
+                                if comp_name in _read else sizes_by_comp.get(comp_name))
+                _sizing = self.__dict__.get("_request_sizing", {}).get(comp_name)
+                if _sizing is None:
+                    return _no(
+                        f"'{comp_name}' has no activation profile at this request (_compute_memory could "
+                        f"not profile it) — a partition cut at the build's shapes would plan a run that "
+                        f"is not this one")
+                _extra = dict((getattr(self, "_conv_band_bytes", None) or {}).get(comp_name) or {})
+                # what each attention writes while it runs (`_attention_scratch`, the engine's own route), on the
+                # piece's op peak as the activation profile prices it
+                _scr = self._attention_scratch(profile, self._run_dtype(comp_name))
+                if _scr is not None:
+                    from neurobrix.triton.prism.profiler import ActivationProfiler, _is_attention
+                    _ap = ActivationProfiler(graph)
+                    for _uid, _op in (graph.get("ops") or {}).items():
+                        if _is_attention(_op.get("op_type")):
+                            _b = _ap._attention_scratch_of(_op, _sizing[0], _scr)
+                            if _b:
+                                _extra[_uid] = _extra.get(_uid, 0) + int(_b)
+                _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
+                                           compute_dtype_bytes=_sizing[1], widths=_sizing[2],
+                                           op_extra=_extra or None,
+                                           # the allocator's hold over the walked activations, the device's measured
+                                           # fact, as a component held whole is priced (`_live_activation_mb`)
+                                           activation_factor=(self._triton_arena_factor(target)
+                                                              if str(getattr(self, "_mode", "compiled")).startswith("triton")
+                                                              else 1.0),
+                                           token_split=bool(getattr(self, "_token_split", False)),
+                                           swap_values=bool(getattr(self, "_swap_values", False)),
+                                           beyond_walls=bool(getattr(self, "_regions_beyond_walls", False)))
+                # One piece's weights are one arena: bounded by the device's largest allocation, in
+                # the partitioner's stored bytes (the arena holds them at the device's cost multiplier).
+                # And a piece CHANGE holds the outgoing arena where the pool parks it beside the
+                # incoming one (`_parked_cap_mb`, a unified device under the Triton engine).
+                _mult = target.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+                _arena_cap = None if _cap_mb is None else int(_cap_mb * _mb / _mult)
+                _parked_cap = None if _parked_mb is None else _parked_mb * _mb / _mult
+                part = _cutter.partition(segment_budget, max_arena_bytes=_arena_cap,
+                                         parked_cap_bytes=_parked_cap, pool_fit_slack=_fit_slack)
+                if part.fits and len(part.segments) < 2 and comp_name not in promoted:
+                    # ONE piece. A component is streamed because the whole rungs cannot hold it
+                    # (`_whole_component_mb` over the usable rung — the arena's activation figure);
+                    # the partitioner prices the same activations by the dataflow, without the
+                    # arena, and found one piece that fits. "A whole-component rung serves it" was
+                    # this rung's answer, and those rungs had already refused it: CogVideoX-5b-I2V's
+                    # transformer on the Mac's profile at the 16 384 rung, 15 212 MB whole against
+                    # 15 073 usable. Cut it in two — each half's weights at most half of them plus
+                    # the largest op's — priced as every streamed cut is, by the partitioner's own
+                    # activation figure: the arena's factor is measured on WHOLE components only and
+                    # a streamed piece keeps the profiled figure (`_live_activation_mb`). Holding
+                    # the halves alone to the factor made the cut a function of which path reached
+                    # it, and a bigger rung refused what a smaller one planned (Ming-Lite-Omni-1.5's
+                    # vision tower on the Mac's profile: 12 288 refused, 11 264 planned).
+                    _halves = _cutter.partition(int(part.peak_live_bytes + (part.total_weight_bytes + 1) // 2),
+                                                max_arena_bytes=_arena_cap, parked_cap_bytes=_parked_cap,
+                                                pool_fit_slack=_fit_slack)
+                    if not (_halves.fits and len(_halves.segments) >= 2):
+                        return _no(f"'{comp_name}' fits in ONE segment of {segment_budget / _mb:.0f} MB and "
+                                   f"cannot be cut in two (" + (_halves.refusal or "one piece") + ")",
+                                   comp=comp_name)
+                    part = _halves
+                if not part.fits:
+                    # Crowded unless its own activations or one op's weights fill the whole usable
+                    # rung — then nothing streamed beside it can make room.
+                    return _no(
+                        f"'{comp_name}' cannot be cut into segments of {segment_budget / _mb:.0f} MB: "
+                        + part.refusal, crowded=part.peak_live_bytes < budget_bytes - constant_bytes,
+                        comp=comp_name)
+                if comp_name in _reentered:
+                    # Re-entered every token or step: the pieces the rung holds beside the window stay loaded and
+                    # only the rest is reloaded per run (S5, 2026-10-27) — a cut that holds none is the plain one.
+                    _held = _cutter.hybrid(segment_budget, max_arena_bytes=_arena_cap,
+                                           parked_cap_bytes=_parked_cap, pool_fit_slack=_fit_slack)
+                    if _held.fits and _held.resident:
+                        part = _held
+                partitions[comp_name] = part
+                fingerprints[comp_name] = graph_fingerprint(graph)
+                orders[comp_name] = list(graph.get("execution_order") or [])
+            return (partitions, fingerprints, moe_declared, resident_beside, constant_bytes,
+                    flow_read_bytes, kv_bytes, kv_in_window), None, (False, None)
+
+        _reentered = self._reentered_components(container)
+        promoted: List[str] = []
+        unstreamable: set = set()      # promoted, then found unable to stream: kept whole again
+        _sized = self.__dict__.get("_request_sizing", {})
+        first_reason = None
+        while True:
+            got, reason, (crowded, failed) = _cut(streamed, set(promoted))
+            if got is not None:
+                break
+            first_reason = first_reason or reason
+            if failed in promoted and not crowded:
+                # A component streamed only to make room, which cannot itself be streamed: it goes
+                # back to whole and the next candidate is tried — promotion never backtracks into a
+                # refusal the plan did not need.
+                promoted.remove(failed)
+                unstreamable.add(failed)
+                streamed = streamed - {failed}
+                continue
+            if not crowded or not streamed:
+                # Nothing over the rung: no component streams inside itself, so none is streamed
+                # beside one — the whole-component rungs answer this plan.
+                return _decline(reason)
+            # The whole component whose streaming frees the most beside the segments.
+            _now = self._resident_beside_streamed(container, sorted_comps, streamed, cost=cost)
+            _gain = {n: _now - self._resident_beside_streamed(container, sorted_comps, streamed | {n},
+                                                               cost=cost)
+                     for n, _m in sorted_comps
+                     if n not in streamed and n not in tiled and n not in unstreamable
+                     and n in graphs and n in _sized}
+            _pick = max(_gain, key=lambda n: _gain[n], default=None)
+            if _pick is None or _gain[_pick] <= 0:
+                return _decline(first_reason + (f" (and with {promoted} streamed beside it: {reason})"
+                                                if promoted else ""))
+            promoted.append(_pick)
+            streamed = streamed | {_pick}
+        (partitions, fingerprints, moe_declared, resident_beside, constant_bytes, flow_read_bytes, kv_bytes,
+         kv_in_window) = got
+        if promoted:
+            logging.getLogger(__name__).warning(
+                "layer_streaming: %s streamed beside %s — kept whole they left no room for its segments",
+                promoted, sorted(set(streamed) - set(promoted)))
+        for comp_name, _mem in sorted_comps:
+            # The device string stays a plain device. A `layer_stream:` prefix
+            # was tried and is wrong: several places parse an allocation by
+            # splitting on ":" and taking the index, so a three-part string
+            # reached `int('mps')`. What marks a component as streamed is the
+            # PLAN carrying segments for it, which is the same fact and needs
+            # no parser anywhere to learn a new shape.
+            allocations[comp_name] = (dev_str, {})
+
+        if not partitions:
+            return _decline("no component exceeds the usable part of the rung — a rung that "
+                            "keeps components whole serves this plan")
+
+        # What each streamed component actually holds, recorded so the
+        # accounting sees the same number the executor will.
+        self._layer_stream_partitions = partitions
+        self._layer_stream_graphs = fingerprints
+        self._layer_stream_orders = orders
+        self._layer_stream_moe = {k: v for k, v in moe_declared.items() if k in partitions}
+        # Resident beside the pieces and outside any component's figure: the graph constants and
+        # the flow-read weights the base holds.
+        self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
+        # The cache's bytes inside the window below (the reserve the segments were cut around, and
+        # the estimate inside a whole LM's total beside them): the KV check sizes the cache itself.
+        self._layer_stream_kv_reserve_bytes = int(kv_in_window)
+        self._layer_stream_window_bytes = int(resident_beside + constant_bytes + flow_read_bytes + kv_bytes
+                                              + max(p_.peak_resident_bytes for p_ in partitions.values()))
+        return allocations, devices
+
+    def _reentered_components(self, container) -> set:
+        """The components the request runs once per generated TOKEN (`time_estimate.uses_per_request`: the flow's
+        language model and head, an autoregressive stage) — the ones whose pieces are held between runs: a few hundred MB
+        short of the rung, every piece reloaded per token cost Janus-Pro-7B an hour for a 41 s plan. A denoiser run per
+        step is not held yet: on Metal mochi-1-preview's transformer held in 61 pieces saved 6 % of the estimate and
+        entered its VAE with 1.2 GB more driver memory than the plain cut, and the VAE's stream ran out of memory (the
+        Mac, 2026-10-27 23:47) — the per-piece cost is not measured, so the plain cut stays where the gain is a few
+        steps. Empty when the flow cannot say (a generation with no token count)."""
+        from neurobrix.triton.prism import time_estimate as TE
+        ic = getattr(self, "_input_config", None)
+        tokens = getattr(ic, "max_tokens", None) or (self._read_defaults(container) or {}).get("max_tokens")
+        try:
+            uses = TE.uses_per_request(self._flow_topology(container).get("flow") or {}, getattr(ic, "steps", None),
+                                       tokens, components=[c.name for c in (getattr(self, "_neural_components", [])
+                                                                             or [])])
+        except TE.MissingFact:
+            return set()
+        return {name for name, (kind, _n) in uses.items() if kind == "token"}
+
+    def _output_bytes(self, container) -> int:
+        """What the run's output boundary holds on the host: the largest graph output among the
+        components the flow SAVES from, at the request, times what the family's save path holds per
+        element (output_dispatch.host_bytes_per_output_element). Which component is final is the
+        flow's business (`core/flow/base.py saved_output_components`); where the flow does not
+        declare it, the largest output of any component bounds it. Janus-Pro-7B's language model
+        returns its logits over the whole sequence (5 x 704 x 102 400 at the placement floor): priced
+        as the saved image, 3 437 MB of host for a 384x384 picture (2026-10-04)."""
+        from neurobrix.core.flow.base import saved_output_components
+        from neurobrix.core.runtime.output_dispatch import host_bytes_per_output_element
+        family = (container.get_manifest() or {}).get("family")
+        sized = self.__dict__.get("_output_elements", {})
+        saved = saved_output_components(self._flow_topology(container))
+        if saved and any(n in sized for n in saved):
+            sized = {n: e for n, e in sized.items() if n in saved}
+        elements = max(sized.values(), default=0)
+        if not family or not elements:
+            return 0
+        return int(elements) * host_bytes_per_output_element(family)
+
+    def _stored_dtype_major(self, container) -> Dict[str, str]:
+        """{component: the floating dtype most of its weights' bytes are stored in} (the weights index) — what its
+        load converts from, the key of the measured loader rate (`time_estimate._loader_bps`). Read once per solve."""
+        memo = self.__dict__.setdefault("_stored_major", {})
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return {}
+        if str(base) not in memo:
+            import json as _json
+            from pathlib import Path as _P
+            out: Dict[str, str] = {}
+            for index in (_P(base) / "components").glob("*/weights_index.json"):
+                by: Dict[str, int] = {}
+                for v in (_json.loads(index.read_text()).get("tensors") or {}).values():
+                    d = str(v.get("dtype", "")) if isinstance(v, dict) else ""
+                    if d.startswith(("float", "bfloat")):
+                        by[d] = by.get(d, 0) + int(v.get("size_bytes") or 0)
+                if by:
+                    out[index.parent.name] = max(by, key=by.get)
+            memo[str(base)] = out
+        return memo[str(base)]
+
+    def _stored_dtypes_by_component(self, container) -> Dict[str, set]:
+        """Per-component {stored floating dtypes} from the weights index (what a load converts FROM)."""
+        out: Dict[str, set] = {}
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return out
+        import json as _json
+        from pathlib import Path as _P
+        for index in (_P(base) / "components").glob("*/weights_index.json"):
+            tensors = (_json.loads(index.read_text()).get("tensors") or {})
+            out[index.parent.name] = {str(v.get("dtype")) for v in tensors.values()
+                                      if isinstance(v, dict) and str(v.get("dtype", "")).startswith(("float", "bfloat"))}
+        return out
+
+    def _kv_reserve_beside(self, container, sorted_comps, streamed, resident_beside: int, cost=None):
+        """(bytes reserved for the KV cache beside the streamed segments, the cache's bytes inside the
+        window).
+
+        At least the minimum the KV plan will demand of this plan (`_kv_min_bytes`): in serve mode
+        two turns, twice the run estimate. Reserving only the run estimate cut segments that left too
+        little for the serve minimum — Qwen3-Coder-30B-A3B on the Mac's profile, serve, was then
+        refused (or, judged against the summed capacity, planned at 20 361 MB on a 17 277 MB device).
+
+        Reserved once. A WHOLE language model whose total sits in `resident_beside` carries the
+        estimate inside it, so only what the plan's minimum needs beyond it is added. A streamed
+        one, no named one (the estimate is then in no component), or a whole one that is NOT beside
+        these segments — another phase of the flow: the cache's buffers outlive it — reserves the
+        whole need."""
+        _kv_est = self._estimate_kv_cache_bytes(container, self._target_dtype_str)
+        _kv_need = max(_kv_est, self._kv_min_bytes(container, self._target_dtype_str))
+        _lm = self._lm_component_name
+        _carried = 0
+        if _lm is not None and _lm not in streamed:
+            _lm_beside = resident_beside - self._resident_beside_streamed(
+                container, [(n, m) for n, m in sorted_comps if n != _lm], streamed, cost=cost)
+            _carried = min(int(_kv_est), max(0, int(_lm_beside)))
+        kv_bytes = max(0, int(_kv_need) - _carried)
+        return kv_bytes, kv_bytes + _carried
+
+    def _resident_beside_streamed(self, container, sorted_comps, streamed, cost=None) -> int:
+        """Bytes held beside a streamed component's segments by the components kept WHOLE.
+
+        A whole component CONCURRENT with the streamed one (same flow phase, or a flow that
+        declares no phases) counts its total — weights, activation peak, overhead. One that runs
+        in ANOTHER phase counts NOTHING: a layer_streaming plan is lazy (`_build_plan`), so its
+        serving session is never persistent (serving/engine.py keeps weights only for an eager
+        plan) and the iterative handlers of both engines force-unload each pre_loop component
+        after it runs and the loop's before post_loop, while a post_loop component is loaded when
+        it is reached (core/flow/iterative_process.py, triton/flow/iterative_process.py
+        `_unload_component`). The phases are the flow's own (`core/flow/base.py
+        resident_together`, 38751c12). With several streamed components the largest reserve is
+        taken: each is cut against the same budget. A component no phase names — streamed or
+        whole — is concurrent with every other: nothing says it is unloaded.
+
+        e4b1370a reserved another phase's WEIGHTS ("an eager load, a serve session never
+        unloads") — neither happens under this plan — and a bigger rung refused what a smaller one
+        planned: CogVideoX-5b-I2V on the Mac's profile at the 16 384 rung kept its 11 003 MB text
+        encoder whole and reserved it beside the transformer's segments (3 088 MB left), while at
+        8 192 the encoder was itself streamed and the plan held (the Mac, 2026-10-04)."""
+        phases = self._flow_phases(container)
+        # A component the request never loads is beside nothing (`_unloaded_by_request`).
+        unloaded = self._unloaded_by_request(container)
+        whole = [(n, m) for n, m in sorted_comps if n not in streamed and n not in unloaded]
+        streamed = {s for s in streamed if s not in unloaded}
+
+        def _total(n, m) -> int:
+            # a component kept resident because spatial tiling fits it costs its TILED figure
+            # (`cost`, the partition rule: weights + the tiled activations), never its untiled peak
+            return int(cost[n]) if cost and n in cost else int(m.total_bytes)
+
+        named = set().union(*phases) if phases else set()
+
+        def _beside(s) -> int:
+            # A whole component no phase names is concurrent, as a streamed one no phase names is:
+            # nothing says it is unloaded. A streamed component in several phases (an image
+            # decode's head runs beside the language model, then beside the decoder) reserves
+            # the dearest of them.
+            mine = [ph for ph in (phases or []) if s in ph]
+            if not mine:
+                return sum(_total(n, m) for n, m in whole)
+            return max(sum(_total(n, m) for n, m in whole if n in ph or n not in named) for ph in mine)
+
+        if not streamed:
+            return sum(_total(n, m) for n, m in whole)
+        return max(_beside(s) for s in streamed)
+
+    def _flow_topology(self, container) -> Dict[str, Any]:
+        """The container's topology.json (its flow), read from its cache — the NBXContainer object carries
+        only the flags from it. Empty when the container has no cache path or no topology.
+        (Brought from 38751c12, a-partition-is-cut-at-the-request, unchanged.)"""
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return {}
+        import json as _json
+        from pathlib import Path as _P
+        path = _P(base) / "topology.json"
+        return _json.loads(path.read_text()) if path.exists() else {}
+
+    def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
+        """Per-component {weight_name: stored bytes} from the weights index.
+
+        The index records what is STORED, which is what a load costs. Missing
+        or unreadable means the partitioner sizes from the graph's own
+        shape/dtype instead, which it already knows how to do.
+        """
+        out: Dict[str, Dict[str, int]] = {}
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return out
+        import json as _json
+        from pathlib import Path as _P
+        comp_dir = _P(base) / "components"
+        if not comp_dir.is_dir():
+            return out
+        for entry in comp_dir.iterdir():
+            index = entry / "weights_index.json"
+            if not index.is_file():
+                continue
+            try:
+                data = _json.loads(index.read_text())
+            except Exception:
+                continue
+            tensors = data.get("tensors")
+            if isinstance(tensors, dict):
+                out[entry.name] = {
+                    k: int(v.get("size_bytes", 0))
+                    for k, v in tensors.items() if isinstance(v, dict)}
+        return out
+
+    def _try_cpu_streaming(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """CPU execution with ONE component resident at a time — the last rung.
+
+        `_try_cpu_execution` needs `sum(components)` to fit in host RAM. When
+        it does not, the cascade used to run out of strategies and Prism
+        raised "No strategy can fit this model". That contradicts the
+        engine's own philosophy: a model here never says it will not run, it
+        says it will run and that it will be slow. ZERO FALLBACK forbids
+        silent defaults; it does not forbid a slow path chosen out loud.
+
+        So this rung applies the `lazy_sequential` idea on the host: components
+        are loaded and released one at a time, so the requirement drops from
+        `sum(components)` to `max(component)` — the same reduction that makes
+        lazy_sequential viable on a GPU too small for the whole model. Weights
+        stream from the container on disk as each component is reached.
+
+        Viable whenever the LARGEST SINGLE COMPONENT fits in host RAM. Below
+        that there is nothing left to try, and the refusal is real rather than
+        a gap in the cascade.
+
+        Deliberately unbounded in wall time (R35: availability first, perf
+        free). The user is told which strategy was chosen and why, so a slow
+        run is a decision they can see rather than a surprise.
+        """
+        peak_mb = max((mem.total_mb for _, mem in sorted_comps), default=0.0)
+
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            available_ram_mb = self._host_budget_mb(profile)
+            if peak_mb > available_ram_mb:
+                # The largest single component does not fit even alone. This
+                # is the real bottom of the ladder.
+                return None
+        # No CPU stats: accept, as _try_cpu_execution does — the runtime
+        # fails clean if host RAM is genuinely insufficient, and refusing on
+        # missing telemetry would be refusing on ignorance.
+
+        allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
+        for comp_name, _mem in sorted_comps:
+            shard_map = {sh: "cpu" for sh in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = ("cpu", shard_map)
+        if not self._size_host_placement_on_device("cpu_streaming", sorted_comps, devices, container, profile):
+            return None
+
+        return allocations, self._fresh_devices(devices)
+
+    def _constants_store_fp64(self, dev) -> bool:
+        """Whether the engine this plan runs under stores a float64 / complex128 graph constant as
+        such on `dev` — the question `_graph_constant_bytes` prices by. Each engine answers from
+        the device's vendor profile through its OWN branch's reader: the Triton engine
+        `triton_stores_fp64` (`precision.stores_fp64.triton`, what `triton.dtype.storage_dtype`
+        narrows by in `_load_constant_triton`); the DtypeEngine `device_supports_fp64` (what
+        `DtypeEngine.storage_dtype` narrows by in `_load_constant_native`)."""
+        spec = dev.spec
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            from neurobrix.triton.dtype import triton_stores_fp64
+            return triton_stores_fp64(getattr(spec.brand, "value", spec.brand), spec.architecture)
+        from neurobrix.core.dtype.config import device_supports_fp64
+        return device_supports_fp64(dev.device_string, getattr(spec.brand, "value", spec.brand),
+                                    spec.architecture)
+
+    def _parse_blocks(self, container: "NBXContainer", comp_name: str) -> Dict:
+        """
+        Parse weight keys to identify transformer block structure.
+
+        Uses safetensors HEADER METADATA (shape + dtype) to compute sizes
+        without loading actual tensors. This avoids loading 32GB of weights
+        just to determine block structure.
+        """
+        cache_path = container.cache_path
+        if not cache_path:
+            return {'blocks': {}, 'block_sizes': {}, 'non_block_keys': [], 'non_block_mb': 0}
+
+        weights_path = cache_path / 'components' / comp_name / 'weights'
+        if not weights_path.exists():
+            return {'blocks': {}, 'block_sizes': {}, 'non_block_keys': [], 'non_block_mb': 0}
+
+        patterns = [r'^blocks?\.(\d+)\.', r'^layers?\.(\d+)\.',
+                    r'\.blocks?\.(\d+)\.', r'\.layers?\.(\d+)\.',
+                    r'^\w+_blocks?\.(\d+)\.', r'^\w+_layers?\.(\d+)\.']
+
+        blocks = {}
+        non_block_keys = []
+        key_sizes = {}
+
+        for shard in weights_path.glob('*.safetensors'):
+            # Read header only — no tensor data loaded
+            header = self._read_safetensors_header(shard)
+            for key, meta in header.items():
+                if key == "__metadata__":
+                    continue
+                # Compute size from shape × dtype_bytes
+                shape = meta.get("shape", [])
+                # the header's code -> the table's dtype -> its width; an unknown code is refused
+                dtype_bytes = _itemsize.itemsize(_itemsize.from_safetensors(meta["dtype"]))
+                numel = 1
+                for dim in shape:
+                    numel *= dim
+                key_sizes[key] = numel * dtype_bytes
+
+                matched = False
+                for pattern in patterns:
+                    m = re.search(pattern, key)
+                    if m:
+                        blocks.setdefault(int(m.group(1)), []).append(key)
+                        matched = True
+                        break
+                if not matched:
+                    non_block_keys.append(key)
+
+        block_sizes = {n: sum(key_sizes[k] for k in keys) / 1024**2 for n, keys in blocks.items()}
+        non_block_mb = sum(key_sizes[k] for k in non_block_keys) / 1024**2
+
+        return {
+            'blocks': blocks,
+            'block_sizes': block_sizes,
+            'avg_block_mb': sum(block_sizes.values()) / len(block_sizes) if block_sizes else 0,
+            'non_block_keys': non_block_keys,
+            'non_block_mb': non_block_mb,
+            'key_sizes': key_sizes,
+        }
+
+    @staticmethod
+    def _read_safetensors_header(path: Path) -> Dict:
+        """Read safetensors header without loading tensor data."""
+        import struct
+        with open(path, 'rb') as f:
+            header_size = struct.unpack('<Q', f.read(8))[0]
+            header_bytes = f.read(header_size)
+        return json.loads(header_bytes)
+
+    def _container_fits_float16(self, container: "NBXContainer") -> bool:
+        """
+        Scan bf16 weight files to verify all values fit in fp16 range.
+        Returns True if bf16→fp16 is safe, False if fp32 fallback needed.
+
+        Results are cached in two layers:
+        1. Instance cache (in-memory, per solver invocation)
+        2. Disk cache (~/.neurobrix/cache/<model>/bf16_safety.json) — persists across runs.
+           Invalidated if any weight file's mtime is newer than the cache file.
+        """
+        if hasattr(self, '_bf16_fp16_safe_cache'):
+            return self._bf16_fp16_safe_cache
+
+        cache_path = container.cache_path
+        if not cache_path:
+            return False
+
+        components_dir = cache_path / "components"
+        if not components_dir.exists():
+            return False
+
+        # Check disk cache
+        safety_cache_file = cache_path / "bf16_safety.json"
+        if safety_cache_file.exists():
+            # Validate: cache must be newer than all weight files
+            cache_mtime = safety_cache_file.stat().st_mtime
+            cache_valid = True
+            for comp_dir in components_dir.iterdir():
+                weights_path = comp_dir / "weights"
+                if not weights_path.exists():
+                    continue
+                for shard in weights_path.glob("*.safetensors"):
+                    if shard.stat().st_mtime > cache_mtime:
+                        cache_valid = False
+                        break
+                if not cache_valid:
+                    break
+
+            if cache_valid:
+                with open(safety_cache_file) as f:
+                    cached = json.load(f)
+                result = cached.get("bf16_fp16_safe", False)
+                self._bf16_fp16_safe_cache = result
+                return result
+
+        # The question is the library's: do all the floating weights fit float16's range? Prism decides placement with the answer.
+        from nbxtensor.io.safetensors import fp16_range_scan
+
+        shards = [shard for comp_dir in sorted(components_dir.iterdir())
+                  for shard in sorted((comp_dir / "weights").glob("*.safetensors"))]
+        scan = fp16_range_scan(shards)
+        if not scan.fits:
+            with open(safety_cache_file, 'w') as cf:
+                json.dump({"bf16_fp16_safe": False, "reason": f"{scan.key}: abs_max={scan.abs_max}"}, cf)
+            self._bf16_fp16_safe_cache = False
+            return False
+
+        result = scan.scanned > 0
+        with open(safety_cache_file, 'w') as cf:
+            json.dump({"bf16_fp16_safe": result, "bf16_params": scan.scanned}, cf)
+        self._bf16_fp16_safe_cache = result
+        return result
+
+    # =========================================================================
+    # DTYPE RESOLUTION
+    # =========================================================================
+
+    def _components_force_fp32(self, container: "NBXContainer",
+                               profile: Optional["PrismProfile"] = None) -> set:
+        """Per-component fp32 pin set. Composes two sources by additive union:
+
+        (1) MANUAL (Ch6-era): the `requires_fp32_compute` registry flag.
+            For architectures whose activation range structurally exceeds
+            the fp16 representable range (e.g. deep transformer-SR stacks
+            with no inter-block normalisation — SwinIR's RSTB cascade hits
+            NaN by conv_after_body in pure fp16). Read via
+            `registry_flags.get_component_flag`, env-overridable by
+            `NBX_FORCE_FP32_COMPUTE`. No .nbx field added (R18 preserved).
+
+        (2) AUTO (Ch8 P-LAYER7-AUTO-FP32-FAMILY-AWARE): family-aware
+            structural detection of fp16-conv-overflow risk. Reads
+            `config/families/<family>.yml dtype_policy.auto_fp32_on_overflow_risk`
+            (R10 data-driven). Discriminator (R34 strict, no model-name
+            branching): family ∈ {image, video} AND component graph
+            torch_dtype matches require_graph_dtype AND hardware is
+            fp16-preferring AND the component is conv-cascade-dominant
+            (`conv2d_count >= min_conv2d_count` and `conv2d_count >=
+            conv2d_to_sdpa_ratio_min × sdpa_count`). Selects VAE-class
+            encoders/decoders, excludes patch-embed transformers and
+            hybrid linear-attention DiTs. Bypassable for diagnosis via
+            `NBX_DISABLE_AUTO_FP32=1` (manual still honored).
+
+        Manual ⊕ auto by set union: manual entries always end up in the
+        result (manual > auto by construction; no conflict surface). Both
+        sources default-absent ⇒ empty set ⇒ ZERO behaviour change for
+        any model not matching the criteria (anti-regression guarantee).
+
+        ZERO FALLBACK (engine audit #2 2026-07-05): read failures
+        PROPAGATE. The former blanket try/excepts silently returned an
+        empty pin set on a broken container / registry / family config,
+        disabling the fp32-overflow protection engine-wide. Legitimate
+        ABSENCE (no manifest family, no flag annotation, policy disabled
+        in the family YAML) still resolves to the empty set.
+        """
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        manifest = container.get_manifest() or {}
+        model_name = manifest.get("model_name")
+        family = manifest.get("family")
+
+        forced = set()
+
+        # (1) Manual flag (Ch6-era).
+        for comp in container.get_neural_components():
+            if get_component_flag(model_name, comp.name,
+                                  "requires_fp32_compute", default=False,
+                                  env_override="NBX_FORCE_FP32_COMPUTE"):
+                forced.add(comp.name)
+
+        # (2) Auto-detect (Ch8). Bypassable for diagnosis.
+        if os.environ.get("NBX_DISABLE_AUTO_FP32", "0") == "1":
+            return forced
+        auto = self._auto_fp32_components(container, profile, family)
+        # (3) A conv-cascade component the registry DECLARES fp16-safe
+        # (`fp16_conv_cascade_safe`) is exempt from the auto pin: the pin
+        # is a structural GUESS at overflow risk, the flag is a measured
+        # fact — manual wins in this direction too. Its OWN flag, not
+        # `activations_fp16_safe`: that one carries the triton cast-back
+        # meaning and is set on the Sana DC-AE, whose fp16 decode renders
+        # BLACK in compiled mode (2026-09-04, sana_G3) — the two facts are
+        # not the same fact. Gate that motivated the exemption: PixArt-Sigma
+        # VAE fp16 vs fp32 at 1024², PSNR 59.5 dB, no non-finite
+        # (validation_outputs/image_fp16_2026_09_04). Manual fp32 pins (1)
+        # are never removed by it.
+        declared_safe = {
+            comp.name for comp in container.get_neural_components()
+            if comp.name not in forced and get_component_flag(
+                model_name, comp.name, "fp16_conv_cascade_safe", default=False,
+                env_override="NBX_FP16_CONV_CASCADE_SAFE")
+        }
+        return forced | (auto - declared_safe)
+
+    def _auto_fp32_components(self, container: "NBXContainer",
+                              profile: "Optional[PrismProfile]",
+                              family: "Optional[str]") -> set:
+        """Family-aware structural auto-fp32 detection (Ch8).
+
+        Policy and thresholds live in `config/families/<family>.yml`
+        under `dtype_policy.auto_fp32_on_overflow_risk`. Default-absent
+        ⇒ disabled ⇒ empty set. See _components_force_fp32 docstring
+        for the full rule. ZERO FALLBACK: an unknown family (no YAML)
+        or a broken profile RAISES via the loader / profile — the
+        former swallow silently disabled the auto-detect.
+        """
+        if family is None:
+            return set()
+        from neurobrix.core.config.loader import get_family_config
+        fcfg = get_family_config(family) or {}
+
+        policy = ((fcfg.get("dtype_policy") or {})
+                  .get("auto_fp32_on_overflow_risk") or {})
+        if not policy.get("enabled"):
+            return set()
+
+        # Hardware gate: skip on bf16-capable hardware (bf16 exponent
+        # range = fp32, no conv-storage saturation).
+        if policy.get("skip_when_hw_supports_bf16", True) and profile is not None:
+            if profile.devices_support_dtype("bfloat16"):
+                return set()
+
+        require_dtype = policy.get("require_graph_dtype", "float32")
+        min_conv = int(policy.get("min_conv2d_count", 20))
+        ratio = float(policy.get("conv2d_to_sdpa_ratio_min", 10))
+
+        # Op-type markers (NeuroBrix canonical aten::op format,
+        # src/neurobrix/CLAUDE.md §6).
+        _CONV_OPS = {"aten::conv2d", "aten::convolution",
+                     "aten::_convolution"}
+        _SDPA_OPS = {"aten::scaled_dot_product_attention",
+                     "aten::_scaled_dot_product_efficient_attention",
+                     "aten::_scaled_dot_product_flash_attention",
+                     "aten::_scaled_dot_product_attention_math"}
+
+        auto = set()
+        comps = container.get_neural_components()
+        for comp in comps:
+            graph = getattr(comp, "graph", None) or {}
+            if graph.get("torch_dtype") != require_dtype:
+                continue
+            ops = graph.get("ops") or {}
+            if not ops:
+                continue
+            conv = 0
+            sdpa = 0
+            for op_data in ops.values():
+                ot = op_data.get("op_type", "")
+                if ot in _CONV_OPS:
+                    conv += 1
+                elif ot in _SDPA_OPS:
+                    sdpa += 1
+            if conv >= min_conv and conv >= ratio * sdpa:
+                auto.add(comp.name)
+        return auto
+
+    def _resolve_dtype(self, container: "NBXContainer", profile: PrismProfile) -> str:
+        """Resolve target dtype. bf16 → fp16 if weights fit in range, else fp32."""
+        # Model-side opt-in (manual `requires_fp32_compute`) + Ch8
+        # auto-detect (family-aware fp16-conv-overflow). Checked FIRST
+        # so the fp16 preference below cannot win for fp16-unsafe
+        # architectures or for VAE-class components on V100.
+        if self._components_force_fp32(container, profile):
+            return "float32"
+
+        # Find model's dominant dtype
+        dtypes = {}
+        for comp in container.get_neural_components():
+            d = comp.get_dominant_dtype()
+            dtypes[d] = dtypes.get(d, 0) + 1
+        requested = max(dtypes.keys(), key=lambda d: dtypes[d]) if dtypes else "float16"
+
+        # Priority: hardware preferred > model native > fallback
+        if profile.preferred_dtype and profile.devices_support_dtype(profile.preferred_dtype):
+            return profile.preferred_dtype
+
+        if profile.devices_support_dtype(requested):
+            return requested
+
+        if requested == "bfloat16":
+            if profile.devices_support_dtype("float16") and self._container_fits_float16(container):
+                return "float16"
+            return "float32"
+        elif requested == "float16":
+            return "float32"
+
+        return "float32"
+
+    def _resolve_component_dtypes(self, components, profile: PrismProfile, container: "Optional[NBXContainer]" = None) -> Dict[str, str]:
+        """Resolve dtype per component. Returns dtype strings."""
+        result = {}
+
+        forced_fp32 = self._components_force_fp32(container, profile) if container is not None else set()
+
+        for comp in components:
+            if comp.name in forced_fp32:
+                result[comp.name] = "float32"
+                continue
+            native = comp.get_dominant_dtype()
+            if profile.preferred_dtype and profile.devices_support_dtype(profile.preferred_dtype):
+                resolved = profile.preferred_dtype
+            elif profile.devices_support_dtype(native):
+                resolved = native
+            elif native == "bfloat16":
+                if container is not None and profile.devices_support_dtype("float16") and self._container_fits_float16(container):
+                    resolved = "float16"
+                else:
+                    resolved = "float32"
+            elif native == "float16":
+                resolved = "float32"
+            else:
+                resolved = "float32"
+            result[comp.name] = resolved
+
+        return result
+
+
+    def _try_fp32_fallback(self, container: "NBXContainer", profile: PrismProfile) -> bool:
+        """Whether an fp32 pass is worth trying for a bf16 model.
+
+        It is worth trying only where the hardware CANNOT do bf16 — which is what this
+        fallback was written for. The caller reaches it when the bf16 plan produced no
+        candidates, and on bf16-capable hardware fp32 needs strictly MORE memory than the plan
+        that just failed: it cannot succeed, and its figures then replace the diagnostic ones
+        at exactly 2x the truth.
+
+        Measured 2026-09-22, Flex.1-alpha on an M4 Pro (bf16-capable, 17 277 MB budget). The
+        call site of `compute_dtype_factor` ran twice per component — `comp_dtype_str`
+        'bfloat16' at mult 1.0, then 'float32' at mult 2.0 with `component_dtypes=None` — and
+        the refusal reported the SECOND: "the streaming path needs 33954MB for that one
+        component", where the bf16 figure is ~16 977 MB and fits. Two machines spent hours
+        chasing that 2.000x as an estimator defect.
+
+        `profile` was accepted and ignored until then. A caller that passes none keeps the old
+        behaviour, since refusing to answer would change plans this has never been asked about.
+        """
+        if profile is not None and profile.devices_support_dtype("bfloat16"):
+            return False
+        for comp in container.get_neural_components():
+            if comp.get_dominant_dtype() == "bfloat16":
+                return True
+        return False
+
+    # =========================================================================
+    # PLAN BUILDING
+    # =========================================================================
+
+    def _build_plan(
+        self, allocations, comp_mem, devices, comp_dtypes, profile: PrismProfile, strategy: str
+    ) -> ExecutionPlan:
+        """Build ExecutionPlan from allocation results."""
+        # GPU profile: use first device's arch/brand. CPU-only profile:
+        # fall back to the CPU's architecture (x86_64, arm64, riscv) and
+        # a generic "cpu" vendor. The factory's `_extract_architecture`
+        # and `_extract_vendor` accept any non-empty string — the values
+        # are used downstream for vendor-specific kernel selection
+        # (which is a no-op on the CPU path that uses PyTorch ATen
+        # native via MKL/oneDNN). R34 generic — no model-specific.
+        if profile.devices:
+            arch = profile.devices[0].architecture
+            vendor = profile.devices[0].brand.value
+        elif profile.cpu:
+            arch = profile.cpu.architecture or "x86_64"
+            vendor = "cpu"
+        else:
+            arch = "x86_64"
+            vendor = "cpu"
+
+        components = {}
+        total_mb = 0.0
+
+        for comp_name, (device_str, shard_map) in allocations.items():
+            mem = comp_mem[comp_name]
+
+            if device_str.startswith("fgp:"):
+                device_list = device_str[4:].split(",")
+                # fgp: prefix is used by both pipeline_parallel and block_scatter
+                comp_strategy = strategy if strategy in ("pipeline_parallel", "block_scatter") else "block_scatter"
+            elif device_str.startswith("tp:"):
+                device_list = device_str[3:].split(",")
+                comp_strategy = "weight_sharding"
+            elif device_str.startswith("zero3:"):
+                # CPU offload with GPU compute — device is the GPU, weights on CPU
+                gpu_device = device_str[6:]
+                device_list = [gpu_device]
+                comp_strategy = "zero3"
+            else:
+                device_list = [device_str]
+                comp_strategy = "single_gpu"
+            memory_mb = mem.total_mb
+            store_mb = self._unified_store_mb(strategy, comp_name, device_str, profile)
+            if store_mb is not None:
+                # `_place_component` Strategy 2.5: held as an expert store, priced at its dense part
+                # and cache floor beside its activations; the cache is granted after the KV cache
+                # (`_zero3_resident_budgets`), which adds it to this figure.
+                comp_strategy = "expert_store"
+                memory_mb = mem.activation_mb + mem.overhead_bytes / (1024 * 1024) + store_mb
+
+            components[comp_name] = ComponentAllocation(
+                name=comp_name,
+                devices=device_list,
+                dtype=comp_dtypes.get(comp_name, "float32"),
+                memory_mb=memory_mb,
+                architecture=arch,
+                vendor=vendor,
+                sharded=len(device_list) > 1,
+                shard_map=shard_map,
+                strategy=comp_strategy,
+            )
+            total_mb += memory_mb
+
+        # Determine loading mode — strategy + serve_mode driven
+        # Eager: weights stay in VRAM permanently (fast serving, near-zero latency)
+        # Lazy: weights swap in/out per execution phase (large models, cold run)
+        #
+        # Serve cold fallback: user asked for serve (hot) but VRAM can't hold all
+        # weights → force lazy mode. The daemon still works, just not near-zero latency.
+        _EAGER_VALUES = {s.value for s in AllocationStrategy if s.is_eager}
+        _LAZY_VALUES = {s.value for s in AllocationStrategy if not s.is_eager}
+
+        if getattr(self, '_serve_cold_fallback', False):
+            # Serve mode degraded to cold: force lazy even if strategy is eager-capable
+            loading_mode = "lazy"
+        elif strategy in _EAGER_VALUES:
+            loading_mode = "eager"
+        elif strategy in _LAZY_VALUES:
+            loading_mode = "lazy"
+        else:
+            total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))
+            loading_mode = "eager" if total_mb <= total_gpu_mb * 0.90 else "lazy"
+
+        if strategy in ("cpu_streaming", "layer_streaming"):
+            # The whole point of these rungs: one component (one segment) resident at a time.
+            # Eager loading would restore the `sum(components)` requirement they exist to avoid,
+            # and a serving session keeps every weight of an eager plan (serving/engine.py) —
+            # `_resident_beside_streamed` prices another phase at nothing BECAUSE this is lazy.
+            # layer_streaming is no AllocationStrategy member, so the rule above decided it from
+            # the summed totals of CUDA devices: lazy on a unified device, eager on a card whenever
+            # the door imposed a rung far enough below it.
+            loading_mode = "lazy"
+
+        # Determine primary dtype
+        primary_dtype = "float16"
+        for dt in comp_dtypes.values():
+            if dt == "float32":
+                primary_dtype = "float32"
+                break
+
+        return ExecutionPlan(
+            components=components,
+            target_dtype=primary_dtype,
+            total_memory_mb=total_mb,
+            strategy=strategy,
+            component_memory=comp_mem,
+            loading_mode=loading_mode,
+            selection_reason=getattr(self, "_selection_reason", ""),
+            candidates=list(getattr(self, "_candidates", [])),
+            rejected=list(getattr(self, "_rejected", [])) + [(n, 0.0, "declined: " + why) for n, why in (getattr(self, "_declined", {}) or {}).items()],
+            estimated_s=(lambda t: t if isinstance(t, float) else None)(
+                dict(getattr(self, "_time_estimates", {}) or {}).get(strategy)),
+            time_estimates=dict(getattr(self, "_time_estimates", {}) or {}),
+            cpu_ram_mb=profile.cpu.ram_mb if profile.cpu else 0,
+            refused_devices=list(getattr(profile, "refused_devices", None) or []),
+        )
+
+    # =========================================================================
+    # UTILITIES
+    # =========================================================================
+
+    def _memory_verdict(self, devices: List[DeviceState]) -> str:
+        """The three numbers a refusal must name: what the device recommends,
+        what the machine has free, what the plan asked for.
+
+        A refusal that names none of them teaches nothing — and being killed
+        at step 3 of 20 in silence is worse than any of them.
+        """
+        lines = []
+        for d in devices:
+            if d.recommended_mb and d.capacity_mb < d.recommended_mb:
+                lines.append(
+                    f"  {d.device_string}: {d.recommended_mb:.0f} MB recommended "
+                    f"by the device, {d.capacity_mb:.0f} MB actually usable "
+                    f"right now")
+            else:
+                lines.append(f"  {d.device_string}: {d.capacity_mb:.0f} MB")
+            host = d.host_memory
+            if host is not None:
+                lines.append(f"    {host.describe()}")
+        return "\n".join(lines) if lines else "  no device was prepared"
+
+    def _empty_plan(self, profile: PrismProfile) -> ExecutionPlan:
+        return ExecutionPlan({}, "float32", 0.0, "empty", {}, "lazy")
+
+    def _fail_error(self, sorted_comps, devices, host_mb: Optional[float] = None):
+        """THE one refusal of a plan for capacity (Hocine Benkelaya, 2026-10-16 18:42): reached only when every exact strategy,
+        down to the last resort on the CPU, cannot run the model; it says so — "This model cannot run on this machine"
+        — with the memory required and the memory available, card and host."""
+        total_req = sum(m.total_mb for _, m in sorted_comps)
+        total_avail = sum(d.capacity_mb for d in devices)
+        comp_info = "\n".join(f"  {n}: {m.total_mb:.0f}MB (W={m.weight_mb:.0f}, A={m.activation_mb:.0f})" for n, m in sorted_comps)
+        dev_info = "\n".join(f"  {d.device_string}: {d.capacity_mb:.0f}MB" for d in devices)
+        # The strategies the cascade actually evaluated (`_evaluate_all_strategies`), not a list
+        # kept by hand: the hand list named part of the cascade and never `layer_streaming`, so
+        # a refusal could not say that streaming was tried, let alone why it declined (the
+        # Mac's 62 weight-over-rung refusals, 4a3658d7; earlier, P-SANA-4KPX-RUNTIME POINT 9).
+        tried = list(self._strategies_tried)
+        tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
+        if getattr(self, "_op_tiling_declined", None):
+            tried_str += f"\n  op_level_tiling declined: {self._op_tiling_declined}"
+        if self._layer_streaming_declined:
+            tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+        # the rungs after the first pass put the solver's state back when they decline: their own reasons, kept
+        for _rung, _why in (getattr(self, "_later_rung_refusals", {}) or {}).items():
+            tried_str += f"\n  layer_streaming with {_rung} declined: {_why}"
+        for _c, _why in (getattr(self, "_arena_declined", {}) or {}).items():
+            tried_str += f"\n  not held whole: {_why}"
+        _why_by_rung = getattr(self, "_tiling_declined_by_rung", {}) or {}
+        for _rung, (_card, _usable, _comps) in (getattr(self, "_host_device_overflow", {}) or {}).items():
+            _why_untiled = _why_by_rung.get(_rung, {})
+            tried_str += (f"\n  {_rung} declined: under the Triton engine a host-placed component computes on "
+                          f"the card, and {_card} cannot hold " + ", ".join(
+                              f"{c}'s activations ({mb:,.0f} MB untiled; "
+                              + (f"no tile: {_why_untiled[c]}" if c in _why_untiled
+                                 else "the tiling engine returned no tile") + ")"
+                              for c, mb in _comps.items())
+                          + f" within its {_usable:,.0f} MB usable — `--compiled` computes it on the host")
+        # The rungs no Triton host line above carries: their components' tiling reasons, each rung's own,
+        # beside the figure it held them to. Those lines exist only where a host placement is sized on
+        # the card; under the compiled engine a component the tiling engine declined went to the host
+        # and the refusal said nothing of the tile it did not get — Allegro-TI2V's re-propagated encoder
+        # at 720x1280, whose time map still folds the batch, was refused with no word of it (2026-10-04).
+        _host_rungs = set(getattr(self, "_host_device_overflow", {}) or {})
+        _figure = getattr(self, "_tiling_rung_figure", {}) or {}
+        for _rung, _whys in _why_by_rung.items():
+            if _rung in _host_rungs or not _whys or _rung not in _figure:
+                continue
+            _card, _usable = _figure[_rung]
+            tried_str += (f"\n  {_rung}: no component tile on {_card} ({_usable:,.0f} MB usable) — "
+                          + "; ".join(f"{c}: {why}" for c, why in _whys.items()))
+        # Reaching here now means REAL impossibility, not a gap in the
+        # cascade. The ladder ends in `cpu_streaming`, which needs only the
+        # LARGEST SINGLE COMPONENT to fit in host RAM; if even that fails
+        # there is nothing left to offer, and saying so is honest rather than
+        # a refusal to try (P-PRISM-NEVER-REFUSE, closed 2026-09-03).
+        peak_mb = max((m.total_mb for _, m in sorted_comps), default=0.0)
+        biggest = max(sorted_comps, key=lambda item: item[1].total_mb)[0] if sorted_comps else "?"
+        # What the solve's tiling engine DID tile, and what it declined and why: a tiled component's
+        # untiled figure is not what binds, and a declined one has no tile count to offer
+        # (`plan_advice.what_would_have_fit`). SANA-Video_2B_720p at 672x1344x81 under Triton on the
+        # 16 GB V100 class was refused naming its vae twice — "largest component: vae at 303099MB" and
+        # "its weights and overhead alone are 16,449 MB" — a vae the same solve had tiled to 5 200 MB per
+        # tile, while the transformer that bound (one block's activations at 155 232 tokens, 18 774 MB
+        # against a 15 072 MB segment) was offered "15 tiles" the tiling engine had declined
+        # (2026-10-04).
+        _tiled_said = {
+            _c: (f"the plan's tiling engine tiles it (tile extent {_t.get('tile_size')}, "
+                 f"{int(_t.get('tiled_activation_bytes') or 0) / (1024 * 1024):,.0f} MB of activations per tile)")
+            for _c, _t in (getattr(self, "_layer_stream_tilings", None) or {}).items()}
+        _untileable: Dict[str, str] = {}
+        for _whys in list(_why_by_rung.values()) + [getattr(self, "_tiling_declined", {}) or {}]:
+            for _c, _why in _whys.items():
+                if _c not in _tiled_said:
+                    # a reason a rung line above already prints is pointed at, not printed twice
+                    _untileable.setdefault(_c, "the tiling engine's reason is stated above" if _why in tried_str
+                                           else _why)
+        _untiled = [(n, m) for n, m in sorted_comps if n not in _tiled_said]
+        if _untiled:
+            biggest, _big = max(_untiled, key=lambda item: item[1].total_mb)
+            _biggest_mb = _big.total_mb
+        else:
+            _biggest_mb = peak_mb
+
+        # "A smaller input" is the remedy this refusal already names and does not
+        # take. It is now COMPUTED: for every component whose ACTIVATIONS are what
+        # overflows, how many tiles the work fits in, and what that is as an input
+        # scale. Measured case handed over from Apple 2026-09-18: real-esrgan-x8 at
+        # 1024 refused at plan time in one second, 17237 MB planned against 12598 MB
+        # available, 16.4 GB of it activations against 32 MB of weights -- and four
+        # tiles then rendered it by hand in 194 s, artefact judged, seam +2.07 sigma.
+        # The budget carries a margin because Prism's own reading of available
+        # memory moved 12598 -> 15248 MB minutes apart on an idle machine, a 21%
+        # swing that would move any band count divided straight out of it.
+        _reshape_block = ""
+        try:
+            from neurobrix.triton.prism import plan_advice as _pa
+            _largest = max((d.capacity_mb for d in devices), default=0.0) * 1024 * 1024
+            _verdicts = [
+                _pa.assess(_n, _m.weight_bytes, _m.activation_bytes,
+                           _m.overhead_bytes, int(_largest))
+                for _n, _m in sorted_comps
+                if _m.weight_bytes < _largest     # tiling cuts activations: offered where the weights fit the card
+            ]
+            _lines = _pa.what_would_have_fit(_verdicts, spatial=True, tiled=_tiled_said,
+                                             untileable=_untileable)
+            if _lines:
+                _reshape_block = ("\n\nWhat tiling would do, computed rather than named:\n"
+                                  + "\n".join(_lines))
+        except Exception as _adv_e:
+            # The refusal must survive its own advice: a model whose memory record
+            # is shaped unexpectedly still gets the refusal it came for, with the
+            # reason the advice could not be computed said rather than swallowed.
+            _reshape_block = f"\n\n(tiling advice unavailable: {_adv_e})"
+        # On a UNIFIED device the host IS the device's memory: no host rung frees a byte the device
+        # does not hold (test_prism_never_offloads_to_host_on_unified_memory), so the last rung is
+        # layer streaming — one segment at a time on the device — and the bound is ITS decline, not
+        # "the largest component whole in host RAM", which no rung there asks for. The headline said
+        # the latter on the Mac's five refusals of 2026-10-04 while the line above it named the
+        # streaming decline that actually bound each one.
+        # Under the TRITON engine a host-placed component computes on the card as well (the host rung's
+        # own decline above says so), so on a discrete card too the last rung that can help is layer
+        # streaming, and ITS decline is the bound — "the largest single component in host RAM" is a
+        # rung the Triton engine does not offer (SANA-Video 672x1344x81 on the 16 GB V100, 2026-10-04).
+        _unified = any(getattr(getattr(d, "spec", None), "has_unified_memory", False) for d in devices)
+        _triton = engine_of(getattr(self, "_mode", None) or "compiled") == "triton"
+        if _unified or _triton:
+            _where = ("On unified memory" if _unified else
+                      "Under the Triton engine every rung computes on the card, the host rungs included, so")
+            _bound = (f"{_where} the last rung streams a component one segment at a time on "
+                      f"the device, and it declined:\n  {self._layer_streaming_declined or 'no reason recorded'}\n"
+                      f"  largest component the plan did not tile: {biggest} at {_biggest_mb:.0f}MB\n\n")
+        else:
+            _bound = (f"The last rung needs only the largest single component to fit in "
+                      f"memory, and it does not:\n"
+                      f"  largest component: {biggest} at {peak_mb:.0f}MB\n\n")
+        raise RuntimeError(
+            f"This model cannot run on this machine.\n\n"
+            f"Every strategy was tried, down to streaming one component at a "
+            f"time from disk:\n  {tried_str}\n\n"
+            f"{_bound}"
+            f"Components:\n{comp_info}\n\n"
+            f"Total required: {total_req:.0f}MB\n\n"
+            f"GPUs:\n{dev_info}\n\n"
+            f"Total GPU available: {total_avail:.0f}MB\n"
+            + (f"Host RAM available to the last rung: {host_mb:.0f}MB\n\n" if host_mb else "\n") +
+            f"What would make it run:\n"
+            + (f"  1. More memory — the streaming path above says what it lacked\n" if (_unified or _triton) else
+               f"  1. More host RAM — the streaming path needs {peak_mb:.0f}MB for that one component\n") +
+            f"  2. A GPU with more memory\n"
+            f"  3. A smaller input (resolution, batch, context)\n"
+            f"  4. A smaller model"
+            f"{_reshape_block}"
+        )
+
+    def _print_summary(self, devices: List[DeviceState], plan: ExecutionPlan, profile: PrismProfile):
+        """Print allocation summary."""
+        pass
+
+
+# =============================================================================
+# IMPORT PLANNING (for NBX Importer)
+# =============================================================================
+
+@dataclass
+class ImportPlan:
+    """Plan for ONNX export (always CPU - GPU provides no benefit for symbolic building)."""
+    device: str
+    can_load: bool
+    reason: str
+
+
+class PrismImportPlanner:
+    """Hardware planning for NBX Import phase. ONNX export is symbolic - always uses CPU."""
+
+
+# =============================================================================
+# CONVENIENCE FUNCTION
+# =============================================================================
+
+def plan_record(plan: "ExecutionPlan") -> dict:
+    """The plan as a client reads it — the same fields `explain_plan` prints,
+    read from the plan and never recomputed, so the record is what will run."""
+    comps = []
+    for name, alloc in plan.components.items():
+        mem = plan.component_memory.get(name)
+        entry = {"name": name, "devices": list(getattr(alloc, "devices", None) or [str(getattr(alloc, "device", ""))]),
+                 "dtype": getattr(alloc, "dtype", None), "sharded": bool(getattr(alloc, "sharded", False))}
+        if getattr(alloc, "strategy", None) == "zero3":
+            entry["zero3_resident_weight_mb"] = float(alloc.resident_weight_mb)
+        if getattr(alloc, "strategy", None) == "expert_store":
+            entry["expert_store"] = {"resident_weight_mb": float(alloc.resident_weight_mb),
+                                     "expert_cache_mb": float(alloc.expert_cache_mb),
+                                     "expert_files": bool(getattr(alloc, "expert_files", False))}
+        if getattr(alloc, "attention_scores_budget_bytes", None) is not None:
+            entry["attention_scores_budget_bytes"] = int(alloc.attention_scores_budget_bytes)
+        if mem is not None:
+            entry.update({"weight_bytes": int(mem.weight_bytes), "activation_bytes": int(mem.activation_bytes),
+                          "overhead_bytes": int(mem.overhead_bytes), "peak_op_uid": mem.peak_op_uid or None,
+                          "activation_profiled": bool(mem.activation_profiled)})
+        comps.append(entry)
+    rec = {"strategy": plan.strategy, "loading_mode": plan.loading_mode, "dtype": plan.target_dtype,
+           "why": plan.selection_reason or None,
+           "candidates": [{"strategy": n, "score": float(sc)} for n, sc in (plan.candidates or [])],
+           "estimated_s": getattr(plan, "estimated_s", None),
+           "time_estimates": dict(getattr(plan, "time_estimates", None) or {}),
+           "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
+           "execution_door": getattr(plan, "execution_door", None),
+           "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
+           "device_window_mb": (float(plan.device_window_mb) if plan.device_window_mb is not None else None),
+           "deferred_drain_cliffs": dict(getattr(plan, "deferred_drain_cliffs", None) or {}),
+           "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
+           "conv3d_chunks": {c: list(getattr(p, "conv3d_chunks", []) or [])
+                             for c, p in (plan.runtime_op_tiling or {}).items()
+                             if getattr(p, "conv3d_chunks", None)},
+           # Which ops each component's op-level tiling cuts — the plan's own decision, which the
+           # executor wires as interceptors and the widths pass reads (`TilingView`).
+           "op_level_tiling_ops": {
+               cn: {"fusion_pairs": sorted([str(u), str(c), int(tf)] for u, c, tf in getattr(tp, "fusion_pairs", []) or []),
+                    "tiled_ops": sorted([str(u), int(tf)] for u, _t, tf in getattr(tp, "tiled_ops", []) or []),
+                    # a band-streamed residual chain: its ops, the bands' count, the halo rows and the axis's extent —
+                    # the census derives its convs' keys at every band height from them (one geometry function)
+                    "residual_chains": sorted([[str(u) for u in sp.get("chain_uids", [])], int(sp.get("tile_factor", 1)),
+                                               int(sp.get("halo", 0)), int((sp.get("shape") or [0, 0, 0, 0])[int(sp.get("spatial_axis", 2))])]
+                                              for sp in getattr(tp, "residual_chains", []) or [])}
+               for cn, tp in (plan.runtime_op_tiling or {}).items()},
+           "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
+                                for k, v in (plan.component_tiling or {}).items()},
+           "tiling_exactness": {k: dict(v) for k, v in (getattr(plan, "tiling_exactness", None) or {}).items()},
+           "component_stream": {k: dict(v) for k, v in (getattr(plan, "component_stream", None) or {}).items()},
+           "stream_declined": dict(getattr(plan, "stream_declined", None) or {})}
+    if plan.kv_cache_plan is not None:
+        kv = plan.kv_cache_plan
+        rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype,
+                           "num_layers": getattr(kv, "num_layers", None),
+                           "num_kv_heads": getattr(kv, "num_kv_heads", None),
+                           "k_head_dim": getattr(kv, "k_head_dim", None),
+                           "v_head_dim": getattr(kv, "v_head_dim", None),
+                           "session_reach": getattr(kv, "session_reach", None),
+                           "prefill_chunk": getattr(kv, "prefill_chunk", None),
+                           "prefill_chunk_reason": getattr(kv, "prefill_chunk_reason", "")}
+    if plan.cfg_split_components:
+        rec["cfg_split_components"] = list(plan.cfg_split_components)
+    if getattr(plan, "batch_split_components", None):
+        rec["batch_split_components"] = {k: dict(v) for k, v in plan.batch_split_components.items()}
+    if getattr(plan, "layer_stream_chunks", None):
+        rec["layer_stream_chunks"] = {k: [dict(c) for c in v] for k, v in plan.layer_stream_chunks.items()}
+    if getattr(plan, "layer_stream_swapped", None):
+        rec["layer_stream_swapped"] = list(plan.layer_stream_swapped)
+    if getattr(plan, "layer_stream_resident", None):
+        rec["layer_stream_resident"] = {k: list(v) for k, v in plan.layer_stream_resident.items()}
+    if plan.host_footprint:
+        rec["host_footprint"] = dict(plan.host_footprint)
+    if getattr(plan, "refused_devices", None):
+        rec["refused_devices"] = [dict(d) for d in plan.refused_devices]
+    if plan.unified_rungs_tried:
+        rec["unified_rungs_tried"] = [list(t) for t in plan.unified_rungs_tried]
+    if getattr(plan, "expert_working_set", None):
+        rec["expert_working_set"] = dict(plan.expert_working_set)
+    return rec
+
+
+def explain_plan(plan: "ExecutionPlan") -> str:
+    """The placement plan as a user reads it: what was chosen, why, what it beat,
+    what was refused, and where every component lands with its memory.
+
+    Asked for by an external evaluator (2026-09-12): a strategy name alone does
+    not say whether the engine decided well. Everything here is read from the
+    plan — nothing is recomputed, so what is printed is what will run.
+    """
+    lines = [f"strategy        {plan.strategy}   (loading: {plan.loading_mode}, dtype: {plan.target_dtype})"]
+    lines.append(f"why             {plan.selection_reason or 'no reason recorded — the solver did not score this plan'}")
+    if plan.time_estimates:
+        lines.append("estimated       " + (f"{plan.estimated_s:.3g} s" if plan.estimated_s is not None else "not estimated")
+                     + "  (" + "  ".join(f"{n}={v:.3g}s" if isinstance(v, float) else f"{n}=?" for n, v in plan.time_estimates.items()) + ")")
+    if plan.candidates:
+        lines.append("candidates      " + "  ".join(f"{n}={sc:.0f}" for n, sc in plan.candidates)
+                     + "   (every strategy that fitted, best first, by estimated throughput)")
+    else:
+        lines.append("candidates      none recorded")
+    for name, sc, why in plan.rejected:
+        lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
+    for d in getattr(plan, "refused_devices", None) or []:
+        lines.append(f"device refused  {d['model']} ({d.get('pci_id') or d.get('brand')}"
+                     + (f", {d['platform']}" if d.get("platform") else "")
+                     + (", integrated" if d.get("integrated") else "") + f"): {d['refused']}")
+    if getattr(plan, "execution_door", None):
+        lines.append(f"door            the memory free NOW is below this plan — a run re-plans on it (refused only if "
+                     f"no plan fits): {plan.execution_door}")
+    lines.append(f"planned memory  {plan.total_memory_mb:.0f} MB on the cards"
+                 + (f", {plan.cpu_ram_mb} MB of host RAM budget" if plan.cpu_ram_mb else ""))
+    if plan.host_footprint:
+        from neurobrix.triton.prism.host_footprint import summary as _host_summary
+        lines.append(f"host memory     {_host_summary(plan.host_footprint)}")
+    for name, alloc in plan.components.items():
+        mem = plan.component_memory.get(name)
+        where = ", ".join(alloc.devices) if getattr(alloc, "devices", None) else str(alloc.device)
+        detail = ""
+        if mem is not None:
+            detail = (f"  weights {mem.weight_bytes / 2**20:.0f} MB + activations {mem.activation_bytes / 2**20:.0f} MB"
+                      + f" + overhead {mem.overhead_bytes / 2**20:.0f} MB"
+                      + (f"; the allocator's replay holds {mem.held_peak_bytes / 2**20:.0f} MB at its peak"
+                         + (f" (the pool x{mem.pool_ratio:.3f} over the walk)" if mem.pool_ratio is not None else "")
+                         if getattr(mem, "held_peak_bytes", None) is not None else "")
+                      + (f"  (peak at {mem.peak_op_uid})" if mem.peak_op_uid else "")
+                      + ("" if mem.activation_profiled else "  [activations estimated, not profiled]"))
+        shard = "  sharded" if getattr(alloc, "sharded", False) else ""
+        lines.append(f"  {name:<20} -> {where}{shard}{detail}")
+        if getattr(alloc, "strategy", None) == "zero3":
+            lines.append(f"  {'':<20}    zero3: weights on the host, {alloc.resident_weight_mb:.0f} MB of them "
+                         f"kept resident on {alloc.device} across passes, the rest streamed per pass")
+        if getattr(alloc, "strategy", None) == "expert_store":
+            lines.append(f"  {'':<20}    expert store: the dense {alloc.resident_weight_mb:.0f} MB resident on "
+                         f"{alloc.device}, routed experts on the host through a {alloc.expert_cache_mb:.0f} MB "
+                         f"expert cache")
+    if plan.cfg_split_components:
+        lines.append(f"guidance        {', '.join(plan.cfg_split_components)}: [uncond, cond] run one pass "
+                     f"each (the reason is the plan's why)")
+    for _cn, _bs in sorted((getattr(plan, "batch_split_components", None) or {}).items()):
+        lines.append(f"passes          {_cn}: its {_bs['fed']} independent items run {_bs['per_pass']} per pass, as its "
+                     f"vendor's reference does (the container's declaration); priced at {_bs['per_pass']}")
+    for _cn, _chunks in sorted((getattr(plan, "layer_stream_chunks", None) or {}).items()):
+        for _c in _chunks:
+            lines.append(f"sliced          {_cn} {_c['first_op']}..{_c['last_op']}: {_c['count']} slices of "
+                         f"{_c['slice']} along {_c['symbol']}, {_c['passes']} pass(es), "
+                         f"{_c['peak_bytes'] / 2**20:.0f} MB live at worst")
+    _ews = getattr(plan, "expert_working_set", None)
+    if _ews:
+        for _c in _ews["components"]:
+            lines.append(f"experts         {_c['component']}: {_c['routed_layers']} routed layers, top {_c['top_k']} "
+                         f"of {_c['n_experts']}, {_c['expert_mb']} MB per expert, shared "
+                         f"{_c['shared_experts'] if _c['shared_experts'] is not None else 'undeclared'} "
+                         f"({_c['shared_expert_mb_per_layer']} MB per layer)")
+        lines.append(f"working set     {_ews['working_set_mb']:.0f} MB of {_ews['dense_equivalent_mb']:.0f} MB dense: "
+                     f"dense part {_ews['dense_mb']:.0f} + active experts {_ews['active_experts_mb']:.0f} + "
+                     f"expert cache {_ews['expert_cache_mb']:.0f} ({_ews['cached_experts_per_layer']} more per "
+                     f"layer, on {_ews['rung_source']}) — stated, not used to place")
+    if plan.kv_cache_plan is not None:
+        kv = plan.kv_cache_plan
+        lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
+        lines.append(f"kv session      reach {kv.session_reach if kv.session_reach is not None else 'none stated'}, "
+                     f"prefill chunk {kv.prefill_chunk if kv.prefill_chunk else 'one per turn'} — "
+                     f"{kv.prefill_chunk_reason or 'no reason recorded'}")
+    for _dev, _cliff in sorted((getattr(plan, "deferred_drain_cliffs", None) or {}).items()):
+        lines.append(f"drain cliff     {_dev}: the Triton hot loop drains its dead tensors at "
+                     f"{_cliff / 2**20:.0f} MB queued")
+    if plan.margin_mb:
+        lines.append(f"margin          {plan.margin_mb} MB held back per card"
+                     + (f"  ({plan.margin_reason})" if plan.margin_reason else ""))
+    if plan.runtime_op_tiling:
+        # WHAT it tiles, not merely THAT it does. This line named the component
+        # and stopped, so a plan that tiled two ops and a plan that tiled two
+        # hundred printed the same four words -- and when `real-esrgan-x8` died
+        # at `aten.convolution::350` with `op-level tiling model` on the plan,
+        # the plan could not say whether that conv was in it. A rendering that
+        # cannot distinguish the working case from the broken one is the same
+        # silence as no rendering.
+        for _cname in sorted(plan.runtime_op_tiling):
+            _p = plan.runtime_op_tiling[_cname]
+            _parts = []
+            for _label, _attr in (("fused upsample+conv", "fusion_pairs"),
+                                  ("tiled ops", "tiled_ops"),
+                                  ("in-place adds", "inplace_adds"),
+                                  ("in-place activations", "inplace_unary"),
+                                  ("residual chains", "residual_chains")):
+                _v = getattr(_p, _attr, None)
+                if _v:
+                    _parts.append(f"{len(_v)} {_label}")
+            lines.append(f"op-level tiling {_cname}: "
+                         + (", ".join(_parts) if _parts else "nothing planned"))
+            for _u, _c, _f in (getattr(_p, "fusion_pairs", None) or [])[:6]:
+                lines.append(f"                  fuse {_u} -> {_c} in {_f} tiles")
+            for _u, _t, _f in (getattr(_p, "tiled_ops", None) or [])[:8]:
+                lines.append(f"                  tile {_u} ({_t}) in {_f} bands")
+    for name, spec in (plan.component_tiling or {}).items():
+        short = {k: v for k, v in spec.items() if not isinstance(v, (dict, list))} if isinstance(spec, dict) else spec
+        lines.append(f"component tiling {name}: {short}")
+    for name, spec in (getattr(plan, "component_stream", None) or {}).items():
+        lines.append(f"temporal stream {name}: chunks {spec.get('schedule')} of {spec.get('frames')} frames, "
+                     f"reference {spec.get('reference')}, {spec.get('states')} states"
+                     + (" parked on the host between chunks" if spec.get("park_states") else ""))
+    for name, why in (getattr(plan, "stream_declined", None) or {}).items():
+        lines.append(f"temporal stream {name}: not run — {why}")
+    if not plan.runtime_op_tiling and not plan.component_tiling:
+        lines.append("tiling          none planned")
+        # WHY, not just "none". `_op_tiling_declined` was assigned in three
+        # places and read in NONE, so the rung's reason existed only for
+        # whoever thought to wrap the method from outside and look — which is
+        # exactly what the Mac had to do. A reason nobody can read is the same
+        # silence as no reason at all, and this file catalogues that family.
+        _why = getattr(plan, "op_tiling_declined", None)
+        if _why:
+            lines.append(f"                the tiling rung declined: {_why}")
+    return "\n".join(lines)
+

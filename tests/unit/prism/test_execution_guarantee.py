@@ -190,11 +190,11 @@ def test_the_one_refusal_names_the_card_and_the_host_memory():
 
 
 def test_the_capacity_refusal_is_raised_from_one_place_only():
-    """One place emits "cannot run on this machine" (`PrismSolver._fail_error`): a second would be a refusal above the
-    bottom of the ladder."""
+    """One place PER BRANCH emits "cannot run on this machine" (`PrismSolver._fail_error`, in each branch's own Prism,
+    RED_LINES line 16): a second in one branch would be a refusal above the bottom of the ladder."""
     import pathlib
     src = pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix"
     raised = 'f"This model cannot run on this machine.'      # the message as raised (comments may name it)
     sites = [(str(p.relative_to(src)), p.read_text(errors="replace").count(raised)) for p in src.rglob("*.py")
              if raised in p.read_text(errors="replace")]
-    assert sites == [("pytorch/prism/solver.py", 1)], sites
+    assert sorted(sites) == [("pytorch/prism/solver.py", 1), ("triton/prism/solver.py", 1)], sites

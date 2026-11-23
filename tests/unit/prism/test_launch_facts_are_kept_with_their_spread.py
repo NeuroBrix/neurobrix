@@ -70,10 +70,12 @@ def test_the_reader_s_width_is_kept_and_the_next_launch_starts_there(hw, monkeyp
     from neurobrix.core import workspace as W
     monkeypatch.setattr(W, "_READER", None)
     monkeypatch.setattr(W, "_LOAD_CEILING", 32)
-    monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-one")
+    for side in ("pytorch", "triton"):                  # the reader asks the Prism of the branch that runs
+        monkeypatch.setattr(f"neurobrix.{side}.prism.autodetect.ACTIVE_HARDWARE_ID", "default-one")
+        monkeypatch.setattr(f"neurobrix.{side}.prism.autodetect.HARDWARE_DIR", hw)
     r = W.weight_reader(hw)
     assert r.width == 8 and r.measured()["start"] == 8
-    src = (Path(A.__file__).parents[1] / "runtime" / "graph_executor.py").read_text()
+    src = (Path(A.__file__).parents[2] / "core" / "runtime" / "graph_executor.py").read_text()
     assert "kept_launch_facts.note_weight_load(engine, nbx_path, component, where, landed, seconds)" in src
 
 

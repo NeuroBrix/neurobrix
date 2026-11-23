@@ -28,6 +28,7 @@ import os
 import threading
 from typing import List, Any, Dict, Optional, Set
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 _RECORD_LOCK = threading.Lock()
@@ -367,7 +368,7 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
     """
     if profile is None and hardware:
         import yaml
-        from neurobrix.pytorch.prism.loader import profile_path
+        profile_path = _branch_door.names("prism", "loader", "profile_path")[0]
         path = profile_path(hardware)
         if not path.exists():
             raise RuntimeError(f"census: the hardware profile {hardware!r} is not at {path}; the shadow cannot choose a vendor profile")

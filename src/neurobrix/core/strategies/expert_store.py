@@ -30,6 +30,7 @@ from typing import Any, Dict, Set
 
 from neurobrix.core.runtime.expert_residency import FUSED_OP, ExpertResidency, routed_layers
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 #: The component strategy name, as Prism writes it into the plan.
@@ -186,7 +187,7 @@ def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any
     seq._expert_cards = executor._expert_cards = None
     if not cards:
         return []
-    from neurobrix.pytorch.prism.expert_topology import _block_of
+    _block_of = _branch_door.names("prism", "expert_topology", "_block_of")[0]
     from neurobrix.core.device_utils import _parse_device
     tensors = (getattr(executor, '_dag', None) or {}).get('tensors') or {}
     owner: Dict[int, str] = {}

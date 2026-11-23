@@ -1,0 +1,1649 @@
+"""Cut a component into segments that each fit a memory budget.
+
+WHY THIS EXISTS
+
+The strategy cascade's last rung, `cpu_streaming`, streams one COMPONENT at
+a time. That is the finest grain it has, and it is not fine enough: measured
+2026-09-09, `DeepSeek-Coder-V2-Lite-Instruct` is a single `model` component
+whose live weights are 17777 MB, and no rung below the component exists. A
+model larger than the budget in ONE component has nowhere to go.
+
+This module supplies the missing grain. It answers one question — where can
+this graph be cut so that each piece's weights fit — and it answers it from
+DATAFLOW.
+
+HOW THE BOUNDARIES ARE FOUND
+
+Not from a list of layer types. Not from `parent_module`, which every graph
+carries and which would make this module a catalogue of other people's
+naming conventions. The only inputs are:
+
+  * `execution_order`  — the topological order the engine replays
+  * each op's `input_tensor_ids` / `output_tensor_ids`
+  * `tensors[tid]["is_parameter"]` and its shape/dtype
+
+A cut between two ops costs whatever must survive it: the activations
+produced at or before the cut and consumed after it. For a stack of repeated
+blocks those minima fall between blocks — but nothing here needs to know
+that, and a graph shaped some other way is cut wherever ITS minima are.
+
+WHAT IT REFUSES
+
+A single op whose own weights exceed the budget cannot be served by cutting,
+because a cut cannot run half an op. That is a real impossibility and it is
+reported with its arithmetic rather than approximated.
+"""
+
+from __future__ import annotations
+
+import os
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
+
+from nbxtensor.dtype import itemsize as _itemsize
+from nbxtensor.shape import numel as _numel
+
+
+def tensor_bytes(tensor: Dict[str, Any]) -> Optional[int]:
+    """Bytes for one tensor, or None when the graph does not say.
+
+    A symbolic or negative dimension means the size is not known: None says
+    so. The width is the dtype table's (config/dtypes.yml); a dtype it does
+    not carry is refused by name, never guessed.
+    """
+    n = 1
+    for dim in (tensor.get("shape") or []):
+        if not isinstance(dim, int) or dim < 0:
+            return None
+        n *= dim
+    return n * _itemsize.itemsize(tensor.get("dtype"))
+
+
+@dataclass
+class Segment:
+    """One streamable piece of a component."""
+    index: int
+    first_op: str
+    last_op: str
+    op_count: int
+    weight_names: Set[str] = field(default_factory=set)
+    weight_bytes: int = 0
+    live_bytes_at_exit: int = 0
+
+    @property
+    def weight_mb(self) -> float:
+        return self.weight_bytes / (1024 * 1024)
+
+
+@dataclass
+class Partition:
+    """What the whole component costs when streamed this way."""
+    segments: List[Segment]
+    total_weight_bytes: int
+    peak_resident_bytes: int
+    peak_live_bytes: int
+    refusal: Optional[str] = None
+    #: The stretches run in slices of a token axis (`LayerPartitioner._chunk_regions`), each one
+    #: segment of its own: {"first_op", "last_op", "symbol", "slice", "count", "passes",
+    #: "peak_bytes"}. Empty when every piece runs whole — every plan before this brick.
+    chunks: List[Dict[str, Any]] = field(default_factory=list)
+    #: The values between pieces wait on the HOST (`LayerPartitioner._greedy_swapped`): a piece holds on
+    #: the device its weights, the inputs it reads and what it produces; the strategy parks every other
+    #: value (`LayerStreamingStrategy._run_pieces`). False: every value stays on the device.
+    swapped: bool = False
+    #: The pieces held loaded BETWEEN the component's runs (`LayerPartitioner.hybrid`), by index: loaded at its first
+    #: run, released with the component. Every other piece streams through the window. Empty: every piece streams.
+    resident: List[int] = field(default_factory=list)
+
+    @property
+    def fits(self) -> bool:
+        return self.refusal is None
+
+
+class LayerPartitioner:
+    """Partition one component graph into budget-sized segments."""
+
+    def __init__(self, graph: Dict[str, Any],
+                 weight_sizes: Optional[Dict[str, int]] = None,
+                 symbol_map: Optional[Dict[str, int]] = None,
+                 compute_dtype_bytes: Optional[int] = None,
+                 widths: Optional[Dict[str, int]] = None,
+                 token_split: bool = False, swap_values: bool = False, beyond_walls: bool = False,
+                 op_extra: Optional[Dict[str, int]] = None, activation_factor: float = 1.0):
+        self._dag = graph
+        # What the engine's allocator holds over the walked activations while a piece runs: the Triton arena and its
+        # pool park freed blocks inside segments that still hold a live one (`memory.triton_arena_activation_factor`,
+        # the device's measured fact, passed by the solver under the Triton engines — the rule a component held whole
+        # is priced by, `PrismSolver._live_activation_mb`); 1.0 under the compiled engine, whose pieces hold no arena.
+        # Wan2.2-I2V-A14B triton V100-16GB: its first piece, cut on the walk alone, refused a 731 MB attention with
+        # 614 MB parked in 6 blocks the pool could not return (2026-10-28).
+        self._activation_factor = float(activation_factor)
+        # {op uid: bytes} an op holds WHILE it runs beside its inputs and outputs, priced by the solver at the request
+        # (`PrismSolver._conv_band_bytes`: a band-streamed conv's largest band — its input buffer and output — beside
+        # its whole output): added to that op's figure on the op peak curve, as the activation walk adds it.
+        self._op_extra = dict(op_extra or {})
+        # Whether a stretch may enclose its same-axis neighbour and keep its slice-only inputs on the host
+        # (`_new_region`, `_fit_slice`): the solver's last stretch rung, after the parked rung declined —
+        # every plan the cuts before it make is the one it was.
+        self._beyond = bool(beyond_walls)
+        # Whether a refusal on what the pieces hold may be answered by parking the values between pieces
+        # on the host (`_greedy_swapped`). The solver turns it on only once the cuts that move nothing
+        # have refused: a parked value crosses the host link twice.
+        self._swap = bool(swap_values)
+        # Whether a refusal on the activations may be answered by running a stretch of the graph in
+        # slices of a token axis (`_chunk_regions`). The solver turns it on only once the cuts that
+        # cost nothing — between ops, and the guidance branches one pass each — have refused: a
+        # sliced stretch recomputes what its later passes read.
+        self._token_split = bool(token_split)
+        # Tensors the runtime keeps past their last reader (the strategy's protected ids): a sliced
+        # stretch must hand them out whole.
+        self.protected: FrozenSet[str] = frozenset()
+        self._axes: Dict[str, Any] = {}
+        self._op_syms: Optional[Dict[str, Any]] = None
+        self._pass_peak_memo: Dict[Tuple[Tuple[str, ...], str, int], int] = {}
+        self._regions_used: Optional[Tuple[List["_Region"], int]] = None
+        self.tensors: Dict[str, Any] = graph.get("tensors") or {}
+        self._weight_views: Optional[Dict[str, Tuple[str, List[str]]]] = None
+        # Activations are sized AT THE REQUEST when the caller gives the request's symbol map: the
+        # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
+        # the same numbers Prism's placement estimate uses. Without it a tensor's `shape` is the
+        # BUILD's — SANA-Video's VAE input [1,128,9,14,22] where a 1280x512 request makes
+        # 21x64x160, ~77x more — and every segment was cut for the build, not the run (the same
+        # bug written twice: the profiler already resolved it). No map = the build, said so by
+        # the caller's absence of one, as before.
+        self._symbol_map = symbol_map
+        self._compute_dtype_bytes = compute_dtype_bytes
+        # {tensor_id: bytes per element} each activation is EXECUTED at (triton/prism/runtime_widths),
+        # the width the placement estimate prices it at — a segment is cut at what the plan pays
+        self._widths = widths or {}
+        self._resolver = None
+        if symbol_map is not None:
+            if compute_dtype_bytes is None:
+                raise ValueError("ZERO FALLBACK: sizing at a request needs the plan's compute dtype width")
+            from neurobrix.triton.prism.profiler import ActivationProfiler
+            self._resolver = ActivationProfiler(graph)
+        self.ops: Dict[str, Any] = graph.get("ops") or {}
+        self.order: List[str] = list(graph.get("execution_order") or [])
+        # Authoritative sizes when the caller has the weights index; the
+        # graph's own shape/dtype otherwise. The index wins because it
+        # records what is STORED, which is what a load actually costs.
+        self.weight_sizes = weight_sizes or {}
+        # an op's operand casts (`ExecutedWidths.casts`), at THIS partitioner's symbols: a pass's sub-partitioner sizes
+        # them at its slice. Sana_1600M_4Kpx native, M4 Pro, 2026-11-06: conv::62's fp32 input cast asked 4.00 GiB the
+        # sliced stretch had not priced (12.9 GB priced, ~19 GiB held), and the run died there.
+        casts = (getattr(self._widths, "casts", None) if self._resolver is not None else None) or {}
+        for uid, pairs in casts.items():
+            self._op_extra[uid] = self._op_extra.get(uid, 0) + sum(
+                _numel(self._resolver._resolve_shape(self.tensors.get(t) or {}, symbol_map)) * int(w) for t, w in pairs)
+
+    def _activation_bytes(self, tid: str, t: Dict[str, Any]) -> int:
+        if self._resolver is None:
+            return tensor_bytes(t) or 0
+        # the width by the tensor's id in the graph — its key, which an entry need not repeat inside it
+        if tid in self._widths:
+            return _numel(self._resolver._resolve_shape(t, self._symbol_map)) * int(self._widths[tid])
+        return self._resolver._compute_size(self._resolver._resolve_shape(t, self._symbol_map), t)
+
+    # -- dataflow ---------------------------------------------------------
+
+    def _last_use(self) -> Dict[str, int]:
+        """tensor id -> index of the op after which it is dead: the PROFILER's liveness
+        (`profiler.dag_last_uses`), one rule for both walks of the same graph. This copy recorded
+        consumers only, so an output no op reads (a layer norm's statistics, an attention's
+        log-sum-exp, a RoPE `copy_` result) was never freed and the curve climbed to the last op:
+        Wan2.2-I2V-A14B's transformer at 480x832x81, 108 800 MB of "activations alone" (the Mac's
+        refusal, 2026-10-04); this rule prices 7 737 MB."""
+        from neurobrix.triton.prism.profiler import dag_last_uses
+        index = {uid: i for i, uid in enumerate(self.order)}
+        return {tid: index[uid] for tid, uid in dag_last_uses(self._dag).items() if uid in index}
+
+    def live_activation_curve(self) -> List[int]:
+        """Bytes of activation alive after each op in the order.
+
+        This is the cost of cutting THERE, and its minima are where the
+        graph comes apart. The liveness is the profiler's (`dag_last_uses`): a graph output is
+        never freed, and a stride-0 broadcast view allocates nothing (`ZERO_ALLOC_OP_TYPES`).
+
+        The transpose of a WEIGHT keeps its bytes on this curve, though the placement estimate
+        prices it at zero on the Triton engines (`profiler.weight_transposes_read_in_place`: the
+        contraction reads the view in place). Here the figure is the cost of a CUT: between the
+        transpose and the contraction that reads it, a seam would carry the weight out of the
+        piece that loaded it. Its bytes on the curve are what keeps that seam from looking free.
+        """
+        if getattr(self, "_curve_memo", None) is not None:
+            return list(self._curve_memo)
+        self._walk_liveness()
+        return list(self._curve_memo)
+
+    def op_peak_curve(self) -> List[int]:
+        """Bytes of activation alive WHILE each op runs: what was live before it plus the outputs it
+        allocates, its inputs not yet freed — the profiler's rule (`estimate_peak_memory`: allocate,
+        record the peak, then free). This is what a piece must RESERVE; `live_activation_curve` is
+        what a CUT carries, and its maximum is not the peak.
+
+        The two differ by the op's inputs at their last use: an FFN's activation reads the
+        projection's output and writes one of the same size, both alive while it runs. Reserving the
+        after-op figure, layer streaming priced Allegro's transformer at its derived request on a
+        16 GB V100 (guidance batch 2, 720x1280, 88 frames) at 7 012 MB of activations where the
+        profiler prices 12 541 — the gelu's [2, 79 200, 9 216] fp32 input and output, 5 569 MB each,
+        counted once — and the Triton run died at aten.gelu::16 asking 5 569 MB with 11 050 MB live
+        (split16, 2026-10-05).
+
+        A view (`profiler.VIEW_OP_TYPES`, the profiler's own rule) allocates nothing while it runs:
+        its output IS its input's storage, so its in-op figure is the live set before it. Counted as a new buffer, Ming-Lite-Omni-1.5's
+        vision tower on the busy Mac read 9 878 MB at an `_unsafe_view` of a 4 420 MB bmm output —
+        the same buffer twice — and the plan that streams it was refused."""
+        if getattr(self, "_op_peak_memo", None) is None:
+            self._walk_liveness()
+        return list(self._op_peak_memo)
+
+    def _walk_liveness(self) -> None:
+        """One walk of the order, filling both curves (`live_activation_curve`, `op_peak_curve`)."""
+        from neurobrix.triton.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
+        last = self._last_use()
+        outputs = set(self._dag.get("output_tensor_ids") or [])
+        curve, during, live = [], [], 0
+        # Only what has been ADDED can be freed. Subtracting every input at
+        # its last use freed the graph's own inputs too — tensors no op
+        # produced — and drove the curve negative, reporting a peak of 0 on a
+        # graph whose activations were 64 MB. A live set, not a running total.
+        alive: Dict[str, int] = {}
+        for i, op_uid in enumerate(self.order):
+            op = self.ops.get(op_uid) or {}
+            zero = op.get("op_type") in ZERO_ALLOC_OP_TYPES
+            before = live
+            for tid in op.get("output_tensor_ids") or []:
+                t = self.tensors.get(tid)
+                if t is not None and not t.get("is_parameter") and tid not in alive:
+                    alive[tid] = 0 if zero else self._activation_bytes(tid, t)
+                    live += alive[tid]
+            during.append((before if op.get("op_type") in VIEW_OP_TYPES else live) + self._op_extra.get(op_uid, 0))
+            # Every tensor dead after this op: its inputs at their last use and its own outputs
+            # no op reads.
+            for tid in list(op.get("input_tensor_ids") or []) + list(op.get("output_tensor_ids") or []):
+                if tid in alive and last.get(tid) == i and tid not in outputs:
+                    live -= alive.pop(tid)
+            curve.append(live)
+        # the graph, the request and the widths are fixed at construction, and the parked-change
+        # search (`partition`) cuts again many times over the same curve
+        self._curve_memo = list(curve)
+        self._op_peak_memo = list(during)
+
+    def _op_weight_names(self, op_uid: str) -> Set[str]:
+        names: Set[str] = set()
+        if self._weight_views is None:
+            self._weight_views = weight_views(self._dag)
+        for tid in (self.ops.get(op_uid) or {}).get("input_tensor_ids") or []:
+            # a view of weights alone is made in the reading piece from its weights (`weight_views`)
+            for root in (self._weight_views[tid][1] if tid in self._weight_views else [tid]):
+                t = self.tensors.get(root)
+                if t is not None and t.get("is_parameter"):
+                    names.add(t.get("weight_name") or root)
+        return names
+
+    def _bytes_for(self, name: str) -> int:
+        if name in self.weight_sizes:
+            return int(self.weight_sizes[name])
+        # fall back to the graph's own description of that parameter
+        for tid, t in self.tensors.items():
+            if t.get("is_parameter") and (t.get("weight_name") or tid) == name:
+                return tensor_bytes(t) or 0
+        return 0
+
+    # -- the partition ----------------------------------------------------
+
+    def partition(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
+                  parked_cap_bytes: Optional[float] = None,
+                  pool_fit_slack: Optional[float] = None) -> Partition:
+        """The cut `_greedy` takes, held to `budget_bytes` at every piece CHANGE as well when the
+        allocator parks a freed arena (`parked_cap_bytes`; None: it parks nothing the next load
+        cannot take back, the plan is the greedy one).
+
+        A piece's arena freed into the Triton allocator's pool stays allocated, parked, when it is
+        at most the pool's cap (`DeviceAllocator.free`, `memory.alloc_pool_parked_cap_fraction` of
+        the device; `math.inf` where the cap is unbounded), and the next piece's arena takes it back
+        only when it lies in [w, (1 + s) w] of that request (`_pool_take`; s = `pool_fit_slack`, the profile's
+        `memory.alloc_pool_fit_slack_fraction`, required with `parked_cap_bytes`). A discrete card's driver
+        refuses an allocation it cannot serve and the pool is flushed and the request retried; a
+        unified device serves it beside the parked block. So at each change — the step's
+        wrap-around included, the last piece to the first — the device holds the incoming arena,
+        the outgoing one when it parks and is not taken back, and the activations live across the
+        cut. Measured on the Mac (deepseek-moe-16b-chat, 2026-10-04): the last piece's 4.5 GB
+        parked while the first one's arena allocated, 13.5 GB live against an 11.3 GB plan.
+
+        Cut again lower until every change fits, or the cut refuses. Lower by the overshoot, but by
+        at most a tenth of the cut at a time: the change peak is not monotonic in the cut (a change
+        whose incoming arena takes the parked one back costs nothing), and one jump by the whole
+        overshoot went from 3 768 MB to 486 MB on PixArt-XL-2-1024-MS's T5 at the Mac's 4096 rung —
+        under its 502 MB embedding, a refusal — where pieces of about half the budget fit every
+        change. Nor below the cut's own floor in one step (`_cut_floor`: the activations' peak plus
+        the most weight one op reads — under it the greedy refuses whatever the change): a step
+        that would cross it lands ON it. Janus-Pro-7B's language model at the Mac's 4096 rung
+        (triton-sequential) stepped from 1 508 to 1 427 MB, under its 1 461 MB floor, and was
+        refused, where every cut from 1 461 to 1 470 MB fits every change at 1 439 MB."""
+        if parked_cap_bytes is not None and pool_fit_slack is None:
+            raise ValueError("LayerPartitioner.partition: parked_cap_bytes given without pool_fit_slack — the pool's "
+                             "take-back rule is the profile's memory.alloc_pool_fit_slack_fraction")
+        part = self._greedy(budget_bytes, max_arena_bytes)
+        if parked_cap_bytes is None or not part.fits:
+            return part
+        cut_at = budget_bytes
+        floor = self._cut_floor()
+        while True:
+            change = self._change_peak(part.segments, parked_cap_bytes, pool_fit_slack)
+            over = change - budget_bytes
+            if over <= 0:
+                part.peak_resident_bytes = max(part.peak_resident_bytes, change)
+                return part
+            step = max(min(over, cut_at // 10), 1024 * 1024)
+            cut_at = floor if cut_at - step < floor < cut_at else cut_at - step
+            again = self._greedy(cut_at, max_arena_bytes)
+            if not again.fits:
+                again.refusal = (
+                    f"the piece changes peak at {change / (1024*1024):.1f} MB against the "
+                    f"{budget_bytes / (1024*1024):.1f} MB budget once the outgoing arena stays "
+                    f"parked in the allocator's pool beside the incoming one, and cutting smaller "
+                    f"to make room refuses: " + again.refusal)
+                return again
+            part = again
+
+    def hybrid(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
+               parked_cap_bytes: Optional[float] = None,
+               pool_fit_slack: Optional[float] = None) -> Partition:
+        """The cut for a component the flow RE-ENTERS (a language model per token, a denoiser per step): the pieces the
+        budget holds beside the streaming window stay loaded between runs (`Partition.resident`), and only the rest is
+        reloaded at every run. Of the cuts `_greedy` takes at the plain cut's budget and at each halving of its weight
+        part down to the cut's floor, the one that reloads the fewest bytes per run (then the fewest pieces); the plain
+        cut, every piece streamed, when none holds a piece. At the worst moment the device holds the held pieces, the
+        largest streamed piece — or a streamed change with the outgoing arena parked (`_change_peak`) — and the
+        activations' peak, all within `budget_bytes`. Janus-Pro-7B's language model on the busy Mac (16 732 MB free):
+        two pieces both re-read per token, 716 reloads in 38 min, where 190 MB was missing (2026-10-27).
+        A cut that runs stretches in slices or parks values on the host is kept as it is."""
+        plain = self.partition(budget_bytes, max_arena_bytes, parked_cap_bytes, pool_fit_slack)
+        if not plain.fits or len(plain.segments) < 2 or plain.chunks or plain.swapped:
+            return plain
+        best, best_streamed = plain, plain.total_weight_bytes
+        floor = self._cut_floor()
+        cut = budget_bytes
+        while True:
+            live = plain.peak_live_bytes
+            cut = live + (cut - live) // 2
+            if cut < floor:
+                break
+            part = self._greedy(cut, max_arena_bytes)
+            if not part.fits or part.chunks or part.swapped:
+                break
+            held, peak = self._held_pieces(part, budget_bytes, parked_cap_bytes, pool_fit_slack)
+            streamed = part.total_weight_bytes - sum(part.segments[i].weight_bytes for i in held)
+            if held and (streamed < best_streamed
+                         or (streamed == best_streamed and len(part.segments) < len(best.segments))):
+                part.resident, part.peak_resident_bytes = sorted(held), peak
+                best, best_streamed = part, streamed
+        self._regions_used = None
+        return best
+
+    def _held_pieces(self, part: Partition, budget_bytes: int, parked_cap_bytes: Optional[float],
+                     pool_fit_slack: Optional[float]) -> Tuple[Set[int], int]:
+        """The pieces of `part` held between runs — the largest first, each while the device still holds the held
+        ones, the streamed window and the activations within `budget_bytes` — and that peak."""
+        segs = part.segments
+        live = part.peak_live_bytes
+
+        def peak(held: Set[int]) -> int:
+            streamed = [s for i, s in enumerate(segs) if i not in held]
+            window = (max(s.weight_bytes for s in streamed) + live) if streamed else live
+            if parked_cap_bytes is not None and len(streamed) > 1:
+                window = max(window, self._change_peak(streamed, parked_cap_bytes, pool_fit_slack))
+            return sum(segs[i].weight_bytes for i in held) + window
+
+        held: Set[int] = set()
+        for i in sorted(range(len(segs)), key=lambda i: -segs[i].weight_bytes):
+            if peak(held | {i}) <= budget_bytes:
+                held.add(i)
+        return held, peak(held)
+
+    def _cut_floor(self) -> int:
+        """The lowest cut the greedy can take: the activations' peak (reserved in every piece) plus
+        the most weight a single op reads (an op is never split across pieces) — or, when stretches
+        run in slices (`_chunk_regions`), the peak those slices leave plus the most weight one op
+        or one stretch reads (a stretch is one piece). Below it `_greedy` refuses by construction;
+        at or above it the op that reads the most fits in a piece."""
+        if self._regions_used is not None:
+            regions, reserve = self._regions_used
+            return reserve + self._weights_floor(regions)
+        peaks = self.op_peak_curve()
+        one_op = max((sum(self._bytes_for(n) for n in self._op_weight_names(uid)) for uid in self.order),
+                     default=0)
+        return (max(peaks) if peaks else 0) + one_op
+
+    @staticmethod
+    def _change_peak(segments: List[Segment], parked_cap_bytes: float, pool_fit_slack: float) -> int:
+        """The most a piece change holds: the incoming arena, the outgoing one when the pool parks
+        it (at most `parked_cap_bytes`) and the incoming request does not take it back (it lies in
+        [w, (1 + pool_fit_slack) w] of that request, `nbxtensor.memory.pool.SegmentPool.take`), and the activations
+        live across the cut — every consecutive pair, the last piece to the first included. One
+        piece: no change."""
+        if len(segments) < 2:
+            return 0
+        peak = 0
+        for i, out in enumerate(segments):
+            inc = segments[(i + 1) % len(segments)]
+            taken_back = inc.weight_bytes <= out.weight_bytes <= (1.0 + pool_fit_slack) * inc.weight_bytes
+            parked = out.weight_bytes if (out.weight_bytes <= parked_cap_bytes and not taken_back) else 0
+            peak = max(peak, inc.weight_bytes + parked + out.live_bytes_at_exit)
+        return peak
+
+    def _greedy(self, budget_bytes: int, max_arena_bytes: Optional[int] = None) -> Partition:
+        """The cut between ops (`_greedy_on` over the activation curve); when it refuses and the
+        solver allows it, the same cut over the curve that running some stretches in slices of a
+        token axis leaves (`_chunk_regions`), each such stretch a piece of its own."""
+        self._regions_used = None
+        part = self._greedy_on(self.live_activation_curve(), budget_bytes, max_arena_bytes,
+                               peaks=self.op_peak_curve())
+        if part.fits or not (self._token_split or self._swap):
+            return part
+        if not self._token_split or self._resolver is None:      # the slices need the request's resolver
+            if not self._swap:
+                return part                    # slices asked for, no resolver bound: the refusal as it was
+            parked = self._greedy_swapped(budget_bytes, max_arena_bytes)
+            if not parked.fits:
+                parked.refusal = f"{part.refusal} Nor with the values between pieces parked on the host: {parked.refusal}"
+            return parked
+        if self._swap:
+            parked = self._greedy_swapped(budget_bytes, max_arena_bytes)
+            if parked.fits:
+                return parked
+            part.refusal = f"{part.refusal} Nor with the values between pieces parked on the host: {parked.refusal}"
+        regions, why = self._chunk_regions(budget_bytes, max_arena_bytes)
+        if regions is None:
+            part.refusal = (f"{part.refusal} Nor does running a stretch of it in slices of a token "
+                            f"axis: {why}.")
+            return part
+        if self._swap:
+            again = self._greedy_swapped(budget_bytes, max_arena_bytes, regions)
+            if again.fits:
+                self._regions_used = (regions, max(r.peak_bytes for r in regions))
+                again.chunks = [r.record() for r in regions]
+            else:
+                again.refusal = (f"{part.refusal} Running {len(regions)} stretch(es) in slices of a token axis with the "
+                                 f"values between pieces parked still refuses: {again.refusal}")
+            return again
+        eff, reserve = self._effective_curve(regions)
+        again = self._greedy_on(self.live_activation_curve(), budget_bytes, max_arena_bytes, regions,
+                                reserve, peaks=eff)
+        if again.fits:
+            self._regions_used = (regions, reserve)
+            again.chunks = [r.record() for r in regions]
+        else:
+            again.refusal = (f"{part.refusal} Running {len(regions)} stretch(es) in slices of a token "
+                             f"axis still refuses: {again.refusal}")
+        return again
+
+    def _value_intervals(self) -> Tuple[Dict[str, int], Dict[str, int], Dict[str, int], Dict[str, str]]:
+        """({tid: index of the op that produces it}, {tid: index of its last use}, {tid: bytes}, {view tid: the
+        activation whose buffer it lives in}) of every activation — the liveness of `_walk_liveness` (the profiler's
+        rule) as intervals, a VIEW of an activation held as its root's buffer: no bytes of its own, the root's last
+        use extended to the view's (counted as a buffer of its own, a parked piece read HAT-S's 6 912 MB
+        `aten.view::10` twice, 2026-10-22)."""
+        # a function of the graph, the request and the protected ids alone: computed once per protected set (the
+        # region search asked it 2 031 times for HAT-L at 2048 px, 425 of a 574 s plan, 2026-10-22)
+        memo_key = frozenset(self.protected)
+        memo = self.__dict__.setdefault("_intervals_memo", {})
+        if memo_key in memo:
+            return memo[memo_key]
+        from neurobrix.triton.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
+        last = dict(self._last_use())
+        prod: Dict[str, int] = {}
+        size: Dict[str, int] = {}
+        root: Dict[str, str] = {}
+        for i, uid in enumerate(self.order):
+            op = self.ops.get(uid) or {}
+            zero = op.get("op_type") in ZERO_ALLOC_OP_TYPES
+            ins = op.get("input_tensor_ids") or []
+            base = None
+            if op.get("op_type") in VIEW_OP_TYPES and ins and ins[0] in size:
+                base = root.get(ins[0], ins[0])
+            for tid in op.get("output_tensor_ids") or []:
+                t = self.tensors.get(tid)
+                if t is None or t.get("is_parameter") or tid in prod:
+                    continue
+                prod[tid] = i
+                if base is not None:
+                    root[tid] = base
+                    size[tid] = 0
+                else:
+                    size[tid] = 0 if zero else self._activation_bytes(tid, t)
+        for tid in self._dag.get("input_tensor_ids") or []:
+            t = self.tensors.get(tid)
+            if t is not None and not t.get("is_parameter") and tid not in size:
+                prod[tid] = -1
+                size[tid] = self._activation_bytes(tid, t)
+        for tid, r in root.items():
+            if last.get(tid, -1) > last.get(r, -1):
+                last[r] = last[tid]
+        memo[memo_key] = (prod, last, size, root)
+        return prod, last, size, root
+
+    def _greedy_swapped(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
+                        regions: Sequence["_Region"] = ()) -> Partition:
+        """The cut when the values between pieces wait on the HOST: a piece holds on the device its
+        weights, every input it reads that an earlier piece (or the caller) produced — uploaded when it
+        starts, held to its end — and the tensors it produces while they live (their in-op figure: an
+        op's inputs not yet freed beside its outputs). Everything else is parked
+        (`LayerStreamingStrategy._run_pieces`, the same rule). A piece grows while that sum fits;
+        one op that cannot fit alone is refused by name. SwapAdvisor's swap plan, decided before the
+        run from the dataflow graph (Huang et al., ASPLOS 2020), at the granularity of a piece."""
+        outputs = set(self._dag.get("output_tensor_ids") or [])
+        prod, last, size, root = self._value_intervals()
+        n = len(self.order)
+        segments: List[Segment] = []
+        peak_resident = peak_live = total = 0
+        starts = {r.first: r for r in regions}
+        s = 0
+        while s < n:
+            region = starts.get(s)
+            if region is not None:
+                # a stretch run in slices is ONE piece, priced parked (`_region_peak`: the buffers it reads, its outputs,
+                # its accumulators and its worst pass)
+                rw = sum(self._bytes_for(m) for m in region.weight_names)
+                if rw + region.peak_bytes > budget_bytes:
+                    return Partition(segments=[], total_weight_bytes=0, peak_resident_bytes=0, peak_live_bytes=0,
+                                     swapped=True,
+                                     refusal=(f"the stretch {region.first_op!r}..{region.last_op!r} holds "
+                                              f"{(rw + region.peak_bytes) / _MB:.1f} MB in slices of {region.slice} "
+                                              f"with the values between pieces parked, over the {budget_bytes / _MB:.1f} MB budget"))
+                segments.append(Segment(index=len(segments), first_op=region.first_op, last_op=region.last_op,
+                                        op_count=region.last - region.first + 1, weight_names=set(region.weight_names),
+                                        weight_bytes=rw, live_bytes_at_exit=0))
+                total += rw
+                peak_resident = max(peak_resident, rw + region.peak_bytes)
+                peak_live = max(peak_live, region.peak_bytes)
+                s = region.last + 1
+                continue
+            names: Set[str] = set()
+            wbytes = 0
+            inputs: Set[str] = set()
+            in_bytes = 0
+            active: Dict[str, int] = {}
+            act_bytes = 0
+            run_peak = 0
+            e = -1
+            for i in range(s, n):
+                if i in starts and i > s:
+                    break                      # a stretch starts: the plain piece ends before it
+                op = self.ops.get(self.order[i]) or {}
+                op_names = names | self._op_weight_names(self.order[i])
+                op_w = wbytes + sum(self._bytes_for(m) for m in op_names - names)
+                reads = dict.fromkeys(root.get(t, t) for t in op.get("input_tensor_ids") or [])
+                new_in = [t for t in reads if t in size and prod.get(t, -1) < s and t not in inputs]
+                op_in = in_bytes + sum(size[t] for t in new_in)
+                outs = [t for t in op.get("output_tensor_ids") or [] if t in size and t not in active]
+                in_op = act_bytes + sum(size[t] for t in outs)
+                extra = self._op_extra.get(self.order[i], 0)      # what the op holds beside them while it runs
+                need = op_w + op_in + max(run_peak, in_op + extra)
+                arena_over = max_arena_bytes is not None and op_w > max_arena_bytes
+                if need > budget_bytes or arena_over:
+                    if i == s:
+                        return Partition(
+                            segments=[], total_weight_bytes=0, peak_resident_bytes=0,
+                            peak_live_bytes=0, swapped=True,
+                            refusal=(f"op {self.order[i]!r} holds {need / _MB:.1f} MB on its own with the values "
+                                     f"between pieces parked (weights {op_w / _MB:.1f}, the inputs it reads "
+                                     f"{op_in / _MB:.1f}, its live set {(in_op + extra) / _MB:.1f}), over the "
+                                     f"{budget_bytes / _MB:.1f} MB budget"
+                                     + (f" (its weights over the device's largest allocation, "
+                                        f"{max_arena_bytes / _MB:.1f} MB)" if arena_over else "")))
+                    break
+                names, wbytes, in_bytes, run_peak = op_names, op_w, op_in, max(run_peak, in_op + extra)
+                inputs.update(new_in)
+                for t in outs:
+                    active[t] = size[t]
+                act_bytes = in_op
+                for t in [t for t in active if last.get(t, -1) <= i and t not in outputs]:
+                    act_bytes -= active.pop(t)
+                e = i
+            segments.append(Segment(index=len(segments), first_op=self.order[s], last_op=self.order[e],
+                                    op_count=e - s + 1, weight_names=names, weight_bytes=wbytes,
+                                    live_bytes_at_exit=act_bytes))
+            total += wbytes
+            peak_resident = max(peak_resident, wbytes + in_bytes + run_peak)
+            peak_live = max(peak_live, in_bytes + run_peak)
+            s = e + 1
+        return Partition(segments=segments, total_weight_bytes=total, peak_resident_bytes=peak_resident,
+                         peak_live_bytes=peak_live, swapped=True)
+
+    def _greedy_on(self, curve: List[int], budget_bytes: int, max_arena_bytes: Optional[int] = None,
+                   regions: Sequence["_Region"] = (), reserve: Optional[int] = None,
+                   peaks: Optional[List[int]] = None) -> Partition:
+        """Greedy left-to-right: extend while the segment's weights fit.
+
+        Greedy is right here because the order is fixed — the engine replays
+        it — so the only freedom is where to cut, and taking as much as fits
+        before each cut minimises the number of loads. It is not an
+        optimisation problem with a better answer hiding in it.
+
+        `max_arena_bytes` bounds one segment's weights on their own: they are
+        ONE allocation when the piece loads (its arena), and a device grants a
+        single allocation only up to its largest one (the profile's
+        `max_allocation_mb`). None: the device grants its whole memory in one.
+
+        `regions`: stretches run in slices (`_chunk_regions`). Each is one piece of its own — cut
+        before its first op and after its last — and `reserve` is the activations' peak with them
+        sliced (`_effective_curve`).
+
+        `curve` is what each cut carries (`live_activation_curve`, a piece's `live_bytes_at_exit`);
+        `peaks` what each op holds while it runs (`op_peak_curve`), the activations every piece
+        reserves. None: `curve` stands for both (a caller with no op inside its ops' live sets).
+        """
+        peaks = curve if peaks is None else peaks
+        peak_live = max(peaks) if peaks else 0
+        if reserve is not None:
+            peak_live = max(peak_live, reserve)
+        peak_live = int(peak_live * self._activation_factor)    # the allocator's hold over the walk (`__init__`)
+        starts = {r.first: r for r in regions}
+
+        # The weights get the budget MINUS what the activations will hold.
+        # Sizing segments against the whole budget and then adding the
+        # activations on top announced a peak ABOVE the budget — 521.5 MB
+        # against 500, 9042.5 against 9000, measured on the first version of
+        # this method. The number this returns is the number the strategy
+        # promises, so it has to be the one that is actually held.
+        weight_budget = budget_bytes - peak_live
+        arena_bound = ""
+        if max_arena_bytes is not None and max_arena_bytes < weight_budget:
+            weight_budget = int(max_arena_bytes)
+            arena_bound = (f" (one segment's weights are one allocation, bounded by the "
+                           f"device's largest: {max_arena_bytes / (1024*1024):.1f} MB)")
+        if weight_budget <= 0:
+            return Partition(
+                segments=[], total_weight_bytes=0, peak_resident_bytes=0,
+                peak_live_bytes=peak_live,
+                refusal=(
+                    f"activations alone peak at "
+                    f"{peak_live / (1024*1024):.1f} MB, at or over the "
+                    f"{budget_bytes / (1024*1024):.1f} MB budget. Cutting "
+                    f"between ops cannot help: no weight has been loaded "
+                    f"yet at that peak. This needs a smaller batch or "
+                    f"context, which is the caller's to choose."))
+
+        segments: List[Segment] = []
+        cur_names: Set[str] = set()
+        cur_bytes = 0
+        cur_first: Optional[str] = None
+        cur_ops = 0
+        total = 0
+
+        def close(last_index: int) -> None:
+            nonlocal cur_names, cur_bytes, cur_first, cur_ops, total
+            segments.append(Segment(
+                index=len(segments), first_op=cur_first,
+                last_op=self.order[last_index], op_count=cur_ops,
+                weight_names=set(cur_names), weight_bytes=cur_bytes,
+                live_bytes_at_exit=curve[last_index]))
+            total += cur_bytes
+            cur_names, cur_bytes, cur_first, cur_ops = set(), 0, None, 0
+
+        i = 0
+        while i < len(self.order):
+            op_uid = self.order[i]
+            region = starts.get(i)
+            if region is not None:
+                # A sliced stretch is ONE piece: every pass re-reads its weights.
+                if cur_first is not None:
+                    close(i - 1)
+                names = region.weight_names
+                add = sum(self._bytes_for(n) for n in names)
+                if add > weight_budget:
+                    return Partition(
+                        segments=[], total_weight_bytes=0, peak_resident_bytes=0,
+                        peak_live_bytes=peak_live,
+                        refusal=(
+                            f"the stretch {region.first_op!r}..{region.last_op!r} run in slices of "
+                            f"{region.symbol} reads {add / (1024*1024):.1f} MB of weights, over the "
+                            f"{weight_budget / (1024*1024):.1f} MB left once activations are reserved "
+                            f"({peak_live / (1024*1024):.1f} MB of a "
+                            f"{budget_bytes / (1024*1024):.1f} MB budget){arena_bound}"))
+                cur_first, cur_names, cur_bytes = op_uid, set(names), add
+                cur_ops = region.last - region.first + 1
+                close(region.last)
+                i = region.last + 1
+                continue
+
+            names = self._op_weight_names(op_uid)
+            new = {n for n in names if n not in cur_names}
+            add = sum(self._bytes_for(n) for n in new)
+
+            if add > weight_budget:
+                one = sum(self._bytes_for(n) for n in names)
+                return Partition(
+                    segments=[], total_weight_bytes=0,
+                    peak_resident_bytes=0, peak_live_bytes=peak_live,
+                    refusal=(
+                        f"op {op_uid!r} reads {one / (1024*1024):.1f} MB of "
+                        f"weights on its own, over the "
+                        f"{weight_budget / (1024*1024):.1f} MB left for "
+                        f"weights once activations are reserved "
+                        f"({peak_live / (1024*1024):.1f} MB of a "
+                        f"{budget_bytes / (1024*1024):.1f} MB budget){arena_bound}. "
+                        f"A cut cannot "
+                        f"run half an op, so no partition of this graph "
+                        f"fits. Serving it needs the op's own weights "
+                        f"sharded, which is a different rung."))
+
+            if cur_first is not None and cur_bytes + add > weight_budget:
+                close(i - 1)
+                new, add = names, sum(self._bytes_for(n) for n in names)
+
+            if cur_first is None:
+                cur_first = op_uid
+            cur_names |= new
+            cur_bytes += add
+            cur_ops += 1
+            i += 1
+
+        if cur_first is not None:
+            close(len(self.order) - 1)
+
+        # What is resident at the worst moment: one segment's weights plus
+        # the activations alive while it runs. This is the number the
+        # strategy ANNOUNCES, and it is the number it holds.
+        peak_resident = max(
+            (s.weight_bytes for s in segments), default=0) + peak_live
+
+        return Partition(segments=segments, total_weight_bytes=total,
+                         peak_resident_bytes=peak_resident,
+                         peak_live_bytes=peak_live)
+
+    # -- stretches run in slices of a token axis --------------------------
+
+    def _host_moved_bytes(self, plan) -> int:
+        """What a stretch whose inputs wait on the host moves through host memory at the request: the inputs it reads in
+        slices, cut from their host tensors (`ChunkedPiece._run_pass` take_slice), and its outputs assembled whole
+        (put_slice) — the term the slicing adds to such a stretch's time (the Mac's diagnosis 4b, 2026-10-28: 2.4-2.9 s of
+        cuts and 0.5-1.3 s of assembly per host-read stretch of mochi's VAE, against 0.1 s on the device)."""
+        from neurobrix.triton.prism.chunked_region import sliced_reads
+        return int(sum(self._bytes_at(t, self._symbol_map) for t in sliced_reads(plan, self.ops))
+                   + sum(self._bytes_at(t, self._symbol_map) for t in plan.outputs if t in self.tensors))
+
+    def _bytes_at(self, tid: str, symbol_map: Dict[str, int]) -> int:
+        """One activation's bytes at `symbol_map` (the request's, or a slice's)."""
+        t = self.tensors.get(tid) or {}
+        shape = self._resolver._resolve_shape(t, symbol_map)
+        if tid in self._widths:
+            numel = 1
+            for d in shape:
+                numel *= int(d)
+            return numel * int(self._widths[tid])
+        return self._resolver._compute_size(shape, t)
+
+    def _axis(self, sym: str, unit: int = 1):
+        from neurobrix.triton.prism.chunked_region import TokenAxis
+        if (sym, unit) not in self._axes:
+            self._axes[(sym, unit)] = TokenAxis(self._dag, sym, unit)
+        return self._axes[(sym, unit)]
+
+    def _op_symbols(self) -> Dict[str, Any]:
+        from neurobrix.triton.prism.chunked_region import op_symbols
+        if self._op_syms is None:
+            self._op_syms = op_symbols(self._dag)
+        return self._op_syms
+
+    def _op_weight_bytes(self, i: int) -> int:
+        return sum(self._bytes_for(n) for n in self._op_weight_names(self.order[i]))
+
+    def _weights_floor(self, regions: Sequence["_Region"]) -> int:
+        """The most weight one piece must hold: one op's outside every stretch, or one stretch's."""
+        inside: Set[int] = set()
+        for r in regions:
+            inside.update(range(r.first, r.last + 1))
+        one_op = max((self._op_weight_bytes(i) for i in range(len(self.order)) if i not in inside),
+                     default=0)
+        return max([one_op] + [sum(self._bytes_for(n) for n in r.weight_names) for r in regions])
+
+    def _parked_op_curve(self) -> List[int]:
+        """What each op holds when the values between pieces wait on the host and it is a piece of its own: the
+        buffers it reads (each view's root once) and the outputs it makes — the least any parked cut can give it."""
+        if getattr(self, "_parked_curve_memo", None) is None:
+            prod, last, size, root = self._value_intervals()
+            out: List[int] = []
+            for i, uid in enumerate(self.order):
+                op = self.ops.get(uid) or {}
+                reads = {root.get(t, t) for t in op.get("input_tensor_ids") or [] if root.get(t, t) in size}
+                outs = {t for t in op.get("output_tensor_ids") or [] if t in size}
+                out.append(sum(size[t] for t in reads | outs) + self._op_extra.get(uid, 0))
+            self._parked_curve_memo = out
+        return list(self._parked_curve_memo)
+
+    def _effective_curve(self, regions: Sequence["_Region"]) -> Tuple[List[int], int]:
+        """What each op holds while it runs (`op_peak_curve`) with these stretches sliced, and the
+        peak to reserve. Inside a stretch the live set is its sliced peak (`_Region.peak_bytes`);
+        outside, the op's own figure — the stretch hands out exactly the tensors the whole ops
+        would. Values parked on the host (`swap_values` with `token_split`): the op's figure as a piece of its
+        own (`_parked_op_curve`)."""
+        eff = list(self._parked_op_curve() if (self._swap and self._token_split) else self.op_peak_curve())
+        reserve = 0
+        for r in regions:
+            for i in range(r.first, r.last + 1):
+                eff[i] = r.peak_bytes
+            reserve = max(reserve, r.peak_bytes)
+        return eff, max([reserve] + eff) if eff else reserve
+
+    def _pass_peak(self, cp, sym: str, c: int, chunked: bool, unit: int = 1) -> int:
+        """The live activations of one pass at slice `c` (in units of `unit` of the symbol): its own curve
+        (its ops alone, its targets kept) plus the contiguous slices of the stretch's inputs it is fed."""
+        from neurobrix.triton.prism.chunked_region import pass_graph
+        key = (tuple(cp.ops), sym, unit, c if chunked else 0)
+        if key not in self._pass_peak_memo:
+            sm = dict(self._symbol_map)
+            if chunked:
+                sm[sym] = c * unit
+            sub = LayerPartitioner(pass_graph(self._dag, cp), {}, symbol_map=sm,
+                                   compute_dtype_bytes=self._compute_dtype_bytes, widths=self._widths)
+            peaks = sub.op_peak_curve()
+            self._pass_peak_memo[key] = max(peaks) if peaks else 0
+        return self._pass_peak_memo[key]
+
+    def _accumulator_bytes(self, tid: str, symbol_map: Dict[str, int]) -> int:
+        """What summing a contraction's slices holds at once (`chunked_region.accumulate`): the
+        running sum and the sum that replaces it, in the accumulator the engines' DtypeEngine
+        names (`nbxtensor/dtype/operands.contraction_accumulator_bytes`, the width form of
+        `contraction_accumulator_dtype`), plus the partial cast to it when the op stores
+        narrower. The store once summed (`chunked_region.store`) is no wider than one of them."""
+        from nbxtensor.dtype.operands import contraction_accumulator_bytes
+        store = self._bytes_at(tid, symbol_map)
+        numel = 1
+        for d in self._resolver._resolve_shape(self.tensors.get(tid) or {}, symbol_map):
+            numel *= int(d)
+        if numel == 0:
+            return 0
+        width = store // numel
+        acc = contraction_accumulator_bytes(width)
+        return numel * (2 * acc + (acc if acc != width else 0))
+
+    def _region_peak(self, ax, plan, c: int, host: bool = False) -> int:
+        """What a stretch run in slices of `c` holds at its worst: everything live before it (held
+        until its last pass), its outputs assembled whole, each contraction's accumulator and the
+        sum that replaces it (`_accumulator_bytes`, its store included), and the worst pass — its
+        slice's activations plus the slices of the inputs it reads that carry the axis (a
+        contiguous copy each, a broadcast's too)."""
+        sm = self._symbol_map
+        if self._swap and self._token_split:
+            # the values between pieces wait on the host: before it, the stretch holds the buffers it READS, brought
+            # whole to the device (each view's root once), never what else is live (`LayerStreamingStrategy._run_pieces`)
+            # — and of those, an input read only in slices stays on the host, its slices uploaded pass by pass
+            # (`chunked_region.sliced_reads`; counted in `fed` below)
+            from neurobrix.triton.prism.chunked_region import sliced_reads
+            _prod, _last, size, root = self._value_intervals()
+            on_host = sliced_reads(plan, self.ops) if host else set()
+            before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs if t not in on_host})
+        else:
+            curve = self.live_activation_curve()
+            before = curve[plan.first - 1] if plan.first > 0 else 0
+        outs = sum(self._bytes_at(t, sm) for t in plan.outputs if t not in plan.contractions)
+        acc = sum(self._accumulator_bytes(t, sm) for t in plan.contractions)
+        # a stretch with a halo runs each slice widened by its margin on both sides (`RegionPlan.margin`, clipped at
+        # the axis' ends): what a slice of c holds is what c + 2 * margin holds
+        total = sm.get(plan.symbol)
+        total = None if total is None else int(total) // plan.unit
+        c = c + 2 * plan.margin if total is None else min(int(total), c + 2 * plan.margin)
+        sliced = dict(sm)
+        sliced[plan.symbol] = c * plan.unit
+        worst = 0
+        for cp in plan.passes:
+            fed = 0
+            if cp.chunked:
+                reads = set()
+                inside = set()
+                for uid in cp.ops:
+                    op = self.ops.get(uid) or {}
+                    reads.update(t for t in op.get("input_tensor_ids") or [] if t not in inside)
+                    inside.update(op.get("output_tensor_ids") or [])
+                # and the carriers of the stretch's symbols, sliced into every pass beside them
+                reads.update(t for t in plan.layouts if t not in plan.outputs)
+                for t in reads:
+                    if t in plan.layouts and t not in plan.outputs:
+                        fed += self._bytes_at(t, sliced)
+            worst = max(worst, self._pass_peak(cp, plan.symbol, c, cp.chunked, plan.unit) + fed)
+        return before + outs + acc + worst
+
+    def _chunk_regions(self, budget_bytes: int, max_arena_bytes: Optional[int]
+                       ) -> Tuple[Optional[List["_Region"]], str]:
+        """The stretches to run in slices of a token axis so the cut between ops fits, or (None,
+        why not). Activations first: the curve's hottest op not yet in a stretch is enclosed in
+        one (`_new_region`), a stretch over the target is sliced finer, until every op's live set
+        leaves room for the most weight one piece must hold."""
+        from neurobrix.triton.prism.chunked_region import token_symbols
+        syms = token_symbols(self._dag, self._symbol_map)
+        if not syms:
+            return None, "no symbol of this graph is bound from a dimension of one of its inputs"
+        regions: List[_Region] = []
+        while True:
+            for r in regions:
+                w = sum(self._bytes_for(n) for n in r.weight_names)
+                if max_arena_bytes is not None and w > max_arena_bytes:
+                    return None, (f"the stretch {r.first_op!r}..{r.last_op!r} reads {w / _MB:.1f} MB "
+                                  f"of weights, over the device's largest allocation "
+                                  f"({max_arena_bytes / _MB:.1f} MB)")
+            eff, _ = self._effective_curve(regions)
+            target = budget_bytes - self._weights_floor(regions)
+            h = max(range(len(eff)), key=lambda i: eff[i]) if eff else 0
+            if not eff or eff[h] <= target:
+                if not regions:
+                    return None, "the activations are not what binds"
+                return regions, ""
+            owner = next((r for r in regions if r.first <= h <= r.last), None)
+            if owner is not None:
+                c, host = self._fit_slice(owner.axis, owner.plan, target, owner.slice - 1, owner.host_reads,
+                                          host_only=None if self._beyond else False)
+                if c is None:
+                    return None, (f"the stretch {owner.first_op!r}..{owner.last_op!r} peaks at "
+                                  f"{self._region_peak(owner.axis, owner.plan, 1) / _MB:.1f} MB in "
+                                  f"slices of one {owner.symbol}, over the {target / _MB:.1f} MB its "
+                                  f"activations may hold")
+                owner.host_reads = host
+                owner.set_slice(c, self._region_peak(owner.axis, owner.plan, c, host), self._symbol_map)
+                owner.host_moved_bytes = self._host_moved_bytes(owner.plan) if host else 0
+                continue
+            best: Optional[_Region] = None
+            whys: List[str] = []
+            from neurobrix.triton.prism.chunked_region import axis_units
+            # every token symbol, and each in the unit its graph divides it by (a window's rows)
+            units_memo = self.__dict__.setdefault("_axis_units_memo", {})
+            for sy in syms:
+                if sy not in units_memo:
+                    units_memo[sy] = axis_units(self._dag, sy)
+            # the neighbours as walls first; enclosing one only where no stretch fits without it (`_new_region`): the
+            # cut that changes the least, as every rung of the ladder is tried after the cheaper ones
+            # and a stretch's inputs whole on the device before the host holds them (`_fit_slice`)
+            for absorb, host_ok in ((False, False), (False, True), (True, False), (True, True)):
+                if (absorb or host_ok) and not self._beyond:
+                    continue
+                if host_ok and not (self._swap and self._token_split):
+                    continue
+                for sym, unit in [(sy, u) for sy in syms for u in [1] + units_memo[sy]]:
+                    ax = self._axis(sym, unit)
+                    if not ax.fits_units(self._symbol_map):
+                        if not absorb:
+                            whys.append(f"{sym} in units of {unit}: the request is not a whole number of the units "
+                                        f"{ax.units} its graph divides its symbols by")
+                        continue
+                    got, why = self._new_region(ax, h, eff, target, regions, absorb=absorb, host_ok=host_ok)
+                    if got is None:
+                        whys.append(f"{sym}{'' if unit == 1 else f' in units of {unit}'}"
+                                    f"{', its neighbours enclosed' if absorb else ''}"
+                                    f"{', its slice-only inputs on the host' if host_ok else ''}: {why}")
+                    elif best is None or (got.count, got.peak_bytes) < (best.count, best.peak_bytes):
+                        best = got
+                if best is not None:
+                    break
+            if best is None:
+                return None, (f"{self.order[h]!r} holds {eff[h] / _MB:.1f} MB of activations "
+                              f"against {target / _MB:.1f} MB — " + "; ".join(whys))
+            # a neighbour the new stretch contains whole is absorbed (`_new_region`): its ops run in the new one's slices
+            regions[:] = [r for r in regions if not (best.first <= r.first and r.last <= best.last)]
+            regions.append(best)
+            regions.sort(key=lambda r: r.first)
+
+    def _fit_slice(self, ax, plan, target: int, upper: int, host_first: bool = False,
+                   host_only: Optional[bool] = None) -> Tuple[Optional[int], bool]:
+        """(the largest slice that fits, whether its slice-only inputs stay on the host). With the values between pieces
+        parked, a stretch's inputs read only in slices may stay on the host, each pass uploading its slice — taken only
+        where no slice fits with them whole on the device: the host copy and the uploads cost time a stretch that fits
+        does not need (HAT-S at 2048 px on 16 GB ran 1.7x slower with every stretch reading from the host, 2026-10-22)."""
+        if host_only is not None:      # the region search's stage asks one way only
+            if host_only:
+                return ((self._largest_slice(ax, plan, target, upper, host=True), True)
+                        if self._swap and self._token_split else (None, False))
+            return self._largest_slice(ax, plan, target, upper), False
+        if not host_first:
+            c = self._largest_slice(ax, plan, target, upper)
+            if c is not None or not (self._swap and self._token_split):
+                return c, False
+        if self._swap and self._token_split:
+            return self._largest_slice(ax, plan, target, upper, host=True), True
+        return None, False
+
+    def _largest_slice(self, ax, plan, target: int, upper: int, host: bool = False) -> Optional[int]:
+        """The largest slice in [1, upper] whose stretch peak is at most `target`, or None."""
+        if upper < 1 or self._region_peak(ax, plan, 1, host) > target:
+            return None
+        lo, hi = 1, upper
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._region_peak(ax, plan, mid, host) <= target:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    def _new_region(self, ax, h: int, eff: List[int], target: int, regions: Sequence["_Region"],
+                    absorb: bool = True, host_ok: bool = True) -> Tuple[Optional["_Region"], str]:
+        """A stretch around op `h` run in slices of `ax.sym`: the ops over the target around it
+        (none may mix the axis), widened to the seams where the least is live — before its first op
+        and after its last — among the ops that do not mix the axis either."""
+        from neurobrix.triton.prism.chunked_region import MIX, NORM, plan_region, region_carriers
+        if ax.verdicts[h].kind == MIX:
+            return None, f"{self.order[h]} mixes the axis ({ax.verdicts[h].reason})"
+        # An existing stretch on THIS axis is no wall: a seam may enclose it whole, and the two run as one, in one
+        # slicing — what passed between them never exists whole (HAT-L at 2048 px on 16 GB: the stretch making the
+        # overlapping-window cross attention's unfolded K and V stopped at the attention's own stretch, and handed
+        # them out whole, 15 840 MB, 2026-10-22). A seam inside one is refused (below); another axis' stretch is a wall.
+        taken: Set[int] = set()
+        for r in regions:
+            if not absorb or r.axis.sym != ax.sym or r.axis.unit != ax.unit:
+                taken.update(range(r.first, r.last + 1))
+
+        def free(i: int) -> bool:
+            return 0 <= i < len(self.order) and i not in taken and ax.verdicts[i].kind != MIX
+
+        # A group norm over the axis (`NORM`) runs on slices only as the stretch's FIRST op, its input read whole from
+        # outside: growing backward a stretch takes one and stops there; growing forward it stops before one.
+        def back(i: int, at: int) -> bool:
+            return free(i) and ax.verdicts[at].kind != NORM
+
+        def fwd(i: int) -> bool:
+            return free(i) and ax.verdicts[i].kind != NORM
+
+        def cuts_one(L: int, R: int) -> bool:
+            return any((r.first < L <= r.last) or (r.first <= R < r.last) for r in regions)
+
+        lo = hi = h
+        while back(lo - 1, lo) and eff[lo - 1] > target:
+            lo -= 1
+        while fwd(hi + 1) and eff[hi + 1] > target:
+            hi += 1
+        span_lo, span_hi = lo, hi
+        while back(span_lo - 1, span_lo):
+            span_lo -= 1
+        while fwd(span_hi + 1):
+            span_hi += 1
+        curve = self.live_activation_curve()
+
+        def before(i: int) -> int:
+            return curve[i - 1] if i > 0 else 0
+
+        # A seam farther from the hot ops is worth taking only where less is live there than at
+        # every seam nearer them: it adds ops (their weights, and recomputation in later passes)
+        # for nothing otherwise. The record lows walking outward, under the target.
+        def record_lows(seq: Sequence[int], value: Callable[[int], int]) -> List[int]:
+            out: List[int] = []
+            low: Optional[int] = None
+            for i in seq:
+                v = value(i)
+                if v <= target and (low is None or v < low):
+                    out.append(i)
+                    low = v
+            return out
+
+        if self._swap and self._token_split:
+            # Parked on the host, a seam carries only what crosses it: the buffers produced before the stretch that it
+            # reads (brought whole to the device) and the outputs read after it (assembled whole). Both are read from the
+            # value intervals without planning the stretch; the three seams each side that let the least cross are
+            # planned (`plan_region`, priced by `_region_peak`), nearest first among equals.
+            prod_, last_, size_, root_ = self._value_intervals()
+
+            def cross_in(L: int) -> int:
+                seen = set()
+                for i in range(L, hi + 1):
+                    for t in (self.ops.get(self.order[i]) or {}).get("input_tensor_ids") or []:
+                        r = root_.get(t, t)
+                        if r in size_ and prod_.get(r, -1) < L:
+                            seen.add(r)
+                return sum(size_[r] for r in seen)
+
+            def cross_out(R: int) -> int:
+                seen = set()
+                for i in range(lo, R + 1):
+                    for t in (self.ops.get(self.order[i]) or {}).get("output_tensor_ids") or []:
+                        if t in size_ and last_.get(t, -1) > R:
+                            seen.add(t)
+                # an output crossing out is ASSEMBLED whole by the stitch: a broadcast view's full extent, not its 0
+                return sum(self._activation_bytes(t, self.tensors[t]) for t in seen)
+            ends_l = [r.first for r in regions if span_lo <= r.first <= lo]
+            ends_r = [r.last for r in regions if hi <= r.last <= span_hi]
+            cin = {L: cross_in(L) for L in list(range(lo, max(span_lo, lo - 64) - 1, -1)) + ends_l}
+            cout = {R: cross_out(R) for R in list(range(hi, min(span_hi, hi + 64) + 1)) + ends_r}
+            lefts = sorted(cin, key=lambda L: (cin[L], lo - L))[:3]
+            rights = sorted(cout, key=lambda R: (cout[R], R - hi))[:3]
+            pairs = sorted(((L, R) for L in lefts for R in rights), key=lambda p: (cin[p[0]] + cout[p[1]], p[1] - p[0]))
+        else:
+            lefts = record_lows(range(lo, span_lo - 1, -1), before)
+            rights = record_lows(range(hi, span_hi + 1), lambda i: curve[i])
+            pairs = sorted(((L, R) for L in lefts for R in rights),
+                           key=lambda p: (max(before(p[0]), curve[p[1]]), before(p[0]) + curve[p[1]],
+                                          p[1] - p[0]))
+        total = int(self._symbol_map[ax.sym]) // ax.unit
+        why = f"no seam around {self.order[h]} leaves the stretch under {target / _MB:.1f} MB"
+        for L, R in pairs:
+            if cuts_one(L, R):
+                continue
+            plan, no = plan_region(ax, L, R, protected=self.protected,
+                                   carriers=region_carriers(self._dag, self.order[L:R + 1],
+                                                            self._op_symbols()))
+            if plan is None:
+                why = no
+                continue
+            c, host = self._fit_slice(ax, plan, target, total - 1, host_only=host_ok)
+            if c is None:
+                why = (f"{self.order[L]}..{self.order[R]} peaks at "
+                       f"{self._region_peak(ax, plan, 1, self._swap and self._token_split) / _MB:.1f} MB in slices of one")
+                continue
+            names: Set[str] = set()
+            for uid in self.order[L:R + 1]:
+                names |= self._op_weight_names(uid)
+            reg = _Region(axis=ax, plan=plan, weight_names=names)
+            reg.host_reads = host
+            reg.set_slice(c, self._region_peak(ax, plan, c, host), self._symbol_map)
+            reg.host_moved_bytes = self._host_moved_bytes(reg.plan) if host else 0
+            return reg, ""
+        return None, why
+
+
+_MB = 1024 * 1024
+
+
+@dataclass
+class _Region:
+    """One stretch run in slices of a token axis, as the partitioner sized it."""
+    axis: Any
+    plan: Any
+    weight_names: Set[str]
+    slice: int = 0
+    count: int = 0
+    peak_bytes: int = 0
+    #: the inputs it reads only in slices stay on the host, each pass uploading its slice (`chunked_region.sliced_reads`)
+    #: — chosen only where no slice fits with them whole on the device (`LayerPartitioner._fit_slice`)
+    host_reads: bool = False
+    #: with `host_reads`: the bytes its slices cut from host tensors and its outputs assembled (`_host_moved_bytes`)
+    host_moved_bytes: int = 0
+
+    @property
+    def first(self) -> int:
+        return self.plan.first
+
+    @property
+    def last(self) -> int:
+        return self.plan.last
+
+    @property
+    def first_op(self) -> str:
+        return self.plan.first_op
+
+    @property
+    def last_op(self) -> str:
+        return self.plan.last_op
+
+    @property
+    def symbol(self) -> str:
+        return self.plan.symbol
+
+    def set_slice(self, c: int, peak: int, symbol_map: Dict[str, int]) -> None:
+        total = int(symbol_map[self.symbol]) // self.plan.unit
+        self.slice, self.count, self.peak_bytes = int(c), -(-total // int(c)), int(peak)
+
+    def record(self) -> Dict[str, Any]:
+        return {"first_op": self.first_op, "last_op": self.last_op, "symbol": self.symbol,
+                "unit": self.plan.unit, "slice": self.slice, "count": self.count,
+                "passes": len(self.plan.passes), "peak_bytes": self.peak_bytes, "host_reads": self.host_reads,
+                # what each slice recomputes beside the rows it keeps, and the norms read whole once: the time the
+                # slicing adds (`PrismSolver._estimate_times`)
+                "margin": int(self.plan.margin), "cyclic": bool(self.plan.cyclic),
+                "host_moved_bytes": int(self.host_moved_bytes),
+                "norm_inputs": sorted(self.plan.norms.values())}
+
+
+def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
+    """One op argument with every tensor id it references mapped through `rewire` — every form
+    the engines resolve: `tensor` / `tensor_ref` (`tensor_id`), `tensor_tuple` (`tensor_ids`, the
+    list `aten::cat` takes), and nested `list` (`value`); an untyped dict's `tensor_id` too. Returns
+    the argument unchanged, or a copy.
+
+    The ONE walk, shared by the triton sequence's in-place rewrites (`TritonSequence._rewire_arg`)
+    and a streamed piece's seam aliasing (`build_segment_graph`). The second walked `tensor_id`
+    only: a seam inside a `tensor_tuple` kept its raw id, the piece held it under `input::<tid>`,
+    and triton-sequential met None — Flex.1-alpha's joint attention `aten.cat::19` concatenated
+    512 text queries with nothing, and the next `mul` failed `(1, 24, 512, 128)` against the
+    4 608-token RoPE table (the Mac's two Flex rows, df2588e7)."""
+    if not isinstance(arg, dict):
+        return arg
+    arg_type = arg.get("type")
+    # A `tensor_id` is rewired whatever the dict's `type` says (`tensor`, `tensor_ref`, or none —
+    # the seam builder always rewired untyped ones, and the union of the two walks it replaces
+    # is what this one must cover).
+    if arg.get("tensor_id") in rewire:
+        arg = dict(arg)
+        arg["tensor_id"] = rewire[arg["tensor_id"]]
+    elif arg_type == "tensor_tuple":
+        tids = arg.get("tensor_ids", [])
+        new_tids = [rewire.get(t, t) for t in tids]
+        if new_tids != tids:
+            arg = dict(arg)
+            arg["tensor_ids"] = new_tids
+    elif arg_type == "list":
+        items = arg.get("value", [])
+        new_items = [rewire_arg(item, rewire) for item in items]
+        if new_items != items:
+            arg = dict(arg)
+            arg["value"] = new_items
+    return arg
+
+
+def flow_embeds_into(graph: Optional[Dict[str, Any]]) -> bool:
+    """Whether the FLOW supplies this component's embeddings — its graph takes `inputs_embeds`,
+    the convention both autoregressive flows read (`uses_embeds`) — and so reads the token
+    embedding BY NAME from the component's executor, outside the graph. Such a component,
+    streamed, keeps its non-block weights resident on its base executor
+    (`LayerStreamingStrategy._ensure_flow_reads`) and Prism reserves them; any other component
+    (a VAE, a DiT, an encoder fed token ids) is read by no flow and its pieces load exactly what
+    they consume."""
+    return "input::inputs_embeds" in ((graph or {}).get("input_tensor_ids") or [])
+
+
+def flow_reads_by_name(component: str, graph: Optional[Dict[str, Any]],
+                       topology: Optional[Dict[str, Any]]) -> bool:
+    """Whether a flow reads `component`'s weights BY NAME, outside its graph — the ONE rule a
+    streamed base's resident set (`LayerStreamingStrategy._ensure_flow_reads`) and Prism's reserve
+    for it (`PrismSolver._try_layer_streaming`) both read. Two readers: the component whose
+    embeddings the flow supplies (`flow_embeds_into`), and the VLM handlers' `head_component`,
+    whose 2-D weight both engines' `_compute_logits` project with directly — its graph takes hidden
+    states, so the first rule never saw it, and a streamed head's base held nothing (GLM-4.1V and
+    MiniCPM-o streamed, 2026-10-08: the logits came from the token embedding instead)."""
+    if flow_embeds_into(graph):
+        return True
+    vlm = ((topology or {}).get("flow") or {}).get("vlm") or {}
+    return bool(component) and component == vlm.get("head_component")
+
+
+def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
+    """A streamed piece's SEAM input: an intermediate the previous piece produced, aliased to
+    `input::<tid>` by `build_segment_graph`. It enters a piece in the dtype its producing op gave it
+    — never cast to the compute dtype or re-aligned to the graph's recorded (build) dtype, as a
+    model input or a leaf would be: that narrowed fp32 islands at every piece's entry (PixArt T5
+    pieces rel L2 0.46 % from whole, register 105). ONE rule, read by every site that casts a
+    component input or re-aligns a leaf, in every engine (R30): TritonDtypeEngine, the torch
+    sequential input resolver and leaf re-alignment, and the compiled input map. Pure Python — the
+    triton branch may read it (R33)."""
+    return bool((meta or {}).get("seam_alias_of"))
+
+
+def weight_views(graph: Dict[str, Any]) -> Dict[str, Tuple[str, List[str]]]:
+    """{tensor id: (its producing op, the parameters it is a view of)} for every VIEW of weights alone
+    (`profiler.VIEW_OP_TYPES` reading only parameters or such views — a linear's `aten::t`, a weight's
+    `view`). Such a value is never a seam's: each piece that reads it makes it itself from the weight
+    it loads (`build_segment_graph`), and the partitioner counts that weight for the reading op
+    (`LayerPartitioner._op_weight_names`). Carried across a seam it outlived the weights its piece
+    unloaded — HAT-S at 2048 px on 16 GB: the next piece's addmm read a linear's transposed weight at
+    an address its piece had freed (2026-10-22)."""
+    from neurobrix.triton.prism.profiler import VIEW_OP_TYPES
+    tensors = graph.get("tensors") or {}
+    ops = graph.get("ops") or {}
+    out: Dict[str, Tuple[str, List[str]]] = {}
+    for uid in graph.get("execution_order") or []:
+        op = ops.get(uid) or {}
+        if op.get("op_type") not in VIEW_OP_TYPES:
+            continue
+        ins = list(op.get("input_tensor_ids") or [])
+        if not ins:
+            continue
+        roots: List[str] = []
+        for t in ins:
+            if (tensors.get(t) or {}).get("is_parameter"):
+                roots.append(t)
+            elif t in out:
+                roots.extend(out[t][1])
+            else:
+                roots = []
+                break
+        if roots:
+            for t in op.get("output_tensor_ids") or []:
+                out[t] = (uid, roots)
+    return out
+
+
+def build_segment_graph(graph: Dict[str, Any], segment: Segment,
+                        order_index: Optional[Dict[str, int]] = None,
+                        pass_ops: Optional[Sequence[str]] = None,
+                        outputs: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """One segment as a standalone, executable graph.
+
+    The point of returning a GRAPH rather than an op range is that the whole
+    engine already knows how to run a graph. A segment executed this way goes
+    through the same executor, the same binding, the same dispatch as any
+    component — the only difference is that it holds one segment's weights.
+
+    Its inputs are the tensors produced BEFORE it and read INSIDE it; its
+    outputs are the tensors produced inside it and read AFTER it, plus any of
+    the component's own outputs it produces. Those two sets are exactly what
+    must cross the seam, and they are computed here rather than assumed.
+
+    `pass_ops` / `outputs`: one PASS of a stretch run in slices (triton/prism/chunked_region.py) — a
+    subset of the segment's ops, in order, and the tensors it hands out — instead of the whole
+    range and what is read after it. Everything else (seam aliasing, carried symbols) is the
+    segment's rule, unchanged.
+    """
+    tensors: Dict[str, Any] = graph.get("tensors") or {}
+    ops: Dict[str, Any] = graph.get("ops") or {}
+    order: List[str] = list(graph.get("execution_order") or [])
+    if order_index is None:
+        order_index = {op_uid: i for i, op_uid in enumerate(order)}
+
+    first = order_index[segment.first_op]
+    last = order_index[segment.last_op]
+    inside = list(pass_ops) if pass_ops is not None else order[first:last + 1]
+    # A view of weights alone read here and made before: made here as well, from the weight this piece loads
+    # (`weight_views`), its producers first in graph order.
+    views = weight_views(graph)
+    made_here = {t for u in inside for t in ((ops.get(u) or {}).get("output_tensor_ids") or [])}
+    remake: Set[str] = set()
+    pending = [t for u in inside for t in ((ops.get(u) or {}).get("input_tensor_ids") or [])
+               if t in views and t not in made_here]
+    while pending:
+        t = pending.pop()
+        uid = views[t][0]
+        if uid in remake:
+            continue
+        remake.add(uid)
+        pending.extend(i for i in ((ops.get(uid) or {}).get("input_tensor_ids") or []) if i in views)
+    if remake:
+        inside = [u for u in order if u in remake and u not in inside] + inside
+    # ...and one no op here reads is not made here: its readers make it (it would load a weight for nothing).
+    component_outs = set(graph.get("output_tensor_ids") or [])
+    while True:
+        read_here = {t for u in inside for t in ((ops.get(u) or {}).get("input_tensor_ids") or [])}
+        idle = [u for u in inside
+                if (ops.get(u) or {}).get("output_tensor_ids")
+                and all(t in views and t not in read_here and t not in component_outs
+                        for t in (ops.get(u) or {}).get("output_tensor_ids"))]
+        if not idle:
+            break
+        inside = [u for u in inside if u not in idle]
+
+    produced_here: Set[str] = set()
+    for op_uid in inside:
+        produced_here.update((ops.get(op_uid) or {}).get("output_tensor_ids") or [])
+
+    # Inputs: read here, not produced here, not a parameter.
+    seg_inputs: List[str] = []
+    for op_uid in inside:
+        for tid in (ops.get(op_uid) or {}).get("input_tensor_ids") or []:
+            t = tensors.get(tid)
+            if tid in produced_here or tid in seg_inputs:
+                continue
+            if t is not None and t.get("is_parameter"):
+                continue
+            seg_inputs.append(tid)
+
+    # Outputs: produced here and read later, or an output of the component.
+    component_outputs = set(graph.get("output_tensor_ids") or [])
+    read_later: Set[str] = set()
+    for op_uid in order[last + 1:]:
+        read_later.update((ops.get(op_uid) or {}).get("input_tensor_ids") or [])
+    seg_outputs = [tid for tid in produced_here
+                   if (tid in read_later and tid not in views) or tid in component_outputs]
+    if outputs is not None:
+        stray = [t for t in outputs if t not in produced_here]
+        if stray:
+            raise ValueError(f"build_segment_graph: outputs {stray[:3]} are not produced by its ops")
+        seg_outputs = list(outputs)
+
+    keep = set(produced_here)
+    for op_uid in inside:
+        op = ops.get(op_uid) or {}
+        for tid in op.get("input_tensor_ids") or []:
+            if (tensors.get(tid) or {}).get("is_parameter"):
+                keep.add(tid)
+        # A tensor may be referenced ONLY from an op's attributes — a
+        # constant an op reads without listing it as an input. Keeping just
+        # what `input_tensor_ids` names dropped those, and the segment then
+        # lowered differently from the same ops in the whole graph: measured
+        # on TinyLlama, `aten.scaled_dot_product_attention::0` refused inside
+        # a segment while lowering cleanly outside one.
+        attrs = op.get("attributes")
+        if isinstance(attrs, dict):
+            for arg in (attrs.get("args") or []):
+                if isinstance(arg, dict) and arg.get("tensor_id"):
+                    keep.add(arg["tensor_id"])
+            kw = attrs.get("kwargs")
+            if isinstance(kw, dict):
+                for arg in kw.values():
+                    if isinstance(arg, dict) and arg.get("tensor_id"):
+                        keep.add(arg["tensor_id"])
+
+    # A seam tensor has to be BINDABLE. The executor finds its inputs by the
+    # `input::` prefix and strips seven characters to get the name it looks up
+    # in the caller's dict, so `aten.add::42::out_0` — which is what a seam
+    # tensor is called — can never be handed in. Each one is therefore aliased
+    # to `input::<tid>`: the prefix makes the executor see it, and stripping
+    # the prefix gives back the tid, so the caller passes {tid: value} and
+    # nothing has to invent or remember a second name.
+    #
+    # A tensor the component itself was given already carries the prefix and
+    # is left exactly as it is.
+    alias_of: Dict[str, str] = {}
+    for tid in seg_inputs:
+        if tid.startswith("input::"):
+            keep.add(tid)
+            continue
+        alias = "input::" + tid
+        src = tensors.get(tid) or {}
+        alias_of[tid] = alias
+        keep.add(alias)
+
+    seg_tensors: Dict[str, Any] = {
+        tid: tensors[tid] for tid in keep if tid in tensors}
+    for tid, alias in alias_of.items():
+        src = tensors.get(tid) or {}
+        seg_tensors[alias] = {
+            "tensor_id": alias,
+            "shape": src.get("shape"),
+            "dtype": src.get("dtype"),
+            "device": src.get("device"),
+            "producer_op_uid": None,
+            "output_index": None,
+            "consumer_op_uids": list(src.get("consumer_op_uids") or []),
+            "is_parameter": False,
+            "is_input": True,
+            "weight_name": None,
+            "input_name": tid,
+            "output_name": None,
+            "seam_alias_of": tid,
+            # The seam carries the SYMBOLIC shape, not only the concrete one.
+            # Without it every dim crossing a segment boundary arrives as a
+            # literal, and a later segment has nothing to bind its symbols from
+            # — which is not a shape bug that shows up as a wrong number, it is
+            # the engine's own refusal:
+            #   UnboundSymbolError: symbol 's0' (batch, binds from
+            #   input::input_ids::dim_0) is not bound at runtime. Bound: ['s2','s3']
+            # `input_ids` is read by the embedding in segment 0 and by nothing
+            # after it, so s0 and s1 lost their source at the first boundary
+            # while `position_ids` (a graph input throughout) kept s2 and s3.
+            # Principle 1 is not suspended at a seam.
+            "symbolic_shape": src.get("symbolic_shape"),
+        }
+
+    # Ops are shared with the full graph, so the rewrite copies rather than
+    # mutating: a partition must not damage the graph it was cut from.
+    seg_ops: Dict[str, Any] = {}
+    for op_uid in inside:
+        op = ops.get(op_uid)
+        if op is None:
+            continue
+        if not alias_of:
+            seg_ops[op_uid] = op
+            continue
+        new_op = dict(op)
+        new_op["input_tensor_ids"] = [alias_of.get(t, t)
+                                      for t in (op.get("input_tensor_ids") or [])]
+        attrs = op.get("attributes")
+        if isinstance(attrs, dict):
+            new_attrs = dict(attrs)
+            if attrs.get("args"):
+                new_attrs["args"] = [rewire_arg(arg, alias_of) for arg in attrs["args"]]
+            if isinstance(attrs.get("kwargs"), dict):
+                new_attrs["kwargs"] = {k: rewire_arg(v, alias_of)
+                                       for k, v in attrs["kwargs"].items()}
+            # Every OTHER tensor id the op carries in its attributes. A fused op
+            # does not take all of its inputs positionally: `custom::moe_fused`
+            # names its hidden states, its gate scores and its pre-computed
+            # routing by tid in `attributes`, and the runtime resolves those
+            # attributes to arena SLOTS — so an id left un-aliased points at a
+            # slot the seam never fills.
+            #
+            # Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct under
+            # `layer_streaming`: segment 0 ran and returned its five outputs,
+            # segment 1 then raised
+            #     RuntimeError: MoE fused: hidden_states is None (slot N).
+            #     Killed by liveness analysis before fused op.
+            # which is not what happened — nothing killed it. The tensor was
+            # present under `input::<tid>` while the attribute still asked for
+            # `<tid>`. All four class-1 MoE models failed this way.
+            #
+            # Data-driven, and it has to be: the rewrite knows only "this value
+            # IS a tensor id this seam is aliasing". It names no op, no
+            # attribute and no family, so a fused op added later is covered the
+            # day it is written. A weight id is never in `alias_of` — a seam
+            # carries activations — so expert weight lists pass through
+            # untouched.
+            for key, val in attrs.items():
+                if key in ("args", "kwargs"):
+                    continue
+                if isinstance(val, str) and val in alias_of:
+                    new_attrs[key] = alias_of[val]
+                elif isinstance(val, list) and any(
+                        isinstance(v, str) and v in alias_of for v in val):
+                    new_attrs[key] = [alias_of.get(v, v) if isinstance(v, str)
+                                      else v for v in val]
+            new_op["attributes"] = new_attrs
+        seg_ops[op_uid] = new_op
+
+    out = {k: v for k, v in graph.items()
+           if k not in ("tensors", "ops", "execution_order",
+                        "input_tensor_ids", "output_tensor_ids")}
+    out["tensors"] = seg_tensors
+    out["ops"] = seg_ops
+    out["execution_order"] = inside
+    # What the executor will bind, in its own vocabulary.
+    out["input_tensor_ids"] = [alias_of.get(t, t) for t in seg_inputs]
+    # What the caller must hand in, keyed as the executor will look it up.
+    out["segment_input_names"] = [t[7:] for t in out["input_tensor_ids"]]
+    # A seam tensor is an INTERMEDIATE, and must not look like one of the
+    # component's own outputs. The executor narrows `output_tensor_ids` to the
+    # entries whose `output_name` is a PRIMARY output name, keeping all of
+    # them only when none matches — so a single seam tensor that inherited a
+    # primary name from the component's metadata silently discarded every
+    # other seam tensor. Measured: segment 0 declared 4 outputs and its `run`
+    # returned 1, and the next segment then had no inputs.
+    #
+    # The component's REAL outputs keep their name — in the last segment that
+    # is what the caller reads.
+    for tid in seg_outputs:
+        if tid in component_outputs:
+            continue
+        t = out["tensors"].get(tid)
+        if t is not None and t.get("output_name"):
+            t = dict(t)
+            # REMOVE the key, do not set it to None. A reader using
+            # `.get("output_name", tid)` gets its default only when the key is
+            # absent; a present-but-null name returned None and collapsed
+            # every seam output onto one key.
+            t.pop("output_name", None)
+            t["seam_intermediate"] = True
+            out["tensors"][tid] = t
+    out["output_tensor_ids"] = sorted(seg_outputs)
+    out["segment_index"] = segment.index
+
+    # EVERY SYMBOL A SEGMENT USES BINDS WHERE THE WHOLE COMPONENT BINDS IT.
+    #
+    # A symbol binds from a component INPUT (`input::attention_mask::dim_1`), and a segment's
+    # inputs are the tensors crossing its seam. The first repair re-sourced each symbol to a seam
+    # dim carrying the SAME symbol id, and kept the original source when none did — which then
+    # refused. It could not serve a build that minted two ids for one extent: PixArt's T5 binds
+    # seq_len twice, `s1` from attention_mask and `s3` from input_ids; the hidden states carry
+    # `s3`, a later piece uses `s1`, and the Mac's 2048x1024 render died after 1 821 s:
+    #     UnboundSymbolError: symbol 's1' (seq_len, binds from input::attention_mask::dim_1)
+    #     is not bound at runtime ... Bound: ['s0', 's3']          (the Mac, 8e786e70)
+    #
+    # So the segment CARRIES the component input its symbols bind from: that input is declared as
+    # one of the segment's inputs, the symbol keeps its original source, and the streaming
+    # strategy — which holds the component's inputs for the whole run — hands it in. Every piece
+    # then binds every symbol from exactly the tensor the whole component binds it from: nothing
+    # is equated, nothing re-sourced, a value-sourced symbol (`::val_`) reads the same data. A
+    # carried input no op reads is a binding source only, and it is already resident (the strategy
+    # holds the component's inputs for the whole run), so it adds a REFERENCE, not bytes. Its entry
+    # handling is a model input's, once per piece: an integer carrier on the device (the T5 case) is
+    # passed as is; a floating carrier not in the compute dtype is cast per piece, and a `::val_`
+    # carrier is read to the host per piece — not measured, and not counted by
+    # `live_activation_curve`, which has never counted component inputs. A symbol whose source is
+    # NOT a component input keeps it and refuses by name, as before: that dim genuinely does not
+    # cross. A source form this function does not know is refused HERE, at partition time.
+    sym_ctx = graph.get("symbolic_context")
+    if isinstance(sym_ctx, dict) and isinstance(sym_ctx.get("symbols"), dict):
+        used: Set[str] = set()
+
+        known = set(sym_ctx["symbols"])
+
+        def _walk(obj):
+            # Every form the resolvers accept: `{"type": "symbol", "id"}`, a `symbol_id` key
+            # (scaled / derived nodes, shape_resolver + triton/sequence), and a bare string that
+            # IS a symbol id (triton/symbols.resolve).
+            if isinstance(obj, dict):
+                if obj.get("type") == "symbol" and obj.get("id"):
+                    used.add(str(obj["id"]))
+                if isinstance(obj.get("symbol_id"), str):
+                    used.add(obj["symbol_id"])
+                for v in obj.values():
+                    _walk(v)
+            elif isinstance(obj, str):
+                if obj in known:
+                    used.add(obj)
+            elif isinstance(obj, list):
+                for v in obj:
+                    _walk(v)
+
+        _walk(out["tensors"])
+        _walk(out["ops"])
+        component_inputs = set(graph.get("input_tensor_ids") or [])
+        carried: List[str] = []
+        for sid, info in sym_ctx["symbols"].items():
+            if sid not in used or not isinstance(info, dict):
+                continue
+            raw = info.get("source")
+            if isinstance(raw, dict) and raw.get("tensor_id") is not None:
+                src_tid = str(raw["tensor_id"])
+            else:
+                source = str(raw or "")
+                sep = ("::dim_" if "::dim_" in source else "::val_" if "::val_" in source
+                       else None)
+                if not source.startswith("input::") or sep is None:
+                    raise ValueError(
+                        f"symbol {sid!r} ({info.get('name')}) used in segment {segment.index} has "
+                        f"a source this partitioner cannot carry: {raw!r}. Refused at partition "
+                        f"time rather than left to refuse at runtime, pointing at the wrong place.")
+                src_tid = source.rsplit(sep, 1)[0]
+            if (src_tid in component_inputs and src_tid not in out["input_tensor_ids"]
+                    and src_tid not in carried):
+                carried.append(src_tid)
+        for tid in carried:
+            meta = dict(tensors.get(tid) or {})
+            meta["symbol_carrier"] = True
+            out["tensors"][tid] = meta
+            out["input_tensor_ids"].append(tid)
+            out["segment_input_names"].append(tid[7:])
+        out["symbol_carriers"] = carried
+        # The segment's OWN copy: a later pass (promotion) mutates `symbols` in place per segment
+        # executor, and a partition must not damage the graph it was cut from.
+        out["symbolic_context"] = {**sym_ctx, "symbols": {k: (dict(v) if isinstance(v, dict) else v)
+                                                          for k, v in sym_ctx["symbols"].items()}}
+
+    return out
+
+
+# The seam is bindable: each incoming tensor is aliased to `input::<tid>`, so
+# `GraphExecutor._graph_input_tids` sees it and `run` strips the prefix back to
+# the tid the caller passes. `segment_input_names` on the returned graph is
+# exactly the key set the caller must provide, and outputs come back keyed by
+# tensor id (graph_executor.py: `output_name if output_name else tid`), so a
+# segment's outputs feed the next segment's inputs with no renaming at all.
+
+

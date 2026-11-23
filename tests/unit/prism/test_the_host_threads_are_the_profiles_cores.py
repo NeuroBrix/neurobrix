@@ -51,6 +51,7 @@ def test_no_thread_count_is_read_from_the_machine():
     assert "_optimize_cpu_threading" not in executor, "the executor re-derives threads from os.cpu_count()"
 
 
-def test_a_profile_without_a_cpu_is_refused_by_name_where_the_solver_prices_cores():
-    solver = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "core" / "prism" / "solver.py").read_text()
+@pytest.mark.parametrize("side", ["pytorch", "triton"])            # each branch's own Prism
+def test_a_profile_without_a_cpu_is_refused_by_name_where_the_solver_prices_cores(side):
+    solver = (Path(__file__).resolve().parents[3] / "src" / "neurobrix" / side / "prism" / "solver.py").read_text()
     assert "profile.cpu.cores if profile.cpu else 4" not in solver, "a profile without cpu falls back to 4 cores"

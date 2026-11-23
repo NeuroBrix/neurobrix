@@ -73,6 +73,7 @@ from neurobrix.serving.protocol import (
     make_response,
 )
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 #: The prefix of the one stdout line that carries the daemon's ready record.
@@ -282,7 +283,7 @@ class ServingDaemon:
         cannot use (cudaErrorInitializationError)."""
         if self._engine.hardware_id:
             return
-        from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
+        get_or_create_default_profile = _branch_door.names("prism", "autodetect", "get_or_create_default_profile")[0]
         self._engine.hardware_id = get_or_create_default_profile()
 
     def _reload_after_intel_refusal(self, exc: BaseException) -> Optional[str]:
@@ -292,7 +293,7 @@ class ServingDaemon:
         gets; the refused device's engine is released only once the new one is loaded, so a reload that fails leaves
         the daemon as it was (its error raised: the caller's). Returns the sentence; None when there is no such
         refusal, when the daemon already reloaded after one, or when its profile was given (`--hardware`)."""
-        from neurobrix.pytorch.prism import intel_refusal
+        intel_refusal = _branch_door.names("prism", "", "intel_refusal")[0]
         err = intel_refusal.intel_error(exc)
         if err is None or err.result not in intel_refusal.CANNOT or self._intel_refused or not self._auto_hardware:
             return None
@@ -305,7 +306,7 @@ class ServingDaemon:
         _log.warning(f"[Daemon] {said}")
         intel_refusal.record(devices, f"refused at run time: {err.call}: {err.result}", old.hardware_id)
         new = type(old)(old.model_name, None, old.mode)
-        from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
+        get_or_create_default_profile = _branch_door.names("prism", "autodetect", "get_or_create_default_profile")[0]
         new.hardware_id = get_or_create_default_profile()
         new.load()
         self._engine = new

@@ -14,6 +14,7 @@ while `run` answered the same model (2026-11-13). A command does not choose its 
 from __future__ import annotations
 
 from typing import Optional
+from neurobrix import branch_door as _branch_door
 
 #: the flag dest -> the execution mode it asks for
 _FLAGS = (("compiled", "compiled"), ("sequential", "sequential"), ("triton", "triton"),
@@ -37,6 +38,20 @@ def add_engine_flags(p) -> None:
                    help='Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). '
                         'Equivalent of --sequential but for the Triton backend. Useful for debugging individual '
                         'Triton kernels.')
+
+
+def asked_mode(args) -> Optional[str]:
+    """The mode `args` names by its flag, else the mode a run that names none takes (`core/runtime/engines.default_mode`),
+    read only: nothing checked, nothing said (`choose_engine` does both). None when several flags are passed (the
+    refusal is `choose_engine`'s). The branch door is told this mode before anything reads the hardware, so that the
+    command's very first Prism call is its branch's (the detection runs before the engine is checked)."""
+    asked = [mode for dest, mode in _FLAGS if getattr(args, dest, False)]
+    if len(asked) > 1:
+        return None
+    if asked:
+        return asked[0]
+    from neurobrix.core.runtime.engines import default_mode
+    return default_mode()[0]
 
 
 def choose_engine(args, log) -> Optional[str]:
@@ -63,6 +78,7 @@ def choose_engine(args, log) -> Optional[str]:
     except (engines.PyTorchBranchNotInstalledError, engines.TritonBranchNotInstalledError) as exc:
         log.error(f"Error: {exc}")
         return None
+    _branch_door.choose(mode)                   # the branch this process runs: common code asks the door for its side
     return mode
 
 
@@ -91,7 +107,7 @@ def _triton_backend_present(log) -> bool:
 def declare_for(mode: str, hw_profile) -> None:
     """The Triton branch's hardware declaration (`triton.dtype.declare_hardware_profile`, which needs triton), in the
     Triton modes only, as `serving/engine.py` gates it: no PyTorch mode reads it, so a host without triton runs them."""
-    from neurobrix.pytorch.prism.runtime_widths import TRITON_ENGINES
+    TRITON_ENGINES = _branch_door.names("prism", "runtime_widths", "TRITON_ENGINES")[0]
     if mode in TRITON_ENGINES:
         from neurobrix.triton.dtype import declare_hardware_profile
         declare_hardware_profile(hw_profile)

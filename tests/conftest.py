@@ -95,3 +95,13 @@ def engine_log(caplog):
         caplog.clear()
         return out
     return text
+
+
+@pytest.fixture(autouse=True)
+def _branch_door_unchosen():
+    """Each test starts with no branch chosen (`neurobrix.branch_door`): a process runs one branch, and a test
+    process runs many commands one after the other, each choosing its own."""
+    from neurobrix import branch_door
+    branch_door._CHOSEN[0] = None
+    yield
+    branch_door._CHOSEN[0] = None

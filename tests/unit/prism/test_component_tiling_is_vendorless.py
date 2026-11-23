@@ -52,11 +52,12 @@ def test_cpu_placement_still_drops_its_tiling_decision():
     assert not _new("cpu")
 
 
-def test_the_solver_uses_the_vendorless_predicate():
+@pytest.mark.parametrize("side", ["pytorch", "triton"])            # each branch's own Prism
+def test_the_solver_uses_the_vendorless_predicate(side):
     """The predicate above is only meaningful if the solver actually uses it."""
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "core" / "prism" / "solver.py"
+    src = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / side / "prism" / "solver.py"
     text = src.read_text()
     idx = text.find("plan.component_tiling = {")
     assert idx != -1, "the component_tiling filter moved; re-point this test"

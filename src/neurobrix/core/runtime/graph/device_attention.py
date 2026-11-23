@@ -20,6 +20,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 _MEMORY = {}          # (vendor, architecture) -> the vendor file's memory section
@@ -27,7 +28,7 @@ _SAID = set()         # the (shape, budget) cuts already said: one line per dist
 
 
 def _memory(hardware):
-    from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
+    vendor_memory_of = _branch_door.names("prism", "attention_scratch", "vendor_memory_of")[0]
     key = tuple(hardware)
     if key not in _MEMORY:
         _MEMORY[key] = vendor_memory_of(*key)
@@ -48,7 +49,7 @@ def scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p: float = 0.0
     if hardware is None:
         raise ValueError(f"ZERO FALLBACK: an attention on {q.device} was given no hardware — whether its device writes "
                          f"its full scores is read from the vendor file of the plan's device, never assumed")
-    from neurobrix.pytorch.prism.attention_scratch import writes_full_scores, chunk_plan, chunks_in_flight
+    writes_full_scores, chunk_plan, chunks_in_flight = _branch_door.names("prism", "attention_scratch", "writes_full_scores", "chunk_plan", "chunks_in_flight")
     memory = _memory(hardware)
     if not writes_full_scores(memory):
         return _plain(q, k, v, attn_mask, dropout_p, is_causal, scale)

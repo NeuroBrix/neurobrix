@@ -1,0 +1,1730 @@
+"""
+NeuroBrix Prism - Symbolic Activation Profiler
+
+Simulates graph execution WITHOUT GPU allocation to estimate peak activation memory.
+
+Key Innovation: Liveness Analysis + Symbolic Shape Resolution
+- Parses graph.json with symbolic shapes
+- Resolves symbols to concrete values (batch_size, height, width)
+- Tracks tensor lifetimes to compute peak memory
+- Zero GPU cost - pure CPU math (~10ms for 5000 ops)
+
+Formula: Required_VRAM = Weights + Peak_Activations + Overhead
+"""
+
+import json
+import os
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Union
+from dataclasses import dataclass
+
+from nbxtensor.dtype import itemsize as _itemsize
+from neurobrix.core.runtime_values import MissingRuntimeValue
+from neurobrix.core.runtime import symexpr as _symexpr
+from neurobrix.core.runtime import liveness as _liveness
+
+
+def _is_attention(op_type) -> bool:
+    """An attention op, by the canonical op names the runtime widths read (triton/prism/runtime_widths._SDPA)."""
+    from neurobrix.triton.prism.runtime_widths import _SDPA
+    return str(op_type or "").split("::")[-1].split(".")[0] in _SDPA
+
+
+@dataclass
+class InputConfig:
+    """Runtime input configuration for activation profiling.
+
+    NO FIELD CARRIES A LITERAL DEFAULT. `batch_size = 2`, `height = 1024`,
+    `width = 1024`, `dtype = "float16"` and `vae_scale = 8` stood here and every
+    one of them is a claim about a request nobody made: a config built without
+    them planned a 1024x1024 float16 batch of two for an upscaler handed a
+    448x448 image. Values come from `core.runtime_values.resolve` — the request,
+    then the container's runtime/defaults.json, then the family config — and the
+    engine refuses by name when none of them provides one.
+
+    `None` here means ABSENT, and absent is legitimate only for a dimension the
+    model does not have: no VAE, no vae_scale; no temporal axis, no compression.
+    """
+    batch_size: Optional[int] = None
+    height: Optional[int] = None
+    width: Optional[int] = None
+    seq_len: Optional[int] = None
+    # The tokens the request asks the decoder for (`--max-tokens`): a run's KV floor and pre-sizing estimate are this
+    # request's, not the package's declared ceiling (runtime/defaults.json max_tokens). None: the package's.
+    max_tokens: Optional[int] = None
+    # The tokens the request decodes at most (`--max-tokens` as given), whatever the flow and its inputs: what Prism's
+    # time estimate counts generated tokens by (`max_tokens` above prices a cache floor and is None for a request with
+    # an image, video or audio input — granite-speech's 32 tokens were estimated as the package's 448, 2026-11-03).
+    # None: not stated, the package's max_tokens.
+    decode_tokens: Optional[int] = None
+    # The request's denoising steps (`--steps`, else the container's `num_inference_steps`): how many times a flow's
+    # loop runs its components, read by Prism's time estimate (triton/prism/time_estimate.py). None: not stated.
+    steps: Optional[int] = None
+    dtype: Optional[str] = None
+    vae_scale: Optional[int] = None
+    # Video (5D) runtime dims — None for image/LLM models. latent_T is
+    # derived as (num_frames - 1) // temporal_compression + 1 (causal video
+    # VAE convention); temporal_compression comes from the model's
+    # defaults.json (`temporal_compression_ratio`), data-driven.
+    num_frames: Optional[int] = None
+    # One chunk of a temporal stream (`triton/prism/temporal_stream.py`): the time extent, in the component's own input
+    # frames, of the chunk a stream graph is priced at — its time symbol binds to it, whatever the request's frames.
+    # None: the component runs its clip whole.
+    chunk_frames: Optional[int] = None
+    # One tile of a VENDOR tiling (`triton/prism/temporal_stream.vendor_tile_extent`): {symbol name ("time", "height",
+    # "width"): the tile's extent in the component's own input units} — each named symbol binds to it, whatever the
+    # request. None: the component runs at the request's extents.
+    cut_extents: Optional[Dict[str, int]] = None
+    temporal_compression: Optional[int] = None
+    # The request's flow (`triton.prism.flow_bindings.FlowBindings`, set by `run.request_input_config`):
+    # the per-component bindings no symbol name carries — the CFG batch of the loop denoiser, a
+    # diffusion encoder's tokenized length, the denoiser's finalized text axis, a FLUX denoiser's
+    # packed inputs. None: the name-driven map alone.
+    flow: Optional[Any] = None
+    # A teacher-forced scoring request (`--set global.score_mode=1`): the flow's head runs EVERY prompt position, not
+    # the last one (`FlowBindings.head_rows`).
+    scoring: bool = False
+    # The cached keys a serving session's prefill chunk attends beside its own rows: the session cache's reach on the
+    # card (`triton/prism/served_prefill.py` states it once the cache is sized). None: a run, whose one pass attends
+    # its own rows only.
+    prefill_keys: Optional[int] = None
+    # The dtype those cached keys are stored in (`KVCachePlan.dtype`), stated with them.
+    prefill_key_dtype: Optional[str] = None
+    # The branches classifier-free guidance batches together (`run.request_input_config`: 2 when the
+    # request's guidance is in force, so `batch_size` is already that multiple of the request's own
+    # batch). None: the request runs no guidance, and there is no guidance batch to split.
+    guidance_passes: Optional[int] = None
+    # The request's output mode (`output_dispatch.resolve_mode`: "text", "audio", ...), which decides
+    # the legs a flow runs (`core.flow.base.unloaded_by_request`: a VLM's speech components load only
+    # for a speech request). None: not known — every leg the flow declares is priced.
+    mode: Optional[str] = None
+    # The input modalities the request carries beside its prompt ("image", "video", "audio"; `run.request_input_config`
+    # reads them from the request), which decide the modality towers a flow runs (`core.flow.base.unloaded_by_request`:
+    # a VLM's vision tower loads only for a request with an image or a video). None: not known — every tower is priced.
+    inputs: Optional[frozenset] = None
+
+    def positional_symbol_map(self) -> Dict[str, int]:
+        """The POSITIONAL base, which GUESSES what each symbol id means.
+
+        It assumes the image legacy — `s0` batch, `s1` latent height, `s2`
+        latent width — and that assumption is wrong for every graph that says
+        otherwise. A video graph declares `s1: time`; bound positionally, the
+        time axis takes a spatial extent and every activation is mis-sized.
+
+        **This is a base, not an answer. Call `ActivationProfiler.build_symbol_map`,
+        which lays the graph's own declared names over this.** The name carries
+        the hypothesis now because a docstring did not carry it: the warning
+        below was already written here in August, in the function nobody called,
+        and it did not reach the caller who called this one.
+        """
+        height = self.height
+        width = self.width
+        batch_size = self.batch_size
+        vae_scale = self.vae_scale
+
+        # A model without a VAE has no latent grid. Dividing by a literal 8
+        # invented one, and the symbols it produced were then matched against
+        # graphs that never had them.
+        latent_h = height // vae_scale if (height and vae_scale) else None
+        latent_w = width // vae_scale if (width and vae_scale) else None
+
+        # Every entry is OMITTED when its value does not exist, rather than
+        # filled with a literal. `seq_len or 128` stood here, and a map that
+        # answers 128 for a sequence nobody declared is a guess wearing an
+        # answer's clothes.
+        symbol_map = {}
+        for k, v in (("batch_size", batch_size), ("height", height),
+                     ("width", width), ("s0", batch_size),
+                     ("s1", latent_h), ("s2", latent_w),
+                     ("latent_h", latent_h), ("latent_w", latent_w),
+                     ("seq_len", self.seq_len), ("sequence_length", self.seq_len)):
+            if v is not None:
+                symbol_map[k] = v
+        if latent_h is not None and latent_w is not None:
+            symbol_map["s3"] = latent_h * latent_w          # flattened spatial
+            symbol_map["latent_hw"] = latent_h * latent_w
+
+        return symbol_map
+
+
+# ---------------------------------------------------------------------------
+# D2-ENCODER — linear-downscale graph classifier (shared Prism machinery)
+#
+# A VAE *encoder* consumes PIXEL-space video and produces LATENT-space
+# output (output extents = input extents / compression). Its symbols are
+# named time/height/width exactly like a decoder's, but they live in the
+# OPPOSITE space — so the name-driven latent binding in build_symbol_map
+# under-sizes every encoder activation by the compression volume (Allegro
+# encoder at 88f 720x1280: 0.62 GiB bound latent-side vs 156 GiB real).
+#
+# These helpers classify the graph DIRECTION and its temporal map class
+# from the graph symbolics alone (data-driven, no model/family names):
+#   - temporal_downscale_ratio: LINEAR-DOWN class (t_out = t_in / r exactly
+#     on the r-lattice, no first-frame offset) vs the causal/affine class
+#     ((t-1)/r + 1: first frame encodes alone) which is DECLINED — the
+#     identical doctrine to the decode-side `_temporal_affine_map` gate
+#     (LINEAR tiles, AFFINE/CAUSAL declines).
+#   - is_linear_downscale_graph: the conjunction used to gate pixel-space
+#     symbol binding and encoder component-tiling.
+# ---------------------------------------------------------------------------
+
+
+def _symbolic_dims(tensors: Dict, tid) -> List:
+    """symbolic_shape dims list for a tensor id ([] when absent)."""
+    return (tensors.get(str(tid), {})
+            .get("symbolic_shape", {}).get("dims", []) or [])
+
+
+class _Declined(Exception):
+    """A tree that references a symbol other than the one probed."""
+
+
+def _eval_symbolic_expr(node, sym_id: str, value: int) -> Optional[int]:
+    """Evaluate a symbolic dim expression tree at `sym_id = value`.
+
+    Returns None when the tree references any OTHER symbol, a node outside the vocabulary, a
+    division by zero or a real (a dim is an integer) — multi-symbol / exotic trees are declined,
+    mirroring the decode-side `_affine` reader's conservatism. The arithmetic is the ONE
+    evaluator every resolver uses (core/runtime/symexpr.py).
+    """
+    def symbol(sid, _node):
+        if sid == sym_id:
+            return value
+        raise _Declined(sid)
+    try:
+        return _symexpr.evaluate(node, symbol, _symexpr.SHAPE)
+    except (_Declined, _symexpr.ExpressionError, ZeroDivisionError):
+        return None
+
+
+def temporal_downscale_ratio(dag: Dict) -> Optional[tuple]:
+    """LINEAR-DOWN temporal map classifier for downsampler (encoder) graphs.
+
+    Reads the rank-5 input's temporal symbol (dim 2, NCTHW) and searches the
+    rank-5 outputs for a dim expression f(t) that is an exact linear
+    downscale: f(k*r) == k AND f(k*r + 1) == k over a probe set, with
+    r = trace_t_in / trace_t_out an exact integer > 1.
+
+    The second probe rejects the causal/affine class ((t-1)//r + 1 —
+    CogVideoX/Wan/Mochi encoders): it agrees with linear at exact multiples
+    of r but jumps to k+1 at k*r + 1 (the first frame encodes alone).
+    A mid-clip tile under that class would re-apply the clip-start
+    semantics — identical doctrine to the decode-side b != 0 decline.
+
+    Returns (ratio, out_t_axis) — out_t_axis is the OUTPUT dim index that
+    carries the temporal expression (encoders may permute the latent layout,
+    e.g. [B, T, C, H, W]) — or None when the graph is not in the class.
+    """
+    tensors = dag.get("tensors", {})
+    t_symbol = None
+    t_in_build = None
+    for iid in dag.get("input_tensor_ids", []):
+        dims = _symbolic_dims(tensors, iid)
+        if len(dims) == 5 and isinstance(dims[2], dict) \
+                and dims[2].get("type") == "symbol":
+            t_symbol = dims[2].get("id")
+            t_in_build = dims[2].get("trace")
+            break
+    if t_symbol is None or not isinstance(t_in_build, int) or t_in_build <= 1:
+        return None
+
+    for oid in dag.get("output_tensor_ids", []):
+        dims = _symbolic_dims(tensors, oid)
+        if len(dims) != 5:
+            continue
+        for axis in range(1, 5):
+            expr = dims[axis]
+            if not isinstance(expr, dict):
+                continue
+            if _eval_symbolic_expr(expr, t_symbol, t_in_build) is None:
+                continue  # not a function of the temporal symbol alone
+            t_out_build = _eval_symbolic_expr(expr, t_symbol, t_in_build)
+            if not isinstance(t_out_build, int) or t_out_build <= 0 \
+                    or t_out_build >= t_in_build:
+                continue  # not a downscale along this axis
+            if t_in_build % t_out_build != 0:
+                return None  # non-integral build ratio — declined
+            ratio = t_in_build // t_out_build
+            if ratio <= 1:
+                return None
+            linear = all(
+                _eval_symbolic_expr(expr, t_symbol, k * ratio) == k
+                for k in (2, 3, 5, 7, 11, 25, 64))
+            no_lead_frame = all(
+                _eval_symbolic_expr(expr, t_symbol, k * ratio + 1) == k
+                for k in (3, 11, 25))
+            if linear and no_lead_frame:
+                return (ratio, axis)
+            return None  # causal / other class — declined
+    return None
+
+
+def temporal_causal_downscale_ratio(dag: Dict) -> Optional[tuple]:
+    """CAUSAL temporal map classifier for downsampler (encoder) graphs: t_out = 1 + (t_in - 1) // r.
+
+    The class `temporal_downscale_ratio` declines on purpose (Wan / CogVideoX / Mochi encoders:
+    the first frame encodes alone). A TEMPORAL tile cannot be taken mid-clip in this class — it
+    would re-apply the clip-start semantics — but a SPATIAL tile carrying the whole clip can: the
+    vendor's own tiled encode for these VAEs (diffusers `AutoencoderKLWan.tiled_encode`) tiles
+    height and width and runs the full causal time pass in every tile.
+
+    Returns (r, out_t_axis) when some rank-5 output dim is exactly 1 + (t - 1) // r over a probe
+    set (r read from the graph, never assumed), else None."""
+    tensors = dag.get("tensors", {})
+    t_symbol = None
+    for iid in dag.get("input_tensor_ids", []):
+        dims = _symbolic_dims(tensors, iid)
+        if len(dims) == 5 and isinstance(dims[2], dict) and dims[2].get("type") == "symbol":
+            t_symbol = dims[2].get("id")
+            break
+    if t_symbol is None:
+        return None
+    for oid in dag.get("output_tensor_ids", []):
+        dims = _symbolic_dims(tensors, oid)
+        if len(dims) != 5:
+            continue
+        for axis in range(1, 5):
+            expr = dims[axis]
+            if not isinstance(expr, dict) or _eval_symbolic_expr(expr, t_symbol, 1) != 1:
+                continue
+            for r in range(2, 17):
+                if all(_eval_symbolic_expr(expr, t_symbol, k * r + 1) == k + 1 for k in (1, 2, 5, 20, 64)):
+                    return (r, axis)
+    return None
+
+
+def _symbols_of(node, out: Optional[set] = None) -> set:
+    """Every symbol id a symbolic dim expression tree references."""
+    out = set() if out is None else out
+    if isinstance(node, dict):
+        if node.get("type") == "symbol":
+            out.add(node.get("id"))
+        for key in ("left", "right", "operand"):
+            if key in node:
+                _symbols_of(node[key], out)
+        for f in node.get("factors", ()) or ():
+            _symbols_of(f, out)
+    return out
+
+
+#: Ops whose result at one position reads EVERY position of the axes they reduce — (op name, index
+#: of the dim argument in `attributes.args`, or None for "every axis past the channel one").
+_REDUCING_OPS = {
+    "mean": 1, "sum": 1, "amax": 1, "amin": 1, "var": 1, "std": 1, "logsumexp": 1, "var_mean": 1,
+    "std_mean": 1, "linalg_vector_norm": 2, "_softmax": 1, "softmax": 1, "_log_softmax": 1,
+    "log_softmax": 1, "native_group_norm": None, "group_norm": None,
+}
+_CONTRACTING_OPS = frozenset({"mm", "bmm", "matmul", "baddbmm", "addbmm"})
+
+
+def spatial_coupling(dag: Dict) -> Optional[tuple]:
+    """The first op of `dag` whose output at one position reads every position of the spatial
+    extent a spatial tile would cut, or None when no op does.
+
+    A spatial tile (`TilingEngine`) runs the component on a window of the input's height and width:
+    exact only where every op is local in space (a convolution's window, a per-position op). An
+    attention whose keys span the spatial extent, a softmax, a reduction or a group norm over it,
+    a matmul contracting it, computes something else on a tile — every position of the tile then
+    reads the tile instead of the whole extent (diffusers says the same of its own tiled encode:
+    "The end result of tiled encoding is different from non-tiled encoding because each tile uses
+    a different encoder", AutoencoderKL.tiled_encode). Read from the graph's symbolic shapes: the
+    spatial symbols are those of the rank-4/5 input's last two dims, and an axis couples space when
+    its extent's expression references one of them.
+
+    Returns (op_uid, reason) — the op and what it reduces — or, when the input's spatial dims are not
+    symbols (coupling cannot be read), ("", reason). None: no op couples the spatial extent."""
+    tensors = dag.get("tensors", {})
+    spatial = None
+    for iid in dag.get("input_tensor_ids", []):
+        dims = _symbolic_dims(tensors, iid)
+        if len(dims) in (4, 5):
+            spatial = set()
+            for d in dims[-2:]:
+                if not (isinstance(d, dict) and d.get("type") == "symbol"):
+                    return ("", f"its input {iid}'s height and width are not symbols, so whether an op "
+                                f"couples them cannot be read")
+                spatial.add(d.get("id"))
+            break
+    if spatial is None:
+        return ("", "its graph has no rank-4 or rank-5 input")
+
+    def couples(tid, axes):
+        dims = _symbolic_dims(tensors, tid)
+        for a in axes:
+            if -len(dims) <= a < len(dims) and _symbols_of(dims[a]) & spatial:
+                return True
+        return False
+
+    ops = dag.get("ops", {})
+    for uid in dag.get("execution_order", []) or list(ops):
+        op = ops.get(uid) or {}
+        name = str(op.get("op_type") or "").split("::")[-1].split(".")[0]
+        ins = op.get("input_tensor_ids") or []
+        if not ins:
+            continue
+        if _is_attention(op.get("op_type")):
+            # the keys' sequence axis (-2 of [B, H, S, D] or [B, S, D]) is what every query attends
+            if len(ins) > 1 and couples(ins[1], (-2,)):
+                return (uid, "an attention whose keys span the spatial extent")
+            continue
+        if name in _CONTRACTING_OPS:
+            first = ins[1] if name in ("baddbmm", "addbmm") and len(ins) > 1 else ins[0]
+            if couples(first, (-1,)):
+                return (uid, "a matmul contracting the spatial extent")
+            continue
+        if name in _REDUCING_OPS:
+            rank = len(_symbolic_dims(tensors, ins[0]))
+            at = _REDUCING_OPS[name]
+            if at is None:
+                axes = tuple(range(2, rank))
+            else:
+                args = (op.get("attributes") or {}).get("args") or []
+                arg = args[at] if at < len(args) else None
+                val = arg.get("value") if isinstance(arg, dict) else None
+                if val is None:
+                    axes = tuple(range(rank))         # no dim: the whole tensor is reduced
+                else:
+                    axes = tuple(val) if isinstance(val, (list, tuple)) else (val,)
+            if couples(ins[0], axes):
+                return (uid, f"a {name} over the spatial extent")
+    return None
+
+
+def render_symbolic_expr(node) -> str:
+    """A symbolic dim expression tree as text — `((s1+1)//2)` — for a refusal that must name it."""
+    if isinstance(node, dict):
+        if node.get("type") == "symbol":
+            return str(node.get("id"))
+        sign = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%"}.get(node.get("type"))
+        if sign is None:
+            return f"<{node.get('type')}>"
+        return f"({render_symbolic_expr(node.get('left'))}{sign}{render_symbolic_expr(node.get('right'))})"
+    return str(node)
+
+
+def temporal_map_unread(dag: Dict) -> str:
+    """Why neither temporal class reads this encoder graph — its time symbol and its rank-5 output's
+    dims, rendered — so a decline names what it could not read rather than saying "no tiling fits".
+    Called only after both `temporal_downscale_ratio` and `temporal_causal_downscale_ratio` gave
+    None."""
+    tensors = dag.get("tensors", {})
+    t_symbol = next((dims[2].get("id") for dims in (_symbolic_dims(tensors, i)
+                                                    for i in dag.get("input_tensor_ids", []))
+                     if len(dims) == 5 and isinstance(dims[2], dict)
+                     and dims[2].get("type") == "symbol"), None)
+    if t_symbol is None:
+        return "its graph has no rank-5 input whose time axis (dim 2) is a symbol"
+    out = next(((o, dims) for o, dims in ((o, _symbolic_dims(tensors, o))
+                                          for o in dag.get("output_tensor_ids", []))
+                if len(dims) == 5), None)
+    if out is None:
+        return "its graph has no rank-5 output"
+    return (f"no axis of its output {out[0]} [{', '.join(render_symbolic_expr(d) for d in out[1])}] is "
+            f"a linear (t/r) or causal (1 + (t-1)//r) map of its time symbol {t_symbol} alone")
+
+
+def is_linear_downscale_graph(dag: Dict) -> bool:
+    """True iff the graph is a rank-5 spatial DOWNSAMPLER (output spatial
+    build extent < input's — a VAE encoder) whose temporal map is in the
+    LINEAR-DOWN class. This is the gate for pixel-space symbol binding
+    (build_symbol_map) and for encoder component-tiling (Prism solver).
+    Anything else — upsamplers, causal encoders, 4D graphs — is untouched.
+    """
+    tensors = dag.get("tensors", {})
+    in_spatial = None
+    for iid in dag.get("input_tensor_ids", []):
+        shape = tensors.get(str(iid), {}).get("shape", [])
+        if isinstance(shape, list) and len(shape) == 5:
+            in_spatial = shape[-2]
+            break
+    if not in_spatial:
+        return False
+    out_spatial = None
+    for oid in dag.get("output_tensor_ids", []):
+        shape = tensors.get(str(oid), {}).get("shape", [])
+        if isinstance(shape, list) and len(shape) == 5:
+            out_spatial = shape[-2]
+            break
+    if out_spatial is None or out_spatial >= in_spatial:
+        return False
+    return temporal_downscale_ratio(dag) is not None
+
+
+def is_downscale_graph(dag: Dict) -> bool:
+    """A rank-5 spatial DOWNSAMPLER (a video VAE encoder) whose temporal map is linear OR causal:
+    either way it reads PIXELS, and its time/height/width symbols bind to the request's pixel
+    extents. Binding a causal encoder latent-side sized the Wan encoder at 1.1 GB of activations
+    for 81 frames of 352x832 where its first layer alone holds 8.5 GiB (2026-09-26): the plan saw
+    no overflow, never tiled, and the run died. The temporal CLASS decides how it may be tiled
+    (linear: in time and space; causal: in space only), never which space it reads."""
+    if is_linear_downscale_graph(dag):
+        return True
+    tensors = dag.get("tensors", {})
+    shapes_in = [tensors.get(str(i), {}).get("shape", []) for i in dag.get("input_tensor_ids", [])]
+    shapes_out = [tensors.get(str(o), {}).get("shape", []) for o in dag.get("output_tensor_ids", [])]
+    s_in = next((s for s in shapes_in if isinstance(s, list) and len(s) == 5), None)
+    s_out = next((s for s in shapes_out if isinstance(s, list) and len(s) == 5), None)
+    # A rank-5 graph whose output is spatially smaller than its input reads PIXELS, whatever its
+    # temporal map — this docstring's own rule. Requiring a temporal class here left an encoder
+    # whose time axis is a concrete 1 (CogVideoX-5b-I2V's image encoder: [1, 3, 1, 112, 176]) and
+    # encoders whose time map neither class recognises (Allegro-TI2V, Wan2.1-I2V) bound
+    # latent-side: priced 8 x 8 too small per frame, and derived at the latent grid (the census
+    # walk encoded 160 x 352 pixels, 2026-09-29).
+    return bool(s_in and s_out and s_out[-2] < s_in[-2] and s_out[-1] < s_in[-1])
+
+
+@dataclass
+class ActivationProfile:
+    """Result of activation profiling."""
+    peak_bytes: int
+    peak_op_uid: str
+    peak_step: int
+    tensor_count_at_peak: int
+    total_ops: int
+    final_live_bytes: int  # Memory still live at end
+    # NEW: ops whose own footprint (output_bytes + workspace_bytes for the
+    # given mode) exceeds the per-GPU VRAM budget × safety. Populated by
+    # estimate_peak_memory() when called with vram_per_gpu_bytes set.
+    # Each entry: (op_uid, op_type, output_bytes, workspace_bytes,
+    #              input_tids_for_fusion_detection)
+    overflow_ops: List = None  # type: ignore  # Optional[List[Tuple[...]]]
+    #: WHICH REQUEST THIS NUMBER IS ABOUT. "request" when a caller supplied an
+    #: InputConfig; "trace" when none was given and the profile was bound to the
+    #: extents the container was actually built at. A peak in gigabytes reads
+    #: like a property of the model; it is a property of a request, and until
+    #: 2026-09-12 a caller who passed nothing silently got a 1024x1024 batch-2
+    #: image request applied to whatever graph it held -- a video component's
+    #: time axis bound to a spatial extent included.
+    binding: str = "request"
+    #: The symbol map the simulation actually used. Recorded so a surprising
+    #: number can be attributed without re-deriving it, which is how the
+    #: 944 GB estimate stayed unexplained for two days.
+    symbol_map: Optional[Dict[str, int]] = None
+    #: Bytes ALREADY live on the card when each op begins, keyed by op_uid.
+    #: `overflow_ops` asks whether one op's own footprint clears the op budget fraction (`tiling_sizes.op_budget_fraction()`) of the
+    #: card, which is a question about an empty card; this is what the card is
+    #: actually holding at that point in the schedule. Recorded by the
+    #: simulation loop because only that loop applies the zero-alloc, stride-0
+    #: and alias-lifetime rules -- a walk that re-derives it outside reads
+    #: `aten.t` and `aten.view` as allocations and reports hundreds of GB on a
+    #: graph that allocates none of it.
+    live_before_op: Optional[Dict[str, int]] = None
+    #: Elements of the graph's output tensors at this binding — what the component hands on; the host
+    #: estimate prices the run's output boundary from the largest of them.
+    output_elements: int = 0
+    #: What the device allocator holds at its peak for this walk (`estimate_peak_memory(pool=)`: the walk's
+    #: allocations replayed through its pool, `nbxtensor.memory.pool.simulate`) — the live set and the free blocks
+    #: its segments keep pinned; None when no pool was given (the compiled engine)
+    held_peak_bytes: Optional[int] = None
+    #: the same walk with every dead tensor freed at once: what the pool alone holds over the live set (the deferred
+    #: queue priced apart, `PrismSolver._deferred_drain_mb`); None with no pool given
+    held_live_bytes: Optional[int] = None
+
+    @property
+    def peak_mb(self) -> float:
+        return self.peak_bytes / (1024 * 1024)
+
+    @property
+    def peak_gb(self) -> float:
+        return self.peak_bytes / (1024 * 1024 * 1024)
+
+    def __repr__(self) -> str:
+        ov = len(self.overflow_ops) if self.overflow_ops else 0
+        return (
+            f"ActivationProfile[{self.binding}-bound](peak={self.peak_gb:.2f}GB "
+            f"at step {self.peak_step}/{self.total_ops}, "
+            f"op={self.peak_op_uid}, tensors_at_peak={self.tensor_count_at_peak}, "
+            f"overflow_ops={ov})"
+        )
+
+
+#: Ops whose output is a STRIDE-0 broadcast view at runtime: they allocate nothing (see the
+#: simulation loop in `ActivationProfiler.estimate_peak_memory`). Shared with the layer partitioner,
+#: which sizes the same graph's activations and must not count what this one does not.
+ZERO_ALLOC_OP_TYPES = ("aten::expand", "aten::broadcast_to")
+
+#: ATen ops whose output is a VIEW of their first input (https://docs.pytorch.org/docs/2.14/tensor_view.html),
+#: in both engines for the contiguous tensors a graph hands them: the op allocates nothing WHILE it
+#: runs. ONE rule for every walk of a graph's activations — the placement estimate
+#: (`ActivationProfiler.estimate_peak_memory`: its peak and its overflow scan) and the layer
+#: partitioner's reserve (`LayerPartitioner.op_peak_curve`) — so a graph has one figure. The
+#: output is still counted once the op has run (both walks): a consumer that cannot read the
+#: strided view copies it, and that copy is not in the graph. Not `reshape` or `contiguous` (they
+#: copy a strided input), and not `expand` (allocation-free for its whole life, above).
+VIEW_OP_TYPES = frozenset({
+    "aten::view", "aten::_unsafe_view", "aten::t", "aten::transpose", "aten::permute",
+    "aten::unsqueeze", "aten::squeeze", "aten::slice", "aten::select", "aten::narrow",
+    "aten::as_strided", "aten::alias",
+})
+
+#: The prefixes of a tensor id that names a stored weight (a parameter or a buffer of the container).
+WEIGHT_TENSOR_PREFIXES = ("param::", "buffer::")
+
+#: The contractions whose TRITON wrapper reads a transposed weight in place, by its strides:
+#: kernels/wrappers.py `mm` ("The weight is walked by its own strides ... a pre-transposed weight —
+#: the (K, N) stride view of a (N, K) row-major buffer — is read in place") and `addmm` ("A
+#: pre-transposed weight is walked by its strides (as mm)"). Every other consumer is held to copy it:
+#: `matmul`'s batched route expands the weight and `bmm` materialises it.
+IN_PLACE_WEIGHT_READERS = ("aten::mm", "aten::addmm")
+
+
+def weight_transposes_read_in_place(dag: Dict[str, Any]) -> set:
+    """The `aten::t` ops of `dag` whose output is no buffer on the TRITON engine: the transpose of
+    a WEIGHT (its input is a parameter or a buffer) that every consumer reads in place
+    (`IN_PLACE_WEIGHT_READERS`), and that the graph does not return.
+
+    The Triton sequence removes such an op when it binds the weights — the weight is transposed
+    once, a stride view of its own buffer (triton/sequence.py `_eliminate_weight_transpose_ops`);
+    triton_sequential runs it as the same view (`NBXTensor.t`). Counted as an allocation, a linear's
+    weight was priced twice while its contraction ran: orpheus-3b's `lm_head` (156 940 x 3 072,
+    920 MB in bf16) planned 927 MB of "activations" for 7 MB of logits, and the Mac's 24 GB machine
+    streamed a model whose 7 241 MB of weights it holds whole (196 s for 16 tokens, 2026-10-04). The
+    arena's own record agrees: Qwen3-Coder-30B's lm_head held 593.5 MB — its weight, once — at the
+    failure measured 2026-09-22.
+
+    NOT applied to the compiled engine, by measurement owed and not by symmetry: there the view is
+    free too, but on fp16 hardware a contraction outside an fp16-safe contract runs under
+    `DtypeEngine._make_fp32_wrapper` (core/dtype/engine.py), which copies EVERY float operand to
+    fp32 — the weight included, twice its fp16 bytes, per call. The transpose's bytes were the only
+    price near that copy, so the compiled estimate keeps them until the copy is measured and priced
+    as what it is.
+    """
+    ops = dag.get("ops") or {}
+    readers: Dict[str, List[str]] = {}
+    for op in ops.values():
+        for tid in op.get("input_tensor_ids") or []:
+            readers.setdefault(tid, []).append(op.get("op_type"))
+    returned = set(dag.get("output_tensor_ids") or [])
+    free = set()
+    for uid, op in ops.items():
+        if op.get("op_type") != "aten::t":
+            continue
+        ins = op.get("input_tensor_ids") or []
+        outs = op.get("output_tensor_ids") or []
+        if not ins or not outs or not str(ins[0]).startswith(WEIGHT_TENSOR_PREFIXES):
+            continue
+        if all(o not in returned and readers.get(o)
+               and all(r in IN_PLACE_WEIGHT_READERS for r in readers[o]) for o in outs):
+            free.add(uid)
+    return free
+
+
+def dag_last_uses(dag: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Build map: tensor_id -> last_op_uid that uses it — THE liveness rule of a graph.
+
+    Liveness Analysis: Tensor can be freed after its last use.
+
+    CRITICAL FIX: Dead output tensors (outputs never consumed as inputs
+    to any downstream op) must be freed immediately at the producing op.
+    Without this, graphs with many detach ops (e.g., text_encoder with
+    ~1041 aten::detach) accumulate dead tensors, inflating peak memory
+    from ~2GB to 89GB.
+
+    One function for every place that walks a graph's liveness: the placement
+    estimate below and the layer partitioner (`layer_partition.py`). The
+    partitioner kept a second copy without the dead-output rule, and a Wan
+    transformer's never-read outputs (layer-norm statistics, attention
+    log-sum-exps, RoPE `copy_` results) stayed alive to the last op: 108 800 MB
+    of "activations alone" at 480x832x81 where this rule prices 7 737 (the Mac,
+    2026-10-04).
+
+    The rule itself is `core/runtime/liveness.py`, the one the Triton sequence and
+    the compiled sequential executor free by (stage B P1, 2026-10-10).
+    """
+    order = dag.get("execution_order", [])
+    return {tid: order[idx] for tid, idx in _liveness.last_uses(order, dag.get("ops", {})).items()}
+
+
+class ActivationProfiler:
+    """
+    Symbolic Activation Memory Profiler.
+
+    Simulates graph execution to compute peak activation memory.
+    Zero GPU cost - pure math on CPU (~10ms for 5000 ops).
+
+    Algorithm:
+    1. Build last-use map (liveness analysis)
+    2. Resolve symbolic shapes with input_config
+    3. Simulate execution:
+       - Allocate output tensors
+       - Track peak memory
+       - Free dead tensors after last use
+    """
+
+    def __init__(self, dag: Dict[str, Any]):
+        """
+        Initialize profiler with TensorDAG.
+
+        Args:
+            dag: Parsed graph.json dict with:
+                - tensors: Dict[tensor_id -> tensor_meta]
+                - ops: Dict[op_uid -> op_meta]
+                - execution_order: List[op_uid]
+        """
+        self.dag = dag
+        self.tensors = dag.get("tensors", {})
+        self.ops = dag.get("ops", {})
+        self.execution_order = dag.get("execution_order", [])
+
+        # Build liveness analysis
+        self.last_uses = self._compute_last_uses()
+        # The invariant state this graph's component keeps through a run (state engine step 4): (frontier tids, the
+        # input tids it keeps a copy of), or None — derived once, by the engines' own rule (plan_for_dag).
+        from neurobrix.core.optim.passes.invariant import DAG_KEY, plan_for_dag
+        _plan = plan_for_dag(dag) if dag.get(DAG_KEY) else None
+        self.invariant_held = ((tuple(_plan["frontier_slots"]), tuple(_plan["input_slots"]))
+                               if _plan else None)
+
+    @classmethod
+    def from_path(cls, graph_path: Union[str, Path]) -> "ActivationProfiler":
+        """Load profiler from graph.json path."""
+        graph_path = Path(graph_path)
+        if not graph_path.exists():
+            raise FileNotFoundError(f"Graph not found: {graph_path}")
+
+        with open(graph_path, 'r') as f:
+            dag = json.load(f)
+
+        return cls(dag)
+
+    def _compute_last_uses(self) -> Dict[str, str]:
+        """tensor_id -> the op after which it is dead (`dag_last_uses`, the one liveness rule)."""
+        return dag_last_uses(self.dag)
+
+    def build_symbol_map(self, input_config: InputConfig,
+                         placement_floor: bool = False, flow: bool = True) -> Dict[str, int]:
+        """Symbol map for THIS graph: positional base + name-driven overrides.
+
+        `placement_floor=True` (PLACEMENT estimates only — never the
+        per-request paths): no symbol whose binding is a guess binds BELOW its
+        build value; the request's own extents (time, height, width) bind as
+        asked.
+        The build is a WITNESSED extent; placement must stay safe for
+        extents >= build. Root case (2026-08-10, D7 scoping note):
+        Qwen3-Omni thinker.audio_tower's mel-frame axis is NAMED
+        `seq_len`, so it bound to the global text seq config (~128)
+        instead of >= its 441-frame build — the activation estimate
+        collapsed and block_scatter packed a 16G card to 15.77 GiB with
+        zero forward headroom. Per-request estimation legitimately binds
+        BELOW build (Kokoro seq 14 < build 23), hence the flag, not a
+        default. The complete fix — declared per-input runtime maxima in
+        the container defaults (registry-driven) — is a build-toolchain
+        contract evolution, filed separately; the floor removes the
+        under-build class without inventing data.
+
+        The positional convention in InputConfig.positional_symbol_map (s1=latent_h,
+        s2=latent_w) is the image legacy. Graphs that carry a
+        `symbolic_context.symbols` table with NAMED symbols (video: s1=time,
+        s2=height, s3=width; image: height/width; LLM: seq_len) get each
+        symbol id bound by NAME from the runtime input config — the only
+        correct mapping for video, where the positional guess binds the time
+        axis to latent_h and mis-sizes every activation. Unnamed/legacy
+        graphs keep the positional map untouched (R23); for image graphs the
+        named values coincide with the positional ones, so the override is
+        value-identical there.
+        """
+        symbol_map = input_config.positional_symbol_map()
+        syms = (self.dag.get("symbolic_context") or {}).get("symbols") or {}
+        if not isinstance(syms, dict) or not syms:
+            return symbol_map
+        vae_scale = input_config.vae_scale
+        # A graph with NO vae_scale has no latent space, so its spatial symbols
+        # ARE the pixel extents and bind to the request directly. They used to
+        # bind to None, and a symbol mapped to None resolves nowhere: every shape
+        # fell back to its BUILD dim, and the profiler answered for the built
+        # request instead of the one being planned.
+        #
+        # Measured on `real-esrgan-x8` at 1024x1024 (the Mac found it, 2026-09-18):
+        # ActivationProfiler reported 128 MB where the solver's own estimator
+        # reported A=16384 MB — 128x apart, because 128 MB is the answer at the
+        # build extent s1=112 and 16384 MB is the answer at 1024. The largest
+        # tensor resolves to 8192 MiB there, and 8192 MiB is 8 589 934 592 bytes,
+        # which is the exact allocation in the failure this whole design opens
+        # with. The graph was never at fault: all 1801 of its tensors carry a
+        # `symbolic_shape` and its upsamples carry the symbol multiplied by 2, 4
+        # and 8.
+        #
+        # The discriminator is in the container, not in a model list: these
+        # symbols declare `source=input::pixel_values::dim_2/3`, while a latent
+        # graph's declare `input::hidden_states::dim_*` or `input::z::dim_*`
+        # (Sana, CogVideoX — checked before this line was written). Absent a
+        # vae_scale there is nothing to divide by, and dividing by nothing is
+        # not the same as having no answer.
+        latent_h = (input_config.height // vae_scale
+                    if (input_config.height and vae_scale) else input_config.height)
+        latent_w = (input_config.width // vae_scale
+                    if (input_config.width and vae_scale) else input_config.width)
+        latent_t = None
+        if input_config.num_frames:
+            tc = input_config.temporal_compression
+            if not tc:
+                raise MissingRuntimeValue(
+                    "this request carries num_frames, so a temporal axis exists, "
+                    "but 'temporal_compression_ratio' is declared nowhere. The "
+                    "latent frame count cannot be derived without it and the "
+                    "engine will not assume one.")
+            latent_t = (input_config.num_frames - 1) // tc + 1
+        # D2-ENCODER: a linear-downscale graph (VAE encoder class) consumes
+        # PIXEL-space video — its time/height/width symbols must bind to the
+        # runtime pixel extents, not the latent ones (which under-size every
+        # activation by the compression volume and hide the encoder's real
+        # overflow from the placement cascade). Strictly additive: False for
+        # every non-downsampler / causal-encoder graph, whose bindings are
+        # byte-identical to before.
+        pixel_space = is_downscale_graph(self.dag)
+        for sid, info in syms.items():
+            if not isinstance(info, dict):
+                continue
+            name = info.get("name")
+            built = info.get("trace_value")
+            if pixel_space and name in ("time", "height", "width"):
+                if name == "time" and input_config.chunk_frames is not None:
+                    symbol_map[sid] = int(input_config.chunk_frames)
+                    continue
+                if name == "time" and input_config.num_frames:
+                    symbol_map[sid] = input_config.num_frames
+                    continue
+                if name == "height":
+                    symbol_map[sid] = input_config.height
+                    continue
+                if name == "width":
+                    symbol_map[sid] = input_config.width
+                    continue
+                # "time" without a runtime num_frames: fall through to the
+                # standard binding below (build value).
+            if name == "batch":
+                # Build value, NOT input_config.batch_size: the build baked
+                # each component's true batch semantics (VAE decode batch=1,
+                # CFG-built transformers batch=2). Binding the CFG batch here
+                # doubled every Sana 4Kpx VAE activation estimate and flipped
+                # its validated single_gpu+tiling plan to weight_sharding
+                # (R23 regression caught by the legacy-vs-new plan probe).
+                # Matches the legacy concrete-shape behavior exactly.
+                symbol_map[sid] = built if isinstance(built, int) else (
+                    input_config.batch_size)
+            elif name == "time" and input_config.chunk_frames is not None:
+                symbol_map[sid] = int(input_config.chunk_frames)
+            elif name == "time":
+                if latent_t is None:
+                    raise MissingRuntimeValue(
+                        f"the plan's request names no frame count for symbol {sid} (time) of "
+                        f"this graph: the build-time extent {built} is a witnessed stimulus, not the request")
+                symbol_map[sid] = latent_t
+            elif name == "height":
+                if latent_h is None:
+                    raise MissingRuntimeValue(
+                        f"the plan's request names no height for symbol {sid} (height) of "
+                        f"this graph: the build-time extent {built} is a witnessed stimulus, not the "
+                        "request (Wan T2V planned 1.74 GiB for a 35 GiB decode this way)")
+                symbol_map[sid] = latent_h
+            elif name == "width":
+                if latent_w is None:
+                    raise MissingRuntimeValue(
+                        f"the plan's request names no width for symbol {sid} (width) of this "
+                        f"graph: the build-time extent {built} is a witnessed stimulus, not the request")
+                symbol_map[sid] = latent_w
+            elif name in ("seq_len", "sequence_length"):
+                symbol_map[sid] = input_config.seq_len or (
+                    built if isinstance(built, int) else 128)
+            elif isinstance(built, int):
+                # Unknown named symbol: build value (matches the build, never
+                # worse than the legacy positional guess).
+                symbol_map[sid] = built
+            # The floor is for a binding that is a GUESS (a `seq_len` axis taking the global text
+            # length, the 2026-08-10 case), never for an extent the request states: frames, height
+            # and width are the request's own, exactly as the pixel-space branch above binds them
+            # unfloored. Floored one axis at a time, Wan2.1-VACE at 832x480 — the vendor's portrait
+            # size, built at 480x832 — priced its width at the build's 104 latent columns where it
+            # asked for 60: a 104x104 grid, the transformer 18.04 GiB instead of 10.41, and the plan
+            # fell from lazy_sequential to cpu_streaming (2026-09-29).
+            if (placement_floor and isinstance(built, int)
+                    and name not in ("time", "height", "width")
+                    and sid in symbol_map
+                    and isinstance(symbol_map[sid], int)
+                    and symbol_map[sid] < built):
+                symbol_map[sid] = built
+        # The request's FLOW binds what no name says (`flow_bindings.FlowBindings.overrides`): the
+        # CFG batch, the VACE pair, an encoder's length, a denoiser's text axis — each the extent
+        # the flow runs, never a guess, so never floored. Floored, Wan2.2-I2V's transformer (built
+        # at batch 3, a collision-free stimulus) was priced at 3 for a CFG batch of 2 (2026-09-29).
+        # `flow=False` is the rules' own recursion (a rule binding another component by name alone).
+        if flow and getattr(input_config, "flow", None) is not None:
+            for sid, v in input_config.flow.overrides(self.dag, input_config).items():
+                symbol_map[sid] = int(v)
+        if getattr(input_config, "cut_extents", None):
+            for sid, info in syms.items():
+                if isinstance(info, dict) and info.get("name") in input_config.cut_extents:
+                    symbol_map[sid] = int(input_config.cut_extents[info["name"]])
+        return symbol_map
+
+    def sample_symbol_map(self) -> Dict[str, int]:
+        """{symbol id: the extent this graph was BUILT at}.
+
+        The only configuration a container is known to have witnessed. It is the
+        honest default for a profile nobody parameterised, and it is the baseline
+        a request-bound profile should be compared against: a request 4x the
+        build should cost about 4x, and when it does not, the difference is the
+        finding.
+
+        REFUSES a graph that declares symbols without build values rather than
+        returning a partial map: a symbol missing from the map falls back to a
+        positional guess downstream, which is the failure this exists to remove.
+        """
+        syms = (self.dag.get("symbolic_context") or {}).get("symbols") or {}
+        out, missing = {}, []
+        for sid, info in syms.items():
+            if not isinstance(info, dict):
+                continue
+            built = info.get("trace_value")
+            if isinstance(built, int):
+                out[sid] = built
+            else:
+                missing.append(f"{sid} '{info.get('name')}'")
+        if missing:
+            raise ValueError(
+                "REFUSED: this graph declares symbols with no build-time value "
+                f"({', '.join(missing)}). A partial symbol map is completed by a "
+                "positional guess downstream, and a guess is what this call "
+                "exists to avoid. Pass an explicit InputConfig.")
+        return out
+
+
+    def _attention_scratch_of(self, op, symbol_map, attention_scratch) -> int:
+        """The scores an attention op writes, from its query [B, H, Tq, D] (or [B, Tq, D]) and value at the request."""
+        ins = op.get("input_tensor_ids") or []
+        q = self._resolve_shape(self.tensors.get(ins[0], {}), symbol_map) if len(ins) >= 3 else []
+        v = self._resolve_shape(self.tensors.get(ins[2], {}), symbol_map) if len(ins) >= 3 else []
+        if len(q) < 3 or len(v) < 3:
+            raise ValueError(f"ZERO FALLBACK: attention op {op.get('op_uid') or op.get('op_type')} has no query and value "
+                             f"shapes at the request (inputs {list(ins)[:3]}: query {q}, value {v}) — its scores cannot "
+                             f"be priced")
+        heads = int(q[-3]) if len(q) >= 4 else 1          # [B, H, T, D], or [B, T, D]: one head
+        batch = 1
+        for d in (q[:-3] if len(q) >= 4 else q[:-2]):
+            batch *= int(d)
+        kv_heads = int(v[-3]) if len(v) >= 4 else heads   # the key/value heads (fewer under grouped-query attention)
+        has_mask = len(ins) >= 4 and bool(ins[3])          # an explicit additive mask, made dense beside the scores
+        return int(attention_scratch(batch, heads, int(q[-2]), int(v[-2]), D=int(q[-1]), Dv=int(v[-1]), Hk=kv_heads,
+                                     mask=has_mask))
+
+    def tiled_conv_band_bytes(self, op: Dict[str, Any], symbol_map: Dict[str, int], widths, dtype_bytes: int,
+                              factor: int) -> int:
+        """What a 2-D convolution run in `factor` bands holds beside its input and whole output
+        (`tiling_sizes.tiled_conv2d_band_bytes`), at the request's shapes: the band's input copied at the conv's output
+        width (the wrappers cast the band to the output's dtype) and the band's output at that width. One rule for the
+        activation walk and the layer partitioner (`LayerPartitioner(op_extra=...)`)."""
+        from nbxtensor.ops.tiling_sizes import tiled_conv2d_band_bytes
+        x_tid, w_tid = op["input_tensor_ids"][0], op["input_tensor_ids"][1]
+        out_tid = op["output_tensor_ids"][0]
+        x_shape = self._resolve_shape(self.tensors.get(x_tid, {}), symbol_map)
+        w_shape = self._resolve_shape(self.tensors.get(w_tid, {}), symbol_map)
+        width = (widths[out_tid] if widths is not None and out_tid in widths
+                 else self._compute_size([1], self.tensors.get(out_tid, {})))
+        attrs = op.get("attributes") or {}
+        return int(tiled_conv2d_band_bytes(x_shape, w_shape, attrs["stride"], attrs["padding"], attrs["dilation"],
+                                           int(factor), int(width), int(width)))
+
+    @staticmethod
+    def weight_transposes_free(mode: str, input_config, comp_name: str) -> bool:
+        """True when the engine that will run `comp_name` reads a transposed weight in place, so its `aten::t` is no
+        buffer (`weight_transposes_read_in_place`): every component on the Triton engines; on the compiled engine the
+        one its flow runs with AMP off — the text generation head (`FlowBindings.head_runs_without_amp`; measured on
+        a V100, 2026-11-10: torch.mm(x, W.t()) holds 8.4 MB above a 594 MB weight)."""
+        from neurobrix.triton.prism.host_footprint import engine_of
+        flow = getattr(input_config, "flow", None)
+        return engine_of(mode) == "triton" or (flow is not None and flow.head_runs_without_amp(comp_name))
+
+    def estimate_peak_memory(
+        self,
+        input_config: Optional[InputConfig] = None,
+        dtype_bytes: Optional[int] = None,
+        vram_per_gpu_bytes: Optional[int] = None,
+        resident_bytes: int = 0,
+        mode: str = "compiled",
+        safety: Optional[float] = None,
+        zero_alloc_uids: Optional[set] = None,
+        inplace_adds: Optional[List] = None,
+        widths: Optional[Dict[str, int]] = None,
+        source_holding_uids: Optional[set] = None,
+        placement_floor: bool = False,
+        in_place_weight_reads: bool = False,
+        attention_scratch=None,
+        handed_inputs: bool = False,
+        deferred_inputs: Optional[frozenset] = None,
+        parked_outputs: Optional[frozenset] = None,
+        conv3d_workspace=None,
+        op_workspace=None,
+        tiled_convs: Optional[Dict[str, int]] = None,
+        pool: Optional[Dict[str, Any]] = None,
+    ) -> ActivationProfile:
+        """
+        Simulate execution to find peak activation memory.
+
+        `pool`: the device allocator's rules the plan's engine runs under — the pool's (the keywords of
+        `nbxtensor.memory.pool.simulate`) and the hot loop's deferred queue (`drain_cliff` bytes, `drain_count`
+        tensors: a dead graph tensor is freed only when the queue reaches either, after the op that killed it) — or
+        None where it has none (the compiled engine): the walk's allocations and frees are replayed through them, and
+        `held_peak_bytes` is what the allocator holds at its peak — the live set, the queued dead, and the free blocks
+        its segments keep pinned. An op's own transients are freed when it returns, never queued.
+
+        `tiled_convs`: {conv uid: band factor} — the 2-D convolutions the plan runs band by band (op-level tiling,
+        `PrismSolver._standalone_conv_tiles`): while such a conv runs it holds, beside its input and its whole output,
+        its largest band's input rows copied into one buffer and the band's output (`tiling_sizes.
+        tiled_conv2d_band_bytes`, both engines), added to its in-op figure.
+
+        `conv3d_workspace(x_shape, w_shape, attrs, x_width, out_width) -> bytes`: what the engine's 3-D convolution
+        holds BESIDE its input and its output while it runs — cuDNN's workspace as the vendor file states it
+        (triton/prism/op_workspace.py), or the Triton engines' own folds (`tiling_sizes.conv3d_one_shot_peak`) — asked
+        at every 5-D convolution; None: none priced.
+
+        `handed_inputs`: the graph's `input::` tensors are its run's (`GraphExecutor._consumed_input_tids`), live
+        before its first op and freed at their last use. False: they are its caller's, priced by the caller.
+        `deferred_inputs`: of those handed inputs, the ones the run binds only right before the first op that reads
+        them (a temporal stream's states parked on the host, `GraphExecutor` ParkedTensor): live from that op.
+        `parked_outputs`: graph outputs copied to the host by the op that makes them (a stream's state outputs,
+        `temporal_stream_runner.park_state`): on the card while that op runs, gone after it.
+
+        `attention_scratch(batch, heads, Tq, Tk) -> bytes`: the scores an attention op writes WHILE it runs on a device
+        whose compiled attention writes them (triton/prism/attention_scratch.py; None elsewhere — the memory-efficient
+        kernels write none), added to that op's in-op figure.
+
+        Args:
+            input_config: Runtime input configuration (batch, height, width)
+            dtype_bytes: Bytes per element override (default: from input_config.dtype)
+            safety: the fraction of the card an op's footprint is measured against; None
+                is the TilingEngine's op budget (`tiling_sizes.op_budget_fraction()`), the
+                figure the op-level tiling detector uses.
+            widths: {tensor_id: bytes per element} the runtime EXECUTES each tensor at
+                (`triton.prism.runtime_widths.runtime_widths`). When given, every op output
+                the simulation allocates is sized at its runtime width — a tensor the
+                engine keeps in fp32 under a half compute dtype is priced at 4 bytes, not
+                at the compute dtype's 2 — and an in-place add whose reused input is
+                NARROWER than its output is a fresh allocation (the in-place path falls
+                back to a plain add: wrappers.py add_inplace_nbx, tiling_engine.py
+                `_inplace_add`), so it is not aliased. None: the built dtype of each
+                tensor (the per-request and detector callers). The overflow scan below
+                keeps sizing at the built dtype either way — the op-level tiling
+                detector (`PrismSolver._detect_op_level_tiling_pairs`) derives the same
+                set from the same scan, and the two must agree on which ops overflow.
+            source_holding_uids: zero-alloc op_uids whose output is a proxy or view
+                CARRYING its first input (the fused-upsample proxy, the
+                pixel-shuffle broadcast chain's expand / clone / view): their
+                output is aliased to that input's buffer, so the buffer lives
+                until the proxy's consumer runs. Members are zero-allocated.
+            zero_alloc_uids: Set of op_uids whose outputs are NOT allocated at
+                runtime because an `OpLevelTilingEngine` interceptor returns a
+                sentinel proxy (`FusionUpsampleProxy`, `BroadcastClonePyroxy`)
+                or a stride-0 view sharing data with the input. When provided,
+                the simulation substitutes their output size with 0 to mirror
+                the runtime exactly — turns worst-case full-materialization
+                into tiling-aware estimation. Used by `PrismSolver._compute_memory`'s
+                two-pass flow. Members typically include: upsample uids in
+                upsample→conv fusion pairs; expand/clone/view uids in F2a
+                pixel_shuffle broadcast-aware chains. None → legacy worst-case
+                estimation (no substitution).
+
+        Returns:
+            ActivationProfile with peak memory info
+        """
+        # NO CONFIG MEANS THE BUILD, NOT A 1024x1024 BATCH-2 IMAGE REQUEST.
+        # `InputConfig()`'s defaults are a request the container never received,
+        # and binding them through the positional base put a video component's
+        # time axis on a spatial extent with nothing in the output saying so.
+        # The extents the graph was built at are the one configuration it is
+        # known to have witnessed, so that is what an unparameterised profile
+        # reports -- and the profile says which of the two it is.
+        binding = "request"
+        if input_config is None:
+            input_config = InputConfig()          # for dtype only
+            binding = "trace"
+
+        if dtype_bytes is None:
+            # a request that names no dtype plans at the widest, float32: over-estimating is the safe direction
+            dtype_bytes = _itemsize.itemsize(input_config.dtype or "float32")
+
+        if binding == "trace":
+            symbol_map = self.sample_symbol_map()
+        else:
+            # Build symbol map for shape resolution (positional base + this
+            # graph's name-driven symbol overrides — video time/height/width).
+            symbol_map = self.build_symbol_map(
+                input_config, placement_floor=placement_floor)
+
+        # Initialize tracking
+        peak_bytes = 0
+        peak_op_uid = ""
+        peak_step = 0
+        peak_tensor_count = 0
+        current_bytes = 0
+        live_tensors: Dict[str, int] = {}  # tensor_id -> size_bytes
+        # the allocation sequence of this walk, for the pool's replay (`pool`): (alloc | free, key, bytes) — `events`
+        # through the hot loop's deferred queue, `events_now` with every dead tensor freed at once (the pool alone)
+        events: Optional[List[tuple]] = [] if pool is not None else None
+        events_now: Optional[List[tuple]] = [] if pool is not None else None
+        pool = dict(pool or {})
+        drain_cliff, drain_count = int(pool.pop("drain_cliff", 0) or 0), int(pool.pop("drain_count", 0) or 0)
+        queued: List[str] = []             # dead graph tensors the hot loop holds until it drains
+        queued_bytes = 0
+
+        # Get graph output tensors (these are never freed)
+        graph_outputs = set(self.dag.get("output_tensor_ids", []))
+        # Tiling-aware: ops whose outputs are sentinel proxies / stride-0 views
+        # at runtime (FusionUpsampleProxy on fusion-paired upsamples,
+        # BroadcastClonePyroxy on F2a clone, pass-through view on F2a view,
+        # NBXTensor.expand stride-0 view on F2a expand). Substituting size=0
+        # here mirrors the runtime exactly. See P-PRISM-ACTIVATION-ESTIMATOR-
+        # TILING-AWARE audit for the gap quantification.
+        zero_set = set(zero_alloc_uids) if zero_alloc_uids else set()
+        # The engine this estimate is for reads a transposed weight in place (the Triton engines:
+        # the caller says so): those transposes are no buffer (`weight_transposes_read_in_place`).
+        if in_place_weight_reads:
+            zero_set |= weight_transposes_read_in_place(self.dag)
+
+        # In-place add aliasing: at runtime, in-place adds reuse one input
+        # buffer as the output (no new allocation). Each in-place add's
+        # output buffer IS its reused input's buffer. Their combined
+        # lifetime extends through the LATER of the two original last-uses.
+        # P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
+        alias = {}
+        last_uses_eff = self.last_uses
+        if inplace_adds and widths is not None:
+            # An in-place add writes into its reused input's buffer only when that
+            # buffer is at least as wide as the result; a narrower target makes the
+            # runtime fall back to a plain add into a NEW buffer (wrappers.py
+            # add_inplace_nbx, tiling_engine.py `_inplace_add` torch path). Aliasing it
+            # anyway prices a buffer the runtime allocates at zero.
+            kept = []
+            for entry in inplace_adds:
+                op_uid_inp, reuse_idx = entry
+                op_inp = self.ops.get(op_uid_inp, {})
+                in_tids = op_inp.get("input_tensor_ids", [])
+                out_tids = op_inp.get("output_tensor_ids", [])
+                if (out_tids and reuse_idx < len(in_tids)
+                        and widths[in_tids[reuse_idx]] < widths[out_tids[0]]):
+                    continue
+                kept.append(entry)
+            inplace_adds = kept
+        # ALIASES — outputs that are not buffers of their own, each bound to the
+        # buffer it lives in (resolved transitively to the root), built in
+        # execution order:
+        #   * an in-place add's output IS its reused input's buffer;
+        #   * a SOURCE-HOLDING proxy's output is a sentinel or a view that
+        #     carries its first input, and its consumer reads that input's
+        #     storage when IT runs: a FusionUpsampleProxy holds the pre-upsample
+        #     tensor until the fused conv (kernels/ops/fused_upsample_conv.py:34-45),
+        #     the broadcast chain's expand is a stride-0 view, its clone a
+        #     BroadcastClonePyroxy carrying that view (:131-155), its view a
+        #     pass-through, and the pixel_shuffle reads through them
+        #     (wrappers.py `_pixel_shuffle_broadcast_aware`). Priced at zero
+        #     without the alias, the source was freed at its last DIRECT consumer
+        #     while the runtime still held it: Sana 4Kpx's decoder held its
+        #     pre-shuffle residual (3 072 MB fp32 at 3072x4096) beside the fused
+        #     conv and the shuffle's output, a buffer the estimate had released.
+        inplace_reuse = {}
+        for entry in inplace_adds or ():
+            op_uid_inp, reuse_idx = entry
+            inplace_reuse[op_uid_inp] = reuse_idx
+        holders = set(source_holding_uids or ())
+        if inplace_reuse or holders:
+            for op_uid_a in self.execution_order:
+                if op_uid_a in inplace_reuse:
+                    idx = inplace_reuse[op_uid_a]
+                elif op_uid_a in holders:
+                    idx = 0
+                else:
+                    continue
+                op_a = self.ops.get(op_uid_a, {})
+                in_tids = op_a.get("input_tensor_ids", [])
+                out_tids = op_a.get("output_tensor_ids", [])
+                if not out_tids or idx >= len(in_tids):
+                    continue
+                target = in_tids[idx]
+                seen_walk = set()
+                while target in alias and target not in seen_walk:
+                    seen_walk.add(target)
+                    target = alias[target]
+                for out_tid in out_tids:
+                    alias[out_tid] = target
+                # Output is zero-allocated (it lives in the root's buffer)
+                zero_set.add(op_uid_a)
+            # Recompute last uses on the ROOTS: any consumer of an aliased tid,
+            # and any direct consumer of a root, extends the root's lifetime.
+            # Walking ops in order makes the LAST consumer win. A tid that takes
+            # part in no alias keeps exactly its `self.last_uses` entry.
+            roots = set()
+            for t in alias:
+                r = t
+                seen_resolve = set()
+                while r in alias and r not in seen_resolve:
+                    seen_resolve.add(r)
+                    r = alias[r]
+                roots.add(r)
+            last_uses_eff = dict(self.last_uses)
+            for op_uid_w in self.execution_order:
+                op_w = self.ops.get(op_uid_w, {})
+                for in_tid in op_w.get("input_tensor_ids", []):
+                    if in_tid in alias or in_tid in roots:
+                        target = in_tid
+                        seen_resolve = set()
+                        while target in alias and target not in seen_resolve:
+                            seen_resolve.add(target)
+                            target = alias[target]
+                        last_uses_eff[target] = op_uid_w
+        # Reverse map for the free phase: op_uid -> list of tids whose
+        # effective last-use is this op. Required to handle the alias case
+        # where an extended last-use points to an op that doesn't list the
+        # tid in its `input_tensor_ids`. Costs O(n) extra at simulation
+        # start, eliminates O(live_count) per-op scan.
+        frees_at: Dict[str, List[str]] = {}
+        for tid, op_uid_l in last_uses_eff.items():
+            frees_at.setdefault(op_uid_l, []).append(tid)
+
+        # What is ALREADY on the card when each op begins, by the same rules the
+        # rest of this loop uses -- zero-alloc proxies sized 0, stride-0
+        # broadcast views free, aliases freed at their effective last use.
+        # Reconstructing this outside the loop does not work: a walk that counts
+        # every output as an allocation reads `aten.t` and `aten.view` as real
+        # bytes and reports hundreds of GB resident on a graph that allocates
+        # none of it. The overflow scan below needs the number, so it is recorded
+        # here rather than recomputed there.
+        live_before_op: Dict[str, int] = {}
+        # the engine's operand copies come with its widths (`ExecutedWidths`); a plain {tid: width} — a levelled
+        # figure a caller builds — states none
+        from neurobrix.triton.prism.runtime_widths import ExecutedWidths
+        op_casts = widths.casts if isinstance(widths, ExecutedWidths) else {}
+
+        deferred_at: Dict[str, List[str]] = {}
+        if handed_inputs:
+            for tid in self.dag.get("input_tensor_ids", []):
+                if not str(tid).startswith("input::") or tid in live_tensors:
+                    continue
+                if deferred_inputs and tid in deferred_inputs:
+                    first = next((u for u in self.execution_order
+                                  if tid in (self.ops.get(u, {}).get("input_tensor_ids") or ())), None)
+                    if first is None:
+                        raise KeyError(f"ZERO FALLBACK: deferred input {tid!r}: no op of this graph reads it")
+                    deferred_at.setdefault(first, []).append(tid)
+                    continue
+                tensor_meta = self.tensors.get(tid, {})
+                shape = self._resolve_shape(tensor_meta, symbol_map)
+                if widths is not None:
+                    numel = 1
+                    for dim in shape:
+                        numel *= dim
+                    size = numel * widths[tid]
+                else:
+                    size = self._compute_size(shape, tensor_meta)
+                live_tensors[tid] = size
+                current_bytes += size
+                if events is not None:
+                    events.append(("alloc", tid, size))
+                    events_now.append(("alloc", tid, size))
+            peak_bytes = current_bytes
+
+        # The invariant state (state engine step 4, core/state/invariant.py): a run that reuses it holds the whole
+        # frontier from its first op, and the state keeps a copy of its invariant inputs — both live through the run,
+        # never freed by it; a run that evaluates it holds no more. Priced at the run's own extents.
+        held_tids: set = set()
+        if self.invariant_held is not None:
+            _frontier, _copies = self.invariant_held
+
+            def _held_size(tid):
+                meta = self.tensors.get(tid, {})
+                shape = self._resolve_shape(meta, symbol_map)
+                if widths is not None and tid in widths:
+                    n = 1
+                    for d in shape:
+                        n *= d
+                    return n * widths[tid]
+                return self._compute_size(shape, meta)
+
+            for tid in _frontier:
+                size = _held_size(tid)
+                live_tensors[tid] = size
+                current_bytes += size
+                held_tids.add(tid)
+                if events is not None:
+                    events.append(("alloc", tid, size))
+                    events_now.append(("alloc", tid, size))
+            for tid in _copies:
+                current_bytes += _held_size(tid)
+                if events is not None:
+                    events.append(("alloc", ("copy", tid), _held_size(tid)))
+                    events_now.append(("alloc", ("copy", tid), _held_size(tid)))
+            peak_bytes = max(peak_bytes, current_bytes)
+
+        # Diagnostic (default off): NBX_PRISM_CURVE_DUMP=<dir> writes this walk op by op — the in-op figure and the
+        # live set after the op — for comparison with an engine's measured live bytes (NBX_NATIVE_LIVE_DUMP_EVERY /
+        # NBX_LIVE_DUMP_EVERY), one file per call.
+        _curve_dir = os.environ.get("NBX_PRISM_CURVE_DUMP")
+        _curve_dump: Optional[List] = [] if _curve_dir else None
+        _peak_live: List = []
+
+        # Simulation loop
+        for step, op_uid in enumerate(self.execution_order):
+            op = self.ops.get(op_uid, {})
+            for tid in deferred_at.get(op_uid, ()):     # a parked input, bound right before its first reader
+                shape = self._resolve_shape(self.tensors.get(tid, {}), symbol_map)
+                if widths is not None:
+                    numel = 1
+                    for dim in shape:
+                        numel *= dim
+                    size = numel * widths[tid]
+                else:
+                    size = self._compute_size(shape, self.tensors.get(tid, {}))
+                live_tensors[tid] = size
+                current_bytes += size
+                if events is not None:
+                    events.append(("alloc", tid, size))
+                    events_now.append(("alloc", tid, size))
+            live_before_op[op_uid] = current_bytes
+            # where this op's own transients go in the sequence: allocated before its outputs, freed when it returns
+            events_at = len(events) if events is not None else 0
+            events_now_at = len(events_now) if events_now is not None else 0
+
+            # 1. ALLOCATE: Add output tensors
+            output_tids = op.get("output_tensor_ids", [])
+            # aten::expand / broadcast_to return STRIDE-0 broadcast VIEWS — they
+            # allocate NOTHING at runtime. A consumer that needs a dense copy
+            # emits its own op (contiguous / the compute kernel), counted
+            # separately; the broadcast view itself is free. Counting it as a
+            # real allocation falsely inflated the peak: Mochi's masked attention
+            # broadcasts the [B,1,1,T] key-padding mask to [2,24,16156,16156]
+            # (25 GB EACH, ×8 live) for the mem-efficient SDPA, which reads it
+            # block-wise and never materialises it -> a phantom 24 GB activation
+            # that forced spurious block_scatter. Same zero-alloc treatment as
+            # the existing stride-0 proxy set. R34: branch on op semantics, not
+            # model family.
+            op_is_zero_alloc = (op_uid in zero_set or
+                                op.get("op_type") in ZERO_ALLOC_OP_TYPES)
+            for out_tid in output_tids:
+                if out_tid in held_tids:
+                    continue                # the invariant state's: counted from the first op
+                tensor_meta = self.tensors.get(out_tid, {})
+                shape = self._resolve_shape(tensor_meta, symbol_map)
+                if widths is not None:
+                    numel = 1
+                    for dim in shape:
+                        numel *= dim
+                    size = numel * widths[out_tid]
+                else:
+                    size = self._compute_size(shape, tensor_meta)
+
+                # Zero-alloc op: output is a sentinel proxy / stride-0 view
+                # at runtime, not a real allocation. Liveness still tracks
+                # the entry (so del live_tensors[tid] works downstream) —
+                # size=0 makes current_bytes -= 0 a no-op when freed.
+                if op_is_zero_alloc:
+                    size = 0
+
+                live_tensors[out_tid] = size
+                current_bytes += size
+                if events is not None:
+                    events.append(("alloc", out_tid, size))
+                    events_now.append(("alloc", out_tid, size))
+
+            # 2. PEAK: Track maximum. A view (`VIEW_OP_TYPES`) allocates nothing WHILE it runs:
+            # its in-op figure is the live set before it (the partitioner's `op_peak_curve`).
+            in_op = (live_before_op[op_uid] if op.get("op_type") in VIEW_OP_TYPES
+                     else current_bytes)
+            # the 3-D convolution's own workspace, on the input it convolves (at the width its cast gives it)
+            if (conv3d_workspace is not None and not op_is_zero_alloc and op.get("op_type") == "aten::convolution"
+                    and op.get("input_tensor_ids")):
+                x_tid = op["input_tensor_ids"][0]
+                x_shape = self._resolve_shape(self.tensors.get(x_tid, {}), symbol_map)
+                if len(x_shape) == 5 and len(op["input_tensor_ids"]) >= 2:
+                    x_width = next((cw for ct, cw in op_casts.get(op_uid, ()) if ct == x_tid), None)
+                    if x_width is None:
+                        x_width = (widths[x_tid] if widths is not None
+                                   else self._compute_size([1], self.tensors.get(x_tid, {})))
+                    out_tid0 = output_tids[0]
+                    out_width = (widths[out_tid0] if widths is not None
+                                 else self._compute_size([1], self.tensors.get(out_tid0, {})))
+                    w_shape = self._resolve_shape(self.tensors.get(op["input_tensor_ids"][1], {}), symbol_map)
+                    _ins = op["input_tensor_ids"]
+                    _attrs = dict(op.get("attributes") or {}, has_bias=len(_ins) >= 3 and bool(_ins[2]))
+                    in_op += int(conv3d_workspace(x_shape, w_shape, _attrs, x_width, out_width))
+            # what the engine's implementation of this op holds beside its input and output while it runs, as the
+            # vendor file states it per op type (`op_workspace(op_type, x_shape, x_width, out_width) -> bytes`,
+            # triton/prism/op_workspace.py `compiled_op_workspace`): MPS's vector norm, its full-size intermediates
+            if (op_workspace is not None and not op_is_zero_alloc and op.get("input_tensor_ids")
+                    and op.get("op_type") != "aten::convolution"):
+                x_tid = op["input_tensor_ids"][0]
+                x_meta = self.tensors.get(x_tid)
+                if x_meta is not None:
+                    x_shape = self._resolve_shape(x_meta, symbol_map)
+                    x_width = next((cw for ct, cw in op_casts.get(op_uid, ()) if ct == x_tid), None)
+                    if x_width is None:
+                        x_width = widths[x_tid] if widths is not None else self._compute_size([1], x_meta)
+                    out_tid0 = output_tids[0] if output_tids else None
+                    out_width = ((widths[out_tid0] if widths is not None else self._compute_size([1], self.tensors.get(out_tid0, {})))
+                                 if out_tid0 else 0)
+                    in_op += int(op_workspace(op.get("op_type"), x_shape, x_width, out_width))
+            # a band-streamed 2-D conv: its largest band's input buffer and output, beside the whole output
+            if tiled_convs and op_uid in tiled_convs and not op_is_zero_alloc:
+                in_op += self.tiled_conv_band_bytes(op, symbol_map, widths, dtype_bytes, tiled_convs[op_uid])
+            # the operand copies the engine's precision wrapper makes while the op runs (`ExecutedWidths.casts`)
+            for cast_tid, cast_width in (op_casts.get(op_uid, ()) if not op_is_zero_alloc else ()):
+                n_cast = 1
+                for dim in self._resolve_shape(self.tensors.get(cast_tid, {}), symbol_map):
+                    n_cast *= dim
+                in_op += n_cast * cast_width
+            if attention_scratch is not None and _is_attention(op.get("op_type")):
+                in_op += self._attention_scratch_of(op, symbol_map, attention_scratch)
+            if events is not None and in_op > current_bytes:
+                events.insert(events_at, ("alloc", ("in_op", op_uid), in_op - current_bytes))
+                events.append(("free", ("in_op", op_uid), 0))
+                events_now.insert(events_now_at, ("alloc", ("in_op", op_uid), in_op - current_bytes))
+                events_now.append(("free", ("in_op", op_uid), 0))
+            if in_op > peak_bytes:
+                peak_bytes = in_op
+                peak_op_uid = op_uid
+                peak_step = step
+                peak_tensor_count = len(live_tensors)
+                if _curve_dump is not None:
+                    _peak_live = sorted(live_tensors.items(), key=lambda kv: -kv[1])[:12]
+            _in_op_dump = in_op
+
+            # 3. FREE: Remove all tids whose effective last-use is this op.
+            # Uses the precomputed `frees_at` reverse map so the free phase
+            # handles aliased tids whose extended last-use points to an op
+            # that doesn't list the tid in its `input_tensor_ids`.
+            for tid in frees_at.get(op_uid, ()):
+                if tid in graph_outputs or tid in held_tids:
+                    continue
+                if tid in live_tensors:
+                    current_bytes -= live_tensors[tid]
+                    if events is not None:
+                        events_now.append(("free", tid, 0))
+                        if drain_cliff > 0:
+                            queued.append(tid)
+                            queued_bytes += live_tensors[tid]
+                        else:
+                            events.append(("free", tid, 0))
+                    del live_tensors[tid]
+            for tid in output_tids:
+                if parked_outputs and tid in parked_outputs and tid in live_tensors:
+                    current_bytes -= live_tensors.pop(tid)     # copied to the host by the op that made it
+                    if events is not None:
+                        events.append(("free", tid, 0))
+                        events_now.append(("free", tid, 0))
+            if queued and (queued_bytes >= drain_cliff or (drain_count and len(queued) >= drain_count)):
+                events.extend(("free", tid, 0) for tid in queued)     # the hot loop's drain, after this op
+                queued, queued_bytes = [], 0
+            if _curve_dump is not None:
+                _curve_dump.append((op_uid, op.get("op_type"), _in_op_dump, current_bytes))
+
+        if _curve_dump is not None:
+            import json as _json
+            _name = str(self.dag.get("component_name") or "component")
+            _path = os.path.join(_curve_dir, f"{_name}.{mode}.{os.getpid()}.{id(_curve_dump)}.jsonl")
+            os.makedirs(_curve_dir, exist_ok=True)
+            with open(_path, "w") as _fh:
+                _fh.write(_json.dumps({"component": _name, "mode": mode, "binding": binding,
+                                       "symbols": {k: (v if isinstance(v, (int, float)) else str(v)) for k, v in symbol_map.items()},
+                                       "widths": widths is not None, "peak_bytes": peak_bytes, "peak_op": peak_op_uid,
+                                       "peak_live": [[t, b, (self.ops.get(next((u for u in self.execution_order if t in (self.ops.get(u) or {}).get("output_tensor_ids", [])), ""), {}) or {}).get("op_type"), last_uses_eff.get(t)] for t, b in _peak_live]}) + "\n")
+                for _u, _k, _i, _l in _curve_dump:
+                    _fh.write(_json.dumps([_u, _k, _i, _l]) + "\n")
+
+        # Scan per-op output + workspace to flag overflows for op-level tiling
+        overflow_ops = []
+        if vram_per_gpu_bytes is not None and vram_per_gpu_bytes > 0:
+            from neurobrix.triton.prism.memory_estimator import estimate_op_workspace_bytes
+            # WHAT THE FOOTPRINT IS MEASURED AGAINST.
+            #
+            # `vram_per_gpu_bytes * safety` is a fraction of an EMPTY card, and the
+            # card is not empty when the op runs. Two things are already on it:
+            # the component's weights, resident for the whole of its execution
+            # and known only to the caller, and the activations still live at
+            # this point in the schedule, which the simulation loop above
+            # recorded in `live_before_op`.
+            #
+            # Measured at build extents over the 56 local containers, this moves
+            # ops on five components -- CogVideoX-2b and 5b-I2V's vae (one op
+            # each, 13,131 MB against a 13,736 MB line, 635 MB of it already
+            # resident), SANA-Video_2B_720p's vae (ten), and Sana_1600M_4Kpx's
+            # vae on both card sizes. Each is a narrow crossing, a few hundred
+            # megabytes, which is exactly the regime where asking about an empty
+            # card gives the wrong answer. It changes nothing on the case that
+            # motivated the rung: real-esrgan-x8 at 1024 has footprints of
+            # 20-45 GB against the same line and clears it with or without the
+            # resident term.
+            if safety is None:
+                from nbxtensor.ops.tiling_sizes import op_budget_fraction
+                safety = op_budget_fraction()
+            threshold = int(vram_per_gpu_bytes * safety) - max(0, int(resident_bytes))
+            for op_uid in self.execution_order:
+                op = self.ops.get(op_uid, {})
+                op_type = op.get("op_type", "")
+                in_tids = op.get("input_tensor_ids", [])
+                out_tids = op.get("output_tensor_ids", [])
+                in_shapes = []
+                for tid in in_tids:
+                    meta = self.tensors.get(tid, {})
+                    in_shapes.append(self._resolve_shape(meta, symbol_map))
+                out_shapes = []
+                out_bytes_total = 0
+                is_view = op_type in VIEW_OP_TYPES       # allocates nothing while it runs
+                for tid in out_tids:
+                    meta = self.tensors.get(tid, {})
+                    sh = self._resolve_shape(meta, symbol_map)
+                    out_shapes.append(sh)
+                    if not is_view:
+                        out_bytes_total += self._compute_size(sh, meta)
+                ws_bytes = estimate_op_workspace_bytes(
+                    mode, op_type, in_shapes, out_shapes, dtype_bytes,
+                    vram_per_gpu_bytes=vram_per_gpu_bytes,
+                )
+                # Largest single input tensor (live at op start)
+                largest_in_bytes = 0
+                for tid, sh in zip(in_tids, in_shapes):
+                    meta = self.tensors.get(tid, {})
+                    largest_in_bytes = max(
+                        largest_in_bytes, self._compute_size(sh, meta)
+                    )
+                # `largest_in_bytes` stands in for an input the simulation
+                # never allocated -- a weight, or a graph input -- so it stays
+                # as the floor; `live_before_op` covers every activation input
+                # and everything else still live beside them.
+                resident_here = live_before_op.get(op_uid, 0)
+                op_footprint = (max(largest_in_bytes, resident_here)
+                                + out_bytes_total + ws_bytes)
+                if op_footprint > threshold:
+                    overflow_ops.append(
+                        (op_uid, op_type, out_bytes_total, ws_bytes, list(in_tids))
+                    )
+
+        output_elements = 0
+        for tid in graph_outputs:
+            meta = self.tensors.get(tid)
+            if meta:
+                n = 1
+                for d in self._resolve_shape(meta, symbol_map):
+                    n *= int(d)
+                output_elements += n
+        held_peak_bytes = held_live_bytes = None
+        if events is not None:
+            events.extend(("free", tid, 0) for tid in queued)         # the run's end drains what is left
+            from nbxtensor.memory.pool import simulate
+            held_peak_bytes = simulate(events, **pool).peak_bytes
+            held_live_bytes = simulate(events_now, **pool).peak_bytes
+        return ActivationProfile(
+            output_elements=output_elements,
+            held_peak_bytes=held_peak_bytes,
+            held_live_bytes=held_live_bytes,
+            peak_bytes=peak_bytes,
+            peak_op_uid=peak_op_uid,
+            peak_step=peak_step,
+            tensor_count_at_peak=peak_tensor_count,
+            total_ops=len(self.execution_order),
+            final_live_bytes=current_bytes,
+            overflow_ops=overflow_ops,
+            binding=binding,
+            symbol_map=dict(symbol_map),
+            live_before_op=live_before_op,
+        )
+
+    def _resolve_shape(
+        self,
+        tensor_meta: Dict[str, Any],
+        symbol_map: Dict[str, int]
+    ) -> List[int]:
+        """
+        Resolve symbolic shape to concrete values.
+
+        Handles:
+        - Symbolic dims: 's0', 's1', 'batch_size', etc.
+        - Integer dims: passed through
+        - String expressions: basic substitution
+
+        Example:
+            symbolic: ['s0', 4096, 's1', 's2']
+            symbol_map: {'s0': 2, 's1': 128, 's2': 128}
+            -> [2, 4096, 128, 128]
+        """
+        shape = tensor_meta.get("shape", [])
+
+        # Symbolic expression trees take precedence over the concrete shape.
+        # Graphs built with a frugal stimulus (video VAEs at [1,16,T0,h0,w0])
+        # store the TINY build values in `shape` and the real symbolic dims as
+        # expression trees in `symbolic_shape.dims` ({symbol,mul,add,floordiv,
+        # ...} nodes). Estimating from the concrete build shape made every
+        # video activation look like a few MB — the 23 GiB Wan f81 VAE
+        # upsample never reached overflow_ops and op-level tiling never
+        # fired. Per-dim fallback to the concrete value keeps non-symbolic
+        # graphs byte-identical (R23).
+        sym_shape = tensor_meta.get("symbolic_shape")
+        if isinstance(sym_shape, dict):
+            dims = sym_shape.get("dims")
+            if isinstance(dims, list) and dims:
+                resolved = []
+                for i, d in enumerate(dims):
+                    cv = shape[i] if i < len(shape) else 1
+                    if not isinstance(cv, int):
+                        cv = 1
+                    # TRUST GATE: an expression is only used if its own build
+                    # annotation reproduces the concrete build dim. Some image
+                    # graphs carry mis-associated product expressions (e.g. a
+                    # Sana _unsafe_view dim whose expr build is 8.4e14 against
+                    # a concrete dim of 1) — evaluating those exploded peak
+                    # estimates to absurdity. Self-consistency at build is the
+                    # discriminator: valid exprs (video frugal-build graphs)
+                    # evaluate at runtime dims; invalid or unannotated ones
+                    # fall back to the concrete value (legacy behavior, R23).
+                    if isinstance(d, dict):
+                        tv = d.get("trace", d.get("trace_value"))
+                        if not (isinstance(tv, int) and tv == cv):
+                            resolved.append(cv)
+                            continue
+                    elif isinstance(d, int) and not isinstance(d, bool) and d != cv:
+                        # A bare integer cannot vary with any symbol, so one
+                        # that differs from the witnessed build dim is a
+                        # corrupted annotation (2026-09-06: 98 component
+                        # graphs of the zoo carry another tensor's extent
+                        # in an output slot — Kokoro's decoder conv put its
+                        # input length, 15361, in the batch slot and was
+                        # sized at 19.2 GB, sending an 82M model to the host
+                        # on every 16 GB card). The build value is the truth.
+                        resolved.append(cv)
+                        continue
+                    v = None
+                    try:
+                        v = self._eval_dim_expr(d, symbol_map)
+                    except Exception:
+                        v = None
+                    if not isinstance(v, int) or v < 0:
+                        v = cv
+                    resolved.append(v)
+                return resolved
+
+        resolved = []
+        for dim in shape:
+            if isinstance(dim, int):
+                resolved.append(dim)
+            elif isinstance(dim, str):
+                # Try direct lookup
+                if dim in symbol_map:
+                    resolved.append(symbol_map[dim])
+                elif dim.isdigit():
+                    resolved.append(int(dim))
+                else:
+                    # Try to infer from pattern
+                    inferred = self._infer_symbol(dim, symbol_map)
+                    resolved.append(inferred)
+            else:
+                # Unknown type - assume 1
+                resolved.append(1)
+
+        return resolved
+
+    def _eval_dim_expr(self, node: Any, symbol_map: Dict[str, int]) -> int:
+        """Evaluate one `symbolic_shape.dims` expression node, through the ONE evaluator every
+        runtime resolver uses (core/runtime/symexpr.py), in the shape slot (a real refuses).
+
+        A symbol absent from `symbol_map` answers its recorded build value, and a node outside
+        the vocabulary its own build value — profiling estimation only, as before.
+        """
+        def symbol(sid, n):
+            if sid in symbol_map:
+                return int(symbol_map[sid])
+            if n is None:                       # a bare string leaf
+                return self._infer_symbol(sid, symbol_map)
+            tv = n.get("trace", n.get("trace_value"))
+            if isinstance(tv, int):
+                return tv
+            raise ValueError(f"unbound symbol {sid}")
+        try:
+            return _symexpr.evaluate(node, symbol, _symexpr.SHAPE)
+        except _symexpr.UnknownExpression:
+            tv = node.get("trace", node.get("trace_value")) if isinstance(node, dict) else None
+            if isinstance(tv, int):
+                return tv
+            raise ValueError(f"unsupported dim expression node: {node!r}")
+
+    def _infer_symbol(self, symbol: str, symbol_map: Dict[str, int]) -> int:
+        """
+        Infer value for unknown symbol.
+
+        Patterns:
+        - s0, s1, s2, ... -> try symbol_map
+        - head*, num_heads -> default 8-32
+        - hidden*, dim -> default 1024-4096
+        """
+        # Conservative defaults for unknown symbols (profiling estimation only).
+        # These are intentionally small to avoid overestimating memory.
+        # Actual values are resolved from topology when available.
+        defaults = {
+            "num_heads": 1,
+            "head_dim": 1,
+            "hidden_dim": 1,
+            "embed_dim": 1,
+            "vocab_size": 1,
+        }
+
+        # Try pattern matching
+        lower = symbol.lower()
+
+        for pattern, value in defaults.items():
+            if pattern in lower:
+                return value
+
+        # Try s0, s1, s2 pattern
+        if symbol.startswith('s') and symbol[1:].isdigit():
+            idx = int(symbol[1:])
+            if f"s{idx}" in symbol_map:
+                return symbol_map[f"s{idx}"]
+
+        raise ValueError(
+            f"ZERO FALLBACK: Unknown symbol '{symbol}' in shape expression. "
+            f"Available symbols: {list(symbol_map.keys())}"
+        )
+
+    def _compute_size(
+        self,
+        shape: List[int],
+        tensor_meta: Dict[str, Any],
+    ) -> int:
+        """
+        Compute tensor size in bytes at the tensor's BUILT dtype — every graph tensor carries one (805 445 tensors of
+        the 49 containers, none without, 2026-10-30); a meta without it is refused by name, never priced at a default
+        width.
+
+        The width a tensor is EXECUTED at is another question, answered by
+        `triton.prism.runtime_widths` and passed to `estimate_peak_memory` as
+        `widths`. A flag that levelled every float to the compute dtype stood
+        here (`force_compute_dtype_for_fp`); it priced the fp32 tensors the
+        engines keep under a half compute dtype at half their size — Sana
+        4Kpx's VAE planned 6 144 MB at 3072x4096 and ran out of memory holding
+        15 360 MB (2026-09-28).
+        """
+        dtype = tensor_meta.get("dtype")
+        if not dtype:
+            raise ValueError(
+                f"Prism: a tensor of shape {list(shape)} carries no dtype recorded in the graph (its meta: {sorted(tensor_meta)}); "
+                "every graph tensor is priced at its own width, never at a default")
+        numel = 1
+        for dim in shape:
+            numel *= dim
+        return numel * _itemsize.itemsize(dtype)
+
+
+def profile_component(
+    graph_path: Union[str, Path],
+    input_config: Optional[InputConfig] = None,
+) -> ActivationProfile:
+    """
+    Profile a component's activation memory.
+
+    Convenience function for quick profiling.
+
+    Args:
+        graph_path: Path to graph.json
+        input_config: Runtime configuration
+
+    Returns:
+        ActivationProfile with peak memory
+    """
+    profiler = ActivationProfiler.from_path(graph_path)
+    return profiler.estimate_peak_memory(input_config)

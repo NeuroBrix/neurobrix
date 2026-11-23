@@ -27,17 +27,20 @@ class _Stop(Exception):
 
 @pytest.fixture
 def fresh_home(tmp_path, monkeypatch):
-    from neurobrix.pytorch.prism import autodetect as A
-    from neurobrix.pytorch.prism import facts_probe as P
-    from neurobrix.pytorch.prism import loader as L
+    import importlib
     hw = tmp_path / "hardware"
     hw.mkdir()
-    monkeypatch.setattr(A, "HARDWARE_DIR", hw)
-    monkeypatch.setattr(L, "GENERATED_DIR", hw)
     read = []
-    monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: read.append(index) or dict(DELL))
+    sides = ("pytorch", "triton")                       # each branch's own Prism: the mode chooses one of them
+    for side in sides:
+        A = importlib.import_module(f"neurobrix.{side}.prism.autodetect")
+        P = importlib.import_module(f"neurobrix.{side}.prism.facts_probe")
+        L = importlib.import_module(f"neurobrix.{side}.prism.loader")
+        monkeypatch.setattr(A, "HARDWARE_DIR", hw)
+        monkeypatch.setattr(L, "GENERATED_DIR", hw)
+        monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: read.append(index) or dict(DELL))
+        monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
     monkeypatch.setattr("nbxtensor.device.count", lambda: 2)   # several cards seen: the child reads them
-    monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
     measured = {"source": "measured at generation", "matmul_tflops": {"float16": 100.0}, "h2d_gbps": 12.0,
                 "d2h_gbps": 12.0, "d2d_gbps": 800.0, "vmm_chunk_bytes": 2 << 20,
                 "gemv_gbps": {"compiled": {"float16": 700.0}, "triton": {"float16": 700.0}},
@@ -56,14 +59,15 @@ def fresh_home(tmp_path, monkeypatch):
     monkeypatch.setattr(N.NBXContainer, "load", staticmethod(lambda p: NS(
         _cache_path=container_dir, get_manifest=lambda: {"family": "llm"}, get_neural_components=lambda: [])))
     planned = []
-    real = L.load_profile
+    for side in sides:
+        L = importlib.import_module(f"neurobrix.{side}.prism.loader")
+        PRISM = importlib.import_module(f"neurobrix.{side}.prism")
 
-    def load_profile(hardware_id):
-        planned.append(real(hardware_id))
-        return planned[-1]
-    import neurobrix.pytorch.prism as PRISM
-    monkeypatch.setattr(L, "load_profile", load_profile)
-    monkeypatch.setattr(PRISM, "load_profile", load_profile)
+        def load_profile(hardware_id, real=L.load_profile):
+            planned.append(real(hardware_id))
+            return planned[-1]
+        monkeypatch.setattr(L, "load_profile", load_profile)
+        monkeypatch.setattr(PRISM, "load_profile", load_profile)
     monkeypatch.setattr(PR, "open_declared", lambda *a, **k: (_ for _ in ()).throw(_Stop()))
     return NS(hw=hw, read=read, planned=planned)
 

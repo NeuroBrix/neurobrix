@@ -38,8 +38,7 @@ from neurobrix.core.module.tiling_engine import TilingEngine
 from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_torch_tensor
 
 
-from neurobrix.pytorch.prism.structure import names_accelerator as _names_accelerator
-from neurobrix.pytorch.prism.host_footprint import engine_of
+from neurobrix import branch_door as _branch_door      # Prism's names are asked at the call: the branch is chosen later
 from neurobrix.core.runtime.torch_allocator import (configure_torch_allocator, configure_memory_fraction,
                                                     bound_to_imposed_rung)
 from neurobrix.core.runtime.phase_trace import load_span
@@ -47,7 +46,7 @@ from neurobrix.core.runtime.phase_trace import load_span
 
 def _release_device_memory(mode: str, device) -> None:
     """Each engine's own release of `device`: sync, collect, the allocator's cache returned to the driver."""
-    if engine_of(mode) == "compiled":
+    if _branch_door.module("prism", "host_footprint").engine_of(mode) == "compiled":
         from neurobrix.core.memory.manager import release_flow_memory
     else:                                         # the Triton branch's own (R33: no torch imported there)
         from nbxtensor.memory.memory_pool import release_flow_memory
@@ -84,6 +83,7 @@ class RuntimeExecutor:
         from neurobrix.core.workspace import adopt_load_ceiling
         adopt_load_ceiling(self.plan)          # the loads read at the ceiling of the plan this executor runs
         self.mode = mode
+        _branch_door.choose(mode)               # an executor runs one branch: its process's Prism is that branch's
         self.executors: Dict[str, Any] = {}
         self.modules: Dict[str, Any] = {}
         self.variable_resolver: Optional[VariableResolver] = None
@@ -302,7 +302,7 @@ class RuntimeExecutor:
         """
         if self._is_setup:
             return
-        if engine_of(self.mode) == "compiled":
+        if _branch_door.module("prism", "host_footprint").engine_of(self.mode) == "compiled":
             # before any executor loads a weight (core/runtime/torch_allocator.py)
             configure_torch_allocator(self.plan)
             bound_to_imposed_rung(self.plan, declared=configure_memory_fraction(self.plan))
@@ -1502,7 +1502,7 @@ class RuntimeExecutor:
                 dev = getattr(alloc, 'device', '')
                 if dev == 'cpu' or dev.startswith('cpu'):
                     seen_cpu = True
-                elif _names_accelerator(dev):
+                elif _branch_door.module("prism", "structure").names_accelerator(dev):
                     # Was ('cuda', 'hip', 'xpu') — omitting mps, so on Apple
                     # seen_gpu never became true and a plan mixing cpu and GPU
                     # components was not detected as hybrid. The explicit
@@ -1535,7 +1535,7 @@ class RuntimeExecutor:
         """The component's output, computed in the plan's temporal chunks (`core/module/temporal_stream_runner.py`).
         The two chunk graphs run on piece executors that BORROW the component's loaded weights (one copy, the
         layer-streaming pieces' rule), on its device, in the run's engine."""
-        from neurobrix.pytorch.prism import temporal_stream as _ts
+        _ts = _branch_door.names("prism", "", "temporal_stream")[0]
         from neurobrix.core.module.temporal_stream_runner import run_stream
         from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
         cache_path = ensure_extracted(Path(self._nbx_path_str))
@@ -1581,7 +1581,7 @@ class RuntimeExecutor:
         """The component's output through its vendor's own tiling (`core/module/vendor_tiling.py`): each tile run
         by the component's executor, or in the plan's temporal stream for that tile (CogVideoX's tiles in its
         frame batches)."""
-        from neurobrix.pytorch.prism import temporal_stream as _ts
+        _ts = _branch_door.names("prism", "", "temporal_stream")[0]
         from neurobrix.core.module.vendor_tiling import run_vendor_tiling
         cache_path = ensure_extracted(Path(self._nbx_path_str))
         decl = _ts.load_vendor_tiling(cache_path, comp_name)

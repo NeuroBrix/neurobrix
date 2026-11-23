@@ -1,0 +1,627 @@
+"""
+NeuroBrix Prism - Structure
+Multi-Interconnect Topology Support for Heterogeneous Hardware
+
+ZERO HARDCODE: All values from hardware profile YAML
+VENDORLESS: nvidia/amd/intel → cuda/hip/xpu device strings
+"""
+
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, List, Dict, Optional, Set, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from neurobrix.triton.prism.cpu_config import CPUConfig
+
+
+# =============================================================================
+# ENUMS
+# =============================================================================
+
+class DeviceBrand(Enum):
+    """Vendorless GPU brand enumeration."""
+    NVIDIA = "nvidia"
+    AMD = "amd"
+    INTEL = "intel"
+    TENSTORRENT = "tenstorrent"
+    APPLE = "apple"
+
+    def to_device_prefix(self) -> str:
+        """Convert brand to PyTorch device prefix."""
+        mapping = {
+            DeviceBrand.NVIDIA: "cuda",
+            DeviceBrand.AMD: "hip",
+            DeviceBrand.INTEL: "xpu",
+            DeviceBrand.TENSTORRENT: "tt",
+            DeviceBrand.APPLE: "mps",
+        }
+        return mapping[self]
+
+    @classmethod
+    def device_prefixes(cls) -> frozenset:
+        """Every prefix a Prism device string can start with.
+
+        Derived from the brand mapping itself, so a new brand cannot be added
+        without every guard built on this set learning about it — which is
+        exactly how the cuda-only guards came to exclude AMD and Apple.
+        """
+        return frozenset(b.to_device_prefix() for b in cls)
+
+
+def names_accelerator(device: str) -> bool:
+    """True when this Prism device string names a GPU rather than host memory.
+
+    The vendorless replacement for `startswith("cuda")`. A guard written that
+    way silently takes the no-GPU branch on every other brand -- AMD is `hip:N`
+    here, Apple `mps:N`, Intel `xpu:N` -- with no error anywhere.
+
+    A bare prefix with no index is NOT an accelerator: that is what a
+    CPU-staged component's plan device looks like, and telling the two apart
+    is the whole job of the guards this replaces.
+    """
+    prefix, _, idx = str(device or "").partition(":")
+    return prefix in DeviceBrand.device_prefixes() and idx.isdigit()
+
+
+class InterconnectTech(Enum):
+    """Physical interconnect technology."""
+    NVLINK = "nvlink"       # NVIDIA NVLink (all generations)
+    XGMI = "xgmi"           # AMD Infinity Fabric
+    QSFP = "qsfp"           # Standard high-speed optical
+    UALINK = "ualink"       # Open standard (future)
+    CXL = "cxl"             # Compute Express Link
+    PCIE = "pcie"           # PCI Express
+
+
+class InterconnectType(Enum):
+    """Logical interconnect capability."""
+    P2P_DIRECT = "p2p_direct"           # Direct peer-to-peer (NVLink, xGMI)
+    P2P_BRIDGE = "p2p_bridge"           # Through bridge/switch
+    SHARED_MEMORY = "shared_memory"     # Shared memory pool (NVSwitch)
+    CPU_BOUNCE = "cpu_bounce"           # Through CPU (slow)
+
+
+class AllocationStrategy(Enum):
+    """
+    Execution strategy for model allocation across hardware.
+
+    Prism scores ALL strategies and selects the best viable one for the
+    given hardware profile. Every strategy listed here is a first-class
+    citizen — NeuroBrix is universal and must handle any hardware combination.
+
+    === Granularity Hierarchy ===
+    Single GPU → Component Placement → Pipeline Parallel (layer) → Block Scatter → Weight Sharding
+
+    === Interconnect ===
+    Scoring uses bandwidth_gbps (continuous value), NOT technology name.
+    No _nvlink/_pcie suffixes — interconnect speed is a scoring factor, not a strategy variant.
+
+    === Memory Modes ===
+    Eager: weights stay in VRAM permanently (fast serving)
+    Lazy: weights swap in/out per phase (models too large for combined VRAM)
+    Offload: weights on CPU, stream to GPU for compute (very large models)
+    """
+
+    # === Single Device ===
+    SINGLE_GPU = "single_gpu"                       # All components on 1 GPU
+    SINGLE_GPU_LIFECYCLE = "single_gpu_lifecycle"   # Persistent + transient classification on 1 GPU
+
+    # === Component Placement — whole-component distribution ===
+    # Each component (text_encoder, transformer, vae) on its assigned GPU.
+    # Activations transfer between GPUs at component boundaries.
+    COMPONENT_PLACEMENT = "component_placement"
+    COMPONENT_PLACEMENT_LAZY = "component_placement_lazy"  # + lazy weight swap between phases
+
+    # === Pipeline Parallel — per-layer sequential fill ===
+    # Layers distributed sequentially across GPUs (like Accelerate device_map="auto").
+    # Layers 0..N on GPU0, N+1..M on GPU1, etc. Only N-1 boundary crossings for N GPUs.
+    # Needed when a component exceeds single GPU but layers are sequential.
+    PIPELINE_PARALLEL = "pipeline_parallel"
+
+    # === Block Scatter — block-level best-fit distribution ===
+    # Individual transformer blocks distributed across GPUs using best-fit-decreasing.
+    # Blocks can land on any GPU (not necessarily sequential).
+    # Needed when a single component exceeds any single GPU's VRAM.
+    BLOCK_SCATTER = "block_scatter"
+
+    # === Weight Sharding — weight-file-level round-robin ===
+    # Single component's weight files distributed across GPUs.
+    # CompiledSequence handles cross-device execution with automatic device alignment.
+    WEIGHT_SHARDING = "weight_sharding"
+
+    # === Sequential / Offload ===
+    LAZY_SEQUENTIAL = "lazy_sequential"             # One component at a time on largest GPU
+    ZERO3 = "zero3"                                 # CPU offload, stream to GPU for compute
+
+    # === CPU-only (Doctrine R35 last-resort cascade) ===
+    # All weights and activations on host RAM; compute via PyTorch ATen
+    # native CPU dispatcher (branch A) or Triton-CPU (branch B, when
+    # integrated). Wall-time is unbounded but availability is guaranteed
+    # on any host with sufficient RAM. R34 generic — works for any model.
+    CPU_EXECUTION = "cpu_execution"
+
+    @property
+    def is_eager(self) -> bool:
+        """True if weights stay in VRAM permanently (fast serving)."""
+        return self in _EAGER_STRATEGIES
+
+
+    @property
+    def granularity(self) -> str:
+        """Distribution granularity: 'single', 'component', 'layer', 'block', 'weight_file'."""
+        if self in (AllocationStrategy.SINGLE_GPU, AllocationStrategy.SINGLE_GPU_LIFECYCLE,
+                    AllocationStrategy.LAZY_SEQUENTIAL, AllocationStrategy.ZERO3):
+            return "single"
+        if self in (AllocationStrategy.COMPONENT_PLACEMENT,
+                    AllocationStrategy.COMPONENT_PLACEMENT_LAZY):
+            return "component"
+        if self == AllocationStrategy.PIPELINE_PARALLEL:
+            return "layer"
+        if self == AllocationStrategy.BLOCK_SCATTER:
+            return "block"
+        if self == AllocationStrategy.WEIGHT_SHARDING:
+            return "weight_file"
+        return "unknown"
+
+
+# Eager strategies: weights stay in VRAM permanently
+_EAGER_STRATEGIES = frozenset({
+    AllocationStrategy.SINGLE_GPU,
+    AllocationStrategy.SINGLE_GPU_LIFECYCLE,
+    AllocationStrategy.COMPONENT_PLACEMENT,
+    AllocationStrategy.PIPELINE_PARALLEL,
+    AllocationStrategy.BLOCK_SCATTER,
+    AllocationStrategy.WEIGHT_SHARDING,
+})
+
+
+# =============================================================================
+# DEVICE SPECIFICATION
+# =============================================================================
+
+
+# Architectures whose GPU shares ONE memory pool with the host. Extended by
+# adding an architecture string, never by testing a vendor: an AMD APU is
+# unified and a discrete Radeon is not, so brand cannot answer this.
+_ARCHITECTURE_IS_UNIFIED = {
+    "apple_silicon": True,
+}
+
+# ---------------------------------------------------------------------------
+# A card's memory class, and the auto-profile name that carries it. ONE place:
+# the builder (autodetect) and every parser (the certified directory reading a
+# legacy proof) call these, so the name's grammar cannot drift from its reading.
+# ---------------------------------------------------------------------------
+def memory_class_gb(memory_mb) -> Optional[int]:
+    """Memory in MB → its class in GB, `round(mb / 1024)`; None when unknown — the library's one rounding
+    (`nbxtensor.backend.device_facts.memory_gb`), which its certified store keys proofs by: one figure for one card."""
+    from nbxtensor.backend.device_facts import memory_gb
+    return memory_gb(memory_mb)
+
+
+def single_card_profile_id(model_short: str, memory_mb) -> str:
+    """`auto-<model>-<N>g` — one visible card, N its memory class."""
+    return f"auto-{model_short}-{memory_class_gb(memory_mb)}g"
+
+
+def rig_profile_id(num_gpus: int, model_short: str, total_vram_gb) -> str:
+    """`auto-<n>x<model>-<total>g` — several cards; names a SUM and the first
+    card's model, not the card a kernel ran on."""
+    return f"auto-{num_gpus}x{model_short}-{total_vram_gb}g"
+
+
+_RIG_PROFILE_ID = re.compile(r"^auto-\d+x")
+_SINGLE_PROFILE_ID = re.compile(r"^auto-.*-(\d+)g$")
+
+
+def memory_class_from_profile_id(profile_id) -> Optional[int]:
+    """The memory class a profile NAME says, or None: a single-card name says
+    its card's class by its suffix; a rig name says a sum and the card is
+    unknown; anything else is unknown."""
+    name = str(profile_id or "")
+    if not name or _RIG_PROFILE_ID.match(name):
+        return None
+    m = _SINGLE_PROFILE_ID.match(name)
+    return int(m.group(1)) if m else None
+
+
+@dataclass
+class DeviceSpec:
+    """
+    Single GPU device specification.
+
+    ZERO HARDCODE: All values from hardware profile YAML.
+    """
+    index: int
+    name: str
+    memory_mb: int
+    compute_capability: str
+    supports_dtypes: List[str]  # ["float32", "float16", "bfloat16"]
+    architecture: str = "unknown"  # volta, ampere, hopper, rdna3, etc.
+    brand: DeviceBrand = DeviceBrand.NVIDIA
+    # None = the profile did not say; fall back to the architecture mapping.
+    unified_memory: Optional[bool] = None
+    # The largest SINGLE allocation the device grants, in MB (Metal: `MTLDevice.maxBufferLength`, 13 639 MB on an
+    # M4 Pro whose working set is 18 186 MB). One arena is one allocation, so no segment, component or tile
+    # buffer may be planned above it. None = the profile does not say: no limit below `memory_mb` (a CUDA card).
+    max_allocation_mb: Optional[int] = None
+    # The device's MEASURED facts (`tools/profile_facts.py`: matmul_tflops per dtype, memory_gbps, h2d_gbps, ...), with
+    # their `source`, read by Prism's time estimate (`triton/prism/time_estimate.py`). None: not measured.
+    measured: Optional[Dict[str, Any]] = None
+    # A dedicated card as the RUNTIME sees it, measured when the profile is generated (autodetect): the total its
+    # allocator reports (cudaMemGetInfo: 16 151 MB on a V100-SXM2-16GB whose nvidia-smi total is 16 384) and the
+    # runtime's own context on it. A run reads both live; the census shadow, which reads nothing, plans against them
+    # (`_device_reading`) — before, it planned the nominal 16 384 against the run's 15 845 and the coverage check missed
+    # the band keys the real plan forms (Sana 4K triton 16g, gate ebm, 2026-10-27). None: not measured.
+    runtime_total_mb: Optional[int] = None
+    runtime_context_mb: Optional[int] = None
+
+    @property
+    def memory_class_gb(self) -> Optional[int]:
+        """The card's memory class — the ONE rounding every reader of a
+        card's memory shares (the auto-profile name, the certified autotune
+        directory's coverage)."""
+        return memory_class_gb(self.memory_mb)
+
+    @property
+    def has_unified_memory(self) -> bool:
+        """Does this device share one memory pool with the host?
+
+        It decides whether offloading weights to the host FREES anything.
+        On a discrete card, host RAM and device memory are disjoint, so
+        zero3's whole premise holds. On a unified device they are the same
+        bytes, and "offload" moves nothing.
+
+        The profile's own `unified_memory` wins when it says anything. When
+        it is silent — every profile written before the field existed, this
+        machine's included — the architecture decides, because unified
+        memory is a property OF the architecture and is already recorded in
+        every profile. Guessing from the brand would be wrong in both
+        directions: a discrete Radeon is not unified and an APU is.
+        """
+        if self.unified_memory is not None:
+            return bool(self.unified_memory)
+        return _ARCHITECTURE_IS_UNIFIED.get(str(self.architecture).lower(), False)
+
+    def get_device_string(self) -> str:
+        """
+        Get PyTorch device string for this GPU.
+
+        VENDORLESS: Converts brand enum to correct device prefix.
+        - NVIDIA -> cuda:X
+        - AMD -> hip:X
+        - INTEL -> xpu:X
+        - TENSTORRENT -> tt:X
+        - APPLE -> mps:X
+        """
+        return f"{self.brand.to_device_prefix()}:{self.index}"
+
+    @property
+    def memory_gb(self) -> float:
+        """Memory in gigabytes."""
+        return self.memory_mb / 1024
+
+
+# =============================================================================
+# INTERCONNECT TOPOLOGY
+# =============================================================================
+
+@dataclass
+class InterconnectLink:
+    """
+    Single interconnect link between devices.
+
+    ZERO HARDCODE: Bandwidth from hardware profile YAML.
+    """
+    device_a: int
+    device_b: int
+    tech: InterconnectTech
+    type: InterconnectType
+    bandwidth_gbps: float
+    bidirectional: bool = True
+
+    def connects(self, dev_a: int, dev_b: int) -> bool:
+        """Check if this link connects two devices (order independent)."""
+        return (self.device_a == dev_a and self.device_b == dev_b) or \
+               (self.device_a == dev_b and self.device_b == dev_a)
+
+
+@dataclass
+class InterconnectGroup:
+    """
+    Group of GPUs sharing fast interconnect.
+
+    Example: 4 GPUs on NVSwitch = one group
+    """
+    name: str
+    members: List[int]  # Device indices
+    tech: InterconnectTech
+    type: InterconnectType
+    internal_bandwidth_gbps: float
+
+    def contains(self, device_index: int) -> bool:
+        """Check if device is in this group."""
+        return device_index in self.members
+
+
+@dataclass
+class InterconnectTopology:
+    """
+    Complete interconnect topology for a hardware profile.
+
+    Supports:
+    - Multi-technology (NVLink + PCIe, xGMI + QSFP)
+    - Groups (NVSwitch domains, xGMI hives)
+    - Fallback paths (NVLink → PCIe if needed)
+    """
+    groups: List[InterconnectGroup] = field(default_factory=list)
+    links: List[InterconnectLink] = field(default_factory=list)
+    default_tech: InterconnectTech = InterconnectTech.PCIE
+    default_bandwidth_gbps: float = 32.0  # PCIe 4.0 x16
+
+    def get_link(self, dev_a: int, dev_b: int) -> Optional[InterconnectLink]:
+        """Get best link between two devices."""
+        for link in self.links:
+            if link.connects(dev_a, dev_b):
+                return link
+        return None
+
+    def get_bandwidth(self, dev_a: int, dev_b: int) -> float:
+        """
+        Get bandwidth between two devices.
+
+        Priority:
+        1. Direct link (NVLink, xGMI)
+        2. Group internal bandwidth
+        3. Default (PCIe) bandwidth
+        """
+        # Check direct links first
+        link = self.get_link(dev_a, dev_b)
+        if link:
+            return link.bandwidth_gbps
+
+        # Check groups
+        for group in self.groups:
+            if group.contains(dev_a) and group.contains(dev_b):
+                return group.internal_bandwidth_gbps
+
+        # Fallback to default
+        return self.default_bandwidth_gbps
+
+    def get_interconnect_type(self, dev_a: int, dev_b: int) -> InterconnectType:
+        """Get interconnect type between two devices."""
+        # Check direct links
+        link = self.get_link(dev_a, dev_b)
+        if link:
+            return link.type
+
+        # Check groups
+        for group in self.groups:
+            if group.contains(dev_a) and group.contains(dev_b):
+                return group.type
+
+        # Fallback
+        return InterconnectType.CPU_BOUNCE
+
+    def devices_have_fast_interconnect(self, devices: List[int]) -> bool:
+        """Check if all devices share fast interconnect (same group or direct links)."""
+        if len(devices) <= 1:
+            return True
+
+        # Check if all in same group
+        for group in self.groups:
+            if all(group.contains(d) for d in devices):
+                return True
+
+        # Check pairwise links (not CPU_BOUNCE)
+        for i in range(len(devices)):
+            for j in range(i + 1, len(devices)):
+                itype = self.get_interconnect_type(devices[i], devices[j])
+                if itype == InterconnectType.CPU_BOUNCE:
+                    return False
+
+        return True
+
+
+# =============================================================================
+# PRISM PROFILE
+# =============================================================================
+
+@dataclass
+class ClusterNode:
+    """One machine of a profile (the state engine's step 6, docs/design/state-engine.md §3.3 point 6): its devices, its
+    host memory, its own working set and state pool. A profile that declares no nodes is ONE node holding every device
+    and the profile's CPU — the single machine is the one-node case, never a special one."""
+    id: str
+    device_indices: List[int]
+    cpu: Optional["CPUConfig"] = None
+
+
+@dataclass
+class NodeLink:
+    """A link between two nodes, its bandwidth and latency as the profile declares them (RING over TCP, RDMA over
+    Thunderbolt 5, ...). No cluster profile exists yet: the list is empty on every profile today."""
+    node_a: str
+    node_b: str
+    bandwidth_gbps: float
+    latency_us: float
+    tech: str = ""
+
+
+@dataclass
+class PrismProfile:
+    """
+    Complete hardware profile for execution planning.
+
+    ZERO HARDCODE: All values from hardware profile YAML.
+    """
+    id: str
+    vendor: str
+    devices: List[DeviceSpec]
+    topology: InterconnectTopology = field(default_factory=InterconnectTopology)
+    cpu: Optional["CPUConfig"] = None  # CPU config from hardware profile
+    # The host's MEASURED facts (`tools/profile_facts.py`: host_matmul_gflops, storage_read_gbps), with their `source`.
+    host_measured: Optional[Dict[str, Any]] = None
+    preferred_dtype: Optional[str] = None  # Override dtype for memory efficiency
+    # Step 6: the machines and the links between them. Empty = ONE node with every device and `cpu` (__post_init__).
+    nodes: List[ClusterNode] = field(default_factory=list)
+    node_links: List[NodeLink] = field(default_factory=list)
+    # The GPUs the machine has and no backend drives, each named with its reason (autodetect): planned without, said.
+    refused_devices: List[Dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.nodes:
+            self.nodes = [ClusterNode(id=self.id, device_indices=[d.index for d in self.devices], cpu=self.cpu)]
+        seen = [i for n in self.nodes for i in n.device_indices]
+        missing = sorted({d.index for d in self.devices} - set(seen))
+        twice = sorted({i for i in seen if seen.count(i) > 1})
+        if missing or twice:
+            raise ValueError(f"ZERO FALLBACK: profile {self.id!r}: every device belongs to exactly one node — "
+                             f"unplaced {missing}, in two nodes {twice}")
+        names = {n.id for n in self.nodes}
+        for link in self.node_links:
+            if link.node_a not in names or link.node_b not in names:
+                raise ValueError(f"ZERO FALLBACK: profile {self.id!r}: link {link.node_a}-{link.node_b} names a node "
+                                 f"the profile does not declare ({sorted(names)})")
+
+
+    @property
+    def total_vram_mb(self) -> int:
+        """Total VRAM across all devices."""
+        return sum(d.memory_mb for d in self.devices)
+
+    @property
+    def total_vram_gb(self) -> float:
+        """Total VRAM in gigabytes."""
+        return self.total_vram_mb / 1024
+
+    @property
+    def device_count(self) -> int:
+        """Number of devices."""
+        return len(self.devices)
+
+    def get_device(self, index: int) -> Optional[DeviceSpec]:
+        """Get device by index."""
+        for d in self.devices:
+            if d.index == index:
+                return d
+        return None
+
+    def devices_support_dtype(self, dtype: str) -> bool:
+        """Check if ALL devices support a dtype."""
+        return all(dtype in d.supports_dtypes for d in self.devices)
+
+    @property
+    def has_native_bf16(self) -> bool:
+        """True iff every device natively supports bfloat16.
+
+        Data-driven surface used by the Triton runtime to decide whether
+        fp16 ops need the fp32-output overflow protection (native's AMP
+        engine already does this unconditionally on pre-Ampere hardware).
+        On Ampere+ (SM 8.0+), H100, Blackwell, Ada, AMD CDNA3, Apple M2+,
+        Intel Ponte Vecchio — this is True and the protection path is a
+        no-op. On Volta / Turing / older AMD — False, fp16 mm/bmm/addmm
+        get fp32 output.
+
+        Edge case: empty device list returns False for safety — callers
+        would otherwise treat "no evidence" as "full capability".
+        """
+        if not self.devices:
+            return False
+        return self.devices_support_dtype("bfloat16")
+
+    @property
+    def attention_operands(self) -> str:
+        """The alignment every device's vendor profile declares for attention operands that
+        disagree in dtype (`precision.attention_operands`, read by the one reader
+        `nbxtensor/dtype/operands.attention_operand_alignment`). Prism prices a plan's attention widths with
+        THIS profile's answer — the profile it plans for, never the one the planning process
+        happens to run on (stage B P3). Devices that declare different alignments are refused
+        by name. A profile with no device (a CPU plan) declares none: its answer is a word that
+        is no alignment, so an attention whose operands agree is priced unchanged and one whose
+        operands disagree is refused by name at the decision — as the compiled DtypeEngine
+        refuses when it was given no hardware."""
+        from neurobrix.triton.dtype import profile_attention_operand_alignment
+        said = profile_attention_operand_alignment(self)     # the one reader; a mixed answer refused
+        if said is None:
+            return f"undeclared (hardware profile {self.id!r} has no device)"
+        return said
+
+    @property
+    def tile_extent_lattice(self) -> int:
+        """The unit a tiled spatial extent is snapped down onto: every device's vendor profile
+        `tiling.extent_lattice` (data, R7/R24), 0 when none declares one. Read from the profile
+        the plan is FOR, never the planning process's active one (stage B P3). Devices that
+        declare different units are refused by name — one plan tiles on one lattice; a profile with
+        no device (a CPU plan) declares none, 0."""
+        from neurobrix.core.config.loader import get_vendor_config
+        said = {int(((get_vendor_config(getattr(d.brand, "value", d.brand), d.architecture) or {})
+                     .get("tiling") or {}).get("extent_lattice") or 0)
+                for d in self.devices}
+        if not said:
+            return 0
+        if len(said) != 1:
+            raise ValueError(f"hardware profile {self.id!r}: its devices declare tile extent "
+                             f"lattices {sorted(said)} — one plan tiles on one")
+        return said.pop()
+
+
+    def get_min_pairwise_bandwidth(self, device_indices: Optional[List[int]] = None) -> float:
+        """Get minimum bandwidth between any pair of devices (Gbps).
+
+        If device_indices is None, considers all devices.
+        Returns the bottleneck bandwidth — the slowest link in the set.
+        """
+        if device_indices is None:
+            device_indices = [d.index for d in self.devices]
+        if len(device_indices) <= 1:
+            return float('inf')
+        min_bw = float('inf')
+        for i in range(len(device_indices)):
+            for j in range(i + 1, len(device_indices)):
+                bw = self.topology.get_bandwidth(device_indices[i], device_indices[j])
+                min_bw = min(min_bw, bw)
+        return min_bw
+
+
+# =============================================================================
+# ALLOCATION STRUCTURES
+# =============================================================================
+#
+# The authoritative ComponentAllocation and ExecutionPlan are defined in
+# solver.py — they use plain strings for strategy (matching Prism's scoring
+# system) and are the active runtime types.
+#
+# Legacy re-exports below provide backward compatibility for code that
+# imports from structure.py. These are thin wrappers around solver types.
+# =============================================================================
+
+@dataclass
+class PipelineStage:
+    """Single stage in pipeline parallelism."""
+    device: str  # "cuda:0", "hip:1", etc.
+    components: List[str]
+    memory_mb: float
+
+
+@dataclass
+class TensorParallelIntent:
+    """
+    TP intent declaration for future DAG rewriter.
+
+    Declares that a tensor SHOULD be split for tensor parallelism.
+    Actual execution requires a TP-DAG-Rewriter (transforms mm → mm_slice + all_reduce).
+    """
+    tensor_name: str       # "transformer.blocks.0.attn.q.weight"
+    split_dim: int         # 0 (row) or 1 (column)
+    world_size: int        # Number of GPUs for this split
+
+
+@dataclass
+class Zero3Config:
+    """Configuration for ZeRO-3 style CPU offloading."""
+    partition_count: int
+    cpu_offload: bool
+    nvme_offload: bool
+    nvme_path: Optional[str] = None

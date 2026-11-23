@@ -27,6 +27,7 @@ from neurobrix.core.runtime.graph_executor import output_key
 from neurobrix.core.strategies.base import ExecutionStrategy
 import logging
 from nbxtensor import memory as _nbx_memory
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 
@@ -109,7 +110,7 @@ def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, second
     the steadiness gate (`autodetect.STEADY_SPREAD`) give their median; three that do not are KEPT with their spread and
     date, priced at their low draw (`note_reload_rate(spread=)`), and replaced by the first steady three — never
     dropped, which made every later launch on a busy machine probe again (the catalogue's kept homes, 2026-11-19)."""
-    from neurobrix.pytorch.prism import autodetect as _ad
+    _ad = _branch_door.names("prism", "", "autodetect")[0]
     stored = _ad.stored_major(nbx_path, component)
     if stored is None or seconds <= 0:
         return
@@ -226,7 +227,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         embed_tokens weight" refusals. Prism budgets these bytes as resident beside the pieces. Idempotent (a held
         key is not reloaded), and called on every entry, so a base unloaded between phases gets
         them back."""
-        from neurobrix.pytorch.prism.layer_partition import flow_reads_by_name
+        flow_reads_by_name = _branch_door.names("prism", "layer_partition", "flow_reads_by_name")[0]
         if not flow_reads_by_name(component_name, getattr(base, "_dag", None),
                                   getattr(self.context, "topology", None)):
             return                    # no flow reads this component by name: nothing to hold
@@ -248,8 +249,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         executor's OWN dag, a segment executor asks the loader for precisely
         its own weights with nothing further to arrange.
         """
-        from neurobrix.pytorch.prism.layer_partition import (
-            LayerPartitioner, build_segment_graph, Segment)
+        LayerPartitioner, build_segment_graph, Segment = _branch_door.names("prism", "layer_partition", "LayerPartitioner", "build_segment_graph", "Segment")
         base = self.context.component_executors.get(component_name)
         if base is None:
             raise RuntimeError(

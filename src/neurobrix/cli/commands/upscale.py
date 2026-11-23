@@ -20,6 +20,7 @@ import sys
 import time
 from pathlib import Path
 from nbxtensor import device as _nbx_device
+from neurobrix import branch_door as _branch_door
 
 log = logging.getLogger(__name__)
 
@@ -68,9 +69,6 @@ def _load_and_preprocess_image(image_path: str, cache_path: Path):
 def cmd_upscale(args):
     """Image super-resolution via an upscaler container."""
     from neurobrix.nbx import NBXContainer
-    from neurobrix.pytorch.prism import PrismSolver, InputConfig
-    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
-    from neurobrix.pytorch.prism.loader import launch_profile
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.core.runtime.output_dispatch import save_image
@@ -90,6 +88,9 @@ def cmd_upscale(args):
     from neurobrix.cli.engine_choice import choose_engine, declare_for
     if (execution_mode := choose_engine(_mode_as_flag(args), log)) is None:
         sys.exit(1)
+    PrismSolver, InputConfig = _branch_door.names("prism", "", "PrismSolver", "InputConfig")   # the chosen branch's Prism
+    get_or_create_default_profile = _branch_door.names("prism", "autodetect", "get_or_create_default_profile")[0]
+    launch_profile = _branch_door.names("prism", "loader", "launch_profile")[0]
 
     from neurobrix.cli.utils import resolve_model_arg
     args.model = resolve_model_arg(args.model)
@@ -143,7 +144,7 @@ def cmd_upscale(args):
         log.debug(f"   Devices:  {', '.join(_cards)}"
                   f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
     if getattr(execution_plan, "host_footprint", None):
-        from neurobrix.pytorch.prism.host_footprint import summary as _host_summary
+        _host_summary = _branch_door.names("prism", "host_footprint", "summary")[0]
         log.debug(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
 
     loader = NBXRuntimeLoader()

@@ -59,6 +59,7 @@ from .graph.execution_context import ExecutionContext
 from .graph.tensor_resolver import TensorResolver
 from neurobrix.core.memory import MemoryManager
 import logging
+from neurobrix import branch_door as _branch_door
 _log = logging.getLogger(__name__)
 
 
@@ -1743,7 +1744,6 @@ class GraphExecutor:
                 neutralized += 1
 
         if neutralized > 0:
-            import logging
             logging.getLogger(__name__).debug(
                 f"[GraphExecutor] Normalized SDPA scaling: neutralized {neutralized * 2} "
                 f"pre-scaling mul ops across {neutralized} attention layers"
@@ -2288,7 +2288,7 @@ class GraphExecutor:
         """The loader's own measurement of this load, handed to the active generated profile (`kept_launch_facts.
         note_weight_load`: the loader's rate, S2, which Prism's estimate reads from the next plan on, and the width the
         weight reader reached, row 167)."""
-        from neurobrix.pytorch.prism import kept_launch_facts
+        kept_launch_facts = _branch_door.names("prism", "", "kept_launch_facts")[0]
         kept_launch_facts.note_weight_load(engine, nbx_path, component, where, landed, seconds)
 
     def _load_weights_native(self, nbx_path, component, shard_map, only=None):
