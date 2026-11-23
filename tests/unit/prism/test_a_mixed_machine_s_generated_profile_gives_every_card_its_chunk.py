@@ -13,6 +13,7 @@ import yaml
 
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import facts_probe as P
+from nbxtensor.backend import host_measure as H
 from neurobrix.core.prism.kept_launch_facts import card_key
 
 SMALL = {"brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "architecture": "volta", "compute_capability": "7.0",
@@ -26,9 +27,10 @@ def hw(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "HARDWARE_DIR", tmp_path)
     probed = []
     monkeypatch.setattr(P, "vmm_first_replay", lambda dev: None)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda dev, *a, **k: probed.append(dev) or (CHUNK[dev], None))
-    monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: 300.0)
-    monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: 20.0)
+    monkeypatch.setattr(P, "sweep_chunk", lambda dev, *a, **k: probed.append(dev) or (CHUNK[dev], None))
+    monkeypatch.setattr(P, "ruled_chunk", lambda *a, **k: None)   # a class the library's rule does not answer: swept
+    monkeypatch.setattr(H, "host_matmul_gflops", lambda *a, **k: 300.0)
+    monkeypatch.setattr(H, "host_memory_gbps", lambda *a, **k: 20.0)
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: {})
     return tmp_path, probed
 

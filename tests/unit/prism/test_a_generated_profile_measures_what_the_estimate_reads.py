@@ -17,6 +17,7 @@ import yaml
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import owed_facts as OF
 from neurobrix.core.prism import facts_probe as P
+from nbxtensor.backend import host_measure as H
 from neurobrix.core.prism.kept_launch_facts import card_key
 
 CALLS = []
@@ -29,9 +30,10 @@ def hw(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "matmul_tflops", lambda t, *a, **k: CALLS.append(("mm", t)) or {"best": 10.0})
     monkeypatch.setattr(P, "copies", lambda *a, **k: CALLS.append(("copies",)) or
                         {"memory_gbps": 500.0, "h2d_gbps": 10.0, "d2h_gbps": 9.0, "h2d_pageable_gbps": 5.0})
-    monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
-    monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: CALLS.append(("vmm",)) or (2 << 20, None))
+    monkeypatch.setattr(H, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
+    monkeypatch.setattr(H, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
+    monkeypatch.setattr(P, "sweep_chunk", lambda *a, **k: CALLS.append(("vmm",)) or (2 << 20, None))
+    monkeypatch.setattr(P, "ruled_chunk", lambda *a, **k: None)   # a class the library's rule does not answer: swept
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)      # no VMM: nothing replayed ahead
     # the runtime's total and own context on each card (255bc661d), read in a child on the real card: mocked like the
     # other probes, so the expected keys do not depend on whether this host has a card

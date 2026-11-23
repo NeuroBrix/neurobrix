@@ -22,7 +22,7 @@ import yaml
 
 
 def set_chunk(block: dict, measured) -> None:
-    """A sweep's answer, (chunk, spread) as `facts_probe.vmm_chunk_bytes` gives it, into a device's measured block: an
+    """A sweep's answer, (chunk, spread) as `facts_probe.sweep_chunk` gives it, into a device's measured block: an
     unconcluded sweep's best candidate with its spread beside it (`vmm_chunk_spread`), never a 0 written as if measured
     (row 167); 0 only for a device with no VMM."""
     chunk, spread = measured
@@ -34,13 +34,23 @@ def set_chunk(block: dict, measured) -> None:
         block.pop("vmm_chunk_spread", None)
 
 
+def chunk_owed(device: dict, own: dict, position: int) -> bool:
+    """Whether the card at `position` of the profile's devices owes a chunk sweep: its block states no chunk AND the
+    library's rule answers none for its memory class (`facts_probe.ruled_chunk`, the card's own index, card 0 for the
+    first). A class the rule answers is READ by the allocator and never swept (first-launch fact page line 1)."""
+    from neurobrix.core.prism import facts_probe as P
+    if "vmm_chunk_bytes" in own:
+        return False
+    return P.ruled_chunk(0 if position == 0 else int(device.get("index", position)), device.get("memory_mb")) is None
+
+
 def _models_to_sweep(devices, first, measured_of) -> Dict[Any, int]:
     """{card model: the index of the card to sweep it on} for every model of the profile whose block states no chunk:
     card 0 for card 0's model, else the model's first card (by its `index`)."""
     todo: Dict[Any, int] = {}
     for i, d in enumerate(devices):
         own = first if d.get("model") == devices[0].get("model") else measured_of(d)
-        if "vmm_chunk_bytes" in own or d.get("model") in todo:
+        if "vmm_chunk_bytes" in own or d.get("model") in todo or not chunk_owed(d, own, i):
             continue
         if i and "index" not in d:
             raise ValueError(f"profile {d.get('model')!r}: a device of this card model has no 'index' fact, so its "
@@ -64,7 +74,7 @@ def sweep_chunks(devices, first, measured_of, q, replay) -> Dict[Any, Any]:
     def sweep(item):
         model, index = item
         ahead = replay[0] if replay and model == devices[0].get("model") else None
-        return model, P.vmm_chunk_bytes(index, q["vmm_reps"], q["vmm_ks"], off_first=ahead)
+        return model, P.sweep_chunk(index, q["vmm_reps"], q["vmm_ks"], off_first=ahead)
     with ThreadPoolExecutor(max_workers=len(todo)) as pool:
         return dict(pool.map(sweep, todo.items()))
 

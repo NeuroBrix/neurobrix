@@ -2548,8 +2548,10 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
             if mb is not None:
                 cpu["runtime_base_mb"] = {**base, engine: int(mb)}
                 added["runtime_base_mb"] = [engine]
-    replay = P.vmm_first_replay(0) if "vmm_chunk_bytes" not in first else None    # made ahead: it prices the rest
-    if not first or "vmm_chunk_bytes" not in first:
+    # the chunk is READ from the library's rule where it answers the card's class (kept.chunk_owed); swept once else
+    owed_chunk = kept.chunk_owed(devices[0], first, 0)
+    replay = P.vmm_first_replay(0) if owed_chunk else None    # made ahead: it prices the rest
+    if not first or owed_chunk:
         launch_lines.say("measure", work_said([], replay, q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
     if not first:
         dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
@@ -2565,7 +2567,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         added["gemv_gbps"] = [engine]
     # every card model's chunk swept at once, each on its own first card, side by side (`kept.sweep_chunks`)
     chunks = kept.sweep_chunks(devices, first, measured_of, q, replay)
-    if "vmm_chunk_bytes" not in first:
+    if owed_chunk:
         # the expandable pool's chunk on this machine's card (R16; 0: the device has no VMM, the pool keeps segments)
         kept.set_chunk(first, chunks[devices[0].get("model")])
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]

@@ -18,6 +18,7 @@ from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import owed_facts as OF
 from neurobrix.core.prism import kept_launch_facts as K
 from neurobrix.core.prism import facts_probe as P
+from nbxtensor.backend import host_measure as H
 
 CALLS = []
 C16 = {"brand": "nvidia", "model": "Card-16", "architecture": "unknownarch", "supports_dtypes": ["float16"],
@@ -32,9 +33,10 @@ def hw(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "matmul_tflops", lambda t, *a, **k: CALLS.append(("mm", t)) or {"best": 10.0})
     monkeypatch.setattr(P, "copies", lambda *a, **k: CALLS.append(("copies",)) or
                         {"memory_gbps": 500.0, "h2d_gbps": 10.0, "d2h_gbps": 9.0, "h2d_pageable_gbps": 5.0})
-    monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
-    monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda d, *a, **k: CALLS.append(("vmm", d)) or ((32 << 20) * (1 + d), None))
+    monkeypatch.setattr(H, "host_matmul_gflops", lambda *a, **k: CALLS.append(("hmm",)) or 300.0)
+    monkeypatch.setattr(H, "host_memory_gbps", lambda *a, **k: CALLS.append(("hmem",)) or 20.0)
+    monkeypatch.setattr(P, "sweep_chunk", lambda d, *a, **k: CALLS.append(("vmm", d)) or ((32 << 20) * (1 + d), None))
+    monkeypatch.setattr(P, "ruled_chunk", lambda *a, **k: None)   # a class the library's rule does not answer: swept
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda i: CALLS.append(("card", i)) or
                         {"runtime_total_mb": 16000 + i, "runtime_context_mb": 300})

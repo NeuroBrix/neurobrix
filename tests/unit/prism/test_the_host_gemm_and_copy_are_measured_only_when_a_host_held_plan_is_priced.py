@@ -15,6 +15,7 @@ import yaml
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import owed_facts as OF
 from neurobrix.core.prism import facts_probe as P
+from nbxtensor.backend import host_measure as H
 from neurobrix.core.prism import time_estimate as T
 from neurobrix.core.prism.work import Work
 
@@ -28,10 +29,11 @@ DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch"
 def home(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "HARDWARE_DIR", tmp_path)
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: (2 << 20, None))
+    monkeypatch.setattr(P, "sweep_chunk", lambda *a, **k: (2 << 20, None))
+    monkeypatch.setattr(P, "ruled_chunk", lambda *a, **k: None)   # a class the library's rule does not answer: swept
     calls = []
-    monkeypatch.setattr(P, "host_matmul_gflops", lambda *a, **k: calls.append("gemm") or 300.0)
-    monkeypatch.setattr(P, "host_memory_gbps", lambda *a, **k: calls.append("copy") or 20.0)
+    monkeypatch.setattr(H, "host_matmul_gflops", lambda *a, **k: calls.append("gemm") or 300.0)
+    monkeypatch.setattr(H, "host_memory_gbps", lambda *a, **k: calls.append("copy") or 20.0)
     (tmp_path / "default-abc.yml").write_text(yaml.safe_dump({"id": "default-abc", "cpu": {"model": "x"},
                                                               "devices": [dict(DEV)]}))
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")

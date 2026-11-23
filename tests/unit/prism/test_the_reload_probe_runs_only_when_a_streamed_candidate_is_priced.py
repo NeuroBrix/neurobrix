@@ -36,7 +36,8 @@ def home(tmp_path, monkeypatch):
         f.truncate(2 * A.LOADER_RATE_MIN_BYTES)          # sparse: the size is what the probe reads
     monkeypatch.setattr(paths, "cache_dir", lambda: cache)
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: (2 << 20, None))
+    monkeypatch.setattr(P, "sweep_chunk", lambda *a, **k: (2 << 20, None))
+    monkeypatch.setattr(P, "ruled_chunk", lambda *a, **k: None)   # a class the library's rule does not answer: swept
     monkeypatch.setattr(A, "_measure_runtime_base_mb", lambda engine: 800)
     probed = []
     monkeypatch.setattr(AP, "child", lambda d, comp, h, e: probed.append((comp, h, e)) or

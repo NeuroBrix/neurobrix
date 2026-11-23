@@ -13,13 +13,14 @@ def measured_of_others(devices, measured_of, added, q, chunks=None) -> Dict[Any,
     others: Dict[Any, dict] = {}
     for d in (d for d in devices if d.get("model") != devices[0].get("model")):
         own = others.setdefault(d.get("model"), measured_of(d))
-        if "vmm_chunk_bytes" not in own:
+        from neurobrix.core.prism.kept_launch_facts import chunk_owed
+        if chunk_owed(d, own, devices.index(d)):
             if "index" not in d:
                 raise ValueError(f"profile {d.get('model')!r}: a device of this card model has no 'index' fact, so its "
                                  f"expandable-pool chunk cannot be measured on its own card; add 'index' to every device "
                                  f"of the profile's devices list")
             chunk, spread = chunks[d.get("model")] if chunks and d.get("model") in chunks else \
-                P.vmm_chunk_bytes(int(d["index"]), q["vmm_reps"], q["vmm_ks"])
+                P.sweep_chunk(int(d["index"]), q["vmm_reps"], q["vmm_ks"])
             own["vmm_chunk_bytes"] = added.setdefault("vmm_chunk_bytes_of", {})[int(d["index"])] = int(chunk or 0)
             from neurobrix.core.prism.kept_launch_facts import card_key
             own["vmm_chunk_under"] = card_key()

@@ -8,11 +8,13 @@ supervisor's S2, 2026-10-27 22:20).
   memory_gbps             a device-to-device copy, (read + write) bytes / time
   h2d_gbps / d2h_gbps     a copy from page-locked host memory to the card and back
   h2d_pageable_gbps       the same from ordinary host memory
-  host_matmul_gflops      a float32 GEMM on the host through numpy's BLAS
-  host_memory_gbps        a copy of an array in host memory, (read + write) bytes / time
+  host_matmul_gflops      a float32 GEMM on the host, host_memory_gbps a host-memory copy: the LIBRARY's measures
+                          (`nbxtensor.backend.host_measure`), read by owed_facts.measure_host_facts
   storage_read_gbps       a sequential read of a named file, its pages dropped first
   gemv_gbps               a decode step's matrix-vector product on each engine, the weight bytes it streams / time
-  vmm_chunk_bytes         the expandable pool's chunk (R16): the device's allocation granularity x k, k the smallest whose
+  vmm_chunk_bytes         the expandable pool's chunk (R16): the LIBRARY's rule for the card's memory class
+                          (`nbxtensor.memory.chunk_rule`, `ruled_chunk`) is READ; a class it does not answer is swept
+                          once (`sweep_chunk`) and kept: the device's allocation granularity x k, k the smallest whose
                           map + unmap costs no more than an ordinary allocation of the same bytes (its median plus its
                           spread) — the supervisor's criterion of 2026-11-02 06:40; absent when the device has no VMM
   expert_copy             the expert store's miss copy, measured by the library next to its kernel
@@ -65,33 +67,6 @@ def gemv_gbps(dtype: str, engine: str, k: int, n: int, reps: int) -> float:
     ms = (time.perf_counter() - t0) / reps * 1e3
     nbytes = w.numel() * w.element_size()
     return round(nbytes / (ms * 1e-3) / 1e9, 1)
-
-
-def host_matmul_gflops(n: int = 4096) -> float:
-    import numpy as np
-    rng = np.random.default_rng(0)
-    a = rng.standard_normal((n, n), dtype=np.float32)
-    b = rng.standard_normal((n, n), dtype=np.float32)
-    a @ b
-    best = float("inf")
-    for _ in range(3):
-        t0 = time.perf_counter()
-        a @ b
-        best = min(best, time.perf_counter() - t0)
-    return 2.0 * n ** 3 / best / 1e9
-
-
-def host_memory_gbps(nbytes: int = 1 << 30) -> float:
-    import numpy as np
-    src = np.ones(int(nbytes), dtype=np.uint8)
-    dst = np.empty_like(src)
-    np.copyto(dst, src)
-    best = float("inf")
-    for _ in range(3):
-        t0 = time.perf_counter()
-        np.copyto(dst, src)
-        best = min(best, time.perf_counter() - t0)
-    return 2.0 * int(nbytes) / best / 1e9
 
 
 def block_keys(root: Path, comp: str, gb: float) -> Tuple[List[str], int, List[Path]]:
@@ -232,9 +207,21 @@ def best_of_unconcluded(times) -> Tuple[int, dict]:
     return best, spread
 
 
-def vmm_chunk_bytes(device: int, reps: int, ks: Sequence[int],
-                    off_first: Optional[float] = None) -> Tuple[Optional[int], Optional[dict]]:
-    """The expandable pool's chunk on `device`, measured on a REAL run's allocations (R16; the supervisor 2026-11-02
+def ruled_chunk(device: int, memory_mb) -> Optional[int]:
+    """The expandable pool's chunk the LIBRARY's rule gives `device` for its memory class (`nbxtensor.memory.chunk_rule`,
+    read from the profile's `memory_mb` exactly as the library's allocator reads it): READ, never swept (OWNER RESET
+    22/11 point 1; the allocator takes it before any measured chunk, so a sweep of a class the rule answers was run and
+    then ignored: 40-48 s of the Dell's 61.7 s first launch). None: no VMM, no card size, or no entry for the class."""
+    if not memory_mb:
+        return None
+    from nbxtensor.memory import chunk_rule
+    return chunk_rule.vmm_chunk_bytes(int(device), int(memory_mb) * chunk_rule.MiB)
+
+
+def sweep_chunk(device: int, reps: int, ks: Sequence[int],
+                off_first: Optional[float] = None) -> Tuple[Optional[int], Optional[dict]]:
+    """The expandable pool's chunk on `device` for a class the library's rule does not answer (`ruled_chunk` None),
+    measured ONCE on a REAL run's allocations (R16; the supervisor 2026-11-02
     17:15): the library's recorded allocation trace (`nbxtensor.memory.trace_replay`) replayed through the allocator on
     this device alone, under the card size it was recorded on, with the range off (the driver segments) and then at
     each chunk = granularity x k, `ks` ascending; the chunk is the first whose median replay is within R16 OFF's median

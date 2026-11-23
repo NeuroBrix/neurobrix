@@ -75,7 +75,7 @@ def measure_host_facts(hardware_id: Optional[str]) -> List[str]:
     if path is None:
         return []
     from neurobrix.core.prism.loader import vendor_block
-    from neurobrix.core.prism import facts_probe as P
+    from nbxtensor.backend import host_measure as H      # the library's measures (qa 1231-4: numpy measures are its own)
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
@@ -87,8 +87,8 @@ def measure_host_facts(hardware_id: Optional[str]) -> List[str]:
     data.setdefault("host_measured", {}).update({
         "source": f"measured {_time.strftime('%Y-%m-%d %H:%M:%S %Z')} when a host-held plan was first priced on this "
                   f"machine (autodetect, quick)",
-        "host_matmul_gflops": round(P.host_matmul_gflops(q["host_gemm_n"])),
-        "host_memory_gbps": round(P.host_memory_gbps(q["host_copy_bytes"]))})
+        "host_matmul_gflops": round(H.host_matmul_gflops(q["host_gemm_n"])),
+        "host_memory_gbps": round(H.host_memory_gbps(q["host_copy_bytes"]))})
     A.write_profile_atomically(path, data)
     return ["host_matmul_gflops", "host_memory_gbps"]
 

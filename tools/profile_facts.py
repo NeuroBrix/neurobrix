@@ -8,7 +8,7 @@ timer (`launcher.do_bench`), the device allocator's copies — never a vendor li
   memory_gbps             a device-to-device copy, (read + write) bytes / time
   h2d_gbps / d2h_gbps     a copy from page-locked host memory to the card and back
   h2d_pageable_gbps       the same from ordinary host memory (what a loader without staging pays)
-  host_matmul_gflops      a float32 GEMM on the host through numpy's BLAS, the machine's thread setting
+  host_matmul_gflops      a float32 GEMM on the host through numpy's BLAS (nbxtensor.backend.host_measure), the machine's thread setting
   host_memory_gbps        a copy of a 1 GiB array in host memory, (read + write) bytes / time
   storage_read_gbps       a sequential read of a file the caller names (a weight shard of the cache)
   weight_load_gbps        the ENGINE'S OWN LOADER on components the caller names (`--weights <model>:<component>,...`,
@@ -40,7 +40,8 @@ from atelier import writable  # noqa: E402
 # The measuring primitives are the engine's own (core/prism/facts_probe.py): one code for this tool's full measurement
 # and for a machine's first launch (the supervisor's S2, 2026-10-27).
 from neurobrix.core.prism.facts_probe import (  # noqa: E402
-    block_keys, copies, host_matmul_gflops, host_memory_gbps, matmul_tflops, storage_read_gbps, stored_dtype)
+    block_keys, copies, matmul_tflops, storage_read_gbps, stored_dtype)
+from nbxtensor.backend.host_measure import host_matmul_gflops, host_memory_gbps  # noqa: E402  the library's (qa 1231-4)
 from neurobrix.core.prism import facts_probe as _probe  # noqa: E402
 from neurobrix.core.prism.autodetect import FIRST_LAUNCH as _FL  # noqa: E402  the probes' settings, one table
 

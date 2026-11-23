@@ -158,7 +158,8 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     handed = []
     # the chunk probe's first replay, measured ahead: 1.0 s replayed, 2.0 s for its whole child here
     monkeypatch.setattr(P, "vmm_first_replay", lambda dev: (1.0, 2.0))
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda dev, reps, ks, off_first=None: handed.append(off_first) or (0, None))
+    monkeypatch.setattr(P, "sweep_chunk", lambda dev, reps, ks, off_first=None: handed.append(off_first) or (0, None))
+    monkeypatch.setattr(P, "ruled_chunk", lambda *a, **k: None)   # a class the library's rule does not answer: swept
     monkeypatch.setattr(P, "card_facts_in_a_child", lambda index: {})   # the card's runtime facts: not this test's
     probed = []
     monkeypatch.setattr(arena_probe, "child", lambda d, c, h, e: probed.append(Path(d).name) or

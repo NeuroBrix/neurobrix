@@ -15,6 +15,7 @@ import yaml
 
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism import facts_probe as P
+from nbxtensor.backend import host_measure as H
 
 DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch", "supports_dtypes": ["float16"],
        "runtime_total_mb": 16000, "runtime_context_mb": 300,
@@ -30,10 +31,11 @@ def hw(tmp_path, monkeypatch):
     (tmp_path / "cache").mkdir()
     monkeypatch.setattr(paths, "cache_dir", lambda: tmp_path / "cache")         # no container: no reload probe owed
     monkeypatch.setattr(P, "vmm_first_replay", lambda *a, **k: None)
-    monkeypatch.setattr(P, "vmm_chunk_bytes", lambda *a, **k: (2 << 20, None))  # the chunk: not this test's
-    for name in ("matmul_tflops", "copies", "card_facts_in_a_child", "gemv_gbps", "host_matmul_gflops",
-                 "host_memory_gbps"):
-        monkeypatch.setattr(P, name, lambda *a, _n=name, **k: (_ for _ in ()).throw(AssertionError(f"{_n} measured")))
+    monkeypatch.setattr(P, "sweep_chunk", lambda *a, **k: (2 << 20, None))  # the chunk: not this test's
+    monkeypatch.setattr(P, "ruled_chunk", lambda *a, **k: None)   # a class the library's rule does not answer: swept
+    for mod, name in ((P, "matmul_tflops"), (P, "copies"), (P, "card_facts_in_a_child"), (P, "gemv_gbps"),
+                      (H, "host_matmul_gflops"), (H, "host_memory_gbps")):
+        monkeypatch.setattr(mod, name, lambda *a, _n=name, **k: (_ for _ in ()).throw(AssertionError(f"{_n} measured")))
     measured = []
     monkeypatch.setattr(A, "_measure_runtime_base_mb", lambda engine: measured.append(engine) or {"compiled": 800,
                                                                                                     "triton": 90}[engine])
