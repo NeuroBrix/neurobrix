@@ -15,13 +15,6 @@ device_prefix: "cuda"
 
 # Kernel block sizes - Hopper-optimized (TMA, larger blocks)
 block_sizes:
-  # GEMM configuration - optimized for H100
-  gemm:
-    block_m: 128
-    block_n: 256         # Larger N tile for H100
-    block_k: 64          # Larger K tile
-    num_warps: 8
-    num_stages: 4        # More pipeline stages
 
   # Resize/interpolation block size
   resize: 512

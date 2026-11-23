@@ -443,26 +443,6 @@ def get_block_sizes(vendor: str, architecture: str) -> Dict[str, Any]:
     return config.get("block_sizes", {})
 
 
-def get_gemm_config(vendor: str, architecture: str) -> Dict[str, int]:
-    """
-    Get GEMM-specific block configuration.
-
-    Returns:
-        Dict with block_m, block_n, block_k, num_warps, num_stages
-    """
-    block_sizes = get_block_sizes(vendor, architecture)
-    gemm_config = block_sizes.get("gemm", {})
-
-    # Provide defaults if missing (but prefer data-driven)
-    return {
-        "block_m": gemm_config.get("block_m", 64),
-        "block_n": gemm_config.get("block_n", 64),
-        "block_k": gemm_config.get("block_k", 32),
-        "num_warps": gemm_config.get("num_warps", 4),
-        "num_stages": gemm_config.get("num_stages", 2),
-    }
-
-
 def get_bmm_config(vendor: str, architecture: str) -> Dict[str, int]:
     """
     Get Batched Matrix Multiply block configuration.

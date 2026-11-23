@@ -15,13 +15,6 @@ device_prefix: "cuda"
 
 # Kernel block sizes - Ampere-optimized (larger tiles, more parallelism)
 block_sizes:
-  # GEMM configuration - larger tiles for A100
-  gemm:
-    block_m: 128         # Larger tiles for Ampere
-    block_n: 128
-    block_k: 32
-    num_warps: 8         # More warps for higher parallelism
-    num_stages: 3        # More pipeline stages
 
   # Resize/interpolation block size
   resize: 256

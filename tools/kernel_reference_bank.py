@@ -43,7 +43,9 @@ def tiles() -> dict:
     from neurobrix.core.config.loader import vendor_file      # the device whole: the library's half and the engine's
     cfg = vendor_file(REPO / "src/neurobrix/config/vendors/nvidia/volta.yml")
     bs = cfg.get("block_sizes") or {}
-    return {"gemm": bs.get("gemm", {}), "bmm": bs.get("bmm", {}), "conv2d": bs.get("conv2d", {}),
+    # the matrix tile is the library's (`block_sizes.bmm` of its device half): the engine's own `gemm` copy, read by
+    # no kernel and disagreeing with the library on ampere and hopper, was removed (supervisor 23/11 01:01)
+    return {"gemm": bs.get("bmm", {}), "bmm": bs.get("bmm", {}), "conv2d": bs.get("conv2d", {}),
             "default": int(bs.get("default", 1024)), "softmax_cap": int(bs.get("softmax_cap", 8192)),
             "layernorm_tile": int(bs.get("layernorm_tile", 1024)), "reduction": int(bs.get("reduction", 1024))}
 

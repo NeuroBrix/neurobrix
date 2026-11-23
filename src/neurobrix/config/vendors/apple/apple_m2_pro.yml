@@ -40,12 +40,6 @@ device_prefix: "mps"
 block_sizes:
   # GEMM — Apple's simdgroup_matrix units are the equivalent of tensor
   # cores. Kept small until the 32 KB budget is measured rather than assumed.
-  gemm:
-    block_m: 32
-    block_n: 32
-    block_k: 32
-    num_warps: 4
-    num_stages: 2
 
   resize: 256
   softmax_cap: 8192
