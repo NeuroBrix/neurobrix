@@ -80,6 +80,16 @@ def _apply_family_stimulus(args, family: str) -> Dict[str, Any]:
     return _stimulus_of(args)
 
 
+def _engine_of(args):
+    """The engine the census runs on, chosen as `run` chooses it (cli/engine_choice.py: no flag = the default engine,
+    Triton), None after a refusal (logged): its record names THAT engine, read from the one choice, never assumed
+    (qa 1274-1: with Triton the default, a label fixed to "compiled" put a Triton census where the PyTorch
+    reference's goes). The PyTorch reference census is asked by its flag: --compiled."""
+    from neurobrix.cli.commands.run import log as _run_log
+    from neurobrix.cli.engine_choice import choose_engine
+    return choose_engine(args, _run_log)
+
+
 def cmd_calibrate(args) -> int:
     from neurobrix.core.dtype import calibration as cal
     from neurobrix.core.config.loader import get_precision_calibration_policy
@@ -95,14 +105,7 @@ def cmd_calibrate(args) -> int:
         print("ERROR: a serving daemon is running — the census must run in this process. "
               "Stop it first (neurobrix stop).")
         return 2
-    # The census runs on the engine the request's flag asks for, chosen as `run` chooses it (cli/engine_choice.py: no
-    # flag = the default engine, Triton); its record names THAT engine, read from the one choice, never assumed
-    # (qa 1274-1: with Triton the default, a label fixed to "compiled" put a Triton census where the PyTorch
-    # reference's goes). The PyTorch reference census is asked by its flag: --compiled.
-    from neurobrix.cli.commands.run import log as _run_log
-    from neurobrix.cli.engine_choice import choose_engine
-    engine = choose_engine(args, _run_log)
-    if engine is None:
+    if (engine := _engine_of(args)) is None:    # the engine the census runs on, and the one its record names
         return 1
     family, model_name = _identity_of(args.model)
     stimulus = _apply_family_stimulus(args, family)
