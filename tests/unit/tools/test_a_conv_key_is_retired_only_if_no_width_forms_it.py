@@ -64,3 +64,21 @@ def test_the_tool_writes_one_row_per_ledger_line(unit, tmp_path):
     assert [(r[0], r[1], r[5], r[12]) for r in out] == [
         ("nvidia/volta/conv2d_forward_kernel.fp16.json", "16g", "failed_reachable", "65..69"),
         ("nvidia/volta/conv2d_forward_kernel.fp16.json", "32g", "failed_reachable", "65..69")]
+
+
+def test_an_exception_row_makes_the_tool_exit_non_zero(unit, tmp_path, capsys):
+    """1244-c1: EXCEPTION "must be 0" is a gate, not a line to read. A ledger row no verdict fits (here re-proven, yet no
+    width forms its key) is printed EXCEPTION and the tool exits EXIT_EXCEPTION (3); a ledger with none exits 0."""
+    never = "RuntimeError: x: the wrapper never reached the autotuner"
+    apart = (1, 1, 1, 3206, 32, 1, 3200, 1, 7, 1, 1, 0, 0, 1, 1, 1, True, "fp16", "fp16", "fp16")
+    head = "file\tkey\tmemory_class\toutcome\tseconds\treason\tdate\n"
+    clean, bad = tmp_path / "clean.tsv", tmp_path / "bad.tsv"
+    clean.write_text(head + f"nvidia/volta/conv2d_forward_kernel.fp16.json\t{apart}\t16g\tfailed\t1\t{never}\td\n")
+    bad.write_text(head + f"nvidia/volta/conv2d_forward_kernel.fp16.json\t{apart}\t16g\tfailed\t1\t{never}\td\n"
+                   f"nvidia/volta/conv2d_forward_kernel.fp16.json\t{apart}\t32g\treproven\t1\t\td\n")
+    assert T.main([str(VOLTA), str(clean)]) == 0
+    capsys.readouterr()
+    assert T.main([str(VOLTA), str(bad)]) == 3
+    out, err = capsys.readouterr()
+    assert out.splitlines()[-1].split("\t")[5] == "EXCEPTION"
+    assert "# exceptions 1" in err and "1 EXCEPTION row(s)" in err and T.EXIT_EXCEPTION == 3

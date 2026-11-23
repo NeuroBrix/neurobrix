@@ -15,7 +15,8 @@ wrapper computed another key; `ok`: re-proven):
   failed_reachable          never_reached, yet some width forms it (FMA kernel): NOT retired, it stays failed;
   reproven_live             ok, and the key is formed;
   named_apart_width_bucket  unreachable_key, and no width forms it (the key's width is no ladder top): stays failed;
-  EXCEPTION                 anything else (counted on stderr; must be 0).
+  EXCEPTION                 anything else (counted on stderr; must be 0: a row of it makes the tool exit 3,
+                            EXIT_EXCEPTION, after the whole table is written — a gate, not a line to read).
 
 Usage: python tools/conv_unit_routed.py <profile.yml> <ledger.tsv> > <out.tsv>   (run with the library's python)
 """
@@ -29,6 +30,7 @@ COLS = ["file", "memory_class", "outcome", "reason_class", "unit_routed", "verdi
         "formed_at", "key"]
 KERNEL = "/conv2d_forward_kernel."
 _BAND = 1 << 62            # no band streaming: a one-row conv cannot be cut in rows, a 2-D band keys its own rows
+EXIT_EXCEPTION = 3         # some row is EXCEPTION (1 is a wrong invocation)
 
 
 def bind_profile(yml):
@@ -123,6 +125,9 @@ def main(argv=None):
         bad += r[5] == "EXCEPTION"
         print("\t".join(map(str, r)))
     print(f"# exceptions {bad}", file=sys.stderr)
+    if bad:
+        print(f"conv_unit_routed: {bad} EXCEPTION row(s), which must be 0: exit {EXIT_EXCEPTION}", file=sys.stderr)
+        return EXIT_EXCEPTION
     return 0
 
 
