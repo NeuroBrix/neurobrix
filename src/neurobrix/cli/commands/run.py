@@ -271,6 +271,41 @@ def _require_container_values(args, manifest: dict, family, cache_path, cached_d
     return _rt("num_frames", args, cached_defaults, None, default=None)
 
 
+def _request_image_hw(args, cache_path):
+    """The (height, width) an image request plans at; None without an image.
+
+    A conditioning image (I2V, `input_processor.is_conditioning_image`): the container's size policy's, by the
+    reader the run fits the image with (`input_processor.conditioning_image_size`) — a size the request names is
+    checked there, and the image's own size is never the run's. Any other image (an upscaler's input, a VLM's):
+    the IMAGE's own size when the request names none. Without this the cascade fell through to a cached or
+    family default and Prism planned the SAME memory whatever was asked of it — measured 2026-09-17 on
+    hat-s-x4: apple_448.png and apple_160x112.png both planned 278 MB, a 22.4x difference in pixels, while the
+    per-cell memory gate fed that number could not refuse a cell that held 8408 MB live. If the file cannot be
+    read, REFUSE: planning on a declared default for a request of unknown size is how that plan came out."""
+    _img_path = getattr(args, 'input_image', None)
+    if not _img_path:
+        return None
+    from neurobrix.core.module.vision.input_processor import conditioning_image_size, is_conditioning_image
+    _topo_path = Path(cache_path) / "topology.json"
+    if is_conditioning_image(json.loads(_topo_path.read_text()) if _topo_path.exists() else {}, cache_path):
+        return conditioning_image_size(cache_path, _img_path, getattr(args, 'height', None),
+                                       getattr(args, 'width', None))
+    if getattr(args, 'height', None) or getattr(args, 'width', None):
+        return None
+    from PIL import Image as _PILImage
+    try:
+        with _PILImage.open(_img_path) as _im:
+            return (_im.size[1], _im.size[0])       # PIL gives (W, H)
+    except Exception as _e:                         # noqa: BLE001
+        raise MissingRuntimeValue(
+            f"the request names an input image the engine cannot read "
+            f"({_img_path!r}: {type(_e).__name__}: {_e}), so its height and "
+            f"width are unknown. Planning on a declared default for a "
+            f"request of unknown size is what this refusal exists to "
+            f"prevent — pass --height/--width, or give a readable image."
+        ) from _e
+
+
 def request_input_config(args, manifest: dict, family, cache_path):
     """The InputConfig Prism plans a request with: the request's own facts (--height, --width,
     the input image's size, the prompt as a batch of one, guidance doubling the batch), then the
@@ -293,33 +328,9 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # defaults.json -> family config -> 1024.
     from neurobrix.core.config import get_family_defaults as _get_family_defaults
     _fam_defaults = _get_family_defaults(family) if family else {}
-    # An image request's size is the IMAGE's size. Without this the cascade
-    # fell through to a cached or family default and Prism planned the SAME
-    # memory whatever was asked of it — measured 2026-09-17 on hat-s-x4:
-    #     --input-image apple_448.png      planned 278 MB
-    #     --input-image apple_160x112.png  planned 278 MB
-    # a 22.4x difference in pixels and not one byte of difference in the plan.
-    # The consequence is not academic: the per-cell memory gate is fed that
-    # number, so it could not refuse a cell that went on to hold 8408 MB live
-    # and take the machine to 127 MB before the OS killed it.
-    # An image request's size is the IMAGE's size. If the file cannot be read,
-    # REFUSE: planning on a declared default for a request whose real size is
-    # unknown is how the same 278 MB plan came out for 448x448 and 160x112.
-    _img_hw = None
-    _img_path = getattr(args, 'input_image', None)
-    if _img_path and not getattr(args, 'height', None) and not getattr(args, 'width', None):
-        from PIL import Image as _PILImage
-        try:
-            with _PILImage.open(_img_path) as _im:
-                _img_hw = (_im.size[1], _im.size[0])       # PIL gives (W, H)
-        except Exception as _e:                            # noqa: BLE001
-            raise MissingRuntimeValue(
-                f"the request names an input image the engine cannot read "
-                f"({_img_path!r}: {type(_e).__name__}: {_e}), so its height and "
-                f"width are unknown. Planning on a declared default for a "
-                f"request of unknown size is what this refusal exists to "
-                f"prevent — pass --height/--width, or give a readable image."
-            ) from _e
+    # The image request's size (`_request_image_hw`): a conditioning image's from the container's size policy,
+    # any other image's own.
+    _img_hw = _request_image_hw(args, cache_path)
 
     # OPTIONAL: a speech model, a TTS or an LLM has no spatial extent. Requiring
     # height/width of every model refused whisper, Kokoro and TinyLlama outright
@@ -810,7 +821,11 @@ def cmd_run(args):
         )
         inputs.update(prepare_image_inputs(
             pkg.topology, pkg.manifest.get("model_name"), args.input_image,
-            cache_path, height=args.height, width=args.width,
+            # The size cmd_run RESOLVED (`request_input_config`: a conditioning image's through the container's
+            # size policy, `input_processor.conditioning_image_size`), not the raw --height/--width: handed the
+            # raw argument, an image with no size asked kept its own size and met the run's noise at another
+            # (CogVideoX-5b-I2V, Wan2.1-VACE, Allegro-TI2V). The processor checks it through the same reader.
+            cache_path, height=height, width=width,
             # The frame count cmd_run already resolved, NOT a second read of
             # the raw argument: without `--frames` that re-derivation was 0, so
             # `pad_to_num_frames` was 0 and the still image stayed a ONE-frame
@@ -818,8 +833,7 @@ def cmd_run(args):
             # whatever its container declared (Allegro-TI2V 88, the Wan I2V
             # pair 81, VACE 81). Allegro-TI2V's VAE compresses time by 4 and
             # refused the extent-1 clip outright; the others simply conditioned
-            # on one frame. height/width stay on the raw argument on purpose:
-            # absent, the processor keeps the source image's own size.
+            # on one frame.
             num_frames=int(num_frames or 0)))
         if _os_dbg.environ.get("NBX_DEBUG") == "1":
             _img = inputs.get("global.image")
@@ -874,9 +888,11 @@ def cmd_run(args):
                 f"frame count (got {height}, {width}, {num_frames})")
         _pair, _mask = vace_control_pair_np(
             _clip, 0 if _clip is None else 1, int(num_frames or 0), int(height or 0), int(width or 0))
-        # Arrays, like every CLI input: the resolver puts them in the engine's container.
-        inputs["global.image"] = _pair
-        inputs["global.vace_pixel_mask"] = _mask
+        # Arrays, like every CLI input: the resolver puts them in the engine's container. The pair is built at the
+        # run's resolved size, which rides with it: the executor no longer reads a size off the image (an
+        # all-generate run has no conditioning image, and its size is the one cmd_run resolved, as before).
+        inputs.update({"global.image": _pair, "global.vace_pixel_mask": _mask,
+                       "global.height": int(height), "global.width": int(width)})
         log.debug(f"   VACE control: pair {list(_pair.shape)} ({'image frame kept' if _clip is not None else 'all-generate'}) "
                   f"-> vae_encoder, pixel mask {list(_mask.shape)}")
 

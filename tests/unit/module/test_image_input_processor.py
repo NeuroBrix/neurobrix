@@ -73,19 +73,29 @@ def _reference_clip(image_path, pc):
     return torch.from_numpy(_ca).permute(2, 0, 1).unsqueeze(0).contiguous()
 
 
-@pytest.mark.parametrize("h,w", [(None, None), (256, 384), (480, 640)])
+#: the fit the former inline block performed, now declared by a container (`condition_image_fit`: a LANCZOS stretch)
+STRETCH = {"crop": "none", "resample": "lanczos"}
+
+
+@pytest.mark.parametrize("h,w", [(480, 640), (256, 384), (128, 160)])
 def test_i2v_single_frame_bit_identical(synthetic_png, h, w):
     got = torch.from_numpy(ImageInputProcessor.process(
-        "i2v_vae_condition", synthetic_png, height=h, width=w))
+        "i2v_vae_condition", synthetic_png, height=h, width=w, fit=STRETCH))
     ref = _reference_i2v(synthetic_png, h, w, 0)
     assert got.shape == ref.shape and got.dtype == ref.dtype == torch.float32
     assert torch.equal(got, ref.contiguous())
 
 
+def test_i2v_without_a_size_is_refused_not_the_images_own(synthetic_png):
+    """The image's own size is not the run's (the size policy's, resolved by the caller)."""
+    with pytest.raises(RuntimeError, match="ZERO FALLBACK: i2v_vae_condition needs the run's height and width"):
+        ImageInputProcessor.process("i2v_vae_condition", synthetic_png, fit=STRETCH)
+
+
 def test_i2v_temporal_pad_bit_identical(synthetic_png):
     got = torch.from_numpy(ImageInputProcessor.process(
         "i2v_vae_condition", synthetic_png, height=128, width=128,
-        pad_to_num_frames=13))
+        pad_to_num_frames=13, fit=STRETCH))
     ref = _reference_i2v(synthetic_png, 128, 128, 13)
     assert got.shape == ref.shape == (1, 3, 13, 128, 128)
     assert torch.equal(got, ref.contiguous())

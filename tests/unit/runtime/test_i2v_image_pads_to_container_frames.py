@@ -41,6 +41,8 @@ ASSET = (pathlib.Path(__file__).resolve().parents[3]
          / "benchmarks" / "assets" / "apple_448.png")
 RUN_PY = (pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix"
           / "cli" / "commands" / "run.py")
+# the fit a container declares (`condition_image_fit`; the DSP refuses an undeclared one)
+STRETCH = {"crop": "none", "resample": "lanczos"}
 
 
 def _t_extent(clip):
@@ -57,7 +59,7 @@ def test_padding_to_a_frame_count_produces_that_many_frames():
         pytest.skip(f"test asset missing: {ASSET}")
     clip = ImageInputProcessor.process("i2v_vae_condition", str(ASSET),
                                        height=64, width=64,
-                                       pad_to_num_frames=88)
+                                       pad_to_num_frames=88, fit=STRETCH)
     assert _t_extent(clip) == 88
 
 
@@ -70,7 +72,7 @@ def test_padding_to_zero_leaves_a_single_frame():
         pytest.skip(f"test asset missing: {ASSET}")
     clip = ImageInputProcessor.process("i2v_vae_condition", str(ASSET),
                                        height=64, width=64,
-                                       pad_to_num_frames=0)
+                                       pad_to_num_frames=0, fit=STRETCH)
     assert _t_extent(clip) == 1
 
 

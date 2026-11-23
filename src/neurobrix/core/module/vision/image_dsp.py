@@ -15,9 +15,10 @@ arithmetic beyond resampling (scale, normalize, transpose, pad) is numpy.
 
 Preprocessing types implemented here:
   i2v_vae_condition — the video I2V conditioning contract (vendor
-      VideoProcessor.preprocess semantics): resize to the run
-      height/width (or the vendor's declared fit: a centre crop and an
-      antialiased linear resample, in numpy — `condition_image_fit`),
+      VideoProcessor.preprocess semantics): fitted to the run
+      height/width the caller resolved, as the container declares
+      (`condition_image_fit`: crop none|center, then resample
+      lanczos|bicubic in PIL or an antialiased linear in numpy),
       normalize to [-1, 1], single conditioning frame
       [1, 3, 1, H, W]; optionally zero-padded to [1, 3, T, H, W] for
       temporal-VAE denoisers (Wan-I2V class).
@@ -76,25 +77,57 @@ def _linear_weights(n_in: int, n_out: int, align_corners: bool) -> np.ndarray:
     return out
 
 
-#: what a `condition_image_fit` declaration may say (the vae_encoder's container flag)
-_FIT_KEYS = {"crop": ("center",), "resample": ("linear",), "antialias": (True,), "align_corners": (True, False)}
+#: what a `condition_image_fit` declaration may say (the vae_encoder's container flag): the crop and the resample
+#: always, the two linear options with the linear resample only
+_FIT_KEYS = {"crop": ("none", "center"), "resample": ("lanczos", "bicubic", "linear"), "antialias": (True,),
+             "align_corners": (True, False)}
+_LINEAR_OPTIONS = ("antialias", "align_corners")
+#: the resamples PIL performs (the vendor preprocessors' own kernels, VaeImageProcessor's PIL resize)
+_PIL_FILTERS = {"lanczos": "LANCZOS", "bicubic": "BICUBIC"}
 
 
-def _fit_condition(img, h: int, w: int, fit: dict) -> np.ndarray:
-    """The conditioning image cut to the request's aspect and resampled as the vendor's own
-    preprocessing declares (`fit`, the container's `condition_image_fit`), HWC float64 in [0, 255]."""
+def _check_fit(fit) -> None:
+    """Refuse, by name, a `condition_image_fit` this DSP does not reproduce: an unknown key or value, a missing
+    crop/resample (or linear option), a linear option on a PIL resample, a resample before a centre crop."""
+    if not isinstance(fit, dict):
+        raise RuntimeError("ZERO FALLBACK: condition_image_fit is required: the conditioning image's crop and "
+                           "resample are its container's (vae_encoder), never this DSP's choice")
     for k, v in fit.items():
         if k != "source" and (k not in _FIT_KEYS or v not in _FIT_KEYS[k]):
             raise RuntimeError(f"ZERO FALLBACK: condition_image_fit.{k} = {v!r} is not a fit this engine "
                                f"reproduces ({_FIT_KEYS})")
-    missing = sorted(set(_FIT_KEYS) - set(fit))
+    linear = fit.get("resample") == "linear"
+    missing = sorted(k for k in ("crop", "resample") + (_LINEAR_OPTIONS if linear else ()) if k not in fit)
     if missing:
         raise RuntimeError(f"ZERO FALLBACK: condition_image_fit declares no {missing}")
-    a = np.asarray(img, dtype=np.float64)
-    i, j, nh, nw = _center_crop_box(a.shape[0], a.shape[1], h, w)
-    a = a[i:i + nh, j:j + nw]
-    ac = bool(fit["align_corners"])
-    return np.einsum("oh,hwc->owc", _linear_weights(nh, h, ac), np.einsum("pw,hwc->hpc", _linear_weights(nw, w, ac), a))
+    stray = [k for k in _LINEAR_OPTIONS if k in fit and not linear]
+    if stray:
+        raise RuntimeError(f"ZERO FALLBACK: condition_image_fit.{stray} are options of the linear resample, not of "
+                           f"{fit['resample']!r} (a PIL filter)")
+    if fit["crop"] != "none" and [k for k in fit if k in ("crop", "resample")][0] == "resample":
+        raise RuntimeError("ZERO FALLBACK: condition_image_fit resamples before its centre crop (the key order is "
+                           "the order of operations): no vendor this engine reproduces does; it crops, then resamples")
+
+
+def _fit_condition(img, h: int, w: int, fit: dict) -> np.ndarray:
+    """The conditioning image fitted as the vendor's own preprocessing declares (`fit`, the container's
+    `condition_image_fit`), in its order: a centre crop to the target's aspect first when declared (Allegro-TI2V),
+    then the declared resample to h x w — PIL's LANCZOS / BICUBIC (VaeImageProcessor's resize, CogVideoX / Wan), or
+    the antialiased linear in numpy (Allegro's `F.interpolate`). HWC float32 in [-1, 1]."""
+    _check_fit(fit)
+    if fit["crop"] == "center":
+        i, j, nh, nw = _center_crop_box(img.height, img.width, h, w)
+        img = img.crop((j, i, j + nw, i + nh))
+    if fit["resample"] == "linear":
+        a = np.asarray(img, dtype=np.float64)
+        ac = bool(fit["align_corners"])
+        a = np.einsum("oh,hwc->owc", _linear_weights(a.shape[0], h, ac),
+                      np.einsum("pw,hwc->hpc", _linear_weights(a.shape[1], w, ac), a))
+        return (a / 127.5 - 1.0).astype(np.float32)
+    from PIL import Image
+    if (img.width, img.height) != (w, h):
+        img = img.resize((w, h), getattr(Image, _PIL_FILTERS[fit["resample"]]))
+    return np.asarray(img, dtype=np.float32) / 127.5 - 1.0
 
 
 def i2v_vae_condition_np(
@@ -108,20 +141,16 @@ def i2v_vae_condition_np(
     `pad_to_num_frames` > 1, zero-padded on the temporal axis to
     [1,3,T,H,W] (frame0 = image, rest = zeros — Wan-I2V temporal-VAE
     contract, data-driven via the caller's registry flag). The image is
-    resized to the request (diffusers' VaeImageProcessor: a LANCZOS stretch)
-    unless the container declares the vendor's own fit (`fit`, the
-    vae_encoder's `condition_image_fit`: Allegro-TI2V centre-crops to the
-    request's aspect, then an antialiased linear resample)."""
-    from PIL import Image
-    img = _load_rgb(image_path)
-    h = int(height) if height else img.height
-    w = int(width) if width else img.width
-    if fit is not None:
-        arr = (_fit_condition(img, h, w, fit) / 127.5 - 1.0).astype(np.float32)   # HWC
-    else:
-        if (img.width, img.height) != (w, h):
-            img = img.resize((w, h), Image.LANCZOS)
-        arr = np.asarray(img, dtype=np.float32) / 127.5 - 1.0        # HWC
+    fitted to the caller's height x width (the run's size, which the
+    caller resolved: never the image's own) as the container declares
+    (`fit`, the vae_encoder's `condition_image_fit`: crop none|center,
+    resample lanczos|bicubic|linear, in the vendor's order)."""
+    if not height or not width:
+        raise RuntimeError(f"ZERO FALLBACK: i2v_vae_condition needs the run's height and width (given {height!r} x "
+                           f"{width!r}): the caller resolves them from the container's size policy; the image's own "
+                           f"size is not the run's")
+    h, w = int(height), int(width)
+    arr = _fit_condition(_load_rgb(image_path), h, w, fit)                  # HWC
     clip = np.ascontiguousarray(
         arr.transpose(2, 0, 1))[np.newaxis, :, np.newaxis]       # 1,3,1,H,W
     t = int(pad_to_num_frames or 0)

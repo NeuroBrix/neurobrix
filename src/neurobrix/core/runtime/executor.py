@@ -474,34 +474,18 @@ class RuntimeExecutor:
         # the family layer before the container's: a container null leaves the family's value to resolve_sampling
         self._family_layer = dict(merged_defaults)
         merged_defaults.update(self.pkg.defaults)
-        # The output size is the CONTAINER's when the build declares none: the
-        # built latent extent of the diffusion backbone times the VAE scale
-        # — Allegro built at [.., 90, 160] × 8 = 720×1280. A family constant
-        # is the last resort only (video family: 512² rendered colour bands on
-        # every arm of the calibration campaign, 2026-09-05).
-        if "height" not in self.pkg.defaults or "width" not in self.pkg.defaults:
-            # WHEN A REQUEST SUPPLIES A CONDITIONING IMAGE, THE IMAGE SETS THE
-            # RESOLUTION. It is the most specific thing the request says, and the
-            # alternative was measured on 2026-09-12: the image processor keeps
-            # the source image's own size when no --height/--width is given (its
-            # own comment says so), while this cascade independently derived the
-            # resolution from the BUILT latent. Allegro-TI2V then met its own
-            # 448x448 conditioning image at a pipeline running 144x208 and died
-            # on "Expected size 18 but got size 56" — the built latent extent
-            # against the image's. Two decisions taken separately about one
-            # quantity.
-            #
-            # Order, and it is the whole answer: an explicit --height/--width
-            # wins (the `inputs` loop below applies after this), then the
-            # container's own declared defaults (this branch does not run at
-            # all when it declares them), then the conditioning image, then the
-            # built latent, then the family constant. A request-side fact
-            # outranks a build-side one; a stimulus chosen at build time is the
-            # last thing that should decide what a user gets.
-            derived = self._conditioning_image_size(inputs)
-            if derived is None:
-                derived = self._container_output_size(
-                    {name: data for name, data in self.pkg.components.items()})
+        # A run with a conditioning image generates at the size its container's size policy gives
+        # (`size_policy.resolve_size`): the image processor fitted the image through that reader and hands its
+        # result as global.height/global.width (applied below); an image that arrives without them is sized by
+        # the same reader here. The image's own size is never the run's. Otherwise, unchanged: the container's
+        # declared size, else its built output extent — the backbone's latent times the VAE scale (Allegro built
+        # at [.., 90, 160] × 8 = 720×1280); a family constant is the last resort only (video family: 512²
+        # rendered colour bands, 2026-09-05).
+        if "global.image" in inputs and ("global.height" not in inputs or "global.width" not in inputs):
+            merged_defaults["height"], merged_defaults["width"] = self._conditioning_run_size(inputs)
+        elif "height" not in self.pkg.defaults or "width" not in self.pkg.defaults:
+            derived = self._container_output_size(
+                {name: data for name, data in self.pkg.components.items()})
             if derived is not None:
                 merged_defaults["height"], merged_defaults["width"] = derived
 
@@ -1886,34 +1870,17 @@ class RuntimeExecutor:
         logger.debug(f"Dynamic latent dims: {height}x{width} / {vae_scale_factor} = {latent_height}x{latent_width}")
         return merged_defaults
 
-    def _conditioning_image_size(self, inputs: Dict[str, Any]) -> Optional[tuple]:
-        """(height, width) of the conditioning image this request supplies.
-
-        Read from the ARRAY the image processor actually produced, never from the
-        file on disk: the processor applies the build's declared preprocessing,
-        so the file's size and the size that enters the graph are not the same
-        question. The spatial extents are the last two axes of an image or video
-        tensor, which holds for [C,H,W], [C,T,H,W] and [B,C,T,H,W] alike.
-
-        Silent when the request supplies no image, when the array is not spatial,
-        or when its extents are not positive integers — silence here falls
-        through to the container, which is the correct next authority.
-        """
-        image = inputs.get("global.image")
-        if image is None:
-            return None
-        shape = getattr(image, "shape", None)
-        if shape is None or len(shape) < 2:
-            return None
-        height, width = shape[-2], shape[-1]
-        if not (isinstance(height, int) and isinstance(width, int)):
-            try:
-                height, width = int(height), int(width)
-            except (TypeError, ValueError):
-                return None
-        if height <= 0 or width <= 0:
-            return None
-        return height, width
+    def _conditioning_run_size(self, inputs: Dict[str, Any]) -> tuple:
+        """(height, width) of a run with a conditioning image: the container's size policy
+        (`size_policy.resolve_size`) over the request's global.height/global.width — which the image
+        processor sets to the size it fitted the image to, through the same reader — and the image's
+        extents as it entered (the last two axes of [C,H,W], [C,T,H,W] or [B,C,T,H,W]). Refused by
+        name when the container declares no policy."""
+        from neurobrix.core.runtime.size_policy import resolve_size
+        shape = tuple(getattr(inputs["global.image"], "shape", None) or ())
+        image_hw = (int(shape[-2]), int(shape[-1])) if len(shape) >= 2 else None
+        return resolve_size(self.pkg.defaults, image_hw, inputs.get("global.height"),
+                            inputs.get("global.width"), where="the container's runtime/defaults.json")
 
     def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
         """(height, width) in pixels from the container — `resolution.container_size`,

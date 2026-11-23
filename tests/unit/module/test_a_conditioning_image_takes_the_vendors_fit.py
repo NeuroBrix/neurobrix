@@ -2,7 +2,8 @@
 TI2V's own preprocessing (rhymes-ai Allegro single_inference_ti2v.py L20-26: ToTensorVideo, CenterCropResizeVideo,
 2x - 1; data_process.py L47-68: the window at the request's aspect, centred, then `F.interpolate(..., mode="bilinear",
 align_corners=True, antialias=True)`) cuts the image to the request's aspect and resamples it; the engine stretched it
-(the 2.3c finding of 2026-11-04: a square apple stretched to 16:9 as frame 0 of a 720x1280 video).
+(the 2.3c finding of 2026-11-04: a square apple stretched to 16:9 as frame 0 of a 720x1280 video). An undeclared
+fit is refused, a declared stretch is the declared PIL filter (lanczos | bicubic).
 
 The oracle is torch's own `F.interpolate` on the vendor's crop (the vendor oracle environment; skipped by name
 elsewhere). What this test would do if the code were wrong: the image stretched instead of cropped, the crop off
@@ -47,12 +48,19 @@ def test_the_fit_is_the_vendors(tmp_path, src, dst):
     assert float(np.abs(got - ref).max()) < 2e-6
 
 
-def test_without_a_declaration_the_image_is_stretched(tmp_path):
+@pytest.mark.parametrize("resample,pil", [("lanczos", "LANCZOS"), ("bicubic", "BICUBIC")])
+def test_a_declared_stretch_is_the_declared_pil_filter(tmp_path, resample, pil):
     from PIL import Image
     path, a = _png(tmp_path, 40, 40, seed=3)
-    got = image_dsp.i2v_vae_condition_np(str(path), height=20, width=60)
-    want = np.asarray(Image.fromarray(a).resize((60, 20), Image.LANCZOS), dtype=np.float32) / 127.5 - 1.0
+    got = image_dsp.i2v_vae_condition_np(str(path), height=20, width=60, fit={"crop": "none", "resample": resample})
+    want = np.asarray(Image.fromarray(a).resize((60, 20), getattr(Image, pil)), dtype=np.float32) / 127.5 - 1.0
     np.testing.assert_array_equal(got[0, :, 0], want.transpose(2, 0, 1))
+
+
+def test_without_a_declaration_the_image_is_refused_not_stretched(tmp_path):
+    path, _ = _png(tmp_path, 40, 40, seed=3)
+    with pytest.raises(RuntimeError, match="ZERO FALLBACK: condition_image_fit is required"):
+        image_dsp.i2v_vae_condition_np(str(path), height=20, width=60)
 
 
 @pytest.mark.parametrize("bad", [{**FIT, "crop": "top"}, {**FIT, "resample": "bicubic"}, {**FIT, "antialias": False},

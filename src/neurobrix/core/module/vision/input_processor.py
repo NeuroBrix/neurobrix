@@ -230,20 +230,32 @@ def load_upscale_image(image_path: str, cache_path: Path):
     return np.ascontiguousarray(tensor), (h, w)
 
 
-def declared_condition_size(cache_path: Path, height: Optional[int],
-                            width: Optional[int]) -> Tuple[Optional[int], Optional[int]]:
-    """The (height, width) a conditioning image is fitted to: the request's when it names both, else the
-    container's declared pair (runtime/defaults.json), else (None, None) — the image keeps its own size, which is
-    then the size the executor generates at (its conditioning-image step)."""
+def is_conditioning_image(topology: dict, cache_path: Path) -> bool:
+    """Whether an image this container is handed is an I2V conditioning image (`global.image`): not an
+    upscaler's input (manifest family=upscaler) and not a VLM's (topology.flow.vlm declares its own
+    preprocessing) — the branch order of :func:`prepare_image_inputs`."""
     import json
-    if height is not None and width is not None:
-        return height, width
+    manifest_file = Path(cache_path) / "manifest.json"
+    if manifest_file.exists() and (json.loads(manifest_file.read_text()) or {}).get("family") == "upscaler":
+        return False
+    vlm_blk = ((topology or {}).get("flow", {}) or {}).get("vlm") or {}
+    return not (vlm_blk.get("input") or {}).get("preprocessing")
+
+
+def conditioning_image_size(cache_path: Path, image_path: str, height: Optional[int],
+                            width: Optional[int]) -> Tuple[int, int]:
+    """The (height, width) a run with this conditioning image generates at, and the image is fitted to: the
+    container's size policy (runtime/defaults.json, `core.runtime.size_policy.resolve_size`) over the request's
+    size and the image's own (height, width) — the one reader every door asks (cli run, its plan, the daemon,
+    the executor)."""
+    import json
+    from PIL import Image
+    from neurobrix.core.runtime.size_policy import resolve_size
     p = Path(cache_path) / "runtime" / "defaults.json"
-    d = json.loads(p.read_text()) if p.exists() else {}
-    if "height" in d and "width" in d:
-        return (height if height is not None else int(d["height"]),
-                width if width is not None else int(d["width"]))
-    return height, width
+    defaults = json.loads(p.read_text()) if p.exists() else {}
+    with Image.open(image_path) as im:
+        image_hw = (int(im.height), int(im.width))
+    return resolve_size(defaults, image_hw, height, width, where=str(p))
 
 
 def prepare_image_inputs(topology: dict, model_name: Optional[str],
@@ -307,15 +319,17 @@ def prepare_image_inputs(topology: dict, model_name: Optional[str],
         if get_component_flag(model_name, "vae_encoder",
                               "pad_image_to_num_frames", default=False):
             pad_nf = int(num_frames or 0)
-        # the vendor's own fit of the conditioning image where its container declares one (a centre crop and an
-        # antialiased linear resample: Allegro-TI2V), else the request's size by a LANCZOS stretch
+        # The vendor's own fit of the conditioning image, the container's (crop none|center, resample
+        # lanczos|bicubic|linear, in the vendor's order), refused by name when undeclared (`size_policy.image_fit`).
+        from neurobrix.core.runtime.size_policy import image_fit
         fit = get_component_flag(model_name, "vae_encoder", "condition_image_fit", default=None)
-        # The size the run generates at, in the executor's own order (`executor._build_merged_defaults`): the
-        # request's, else the container's declared height/width, else the image's own. The vendor resizes the
-        # conditioning image to that size (diffusers pipeline_cogvideox_image2video.py:710-711); handed only the
-        # request's, a 512 image met 480x720 noise (CogVideoX-5b-I2V 'Expected size 60 but got size 64',
-        # Wan2.1-VACE 'cannot broadcast 21504 against 32760', Allegro-TI2V).
-        height, width = declared_condition_size(cache_path, height, width)
+        image_fit(fit, model_name or str(cache_path))
+        # The size the run generates at, from the container's size policy (`size_policy.resolve_size`), never the
+        # image's own: handed only the request's, a 512 image met 480x720 noise (CogVideoX-5b-I2V 'Expected size
+        # 60 but got size 64', Wan2.1-VACE 'cannot broadcast 21504 against 32760', Allegro-TI2V). The resolved
+        # size rides with the inputs, so the executor generates at the size the image was fitted to.
+        height, width = conditioning_image_size(cache_path, image_path, height, width)
+        inputs["global.height"], inputs["global.width"] = height, width
         inputs["global.image"] = ImageInputProcessor.process(
             "i2v_vae_condition", image_path,
             height=height, width=width, pad_to_num_frames=pad_nf, fit=fit)
