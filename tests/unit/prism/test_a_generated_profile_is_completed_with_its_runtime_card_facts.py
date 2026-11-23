@@ -36,7 +36,11 @@ def test_a_launch_on_a_generated_profile_calls_the_completion():
     """`ensure_measured_facts` (generated profiles only) is where the completion is asked, with autodetect's reading."""
     import inspect
     from neurobrix.core.prism import autodetect as A
-    assert "complete_runtime_card_facts(devices, P.card_facts_reader(devices))" in inspect.getsource(A.ensure_measured_facts)
+    src = inspect.getsource(A.ensure_measured_facts)
+    # asked once on either branch: in process before any measure, in a child after the chunk (qa 1235-1; the order
+    # is test_the_in_process_card_read_comes_before_any_measure.py's)
+    assert "now, after_chunk = P.card_facts_readers(devices)" in src
+    assert "complete_runtime_card_facts(devices, now)" in src and "complete_runtime_card_facts(devices, after_chunk)" in src
 
 
 def test_a_card_is_read_in_its_own_process(monkeypatch):
@@ -75,4 +79,8 @@ def test_detection_initialises_no_card_and_generation_reads_them_in_a_child(monk
     for fn in (A._parse_nvidia_smi, A.detect_hardware, A.detect_devices, A._visible_set_tag):
         assert "runtime_card_facts" not in inspect.getsource(fn), fn.__name__
     # a freshly written profile gets them the same way an old one does: at the launch's ensure_measured_facts
-    assert "complete_runtime_card_facts(devices, P.card_facts_reader(devices))" in inspect.getsource(A.ensure_measured_facts)
+    src = inspect.getsource(A.ensure_measured_facts)
+    # asked once on either branch: in process before any measure, in a child after the chunk (qa 1235-1; the order
+    # is test_the_in_process_card_read_comes_before_any_measure.py's)
+    assert "now, after_chunk = P.card_facts_readers(devices)" in src
+    assert "complete_runtime_card_facts(devices, now)" in src and "complete_runtime_card_facts(devices, after_chunk)" in src

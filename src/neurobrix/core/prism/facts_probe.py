@@ -271,6 +271,14 @@ def card_facts_reader(devices):
     return A.runtime_card_facts if one else card_facts_in_a_child
 
 
+def card_facts_readers(devices):
+    """(read now, read after the chunk is written) — one of them None: `card_facts_reader`'s in-process reading is
+    taken FIRST, before any measure of this process holds memory on the card (qa 1235-1: read after torch's GEMM and
+    copies it kept 564 MiB against 306); the child, which reads the profile's chunk, after it is written."""
+    reader = card_facts_reader(devices)
+    return (None, reader) if reader is card_facts_in_a_child else (reader, None)
+
+
 def complete_runtime_card_facts(devices, measure) -> dict:
     """The runtime's total and its own context on each card of a GENERATED profile that states neither
     (written at generation since 2026-10-27): measured now by `measure(index)` — `card_facts_in_a_child`: autodetect's own reading in its own process, {}
@@ -280,7 +288,7 @@ def complete_runtime_card_facts(devices, measure) -> dict:
     2026-11-11). Identical cards (one `model`) are measured once: the first card of a model answers for the others
     (the launch-time cure, 2026-11-19). Returns {"runtime_card_facts": [device indices completed]} or {}."""
     done, of_model = [], {}
-    for device in devices:
+    for device in devices if measure is not None else ():     # None: no reader at this point (card_facts_readers)
         if device.get("unified_memory") or device.get("runtime_context_mb") is not None:
             continue
         model = device.get("model")

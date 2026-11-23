@@ -2531,12 +2531,16 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     # (and a kept fact of another driver or library is dropped first, measured again: qa on 1215)
     added: Dict[str, Any] = dict(other_card_models.from_siblings(path, data, devices))
 
-    def measured_of(d):
-        return dict(d.get("measured") or vendor_block(d, "measured") or {})
+    measured_of = lambda d: dict(d.get("measured") or vendor_block(d, "measured") or {})  # noqa: E731
 
     first = measured_of(devices[0])
-    cpu = data.get("cpu")
-    if engine in _BASE_PROBES and isinstance(cpu, dict):
+    # the runtime's card facts, READ in this process when it sees one card (`card_facts_reader`), are read FIRST: the
+    # context the driver attributes to this process is the launch's own only before any measure of this process holds
+    # memory on the card (qa 1235-1, Dell p1235 TABLE_c1: compiled 564 MiB read after torch's GEMM and copies against
+    # 306 in a child); the child, which holds nothing of this process, keeps its place after the chunk is written
+    now, after_chunk = P.card_facts_readers(devices)
+    added.update(P.complete_runtime_card_facts(devices, now))
+    if engine in _BASE_PROBES and isinstance(cpu := data.get("cpu"), dict):
         # the launched engine's runtime base, lazily (line 3 of the ruling of 22/11/2026 17:43): a sibling's measure
         # of this engine, else one child of this engine now; the other engine's waits for its own first launch
         base = dict(cpu.get("runtime_base_mb") or {})
@@ -2572,7 +2576,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         added["vmm_chunk_bytes"] = first["vmm_chunk_bytes"]
     # written BEFORE any child probe reads the profile: on a clean machine the first child refused the vmm_chunk_bytes
     # measured above and not yet written (the stable's install test, 2026-11-05)
-    added.update(P.complete_runtime_card_facts(devices, P.card_facts_reader(devices)))
+    added.update(P.complete_runtime_card_facts(devices, after_chunk))
     # another card model's chunk swept here is written too, when nothing else was measured (it rode on the host
     # facts' write until those left the first launch)
     if added or chunks:
