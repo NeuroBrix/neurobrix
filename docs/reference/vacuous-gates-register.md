@@ -3494,7 +3494,7 @@ every id every op names, in every form an argument takes.
 
 ### 109 — the rebuild gate's arms ran on the live tree under a frozen worktree's name
 
-`tools/retrace_zoo.py --src <worktree>` put the worktree ROOT on `PYTHONPATH`; the package lives
+The rebuild gate's `--src <worktree>` put the worktree ROOT on `PYTHONPATH`; the package lives
 under `<worktree>/src`, so the import fell through to the editable install — the live tree — and
 every "old" and "new" arm of 2026-09-25 (PixArt-XL-2-1024-MS twice, Flex.1-alpha) ran on whatever
 the live tree held at that minute, while the operator believed the arm frozen. The same path made

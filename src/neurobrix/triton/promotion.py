@@ -747,7 +747,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         symbol still resolves to 1, so the mul evaluates to 64 — i.e., the
         spatial dim STAYS at build size and never rebinds. The fix:
         when an arithmetic expression's build value equals a single spatial
-        build (h_trace or w_trace) AND the expression isn't already
+        build (the built height or width) AND the expression isn't already
         anchored to a height/width symbol, REPLACE it with the canonical
         spatial symbol. This corrects the builder's mis-attribution at
         engine load time without touching graph.json or the build side.

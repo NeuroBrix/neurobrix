@@ -160,7 +160,7 @@ def get_component_flag(
     carried = component_flags.get(model_name, component_name, flag_name, _ABSENT)
     declared = _registry_declaration(model_name, component_name, flag_name)
     # A flag declared false or null is the default and is not carried by the
-    # build (importer/runtime_flags.py); anything else must be carried as is.
+    # build; anything else must be carried as is.
     if declared is not _ABSENT and carried != declared and not (
             declared in (None, False) and carried is _ABSENT):
         where = "does not carry it" if carried is _ABSENT else f"carries {carried!r}"

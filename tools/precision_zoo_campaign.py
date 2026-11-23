@@ -1937,7 +1937,7 @@ def main():
                         "(from its own previous record) exceeds it is refused "
                         "at the door, before its first arm starts. Opt-in: "
                         "without it nothing is refused.")
-    r.add_argument("--hold-from", default=None, metavar="RETRACE_OUT",
+    r.add_argument("--hold-from", default=None, metavar="REBUILD_OUT",
                    help="skip every model a rebuild campaign at this path still holds (listed in its phase files or "
                         "carrying a state without a PASS gate): its cache slot may change under the measurement")
     r.add_argument("--probe", action="store_true",

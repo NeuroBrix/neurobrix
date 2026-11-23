@@ -35,7 +35,7 @@ _SHAPE_DEBUG = _os_shape.environ.get("NBX_DEBUG") == "1"
 
 from neurobrix.core.runtime import symexpr as _symexpr
 
-# Import SymInt support (from core/runtime, no builder/ dependency)
+# Import SymInt support (from core/runtime, no dependency on the container build)
 try:
     from neurobrix.core.runtime.symint import SymInt
 except ImportError:

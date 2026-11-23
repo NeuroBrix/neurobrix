@@ -74,7 +74,7 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as _zoo                       # noqa: E402  (run_group, CACHE)
-import container_request as _trace                              # noqa: E402  (the request the container's build gives)
+import container_request as _request                             # noqa: E402  (the request the container's build gives)
 import where_the_symbol_chain_breaks as _chain              # noqa: E402  (analyse)
 
 # Honor NEUROBRIX_CACHE (cache_dir's env door), so a census can run over a
@@ -324,35 +324,35 @@ def census_requests(model: str, fam: str, extra: list, table) -> list:
     each of which must ask for the derived size. Raises RequestRefused naming the model, both
     sizes and how to regenerate the table; nothing is taken silently from either side."""
     try:
-        derived = _trace.derived_request(model, fam)
+        derived = _request.derived_request(model, fam)
     except Exception as e:                    # said by name, never replaced by another request
         raise RequestRefused(f"{model}: the request cannot be derived from the container's build — "
                              f"{type(e).__name__}: {e}") from e
-    want = _trace.requested_size(derived)
+    want = _request.requested_size(derived)
     regen = (f"regenerate the table from the containers as they are now (`python tools/container_request.py "
              f"--models {model} --out <requests.json>`), or drop the model's entry and let the census derive it")
-    stray = [f for f in _trace.SIZE_FLAGS if f in extra]
+    stray = [f for f in _request.SIZE_FLAGS if f in extra]
     if stray:
         raise RequestRefused(
             f"{model}: --extra carries {', '.join(stray)} — a size is the container build's "
-            f"({_trace.size_text(want)}), never a flag appended to every request; drop it from --extra")
+            f"({_request.size_text(want)}), never a flag appended to every request; drop it from --extra")
     if not table:
         # the gate cell's request too, when the model's container states gate values (container_request.gate_request):
         # the certified-only gate forms its keys (fewer frames are other shapes)
-        gate = _trace.gate_request(model, fam)
-        if _trace.requested_size(gate) != want:
-            raise RequestRefused(f"{model}: the gate request asks for {_trace.size_text(_trace.requested_size(gate))}, "
-                                 f"the judging request for {_trace.size_text(want)} — a census table is taken for one "
+        gate = _request.gate_request(model, fam)
+        if _request.requested_size(gate) != want:
+            raise RequestRefused(f"{model}: the gate request asks for {_request.size_text(_request.requested_size(gate))}, "
+                                 f"the judging request for {_request.size_text(want)} — a census table is taken for one "
                                  f"size per model; state the gate's frames and steps, not another size")
         return [derived + list(extra)] + ([gate + list(extra)] if gate != derived else [])
     reqs = []
     for i, req in enumerate(table):
         req = list(req) + list(extra)
-        got = _trace.requested_size(req)
+        got = _request.requested_size(req)
         if got != want:
             raise RequestRefused(
-                f"{model}: the request table asks for size {_trace.size_text(got)} (request {i}) but the "
-                f"current container's build gives {_trace.size_text(want)} — the table was not derived from "
+                f"{model}: the request table asks for size {_request.size_text(got)} (request {i}) but the "
+                f"current container's build gives {_request.size_text(want)} — the table was not derived from "
                 f"this container (a rebuild since it was written?). A census at a size the verification "
                 f"never runs certifies keys nobody asks for; {regen}.")
         reqs.append(req)

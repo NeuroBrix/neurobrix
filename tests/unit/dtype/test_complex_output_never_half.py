@@ -239,7 +239,7 @@ def test_every_dispatch_site_passes_the_op_record():
 
 def test_both_branches_read_the_container_identically():
     """core/dtype/engine.py and triton/dtype.py both hand out the library's
-    `traced_output_is_complex` — one definition, torch-free, read the same way
+    `built_output_is_complex` — one definition, torch-free, read the same way
     on a plain string, a torch.dtype and an NBXDtype.
     """
     from nbxtensor.dtype import outputs

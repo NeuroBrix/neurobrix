@@ -117,7 +117,7 @@ def scan_graph(graph: dict):
         moved = [names[i] for i in range(1, len(envs)) if not broadcasts(at[i])]
         if moved:
             found.append({"op": uid, "op_type": op["op_type"], "module": op.get("parent_module"),
-                          "inputs": [t for t, _ in dims], "at_trace": at[0], "breaks_when": moved,
+                          "inputs": [t for t, _ in dims], "at_build": at[0], "breaks_when": moved,
                           "away": {names[i]: at[i] for i in range(1, len(envs)) if names[i] in moved}})
     return found, unknown
 
@@ -143,7 +143,7 @@ def main() -> int:
         for moved, fs in sorted(by.items()):
             f = fs[0]
             print(f"{model} | {comp} | breaks when {','.join(moved)} moves | {len(fs)} op(s) | first {f['op']} "
-                  f"({f['module']}): build {f['at_trace']} -> {f['away'][moved[0]]}")
+                  f"({f['module']}): build {f['at_build']} -> {f['away'][moved[0]]}")
     n = sum(len(c["breaks"]) for m in report.values() for c in m.values())
     print(f"\n{n} op(s) broadcast at the build and not away from it, in "
           f"{sum(1 for m in report.values() for c in m.values() if c['breaks'])} component(s) of "

@@ -2,11 +2,13 @@
 build tool or of its folder, in any tracked text file. The public wording is "built", "recorded at build", "the
 build-time value", "rebuild", "our own container build".
 
-Every tracked text file is read (`git ls-files`; binary files, .nbx caches and the private docs/internal/ are not).
-Three stems are matched in any letter case: the verb (the regex below: trace, traced, tracer, tracers, traces,
-tracing, and their re- forms, as whole words), the build tool's name (as a substring; "forget" and its family are
-other English words, admitted by name), and its folder's name (as a substring). A hit is admitted only inside a
-phrase the list below declares for its file, each with its reason, in three kinds:
+Every tracked text file is read (`git ls-files`; binary files, .nbx caches, the private docs/internal/ and the
+census fingerprint files are not). Three stems are matched as SUBSTRINGS, in any letter case, joined forms included:
+the verb (trace, tracing: so traced, tracer, retrace, AItracing, retrace_zoo, nbx_tracer all hit), the build tool's
+name ("forget" and its family are other English words, admitted by name), and its folder's name. A hit inside a
+bare word (trace, traced, tracer, traces, tracing and their re- forms) is admitted only inside a phrase the list
+below declares for its file; a hit inside a joined identifier (letters, digits, underscores) only when that
+identifier is declared BY NAME, each with its reason. Both lists say which of three kinds a hit is:
 
   (a) the container FORMAT key: the build-time value of a symbolic dimension that graph.json carries, read and
       written as the format names it;
@@ -19,11 +21,13 @@ Two lines are admitted although they name the build tool (kind (d)): they are na
 repository (a workshop configuration role, a gitignored pointer directory of the worktrees), and renaming them is a
 change of every machine's configuration, not a text edit. They are listed by name so that they stay in sight.
 
-What this test would do if a file said it again: red, by file:line and the word (injection seen red: a comment
-"the graph is traced at build" added to src/neurobrix/core/runtime/symexpr.py -> named here).
+What this test would do if a file said it again: red, by file:line and the word (injections seen red: a comment
+"the graph is traced at build" added to src/neurobrix/core/runtime/symexpr.py; a tracked page naming
+tools/retrace_zoo.py, test_a_joined_name_is_red_in_a_tracked_file below).
 """
 from __future__ import annotations
 
+import fnmatch
 import re
 import shutil
 import subprocess
@@ -34,15 +38,48 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 SELF = Path(__file__).resolve().relative_to(ROOT).as_posix()
 
-VERB = re.compile(r"\b(re)?trac(e|ed|er|ers|es|ing)\b", re.IGNORECASE)
+STEM = re.compile("trac" + "(e|ing)", re.IGNORECASE)                  # a substring: joined forms hit too
+BARE = re.compile(r"(re)?trac(e|ed|er|ers|es|ing)", re.IGNORECASE)      # the bare words, held by a phrase
 TOOL_NAME = "f" + "orge"                 # spelled in two halves so that this file does not carry it whole
 FOLDER_NAME = "NeuroBrix" + "_System"
 NAMES = re.compile(re.escape(TOOL_NAME) + "|" + re.escape(FOLDER_NAME), re.IGNORECASE)
 #: English words that hold the tool's name as letters and are other words, admitted by name (the whole letter run)
 ENGLISH = ("forget", "forgets", "forgetting", "forgetful")
-#: words that hold the verb's letters and are not it; the regex does not match them (whole words only) — named so
-#: that the next reader knows they were judged, and held by test_the_patterns_see_every_form_and_only_those
-NOT_THE_VERB = ("traceback", "Traceback", "settrace", "tracemalloc", "pytrace", "trace_replay", "untraced")
+#: the census fingerprints: the hashed names of the functions a derivation ran, a file format the census reads back
+#: byte for byte; renaming a function there unmakes the record. The only path-wide exemption.
+FINGERPRINTS = "src/neurobrix/config/census/*/*/*.inputs.jsonl"
+_A = "(a) a name of the build-time value the container format carries (graph.json, manifest), not of a technique"
+_B = "(b) the library's allocation record (nbxtensor.memory.trace_replay): one real run's allocations"
+_C = "(c) a trace of a RUN: a debug switch, a profiler or malloc or launch trace, a settrace hook, a traceback"
+_W = "(c) a walk back through the graph's ops"
+#: joined identifiers, BY NAME: identifier -> reason
+DECLARED = {
+    "trace_value": _A + ": the format key", "trace_resolution": _A + ": the manifest key",
+    "traced_shape": _A + ": a segment spec key", "trace_seq_len": _A, "trace_size": _A, "off_trace_size": _A,
+    "off_trace_in": _A, "off_trace_out": _A, "trace_in": _A, "trace_out": _A, "trace_t_in": _A, "trace_t_out": _A,
+    "traced_buffer": _A, "traced_data": _A, "traced_grid_h": _A, "traced_grid_w": _A,
+    "k_trace": _A + ": a census row key", "trace_value_is_clear": _A + ": a stimulus row key",
+    "traced_island_uids": "(a) the past name the census fingerprints record for that function",
+    "trace_replay": _B, "load_trace": _B, "TRACES_DIR": _B,
+    "test_the_library_carries_a_trace_that_names_its_card": _B, "test_the_carried_trace_replays_on_a_card": _B,
+    "test_several_traces_are_named_never_picked": _B, "test_a_trace_without_its_card_is_refused": _B,
+    "test_the_first_launch_probe_measures_on_the_trace": _B,
+    "ExpertTrace": "(c) the decode's routing record",
+    "test_a_trace_notes_decode_calls_only_and_writes_once": "(c) the decode's routing record",
+    "phase_trace": _C + ": the run's phase ledger module", "NBX_PHASE_TRACE": _C, "NBX_MALLOC_TRACE": _C,
+    "NBX_LAUNCH_TRACE": _C, "nbx_bank_launch_trace": _C, "NBX_DEVICE_TRACE": _C, "DEVTRACE": _C, "OP_TRACE": _C,
+    "VALUE_TRACE": _C, "TID_TRACE": _C, "NBX_TRACE_TIDS": _C, "_trace_tids": _C, "_trace_tids_env": _C,
+    "NBX_TRACE_NAN": _C, "NBX_TRITON_TRACE_NAN": _C, "_TRACE_NAN": _C, "trace_nan": _C, "_maybe_trace_nan": _C,
+    "_trace_nan_on": _C, "_trace_nan_seen": _C, "NBX_TRACE_ZEROS": _C, "_TRACE_ZEROS": _C, "trace_zeros": _C,
+    "LIVE_WATERMARK_TRACE": _C, "NBX_LIVE_WATERMARK_TRACE": _C, "NBX_WEIGHTS_LOAD_TRACE": _C,
+    "_StageTracer": _C + ": the kernel compiler's stage recorder", "_tracer": _C, "settrace": _C, "gettrace": _C,
+    "untraced": _C + ": a frame the settrace hook leaves alone",
+    "tracemalloc": _C, "get_traced_memory": _C, "export_chrome_trace": _C, "trace_path": _C, "trace_": _C,
+    "trace_hf_sana_": _C, "traceback": _C, "Traceback": _C, "tracebacks": _C, "__traceback__": _C,
+    "with_traceback": _C, "traceback_tail": _C, "stacktrace": _C, "backtrace": _C, "pytrace": _C,
+    "_trace_to_mul": _W, "_trace_expert_blocks": _W, "_trace_routing_ops": _W,
+    "TRACE_COMPARISON_REPORT": "(c) an ignore rule for an old debug report's file name, never tracked",
+}
 
 #: (path or "*", phrase that must hold the hit on its line, reason)
 EXCEPTIONS = (
@@ -145,15 +182,16 @@ EXCEPTIONS = (
 )
 
 
-def _tracked_texts():
-    if not (ROOT / ".git").exists() or shutil.which("git") is None:
-        pytest.skip(f"{ROOT} is not a git checkout (an sdist): no tracked list to read")
-    paths = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True,
+def _tracked_texts(root: Path = ROOT):
+    if not (root / ".git").exists() or shutil.which("git") is None:
+        pytest.skip(f"{root} is not a git checkout (an sdist): no tracked list to read")
+    paths = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=True,
                            text=True).stdout.split("\0")
     for p in paths:
-        if not p or p == SELF or p.startswith("docs/internal/") or p.endswith(".nbx") or "/.nbx" in p:
+        if (not p or p == SELF or p.startswith("docs/internal/") or p.endswith(".nbx") or "/.nbx" in p
+                or fnmatch.fnmatch(p, FINGERPRINTS)):
             continue
-        f = ROOT / p
+        f = root / p
         if not f.is_file():
             continue
         data = f.read_bytes()
@@ -165,28 +203,39 @@ def _tracked_texts():
             continue
 
 
-def _letters_around(line: str, start: int, end: int) -> str:
-    while start > 0 and line[start - 1].isalpha():
+def _around(line: str, start: int, end: int, keep) -> tuple:
+    while start > 0 and keep(line[start - 1]):
         start -= 1
-    while end < len(line) and line[end].isalpha():
+    while end < len(line) and keep(line[end]):
         end += 1
-    return line[start:end]
+    return start, end
 
 
-def hits(path: str, text: str, exceptions=EXCEPTIONS) -> list:
-    """(line number, word) of every hit of `text` that no declared phrase of this file holds."""
+def _ident(c: str) -> bool:
+    return c.isalnum() or c == "_"
+
+
+def hits(path: str, text: str, exceptions=EXCEPTIONS, declared=DECLARED) -> list:
+    """(line number, word) of every hit of `text` that no declared phrase of this file, nor a declared identifier, holds."""
     phrases = [ph for p, ph, _ in exceptions if p in ("*", path)]
     out = []
     for n, line in enumerate(text.splitlines(), 1):
-        found = list(VERB.finditer(line)) + list(NAMES.finditer(line))
+        spans = {_around(line, m.start(), m.end(), _ident) for m in STEM.finditer(line)}
+        found = []
+        for a, z in sorted(spans):
+            word = line[a:z]
+            if BARE.fullmatch(word):
+                found.append((a, z, word))
+            elif word not in declared:
+                out.append((n, word))
+        for m in NAMES.finditer(line):
+            a, z = _around(line, m.start(), m.end(), str.isalpha)
+            if line[a:z].lower() not in ENGLISH:
+                found.append((m.start(), m.end(), m.group(0)))
         if not found:
             continue
         held = [(m.start(), m.end()) for ph in phrases for m in re.finditer(re.escape(ph), line)]
-        for m in found:
-            if m.group(0).lower() == TOOL_NAME and _letters_around(line, m.start(), m.end()).lower() in ENGLISH:
-                continue
-            if not any(a <= m.start() and m.end() <= b for a, b in held):
-                out.append((n, m.group(0)))
+        out += [(n, w) for a, z, w in found if not any(x <= a and z <= y for x, y in held)]
     return out
 
 
@@ -194,11 +243,30 @@ def test_the_patterns_see_every_form_and_only_those():
     t = "trac"
     seen = f"{t}e. {t}ed, re{t}e {t.upper()}ER {t}ers {t}es {t}ing re{t}ed D-RE{t.upper()}E-X {TOOL_NAME.title()} " \
            f"x{FOLDER_NAME.lower()}/y"
-    assert [w.lower() for _, w in hits("p.py", seen, ())] == [
+    assert [w.lower() for _, w in hits("p.py", seen, (), {})] == [
         f"{t}e", f"{t}ed", f"re{t}e", f"{t}er", f"{t}ers", f"{t}es", f"{t}ing", f"re{t}ed", f"re{t}e",
         TOOL_NAME, FOLDER_NAME.lower()]
-    other = " ".join(NOT_THE_VERB + ENGLISH) + " Forgets the_forgetting"
-    assert hits("p.py", other, ()) == []
+    assert hits("p.py", " ".join(ENGLISH) + " Forgets the_forgetting", (), {}) == []
+
+
+def test_a_joined_form_hits_unless_declared_by_name():
+    """qa 1290-1's mutants: a stem glued to letters, digits or underscores is a hit like a bare word."""
+    t = "trac"
+    for mutant in (f"AI{t}ing", f"re{t}e_zoo", f"nbx_{t}er", f"tools/re{t}e_zoo.py", f"NBX_{t.upper()}E_X"):
+        assert hits("p.md", f"see {mutant} here", (), {}) != [], mutant
+    assert hits("p.md", f"see {t}e_value here", (), {f"{t}e_value": "r"}) == []
+    assert hits("p.md", f"see {t}e_values here", (), {f"{t}e_value": "r"}) == [(1, f"{t}e_values")]
+
+
+def test_a_joined_name_is_red_in_a_tracked_file(tmp_path):
+    """The scan end to end, on a scratch repository: a tracked page naming a joined build-tool file is named."""
+    if shutil.which("git") is None:
+        pytest.skip("no git here")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "page.md").write_text("The gate ran `tools/re" + "trace_zoo.py --src <worktree>`.\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "page.md"], check=True)
+    found = [(p, n, w) for p, text in _tracked_texts(tmp_path) for n, w in hits(p, text)]
+    assert found == [("page.md", 1, "re" + "trace_zoo")]
 
 
 def test_a_phrase_holds_only_its_own_file_and_its_own_span():
@@ -209,14 +277,18 @@ def test_a_phrase_holds_only_its_own_file_and_its_own_span():
     assert hits("a.py", f"the malloc {t}, then the graph was {t}d", ex) == [(1, t + "d")]
 
 
-def test_every_declared_phrase_is_still_on_its_file():
+def test_every_declared_phrase_and_name_is_still_used():
     texts = dict(_tracked_texts())
     stale = [(p, ph) for p, ph, _ in EXCEPTIONS if p != "*" and ph not in texts.get(p, "")]
     assert stale == [], f"declared exceptions their file no longer holds: remove them: {stale}"
+    words = {w for text in texts.values() for w in re.findall(r"[A-Za-z0-9_]+", text)}
+    unused = sorted(set(DECLARED) - words)
+    assert unused == [], f"declared identifiers no tracked file holds any more: remove them: {unused}"
 
 
 def test_every_exception_says_why():
     assert all(reason.strip() for _, _, reason in EXCEPTIONS)
+    assert all(reason.strip() for reason in DECLARED.values())
 
 
 def test_the_public_repository_names_no_build_technique():

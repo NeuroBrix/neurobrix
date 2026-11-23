@@ -298,22 +298,22 @@ def _read_manifest(model_dir: Path) -> Dict[str, str]:
 def discover_target_matrix() -> List[Dict[str, str | int]]:
     """Yield the not-yet-built reference matrix as discover-style records.
 
-    Each entry carries `status="not_traced"` so the harness skips it
+    Each entry carries `status="not_built"` so the harness skips it
     (instead of failing on a missing cache directory). The harness
     output then lists `<model>::<mode> SKIPPED [reason]` for every
     family-coverage debt — making the inventory visible at every run.
 
-    See `TARGET_MATRIX_NOT_TRACED` for the actual list.
+    See `TARGET_MATRIX_NOT_BUILT` for the actual list.
     """
     out: List[Dict[str, str | int]] = []
     for name, family, reason in TARGET_MATRIX_NOT_BUILT:
         out.append({
             "name": name,
             "family": family,
-            "flow": "not_traced",
-            "gen_type": "not_traced",
+            "flow": "not_built",
+            "gen_type": "not_built",
             "timeout_s": 1,  # never used (cells skip), but keep int type
-            "status": "not_traced",
+            "status": "not_built",
             "skip_reason": f"DETTE_TECHNIQUE_NON_OUVERTE: {reason}",
         })
     return out

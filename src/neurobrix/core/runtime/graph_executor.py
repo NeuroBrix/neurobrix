@@ -2394,7 +2394,7 @@ class GraphExecutor:
         # because the bind-time upcast cost itself was never cheap.
         # Load only what this graph reads. See consumed_weight_names: a
         # parameter no op consumes cannot be reached by execution, and on an
-        # MoE build the untraced experts are a third of the component.
+        # MoE build the experts no op reads are a third of the component.
         _only = self.consumed_weight_names()
         # THE TWO KEY SPACES. `consumed_weight_names` speaks the GRAPH's names
         # (`encoder.token_embed.weight`); the loader filters the INDEX's keys

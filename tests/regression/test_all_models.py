@@ -113,12 +113,12 @@ def _marks_for(name: str, mode: str, family: str,
                skip_reason: str = "") -> List:
     """Build the pytest.mark list for a (model, mode) cell.
 
-    `status='not_traced'` cells receive a `pytest.mark.skip` with the
+    `status='not_built'` cells receive a `pytest.mark.skip` with the
     DETTE_TECHNIQUE_NON_OUVERTE reason — the harness lists them as
     coverage gaps without attempting to run them.
     """
     marks: List = []
-    if status == "not_traced":
+    if status == "not_built":
         marks.append(pytest.mark.skip(reason=skip_reason or
                                       "DETTE_TECHNIQUE_NON_OUVERTE: model not built"))
         return marks
@@ -157,7 +157,7 @@ def _build_parametrize() -> List:
             marks=_marks_for(m["name"], "native", m["family"],
                              status=str(m.get("status", "testable")),
                              skip_reason=str(m.get("skip_reason", ""))),
-            id=f"{m['name']}::not_traced",
+            id=f"{m['name']}::not_built",
         ))
     return params
 
