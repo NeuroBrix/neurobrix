@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
 from neurobrix import branch_door as _branch_door
-normalize_tensor_name_strict = _branch_door.names("neurotax", "", "normalize_tensor_name_strict")[0]
 import logging
 
 
@@ -138,10 +137,16 @@ class AudioSteps:
 
 
 # The RNN-T joint's weights, NeuroTax name -> role (both branches' joint).
-_JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
-    ("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
-    ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),
-    ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))}
+# Named by the running branch's NeuroTax twin AT THE CALL, never bound at import: the branch is chosen after the imports.
+_JOINT_VENDOR = (("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
+                 ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),
+                 ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))
+
+
+def _joint_keys() -> dict:
+    """The joint's weights, NeuroTax name -> role, from the twin of the branch this process runs."""
+    normalize = _branch_door.names("neurotax", "", "normalize_tensor_name_strict")[0]
+    return {normalize(vendor): role for vendor, role in _JOINT_VENDOR}
 
 
 class AudioLLMSteps:
@@ -209,7 +214,7 @@ class RNNTSteps:
 
 def joint_role(key: str) -> Optional[str]:
     """The joint-network role of a weight key (the key itself, or the key under a component prefix)."""
-    for canon, role in _JOINT_KEYS.items():
+    for canon, role in _joint_keys().items():
         if key == canon or key.endswith("." + canon):
             return role
     return None

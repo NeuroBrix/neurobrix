@@ -18,21 +18,27 @@ import re
 import os
 
 from neurobrix import branch_door as _branch_door
-_NeuroTax = _branch_door.names("neurotax", "", "SynonymRegistry")[0]
 import logging
 _log = logging.getLogger(__name__)
 
 # The expert weights' key tokens, AS THE PARSER NAMES THEM — the neurotaxe has one reader.
 # Spelled here once, a renamed canonical token (the SwiGLU gate's `gate` -> `ffn_gate`,
 # 2026-09-26) would leave this reader matching nothing and the fusion silently off.
-_EXPERT = _NeuroTax.resolve("experts")
-_EXPERT_PROJ = {role: _NeuroTax.resolve(vendor) for role, vendor in
-                (("gate", "gate_proj"), ("up", "up_proj"), ("down", "down_proj"))}
-_EXPERT_ROLE = {token: role for role, token in _EXPERT_PROJ.items()}
+# Asked of the running branch's NeuroTax twin AT THE CALL, never bound at import: the branch is chosen after the imports.
+def _tokens() -> Dict[str, str]:
+    """The canonical tokens this reader matches, vendor word -> token, from the NeuroTax twin of the branch in force."""
+    registry = _branch_door.names("neurotax", "", "SynonymRegistry")[0]
+    return {word: registry.resolve(word) for word in ("experts", "layers", "mlp", "gate_proj", "up_proj", "down_proj")}
+
+
+def _expert_proj() -> Dict[str, str]:
+    """The three expert projections, role -> canonical token (gate, up, down)."""
+    tokens = _tokens()
+    return {role: tokens[vendor] for role, vendor in (("gate", "gate_proj"), ("up", "up_proj"), ("down", "down_proj"))}
 
 
 def _expert_tid(prefix: str, expert_id: int, role: str) -> str:
-    return f"param::{prefix}.{_EXPERT}.{expert_id}.{_EXPERT_PROJ[role]}.weight"
+    return f"param::{prefix}.{_tokens()['experts']}.{expert_id}.{_expert_proj()[role]}.weight"
 
 
 def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool = True,
@@ -1123,10 +1129,10 @@ def _trace_expert_blocks(
     """
     # Pattern: param::<prefix>.<expert>.Y.<swiglu gate|up|down>.weight, the tokens the parser
     # emits (a container holds no raw vendor name). Group 1 = expert_id, group 2 = the token.
+    expert_role = {token: role for role, token in _expert_proj().items()}
     weight_pattern = re.compile(
-        rf"param::.*\.{re.escape(_EXPERT)}\.(\d+)\."
-        rf"({'|'.join(re.escape(t) for t in _EXPERT_PROJ.values())})\.weight"
-    )
+        rf"param::.*\.{re.escape(_tokens()['experts'])}\.(\d+)\."
+        rf"({'|'.join(re.escape(t) for t in expert_role)})\.weight")
 
     # Collect weight tensor IDs from mm ops in the MoE subgraph
     expert_weights: Dict[int, Dict[str, str]] = {}  # expert_id -> {gate: tid, up: tid, down: tid}
@@ -1171,7 +1177,7 @@ def _trace_expert_blocks(
                     m = weight_pattern.match(t_input)
                     if m:
                         expert_id = int(m.group(1))  # Group 1 = expert ID
-                        proj_type = _EXPERT_ROLE[m.group(2)]  # the role: gate|up|down
+                        proj_type = expert_role[m.group(2)]  # the role: gate|up|down
                         if expert_id not in expert_weights:
                             expert_weights[expert_id] = {}
                         expert_weights[expert_id][proj_type] = t_input
@@ -1207,7 +1213,7 @@ def _trace_expert_blocks(
     # The weight pattern is e.g., "param::block.1.ffn.expert.0.gate.weight"
     # We need to extract "block.1" to reconstruct missing expert paths
     block_prefix = None
-    block_pattern = re.compile(rf"param::(.*?)\.{re.escape(_EXPERT)}\.\d+")
+    block_pattern = re.compile(rf"param::(.*?)\.{re.escape(_tokens()['experts'])}\.\d+")
     for projs in expert_weights.values():
         for tid in projs.values():
             m = block_pattern.match(tid)
@@ -1296,8 +1302,8 @@ def _count_total_experts(
 
     # Fallback: count from weight tensor IDs
     weight_pattern = re.compile(
-        rf"param::{re.escape(_NeuroTax.resolve('layers'))}\.\d+\.{re.escape(_NeuroTax.resolve('mlp'))}"
-        rf"\.{re.escape(_EXPERT)}\.(\d+)\.{re.escape(_EXPERT_PROJ['gate'])}\.weight")
+        rf"param::{re.escape(_tokens()['layers'])}\.\d+\.{re.escape(_tokens()['mlp'])}"
+        rf"\.{re.escape(_tokens()['experts'])}\.(\d+)\.{re.escape(_expert_proj()['gate'])}\.weight")
     expert_ids = set()
     for tid in tensors:
         m = weight_pattern.match(tid)
@@ -2139,7 +2145,7 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
 
     # --- the fused op -------------------------------------------------------
     parent = topk.get("parent_module", "") or ""
-    bm = re.match(rf"({re.escape(_NeuroTax.resolve('layers'))}\.\d+)", parent)
+    bm = re.match(rf"({re.escape(_tokens()['layers'])}\.\d+)", parent)
     fused_uid = f"moe_fused::{bm.group(1) if bm else topk_uid}"
     if fused_uid in ops:
         fused_uid = f"moe_fused::{topk_uid}"

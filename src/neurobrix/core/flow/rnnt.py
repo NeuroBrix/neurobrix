@@ -509,7 +509,7 @@ class RNNTEngine(RNNTSteps, ComponentFlowHandler):
     def _extract_joint_weights(self) -> Dict[str, Any]:
         """Extract joint network weights from GraphExecutor.
 
-        Keys through the parser (`_JOINT_KEYS`):
+        Keys through the parser (`_joint_keys()`):
           enc_proj.weight: [D_joint, D_enc]    enc_proj.bias: [D_joint]
           pred_proj.weight: [D_joint, D_dec]   pred_proj.bias: [D_joint]
           joint.2.weight: [V, D_joint]         joint.2.bias: [V]

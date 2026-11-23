@@ -37,8 +37,8 @@ def test_the_joint_is_found_on_the_complete_keys(mode):
 
 
 def test_the_joint_keys_are_the_parsers():
-    from neurobrix.core.flow.shared_steps import _JOINT_KEYS   # one table, both branches' joint
-    assert set(_JOINT_KEYS) == set(JOINT_KEYS)
+    from neurobrix.core.flow.shared_steps import _joint_keys   # asked at the call, of the branch in force
+    assert set(_joint_keys()) == set(JOINT_KEYS)
 
 
 def test_the_vocoder_token_table_is_found_by_its_canonical_token():
