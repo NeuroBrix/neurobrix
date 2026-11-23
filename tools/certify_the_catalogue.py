@@ -63,7 +63,7 @@ sys.path.insert(0, str(REPO / "tools"))
 from container_renames import current_name  # noqa: E402
 from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE") or _atelier.root("cache"))
-PY = os.environ.get("NBX_PYTHON") or _atelier.interpreter("forge")
+PY = os.environ.get("NBX_PYTHON") or _atelier.interpreter("factory")
 
 #: hub slug (lowercased) -> local container directory. ONLY where the two names
 #: genuinely differ. Each line is a decision someone made by reading both names,

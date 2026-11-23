@@ -1536,7 +1536,8 @@ ARM_LABELS = ("A", "B")
 # different engine from the one anybody meant: Prism's registry flags read False
 # there. Two GPU hours went to exactly that on 2026-09-05 — PixArt VAE fp32 vs
 # fp16 — and the answer was blamed on the change rather than on the tree.
-FROZEN_POINTERS = (".nbx_registry", "forge")
+#: The registry pointer only: it is the one ignored file beside src/ that the engine reads.
+FROZEN_POINTERS = (".nbx_registry",)
 
 
 FLIGHTREC_OPT = "--allow-unrecorded"

@@ -18,7 +18,7 @@ Three things are refused at entry, before a second of card is spent:
     happens to be at each moment;
   * a `--src` inside the live repository — the same tree under another name;
   * a `--src` whose worktree is missing the ignored pointers a measurement
-    depends on. A fresh checkout has no `.nbx_registry` and no build tool pointer, and
+    depends on. A fresh checkout has no `.nbx_registry`, and
     Prism's registry flags then read False there — two GPU hours were lost to
     exactly that on 2026-09-05, and the answer was the change, not the tree.
 

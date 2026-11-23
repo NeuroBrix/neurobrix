@@ -17,9 +17,7 @@ identifier is declared BY NAME, each with its reason. Both lists say which of th
   (c) a trace of a RUN, not of a build: a traceback switch, a profiler or malloc or per-op memory trace, a
       settrace hook, a compile-stage recorder, a walk back through the graph's ops, an English idiom.
 
-Two lines are admitted although they name the build tool (kind (d)): they are names on the machines, outside this
-repository (a workshop configuration role, a gitignored pointer directory of the worktrees), and renaming them is a
-change of every machine's configuration, not a text edit. They are listed by name so that they stay in sight.
+No line names the build tool: the workshop role is "factory" and the worktree pointer is gone (no exception).
 
 What this test would do if a file said it again: red, by file:line and the word (injections seen red: a comment
 "the graph is traced at build" added to src/neurobrix/core/runtime/symexpr.py; a tracked page naming
@@ -174,11 +172,6 @@ EXCEPTIONS = (
     ("benchmarks/profile_hf_baseline.py", "CUDA trace", "(c) a CUDA profiler trace"),
     ("benchmarks/profile_hf_baseline.py", "benchmarks/traces", "(c) the profiler traces' directory"),
     ("benchmarks/profile_hf_baseline.py", "Trace saved", "(c) a CUDA profiler trace"),
-    # (d) names on the machines, outside this repository
-    ("tools/certify_the_catalogue.py", f'interpreter("{TOOL_NAME}")',
-     "(d) a role of each machine's private atelier.json `python` table; renaming it is a configuration change"),
-    ("tools/precision_zoo_campaign.py", f'FROZEN_POINTERS = (".nbx_registry", "{TOOL_NAME}")',
-     "(d) a gitignored pointer directory every frozen worktree carries; renaming it is a workshop change"),
 )
 
 
