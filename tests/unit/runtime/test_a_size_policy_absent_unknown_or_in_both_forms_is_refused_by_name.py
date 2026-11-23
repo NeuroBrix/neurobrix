@@ -51,3 +51,11 @@ def test_a_key_that_is_not_a_positive_integer_is_refused(bad):
     with pytest.raises(RuntimeError, match="ZERO FALLBACK: size_policy = 'from_image' needs size_multiple|"
                                            "ZERO FALLBACK: size_multiple = .* is not a positive integer"):
         resolve_size(defaults, (512, 512), None, None, where=WHERE)
+
+
+def test_a_container_without_the_policy_is_told_its_remedy():
+    """The refusal names the remedy as well as the fault: the corrected container, in the engine's own wording for
+    incomplete model data (core/module/cache/factory.py). Red if the text names only the missing key."""
+    with pytest.raises(RuntimeError, match=r"predates the declared size policy: install the corrected container "
+                                           r"\(neurobrix remove <model> && neurobrix import <org>/<model>\)"):
+        resolve_size({}, (512, 512), None, None, where=WHERE)

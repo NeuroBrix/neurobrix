@@ -33,18 +33,29 @@ def _refuse(message: str) -> None:
     raise RuntimeError(f"ZERO FALLBACK: {message}")
 
 
+# The remedy, in the engine's own wording for a container whose data is incomplete (core/module/cache/factory.py):
+# the value is the container's, so the fix is the corrected container, never a value supplied here.
+REMEDY = (" — this container predates the declared size policy: install the corrected container "
+          "(neurobrix remove <model> && neurobrix import <org>/<model>)")
+
+
+def _outdated(message: str) -> None:
+    """A size key the container lacks or holds wrong: refused by name, with the remedy."""
+    _refuse(message + REMEDY)
+
+
 def _policy(defaults: Mapping[str, Any], where: str) -> str:
     """The declared policy, refused by name when absent, unknown, or declared beside the other form's keys."""
     policy = defaults.get("size_policy")
     if policy is None:
-        _refuse(f"size_policy is not declared in {where}: a run with a conditioning image generates at the size its "
+        _outdated(f"size_policy is not declared in {where}: a run with a conditioning image generates at the size its "
                 f"container declares, \"fixed\" (height, width) or \"from_image\" (max_area, size_multiple)")
     if policy not in POLICIES:
-        _refuse(f"size_policy = {policy!r} in {where} is not a size policy: \"fixed\" or \"from_image\"")
+        _outdated(f"size_policy = {policy!r} in {where} is not a size policy: \"fixed\" or \"from_image\"")
     other = "from_image" if policy == "fixed" else "fixed"
     stray = [k for k in _FORMS[other] if k in defaults]
     if stray:
-        _refuse(f"{where} declares size_policy = {policy!r} and also {stray} of the {other!r} form: one form, "
+        _outdated(f"{where} declares size_policy = {policy!r} and also {stray} of the {other!r} form: one form, "
                 f"not both")
     return policy
 
@@ -52,21 +63,27 @@ def _policy(defaults: Mapping[str, Any], where: str) -> str:
 def _positive_int(defaults: Mapping[str, Any], key: str, policy: str, where: str) -> int:
     value = defaults.get(key)
     if value is None:
-        _refuse(f"size_policy = {policy!r} needs {key}, which is not declared in {where}")
+        _outdated(f"size_policy = {policy!r} needs {key}, which is not declared in {where}")
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        _refuse(f"{key} = {value!r} in {where} is not a positive integer")
+        _outdated(f"{key} = {value!r} in {where} is not a positive integer")
     return value
 
 
 def from_image_size(max_area: int, size_multiple: int, image_hw: Tuple[int, int]) -> Tuple[int, int]:
     """(height, width) at `max_area` pixels and the image's aspect, each side floored to `size_multiple`.
 
-    The diffusers form (the Wan I2V pipelines' documented example, `pipeline_wan_i2v.py` EXAMPLE_DOC_STRING):
+    The diffusers form: diffusers pipelines/wan/pipeline_wan_i2v.py:70-75 (EXAMPLE_DOC_STRING, with
+    mod_value = vae_scale_factor_spatial * patch_size[1]) and the Wan2.1 card README L173-175:
         aspect_ratio = image.height / image.width
         height = round(np.sqrt(max_area * aspect_ratio)) // mod_value * mod_value
         width = round(np.sqrt(max_area / aspect_ratio)) // mod_value * mod_value
-    Not checked against a vendor copy on disk: none was found under ~/Mounts/Super-HF-Snapshots on 2026-11-23 (the
-    snapshots there carry weights and configs, no README, no diffusers source); this is the ruling's formula."""
+    The vendor lines are quoted in transfer/dell_cards/size_policy/research.md (Dell lead, 23/11/2026). A vendor that
+    rounds otherwise declares its own key then; it is not a branch here.
+
+    A daemon plans at load, before any image (serving/engine.py `_container_extent`): with the declared height and
+    width, else the container's own output size (its built latent times the VAE scale). A "from_image" container
+    declares neither, so it is planned at its built latent, which can hold fewer pixels than `max_area` (an open
+    point of the record, not settled here)."""
     ar = image_hw[0] / image_hw[1]
     return (round(math.sqrt(max_area * ar)) // size_multiple * size_multiple,
             round(math.sqrt(max_area / ar)) // size_multiple * size_multiple)
@@ -112,10 +129,10 @@ def image_fit(fit: Optional[Mapping[str, Any]], container: str = "the container"
     The order of the two keys in the declaration is the vendor's order of operations; the library reads it from the
     declaration itself (`image_dsp.i2v_vae_condition_np`)."""
     if not isinstance(fit, Mapping):
-        _refuse(f"condition_image_fit is not declared on the vae_encoder of {container} ({FIT_SITE}): the "
+        _outdated(f"condition_image_fit is not declared on the vae_encoder of {container} ({FIT_SITE}): the "
                 f"conditioning image's crop (none|center) and resample (lanczos|bicubic|linear) are its container's")
     for key in FIT_KEYS:
         if fit.get(key) is None:
-            _refuse(f"condition_image_fit.{key} is not declared on the vae_encoder of {container} ({FIT_SITE}): "
+            _outdated(f"condition_image_fit.{key} is not declared on the vae_encoder of {container} ({FIT_SITE}): "
                     f"crop (none|center) and resample (lanczos|bicubic|linear), in the vendor's order")
     return fit["crop"], fit["resample"]
