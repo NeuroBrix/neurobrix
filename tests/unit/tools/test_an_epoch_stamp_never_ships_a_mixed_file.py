@@ -10,7 +10,9 @@ the unit test RED; a stop during the replacement losing a failed key or truncati
 retired key kept in the file, put on the recertification list or not counted apart -> the retired test RED; a file
 whose every key is retired shipped (empty or as it was), or one with a key failed removed -> the removal test RED. A
 subset draft's certification not added, added over another class's proof, or an existing certification of the same
-key and class overwritten -> the two add tests RED.
+key and class overwritten -> the two add tests RED. Each guard of the add removed (qa 1245-1) -> its own test RED: a
+proof of another bits epoch accepted, a draft entry of two classes accepted, a merge that fails the library's validate
+written, a draft tree that is the shipped tree run.
 """
 import csv
 import json
@@ -300,3 +302,61 @@ def test_an_existing_certification_of_the_same_key_and_class_is_never_overwritte
     assert any("never overwritten" in s and K1 in s for s in said)
     table = list(csv.DictReader(open(tmp_path / "add_table.tsv"), delimiter="\t"))
     assert [(r["added"], r["variants"], r["refused"]) for r in table] == [("1", "0", "1")]
+
+
+def _refused(tmp_path, cert, why):
+    """A draft whose one certification is refused by `why`: refused by name, counted, and the file not written."""
+    k1 = {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}
+    shipped = _write(tmp_path / "shipped", {K1: k1})
+    _write(tmp_path / "d16", {K2: cert})
+    before, said = shipped.read_bytes(), []
+    out = S.add(tmp_path / "shipped", [tmp_path / "d16"], tmp_path / "add_table.tsv", apply=True, say=said.append)
+    assert out["written"] == [] and shipped.read_bytes() == before
+    assert any(why in s and K2 in s and "REFUSED" in s for s in said)
+    table = list(csv.DictReader(open(tmp_path / "add_table.tsv"), delimiter="\t"))
+    assert [(r["added"], r["variants"], r["refused"]) for r in table] == [("0", "0", "1")]
+
+
+def test_a_draft_proof_of_another_bits_epoch_is_refused_by_name(tmp_path):
+    """1245-1, the epoch guard: a draft certification whose proof is not at the library's bits epoch is refused by its
+    own reason (not left to the later gate), and the file is not written."""
+    cert = _unit_cert(2, 2, 16384)
+    cert["proof"]["bits_epoch"] = C.BITS_EPOCH + 1
+    _refused(tmp_path, cert, "not of the library's bits epoch")
+
+
+def test_a_draft_entry_of_two_memory_classes_is_refused_by_name(tmp_path):
+    """1245-1, the one-class guard: a draft entry that carries a variant (it covers 16 and 32 GB) is refused, never
+    added whole, and the file is not written."""
+    cert = _unit_cert(2, 2, 16384)
+    cert["variants"] = {"32g": _unit_cert(3, 2, 32768)}
+    assert sorted(C.covered_memory_gbs(cert)) == [16, 32]
+    _refused(tmp_path, cert, "not one memory class")
+
+
+def test_a_merge_the_library_validate_refuses_is_not_written(tmp_path):
+    """1245-1, the validate gate: a draft certification no guard of the add refuses (one class, at the epoch, a key the
+    file lacks) whose merge the library's `validate` refuses (its proof's shape is not its key) leaves the file as it
+    was, and says the gate."""
+    k1 = {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}
+    shipped = _write(tmp_path / "shipped", {K1: k1})
+    _write(tmp_path / "d16", {K2: _unit_cert(2, 1, 16384)})                  # key (2, fp32), proof shape (1, fp32)
+    assert S._add_one({}, K2, _unit_cert(2, 1, 16384)) == "added"            # no guard of the add refuses it
+    before, said = shipped.read_bytes(), []
+    out = S.add(tmp_path / "shipped", [tmp_path / "d16"], tmp_path / "add_table.tsv", apply=True, say=said.append)
+    assert out["written"] == [] and shipped.read_bytes() == before
+    assert any("NOT WRITTEN, gate:" in s for s in said)
+    table = list(csv.DictReader(open(tmp_path / "add_table.tsv"), delimiter="\t"))
+    assert [(r["added"], r["variants"], r["refused"]) for r in table] == [("1", "0", "0")]
+
+
+def test_a_draft_tree_that_is_the_shipped_tree_is_refused_before_any_read(tmp_path):
+    """1245-1, the same-tree guard: --add-from naming the shipped tree itself is refused by the command, with --apply,
+    before anything is read or written (no table)."""
+    shipped = _write(tmp_path / "shipped", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}})
+    before = shipped.read_bytes()
+    with pytest.raises(SystemExit) as stop:
+        S.main(["--shipped", str(tmp_path / "shipped"), "--table", str(tmp_path / "add_table.tsv"), "--apply",
+                "--add-from", str(tmp_path / "x" / ".." / "shipped")])
+    assert stop.value.code == "a draft tree is the shipped tree: refused"
+    assert shipped.read_bytes() == before and not (tmp_path / "add_table.tsv").exists()
