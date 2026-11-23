@@ -323,6 +323,10 @@ measured:
   # bf16 GEMM the compute dtype of this device needs (the time estimate refused every accelerator strategy without it)
   source: "measured 2026-10-25 18:37:27 CET on the M4 Pro (card 0), alone, the Windows VM off (tools/profile_facts.py --dtypes float16,float32,bfloat16)"
   matmul_tflops: {float16: 6.0, float32: 5.3, bfloat16: 5.9}
+  # the runtime's own footprint per engine (MB the process holds before a model), READ at a first launch instead of a
+  # child that measures it (owner reset 22/11 point 1; first-launch step 4): measured 2026-11-23 on the M4 Pro alone,
+  # engine 13990e561 + nbxtensor def527d, fresh homes (runs seq_compiled 184, goc 187 -> 187 kept; seq_triton 354)
+  runtime_base_mb: {compiled: 187, triton: 354}
   memory_gbps: 230
   h2d_gbps: 59.3
   d2h_gbps: 66.1

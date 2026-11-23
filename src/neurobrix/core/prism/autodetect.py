@@ -2545,7 +2545,7 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
         # of this engine, else one child of this engine now; the other engine's waits for its own first launch
         base = dict(cpu.get("runtime_base_mb") or {})
         if engine not in base:
-            mb = other_card_models.base_from_siblings(path.parent, exclude=path, engine=engine).get(engine)
+            mb = other_card_models.shipped_or_sibling_base(devices[0], path, engine)  # read; else measured below
             if mb is None:
                 launch_lines.say("base", f" ({engine})")
                 mb = _measure_runtime_base_mb(engine)

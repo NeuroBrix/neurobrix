@@ -1,6 +1,6 @@
 """The device facts of the card models of a machine that are not card 0's: each model's own block, with the
 expandable pool's chunk measured on its own first card."""
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def measured_of_others(devices, measured_of, added, q, chunks=None) -> Dict[Any, dict]:
@@ -174,3 +174,15 @@ def base_from_siblings(directory, exclude=None, engine=None) -> dict:
         if base and (engine is None or engine in base):
             return dict(base)
     return {}
+
+
+def shipped_or_sibling_base(device: dict, path, engine: str) -> Optional[int]:
+    """The launched engine's runtime base READ, never measured, where a figure exists (owner reset 22/11 point 1): the
+    vendor file's shipped `measured.runtime_base_mb.<engine>` for this card model (config/vendors/<vendor>/<arch>.yml,
+    with its source line), else a sibling profile's measure on this machine (`other_card_models.base_from_siblings`).
+    None: no figure anywhere — the one case the caller measures it once, says it, keeps it."""
+    from neurobrix.core.prism.loader import vendor_block
+    shipped = ((vendor_block(device, "measured") or {}).get("runtime_base_mb") or {}).get(engine)
+    if shipped is not None:
+        return int(shipped)
+    return base_from_siblings(path.parent, exclude=path, engine=engine).get(engine)
