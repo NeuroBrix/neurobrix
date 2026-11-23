@@ -26,7 +26,7 @@ Supported preprocessing types:
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -230,6 +230,22 @@ def load_upscale_image(image_path: str, cache_path: Path):
     return np.ascontiguousarray(tensor), (h, w)
 
 
+def declared_condition_size(cache_path: Path, height: Optional[int],
+                            width: Optional[int]) -> Tuple[Optional[int], Optional[int]]:
+    """The (height, width) a conditioning image is fitted to: the request's when it names both, else the
+    container's declared pair (runtime/defaults.json), else (None, None) — the image keeps its own size, which is
+    then the size the executor generates at (its conditioning-image step)."""
+    import json
+    if height is not None and width is not None:
+        return height, width
+    p = Path(cache_path) / "runtime" / "defaults.json"
+    d = json.loads(p.read_text()) if p.exists() else {}
+    if "height" in d and "width" in d:
+        return (height if height is not None else int(d["height"]),
+                width if width is not None else int(d["width"]))
+    return height, width
+
+
 def prepare_image_inputs(topology: dict, model_name: Optional[str],
                          image_path: str, cache_path: Path, *,
                          height: Optional[int] = None,
@@ -294,6 +310,12 @@ def prepare_image_inputs(topology: dict, model_name: Optional[str],
         # the vendor's own fit of the conditioning image where its container declares one (a centre crop and an
         # antialiased linear resample: Allegro-TI2V), else the request's size by a LANCZOS stretch
         fit = get_component_flag(model_name, "vae_encoder", "condition_image_fit", default=None)
+        # The size the run generates at, in the executor's own order (`executor._build_merged_defaults`): the
+        # request's, else the container's declared height/width, else the image's own. The vendor resizes the
+        # conditioning image to that size (diffusers pipeline_cogvideox_image2video.py:710-711); handed only the
+        # request's, a 512 image met 480x720 noise (CogVideoX-5b-I2V 'Expected size 60 but got size 64',
+        # Wan2.1-VACE 'cannot broadcast 21504 against 32760', Allegro-TI2V).
+        height, width = declared_condition_size(cache_path, height, width)
         inputs["global.image"] = ImageInputProcessor.process(
             "i2v_vae_condition", image_path,
             height=height, width=width, pad_to_num_frames=pad_nf, fit=fit)
