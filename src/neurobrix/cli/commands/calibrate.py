@@ -95,11 +95,15 @@ def cmd_calibrate(args) -> int:
         print("ERROR: a serving daemon is running — the census must run in this process. "
               "Stop it first (neurobrix stop).")
         return 2
-    # The census runs on the compiled reference path (the numerical oracle)
-    # by default; `--triton` runs it on the Triton engine's conservative
-    # path — the census a Triton-only build (an int4 container) can have.
-    engine = ("triton_sequential" if getattr(args, "triton_sequential", False)
-              else "triton" if getattr(args, "triton", False) else "compiled")
+    # The census runs on the engine the request's flag asks for, chosen as `run` chooses it (cli/engine_choice.py: no
+    # flag = the default engine, Triton); its record names THAT engine, read from the one choice, never assumed
+    # (qa 1274-1: with Triton the default, a label fixed to "compiled" put a Triton census where the PyTorch
+    # reference's goes). The PyTorch reference census is asked by its flag: --compiled.
+    from neurobrix.cli.commands.run import log as _run_log
+    from neurobrix.cli.engine_choice import choose_engine
+    engine = choose_engine(args, _run_log)
+    if engine is None:
+        return 1
     family, model_name = _identity_of(args.model)
     stimulus = _apply_family_stimulus(args, family)
     policy = get_precision_calibration_policy()

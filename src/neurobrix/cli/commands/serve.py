@@ -51,7 +51,7 @@ def cmd_serve(args):
     elif getattr(args, 'compiled', False):
         mode = "compiled"
     else:
-        # no mode flag: the PyTorch engine where torch is installed, the Triton engine where it is not — said here
+        # no mode flag: the default engine, Triton, whether torch is installed or not — said here
         from neurobrix.core.runtime.engines import default_mode
         mode, _said = default_mode()
         log.info(f"[Serve] {_said}")

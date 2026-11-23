@@ -4,8 +4,8 @@ The Triton branch (`triton`, `triton_sequential`) runs on nbxtensor, triton and 
 dependencies (R33). The PyTorch branch (`compiled`, `sequential`) is torch itself, an optional dependency
 (`pip install "neurobrix[pytorch]"`). A PyTorch-branch mode asked for where torch is not installed is refused here,
 by name, before anything is loaded — never a ModuleNotFoundError from deep inside a run, never a silent switch to the
-other branch (ZERO FALLBACK). With no mode asked for, the run takes the PyTorch engine where torch is installed and the
-Triton engine where it is not (`pip install neurobrix`, the light install), and says which on its launch line.
+other branch (ZERO FALLBACK). With no mode asked for, the run takes the Triton engine, whether torch is installed or not
+(the default engine, orders row 251), and says so on its launch line.
 
 Whether torch is installed is read from the import system's finder, which locates a package without importing it:
 the Triton branch asks the question and stays torch-free.
