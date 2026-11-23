@@ -71,6 +71,14 @@ from neurobrix.nbx.weight_presence import (
 )
 
 
+def listed_files(root) -> List[str]:
+    """Every file under an extracted container, as ZIP-style forward-slash paths. os.walk follows a linked directory
+    (a container whose components/ is a symlink into a shared store); Path.rglob does not, and the compiled load found
+    no weight file there."""
+    root = Path(root)
+    return [(Path(d) / n).relative_to(root).as_posix() for d, _, names in os.walk(root, followlinks=True) for n in names]
+
+
 class WeightLoader:
     """
     Loads model weights from .nbx container.
@@ -134,11 +142,7 @@ class WeightLoader:
             self._zip = None
             self._cache_path = self.nbx_path
             self.use_cache = True
-            self._file_list_cache = [
-                f.relative_to(self.nbx_path).as_posix()
-                for f in self.nbx_path.rglob("*")
-                if f.is_file()
-            ]
+            self._file_list_cache = listed_files(self.nbx_path)
             manifest_file = self.nbx_path / "manifest.json"
             if manifest_file.exists():
                 with open(manifest_file) as f:
@@ -171,11 +175,7 @@ class WeightLoader:
             if self.use_cache and self._cache_path:
                 # Get file list from cache directory
                 # Normalize to forward slashes (ZIP convention) for cross-platform matching
-                self._file_list_cache = [
-                    f.relative_to(self._cache_path).as_posix()
-                    for f in self._cache_path.rglob("*")
-                    if f.is_file()
-                ]
+                self._file_list_cache = listed_files(self._cache_path)
             else:
                 # Get file list from ZIP
                 if self._zip is None:
