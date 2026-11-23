@@ -12,7 +12,7 @@ import pytest
 
 from tests.unit.kernels.test_an_op_allocates_what_it_declares import (_device, _measure, _no_pool,  # noqa: F401
                                                                     _spec, _this_machine)
-from nbxtensor.ops._cost import Spec
+from nbxtensor.ops.operand import Spec
 
 pytestmark = pytest.mark.skipif(not _device(), reason="the allocator's peak needs a device")
 

@@ -44,10 +44,9 @@ def tl_dot_gemms(monkeypatch):
     `matrix_unit` (Volta's m8n8k4, its fp32 split included) the unit takes those launches with no key
     (`launch_keys.matrix_unit_takes`), so such a cell bound to the V100 profile went red the day the unit
     was declared — the key it asserts is still the one an arch without the unit launches. The ONE decision
-    point, `_configs.matrix_unit`, answers `{}` (what it answers for a profile that declares none); the
+    point, `nbxtensor.ops.matrix_units.matrix_unit`, answers `{}` (what it answers for a profile that declares none); the
     unit's own placement is asserted by the cells that leave it declared."""
-    from nbxtensor.ops import _configs
-    monkeypatch.setattr(_configs, "matrix_unit", lambda: {})
+    monkeypatch.setattr("nbxtensor.ops.matrix_units.matrix_unit", lambda: {})
 
 
 def installed_container(name: str) -> Path:

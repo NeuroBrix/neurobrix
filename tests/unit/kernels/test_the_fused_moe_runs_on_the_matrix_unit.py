@@ -19,7 +19,7 @@ def _card_with_unit():
             return False
         from neurobrix.kernels.autotune_certify import _bind_hardware_profile
         _bind_hardware_profile()
-        from nbxtensor.ops._configs import matrix_unit
+        from nbxtensor.ops.matrix_units import matrix_unit
         return bool((matrix_unit() or {}).get("mm"))
     except Exception:
         return False
@@ -38,7 +38,7 @@ def test_parity_with_the_oracle(T, top_k, E, K, N, mul, divide, tile):
     import triton
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import NBXDtype
-    from nbxtensor.ops._configs import matrix_unit
+    from nbxtensor.ops.matrix_units import matrix_unit
     from nbxtensor.ops.matmul_m8n8k4 import mm_layouts
     from nbxtensor.ops.fused_moe_m8n8k4 import fused_moe_m8n8k4_kernel
     from nbxtensor.ops.moe_wrappers import moe_align_block_size
@@ -80,7 +80,7 @@ def test_the_layer_takes_the_unit_where_its_certificate_names_it(monkeypatch):
     Red if the route ignores the choice (the unit never launched) or launches at the wrong alignment (parity)."""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import moe_wrappers as MW
-    from nbxtensor.ops._configs import matrix_unit
+    from nbxtensor.ops.matrix_units import matrix_unit
     from neurobrix.triton.moe import execute_moe_fused
     T, H, F, E, top_k = 40, 256, 128, 8, 2
     rng = np.random.default_rng(3)

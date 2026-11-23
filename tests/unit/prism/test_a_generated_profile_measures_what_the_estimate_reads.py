@@ -128,6 +128,8 @@ def test_an_unsteady_reload_is_kept_at_its_low_draw_until_a_steady_one(hw, monke
     kept after an unsteady three (red: the probe owed again), the high or median draw priced (red), a steady measure
     not replacing it (red), a second unsteady measure moving it (red)."""
     from neurobrix.core.strategies import layer_streaming as LS
+    from neurobrix import branch_door
+    branch_door.choose("compiled")                      # this process runs the PyTorch branch, whose Prism is A
     _profile(hw, "default-abc", DEV)
     A.ensure_measured_facts("default-abc")
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")

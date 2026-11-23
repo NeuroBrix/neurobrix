@@ -58,7 +58,7 @@ def test_executor_hybrid_detection_sees_every_gpu():
     window = src[idx:idx + 700]
     code = "\n".join(l for l in window.splitlines()
                      if not l.lstrip().startswith("#"))
-    assert "_names_accelerator(dev)" in code, (
+    assert "names_accelerator(dev)" in code, (
         "hybrid detection no longer uses the vendorless predicate"
     )
     assert "('cuda', 'hip', 'xpu')" not in code, (

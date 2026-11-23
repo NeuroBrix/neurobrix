@@ -2202,16 +2202,11 @@ def _detect_apple_memory_mb() -> int:
     answer for what is then a host-only profile, and it is returned rather
     than a made-up fraction of it.
     """
+    from nbxtensor import device as _nbx_device
     try:
-        import Metal                                    # vendor layer: allowed here
-        device = Metal.MTLCreateSystemDefaultDevice()
-        if device is not None:
-            budget = int(device.recommendedMaxWorkingSetSize())
-            if budget > 0:
-                return budget // (1024 * 1024)
-    except Exception:
-        pass
-    return _detect_apple_host_memory_mb()
+        return _nbx_device.apple_gpu_limits()["working_set_bytes"] // (1024 * 1024)     # asked of the device, by the library
+    except _nbx_device.MetalUnavailableError:
+        return _detect_apple_host_memory_mb()
 
 
 def _detect_apple_max_allocation_mb() -> int:
@@ -2230,16 +2225,11 @@ def _detect_apple_max_allocation_mb() -> int:
     cell failed at weight loading; this function had swallowed its own failure. A device that cannot be asked is now a
     named refusal: a profile is never written without the fact (rule 1, ZERO FALLBACK).
     """
-    why = None
+    from nbxtensor import device as _nbx_device
     try:
-        import Metal                                    # vendor layer: allowed here
-        device = Metal.MTLCreateSystemDefaultDevice()
-        largest = int(device.maxBufferLength()) if device is not None else 0
-        if largest > 0:
-            return largest // (1024 * 1024)
-        why = "MTLCreateSystemDefaultDevice() returned no device" if device is None else f"maxBufferLength() = {largest}"
-    except Exception as exc:                            # said, never swallowed
-        why = f"{type(exc).__name__}: {exc}"
+        return _nbx_device.apple_gpu_limits()["max_buffer_bytes"] // (1024 * 1024)      # asked of the device, by the library
+    except _nbx_device.MetalUnavailableError as exc:                # said, never swallowed
+        why = str(exc)
     raise RuntimeError(
         f"ZERO FALLBACK: the Apple GPU's largest single allocation (MTLDevice.maxBufferLength) cannot be read ({why}). "
         f"Without it Prism would plan arenas the device refuses. On a Mac, `python -m nbxtensor install-metal` installs "

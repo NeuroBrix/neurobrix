@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 from nbxtensor.dtype.operands import matrix_unit_flash_representation as rep
+from nbxtensor.ops import matrix_units as _MU     # the profile's matrix unit, by its public name
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 _EPS32 = float(np.finfo(np.float32).eps)
@@ -61,12 +62,12 @@ def test_a_split_flash_row_without_a_power_of_two_block_k_is_refused(monkeypatch
     prof = _profile({"head_dim_le": 96, "block_m": 64, "block_n": 32, "warps_m": 4, "block_k": 24})
     monkeypatch.setattr(C, "active_vendor_profile", lambda: prof)
     with pytest.raises(ValueError, match="block_k 24"):
-        C.matrix_unit()
+        _MU.matrix_unit()
     del prof["matrix_unit"]["fp32_split"]["flash"][0]["block_k"]
     with pytest.raises(ValueError, match="names no block_k"):          # a missing field is refused, not a KeyError
-        C.matrix_unit()
+        _MU.matrix_unit()
     prof["matrix_unit"]["fp32_split"]["flash"][0]["block_k"] = 32
-    tile = C.matrix_unit_flash_tile(96, C.matrix_unit()["fp32_split"])
+    tile = C.matrix_unit_flash_tile(96, _MU.matrix_unit()["fp32_split"])
     assert tile == {"block_m": 64, "block_n": 32, "warps_m": 4, "block_k": 32}
 
 
@@ -84,19 +85,19 @@ def test_a_flash_row_over_the_profiles_shared_memory_never_loads(monkeypatch):
     prof = _profile({"head_dim_le": 256, "block_m": 64, "block_n": 32, "warps_m": 4, "block_k": 32})
     monkeypatch.setattr(C, "active_vendor_profile", lambda: prof)
     with pytest.raises(ValueError, match="stages 131072 bytes of shared memory, over memory.max_shared_memory_per_block 98304"):
-        C.matrix_unit()
+        _MU.matrix_unit()
     prof["matrix_unit"]["fp32_split"]["flash"][0]["block_n"] = 16                 # exactly the budget: loads
-    assert C.matrix_unit_flash_tile(256, C.matrix_unit()["fp32_split"])["block_n"] == 16
+    assert C.matrix_unit_flash_tile(256, _MU.matrix_unit()["fp32_split"])["block_n"] == 16
     prof["matrix_unit"]["flash"] = [{"head_dim_le": 256, "block_m": 128, "block_n": 64, "warps_m": 4}]   # native, 131072
     with pytest.raises(ValueError, match=r"matrix_unit\.flash row head_dim_le 256 128x64 stages 131072"):
-        C.matrix_unit()
+        _MU.matrix_unit()
     prof["matrix_unit"]["flash"] = [{"block_m": 64, "block_n": 32, "warps_m": 4}]                       # unpriceable
     with pytest.raises(ValueError, match="names no head_dim_le"):
-        C.matrix_unit()
+        _MU.matrix_unit()
     prof["matrix_unit"]["flash"] = [{"head_dim_le": 64, "block_m": 128, "block_n": 64, "warps_m": 4}]
     del prof["memory"]                      # a profile that did not say its budget: the rows are not priced here
     prof["matrix_unit"]["fp32_split"]["flash"][0]["block_n"] = 32
-    assert C.matrix_unit()["fp32_split"]["flash"][0]["block_n"] == 32
+    assert _MU.matrix_unit()["fp32_split"]["flash"][0]["block_n"] == 32
 
 
 def test_the_committed_volta_rows_all_load_under_their_own_budget():
@@ -324,7 +325,7 @@ def test_a_planned_profile_is_read_against_its_own_shared_memory(monkeypatch):
     planned = _profile(row, smem=98304)
     host = {**_profile(row, smem=need - 1), "conv": {"weight_layout": "KRSC"}}   # this host: too small, KRSC weights
     monkeypatch.setattr(C, "active_vendor_profile", lambda: host)
-    assert C.matrix_unit(vendor_profile=planned)["fp32_split"]["flash"] == [row]
+    assert _MU.matrix_unit(vendor_profile=planned)["fp32_split"]["flash"] == [row]
     with pytest.raises(ValueError, match=f"stages {need} bytes of shared memory, over "
                                          f"memory.max_shared_memory_per_block {need - 1}"):
-        C.matrix_unit()                                                     # the host's own read keeps its door
+        _MU.matrix_unit()                                                     # the host's own read keeps its door

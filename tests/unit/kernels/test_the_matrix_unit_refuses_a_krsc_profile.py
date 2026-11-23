@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from nbxtensor.ops import _configs
+from nbxtensor.ops import matrix_units as _matrix_units
 from neurobrix.core.config.loader import vendor_file  # the device whole: engine file + library half
 
 VOLTA = Path(__file__).resolve().parents[3] / "src/neurobrix/config/vendors/nvidia/volta.yml"
@@ -22,10 +23,10 @@ def _bound(monkeypatch, layout):
 
 def test_the_unit_with_kcrs_weights_is_served(monkeypatch):
     _bound(monkeypatch, "KCRS")
-    assert _configs.matrix_unit().get("mm")
+    assert _matrix_units.matrix_unit().get("mm")
 
 
 def test_the_unit_with_krsc_weights_is_refused_by_name(monkeypatch):
     _bound(monkeypatch, "KRSC")
     with pytest.raises(ValueError, match="conv.weight_layout 'KRSC'.*reads KCRS weights only"):
-        _configs.matrix_unit()
+        _matrix_units.matrix_unit()

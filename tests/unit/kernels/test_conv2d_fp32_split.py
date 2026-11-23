@@ -75,8 +75,7 @@ def _both(run, monkeypatch):
     split = run().numpy().astype(np.float64)
     assert calls, "the m8n8k4 route was not taken"
     flags = calls[0]
-    from nbxtensor.ops import _configs as C
-    monkeypatch.setattr(C, "matrix_unit", lambda: {})
+    monkeypatch.setattr("nbxtensor.ops.matrix_units.matrix_unit", lambda: {})
     for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):
         monkeypatch.setattr(_m, "_matrix_unit", lambda: {})
     calls.clear()

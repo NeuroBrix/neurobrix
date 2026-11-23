@@ -263,7 +263,7 @@ def _probe(tree, rack, jobs):
 
 # a point reads the vendor profile the way a launch key does (matrix_unit() -> active_vendor_profile())
 READS_PROFILE = ("def f(x):\n"
-                 "    import neurobrix; from nbxtensor.ops._configs import matrix_unit, active_vendor_profile\n"
+                 "    import neurobrix; from nbxtensor.ops.matrix_units import matrix_unit; from nbxtensor.ops._configs import active_vendor_profile\n"
                  "    return (x, active_vendor_profile().get('_profile'), bool(matrix_unit()))\n")
 
 

@@ -140,8 +140,8 @@ def test_the_triton_conv3d_is_priced_with_its_folds():
     from neurobrix.pytorch.prism import PrismSolver
     from neurobrix.core.config.loader import vendor_config_for_device
     from nbxtensor.ops import conv_wrappers as _cw
-    from nbxtensor.ops._configs import matrix_unit
-    from nbxtensor.ops._cost import Spec
+    from nbxtensor.ops.matrix_units import matrix_unit
+    from nbxtensor.ops.operand import Spec
     from types import SimpleNamespace
     T = {"input::x": _t([1, 4, 6, 8, 8], is_input=True, seam_alias_of="test"), "param::w": _t([4, 4, 3, 3, 3]),
          "c": _t([1, 4, 4, 6, 6])}

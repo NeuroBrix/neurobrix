@@ -16,8 +16,7 @@ def without_matrix_unit(monkeypatch):
     tl.dot kernels and their autotune keys. For the cells that prove the certifier, the sweep or the FMA routes —
     machinery a GEMM on the unit (no key, the profile's tile) never reaches."""
     from nbxtensor.ops import wrappers as W
-    from nbxtensor.ops import _configs as C
-    monkeypatch.setattr(C, "matrix_unit", lambda: {})
+    monkeypatch.setattr("nbxtensor.ops.matrix_units.matrix_unit", lambda: {})
     import importlib
     for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):  # the core and its families (M2 split) each bind it
         monkeypatch.setattr(_m, "_matrix_unit", lambda: {})

@@ -73,8 +73,7 @@ def _both(run, monkeypatch):
     split = run().numpy().astype(np.float64)
     assert calls, "the m8n8k4 route was not taken"
     flags = (calls[0]["split_a"], calls[0]["split_b"])
-    from nbxtensor.ops import _configs as C
-    monkeypatch.setattr(C, "matrix_unit", lambda: {})
+    monkeypatch.setattr("nbxtensor.ops.matrix_units.matrix_unit", lambda: {})
     import importlib
     for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):  # the core and its families (M2 split) each bind it
         monkeypatch.setattr(_m, "_matrix_unit", lambda: {})
@@ -184,9 +183,9 @@ def test_a_bfloat16_operand_through_the_split_rounds_to_the_oracle(monkeypatch):
 def test_without_the_split_an_fp32_operand_keeps_the_exact_path(monkeypatch):
     """The representation is the profile's decision: with `fp32_split` withheld, an fp32 operand never reaches the
     unit (rounding it to fp16 would be wrong)."""
-    from nbxtensor.ops import _configs as C
-    mu = {k: v for k, v in C.matrix_unit().items() if k != "fp32_split"}
-    monkeypatch.setattr(C, "matrix_unit", lambda: mu)
+    from nbxtensor.ops import matrix_units as _matrix_units
+    mu = {k: v for k, v in _matrix_units.matrix_unit().items() if k != "fp32_split"}
+    monkeypatch.setattr("nbxtensor.ops.matrix_units.matrix_unit", lambda: mu)
     import importlib
     for _m in (W, *(importlib.import_module(f"nbxtensor.ops.{f}") for f in W._FAMILY_MODULES)):  # the core and its families (M2 split) each bind it
         monkeypatch.setattr(_m, "_matrix_unit", lambda: mu)

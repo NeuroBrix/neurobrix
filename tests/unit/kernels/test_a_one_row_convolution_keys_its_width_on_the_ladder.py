@@ -35,8 +35,8 @@ PROBE = textwrap.dedent("""
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
     import nbxtensor.ops.conv_wrappers as _nbx_conv_wrappers
-    from nbxtensor.ops import _configs as C
-    C.matrix_unit = W._matrix_unit = lambda: {}     # the tl.dot convolution's keys (the unit's have none)
+    from nbxtensor.ops import matrix_units as MU
+    MU.matrix_unit = W._matrix_unit = lambda: {}     # the tl.dot convolution's keys (the unit's have none)
     x1 = NBXTensor.empty((1, 64, 1, 4021), "float16", 0)
     w1 = NBXTensor.empty((64, 64, 1, 3), "float16", 0)
     _nbx_conv_wrappers.conv2d_wrapper(x1, w1, None, (1, 1), (0, 1), (1, 1), False, 0, 1)

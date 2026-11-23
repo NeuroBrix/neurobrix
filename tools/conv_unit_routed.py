@@ -36,11 +36,12 @@ EXIT_EXCEPTION = 3         # some row is EXCEPTION (1 is a wrong invocation)
 def bind_profile(yml):
     """Put the profile file in force for the library (its ladders and its matrix unit) and return the unit."""
     from nbxtensor.ops import _configs
+    from nbxtensor.ops import matrix_units as _matrix_units
     path = Path(yml)
     _configs._ACTIVE_PROFILE.clear()
     _configs._ACTIVE_PROFILE.update(yaml.safe_load(path.read_text()))
     _configs._ACTIVE_PROFILE.update({"_vendor": path.parent.name, "_profile": path.stem, "_exact": True})
-    return _configs.matrix_unit()
+    return _matrix_units.matrix_unit()
 
 
 def bucket_widths(key):

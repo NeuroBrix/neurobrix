@@ -1661,7 +1661,7 @@ class PrismSolver:
         # the executing device's budget, `tiling_sizes.sdpa_math_scores_budget`), priced at the dearest of them: on a
         # rack of 16 and 32 GB cards an attention between the two budgets runs the math route on the larger one
         from neurobrix.core.config.loader import vendor_config_for_device
-        from nbxtensor.ops._configs import matrix_unit
+        from nbxtensor.ops.matrix_units import matrix_unit
         routes = []
         for device in profile.devices:
             memory = vendor_memory(device)
@@ -1685,7 +1685,7 @@ class PrismSolver:
             # `chunked_math_attention_cost`: the scores' product, its scale, a mask made dense, the softmax, the casts,
             # the output's product), less the output the walk already counts; the flash route writes no scores
             from nbxtensor.ops import attention_wrappers as _aw
-            from nbxtensor.ops._cost import Spec
+            from nbxtensor.ops.operand import Spec
             hk = int(Hk or h)
             q = Spec.contiguous((b, h, tq, D), dtype)
             k = Spec.contiguous((b, hk, tk, D), dtype)
@@ -1740,8 +1740,8 @@ class PrismSolver:
             return None
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
             from nbxtensor.ops import conv_wrappers as _cw
-            from nbxtensor.ops._cost import Spec
-            from nbxtensor.ops._configs import matrix_unit
+            from nbxtensor.ops.operand import Spec
+            from nbxtensor.ops.matrix_units import matrix_unit
             from neurobrix.core.config.loader import vendor_config_for_device
             units = []
             for device in profile.devices:
