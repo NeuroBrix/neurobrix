@@ -48,9 +48,11 @@ dependencies = [
     # name (core/runtime/engines.py). NO vendor model/tokenizer/codec/DSP
     # library is a runtime dependency (those moved to the `adapter` extra below).
     # The tensor library the Triton engine is built on: its own project in its own repository
-    # (github.com/NeuroBrix/nbxtensor), installed from its published release only, never from a path or a copy in this
-    # repository. Pinned exactly; the library is released first, then this pin moves to that release.
-    "nbxtensor==0.1.11",
+    # (github.com/NeuroBrix/nbxtensor), never from a path or a copy in this repository. Pinned exactly, by the library
+    # COMMIT between releases (supervisor 23/11 01:01: engine main never imports what its pinned library lacks; a version
+    # string does not move between commits) and by the published version in the tag's commit at a release
+    # (tools/library_pin.py reads both forms).
+    "nbxtensor @ git+https://github.com/NeuroBrix/nbxtensor.git@def527d8183f3ef46838b005927ca9038a506a32",
     # The grammar engine of constrained decoding (its own package, github.com/NeuroBrix/nbxgrammar): pinned exactly, and
     # only where a wheel of that release is published on PyPI (recorded and checked by tests/unit/packaging). Elsewhere pip installs nothing for it (no Rust build) and a
     # constrained request answers 501 constrained_decoding_not_installed, by name.
@@ -118,6 +120,11 @@ Changelog = "https://github.com/NeuroBrix/neurobrix/blob/main/CHANGELOG.md"
 
 [project.scripts]
 neurobrix = "neurobrix.cli:main"
+
+[tool.hatch.metadata]
+# the library pinned by commit between releases (the dependency above): hatch builds a direct reference only when told;
+# at a release the pin is the published version again and this line goes with it (docs/reference/RELEASING.md)
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neurobrix"]

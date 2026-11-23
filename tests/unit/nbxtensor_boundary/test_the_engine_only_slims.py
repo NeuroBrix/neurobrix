@@ -18,9 +18,7 @@ definition: rule 4 RED; new plain lines: printed, green; a list regenerated agai
 from __future__ import annotations
 
 import functools
-import importlib.metadata
 import importlib.util
-import re
 from pathlib import Path
 
 try:
@@ -90,7 +88,10 @@ def test_the_list_was_scanned_against_the_installed_pinned_release():
     lib = S.installed_library()
     assert not lib.is_relative_to(REPO), lib
     deps = tomllib.loads((REPO / "pyproject.toml").read_text())["project"]["dependencies"]
-    pin = next(re.fullmatch(r"nbxtensor==(\S+)", d.replace(" ", "")).group(1) for d in deps if re.match(r"nbxtensor\b", d))
-    assert S.library_version(lib) == importlib.metadata.version("nbxtensor") == pin == _list()[0].get("nbxtensor"), (
-        f"the scan read nbxtensor {S.library_version(lib)} at {lib}, pyproject pins {pin}, the list was scanned "
-        f"against {_list()[0].get('nbxtensor')}: install the pinned release, then run --write-list")
+    lp = importlib.util.module_from_spec(importlib.util.spec_from_file_location("library_pin", REPO / "tools" / "library_pin.py"))
+    lp.__spec__.loader.exec_module(lp)
+    pin = lp.pin_of(deps)
+    pinned = pin.commit or pin.release
+    assert lp.installed_matches(pin) and S.library_stamp(lib) == pinned == _list()[0].get("nbxtensor"), (
+        f"the scan read nbxtensor {S.library_stamp(lib)} at {lib}, pyproject pins {pinned}, the list was scanned "
+        f"against {_list()[0].get('nbxtensor')}: install the pinned library, then run --write-list")

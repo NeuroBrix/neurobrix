@@ -21,16 +21,30 @@ except ModuleNotFoundError:          # python 3.10
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def _library_pin():
+    """tools/library_pin.py, the one reading of the engine's nbxtensor pin (loaded by path: tools is no package)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("library_pin", ROOT / "tools" / "library_pin.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_every_dependency_is_named_by_version_never_by_path():
     for project in (ROOT / "pyproject.toml",):     # the library's packaging is its own repository's
         meta = tomllib.loads(project.read_text())
         deps = list(meta["project"].get("dependencies", []))
         for extra in (meta["project"].get("optional-dependencies") or {}).values():
             deps += list(extra)
-        direct = [d for d in deps if re.search(r"\s@\s|file:|://", d)]
+        # the ONE exception between releases: the library pinned by its commit (supervisor 23/11 01:01), read by
+        # `library_pin.pin_of`; at a release it is the published version and hatch allows no direct reference
+        pin = _library_pin().pin_of(meta["project"].get("dependencies", []))
+        direct = [d for d in deps if re.search(r"\s@\s|file:|://", d) and not re.match(r"nbxtensor\b", d.strip())]
         assert not direct, f"{project.relative_to(ROOT)} names a dependency by path or URL: {direct}"
         hatch = ((meta.get("tool") or {}).get("hatch") or {}).get("metadata") or {}
-        assert not hatch.get("allow-direct-references"), f"{project.relative_to(ROOT)} allows direct references"
+        assert bool(hatch.get("allow-direct-references")) == (pin.commit is not None), (
+            f"{project.relative_to(ROOT)}: direct references allowed {hatch.get('allow-direct-references')!r} under "
+            f"the pin {pin}: allowed only while the library is pinned by commit")
 
 
 def test_the_packages_ship_no_empty_file():
@@ -44,19 +58,22 @@ def test_the_engine_depends_on_one_exact_release_of_the_library():
     # 0.0.3 published, the engine still asked for nbxtensor==0.0.1 — which names CUDA on an AMD or Intel machine (the
     # supervisor 2026-11-06 22:10). The library lives in its own repository and is released first: the engine names ONE
     # release of it, exactly, and moves that pin when the library publishes the next one (docs/reference/RELEASING.md)
-    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
-    pins = [d.replace(" ", "") for d in deps if re.match(r"nbxtensor\b", d)]
-    assert len(pins) == 1 and re.fullmatch(r"nbxtensor==\d+\.\d+\.\d+", pins[0]), pins
+    # Between releases that one is a COMMIT of the library's repository (supervisor 23/11 01:01), at a release its
+    # published version: `library_pin.pin_of` refuses anything else by name.
+    pin = _library_pin().pin_of(tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"])
+    assert (pin.commit is None) != (pin.release is None), pin
 
 
 def test_the_library_the_engine_imports_is_the_exact_release_it_pins():
     # A python holding another release of the library graded the engine against code it does not ship with (for example
     # a venv with 0.1.6 under a pin of 0.1.10): the version installed is the pinned one, read from pyproject, exactly
-    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
-    pinned = next(d.replace(" ", "").split("==", 1)[1] for d in deps if re.match(r"nbxtensor\b", d))
-    installed = importlib.metadata.version("nbxtensor")
-    assert installed == pinned, (f"this python imports nbxtensor {installed}, pyproject.toml pins {pinned}: install "
-                                 f"nbxtensor=={pinned}")
+    # exactly — by commit between releases: 0.1.11 named both the release and the commit main imported
+    # `one_device_env` from, which the release lacks (2026-11-23)
+    lp = _library_pin()
+    pin = lp.pin_of(tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"])
+    import nbxtensor
+    assert lp.installed_matches(pin), (f"this python imports nbxtensor {nbxtensor.__version__} at commit "
+                                    f"{lp.installed_commit()}, pyproject.toml pins {pin.commit or pin.release}")
 
 
 def test_the_pytorch_extra_asks_for_the_first_torch_with_every_api_the_compiled_engine_calls():

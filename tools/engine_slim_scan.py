@@ -109,6 +109,15 @@ def library_version(library: Path = LIBRARY) -> str:
                       f"scanned against")
 
 
+def library_stamp(library: Path = LIBRARY) -> str:
+    """What the list records it was scanned against, in the form the engine pins it (tools/library_pin.py): the
+    library's commit when the imported one states it (a checkout, a git install), else its released version."""
+    spec = importlib.util.spec_from_file_location("library_pin", Path(__file__).with_name("library_pin.py"))
+    pin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pin)
+    return (pin.installed_commit() if library == LIBRARY else None) or library_version(library)
+
+
 def read_list(path: Path = LIST) -> Tuple[Dict[str, str], Dict[Tuple[str, str, str], str]]:
     """({header name: value}, {(kind, path, symbol): why it stays}) of the engine's list."""
     head, rows = {}, {}
@@ -136,7 +145,7 @@ def write_list(repo: Path = REPO, library: Path = LIBRARY, path: Path = LIST) ->
            "# A new finding is written into the engine: delete it, or move it into nbxtensor. Rule (ruling 17/11 16:11):",
            "# the findings count, and the scatter count of scatter_list.tsv, only go down; engine_lines is a measure:",
            "# the test prints the current count against it and never fails on it.",
-           f"# nbxtensor: {library_version(library)}", f"# engine_lines: {lines}", f"# findings: {len(found)}",
+           f"# nbxtensor: {library_stamp(library)}", f"# engine_lines: {lines}", f"# findings: {len(found)}",
            "kind\tpath\tsymbol\twhy it stays"]
     out += ["\t".join((k, p, s, why.get((k, p, s), ""))) for k, p, s in found]
     path.write_text("\n".join(out) + "\n")
