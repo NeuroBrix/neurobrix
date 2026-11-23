@@ -83,8 +83,7 @@ class RuntimeExecutor:
         from neurobrix.core.workspace import adopt_load_ceiling
         adopt_load_ceiling(self.plan)          # the loads read at the ceiling of the plan this executor runs
         self.mode = mode
-        if _branch_door.choose(mode) == "pytorch":      # an executor runs one branch: its process's Prism is that branch's
-            _branch_door.module("torch_version").require_validated_torch()     # the PyTorch branch runs one torch
+        _branch_door.choose(mode)               # an executor runs one branch: its process's Prism is that branch's
         self.executors: Dict[str, Any] = {}
         self.modules: Dict[str, Any] = {}
         self.variable_resolver: Optional[VariableResolver] = None

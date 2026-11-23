@@ -47,7 +47,15 @@ def choose(mode: str) -> str:
     if _CHOSEN[0] is not None and _CHOSEN[0] != side:
         raise RuntimeError(f"BRANCH ALREADY CHOSEN: this process runs the {_CHOSEN[0]} branch; mode {mode!r} asks for the {side} "
                                   f"branch: one process runs one branch (start another process for it)")
-    _CHOSEN[0] = side
+    first, _CHOSEN[0] = _CHOSEN[0] is None, side
+    if first and side == "pytorch":
+        # the PyTorch branch runs the torch it is validated with: refused at the CHOICE, before any Prism solve, probe
+        # or weight load of a first launch (qa 1301-1); the Triton branch never imports torch and never reaches it
+        try:
+            module("torch_version").require_validated_torch()
+        except BaseException:
+            _CHOSEN[0] = None          # a refused choice chooses nothing
+            raise
     return side
 
 

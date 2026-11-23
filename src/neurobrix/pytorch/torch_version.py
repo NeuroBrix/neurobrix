@@ -7,8 +7,6 @@ two cannot drift. The Triton branch never imports torch and never reaches this f
 """
 from __future__ import annotations
 
-from typing import Any
-
 #: the release (no local label) of the torch the PyTorch branch is validated with
 VALIDATED_TORCH = "2.14.0"
 
@@ -18,10 +16,10 @@ def release_of(version: str) -> str:
     return str(version).split("+", 1)[0]
 
 
-def require_validated_torch(torch: Any = None) -> None:
-    """Refuse, by name, a torch whose release is not VALIDATED_TORCH; nothing is skipped or guessed instead."""
-    if torch is None:
-        import torch
+def require_validated_torch() -> None:
+    """Refuse, by name, an installed torch whose release is not VALIDATED_TORCH; nothing is skipped or guessed instead.
+    Asked by the branch door when a process chooses the PyTorch branch (branch_door.choose), before anything runs."""
+    import torch
     have = release_of(torch.__version__)
     if have != VALIDATED_TORCH:
         raise RuntimeError(
