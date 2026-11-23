@@ -35,7 +35,7 @@ from .base import ComponentFlowHandler, register_flow
 from .table_gather import gather_rows
 
 # The rule and its history live in core.runtime_values.
-from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.runtime_values import max_tokens_of
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 import logging
 _log = logging.getLogger(__name__)
@@ -201,7 +201,7 @@ class TTSLLMEngine(ComponentFlowHandler):
         # ⇒ deterministic greedy (the cross-mode-reconciling floor; stochastic
         # temp 0.8 is intelligible-but-not-token-identical across engines).
         _ov = self.ctx.variable_resolver.resolved
-        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
+        max_tokens = decode_bound(max_tokens_of(_ov, defaults))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.8))
         eos_token_id = defaults.get("eos_token_id")
         bos_token_id = defaults.get("bos_token_id")

@@ -22,7 +22,7 @@ from neurobrix.triton.session import TritonLMSession
 from neurobrix.core.state.kv_session import session_turn   # a serving session's turn (pure Python)
 
 # The rule and its history live in core.runtime_values.
-from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.runtime_values import max_tokens_of
 # the LM facts, the session's LM and the image-AR guidance weight: one reader for the plan and
 # both engines' sessions (core/runtime/lm_facts.py)
 from neurobrix.core.runtime.lm_facts import (  # noqa: F401  (re-exported for the census)
@@ -37,8 +37,9 @@ _log = logging.getLogger(__name__)
 
 def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
     """Build generator config from defaults.json — pure Python."""
+    # The request's token budget first, the container's only when the request carries none (core.runtime_values).
     config = {
-        "max_tokens": require_max_tokens(defaults),
+        "max_tokens": max_tokens_of(getattr(resolver, 'resolved', {}), defaults),
         "eos_token_id": defaults.get("eos_token_id"),
         "pad_token_id": defaults.get("pad_token_id"),
         "_class_name": "TritonGenerator",
@@ -47,12 +48,6 @@ def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
     # the repetition penalty included, which this table used to leave at the container's whatever the request said.
     from neurobrix.core.module.sampling_contract import resolve_sampling
     config.update(resolve_sampling(resolver, defaults, "autoregressive_text (triton)"))
-    # The request's token budget over the container's (explicit `is not None`: a falsy value is a value).
-    resolved = getattr(resolver, 'resolved', {}) or {}
-    for key in ("global.max_tokens", "max_tokens"):
-        if resolved.get(key) is not None:
-            config["max_tokens"] = resolved[key]
-            break
     return config
 
 
@@ -664,12 +659,7 @@ class TritonAutoregressiveHandler:
             # (R30 — the compiled generator honors global.max_tokens):
             # a CLI --max-tokens larger than defaults must size the
             # cache too, not just the loop.
-            _resolved = getattr(self.ctx.variable_resolver, "resolved", {})
-            _mt = _resolved.get("global.max_tokens")
-            if _mt is None:
-                _mt = _resolved.get("max_tokens")
-            if _mt is None:
-                _mt = require_max_tokens(self.ctx.pkg.defaults)
+            _mt = max_tokens_of(getattr(self.ctx.variable_resolver, "resolved", {}), self.ctx.pkg.defaults)
             _decode_budget = decode_bound(int(_mt))
             kv_params = session_kv_params(getattr(self.ctx.plan, 'kv_cache_plan', None),
                                           _window, _decode_budget)

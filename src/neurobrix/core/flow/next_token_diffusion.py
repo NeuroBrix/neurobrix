@@ -50,7 +50,7 @@ from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 
 # The rule and its history live in core.runtime_values.
-from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.runtime_values import max_tokens_of
 import logging
 from neurobrix.core.flow.audio_utils import refuses_a_cloned_voice_without_its_clip
 _log = logging.getLogger(__name__)
@@ -134,7 +134,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
 
         # ── Generation / diffusion params (data-driven) ──
         _ov = self.ctx.variable_resolver.resolved
-        max_steps = int(_ov.get("global.max_tokens", require_max_tokens(defaults)))
+        max_steps = int(max_tokens_of(_ov, defaults))
         ddpm_steps = int(_require_default(defaults, "ddpm_num_inference_steps"))
         # CFG scale cascade: CLI `--cfg` (global.guidance_scale) >
         # defaults.json cfg_scale (required — ZERO FALLBACK). cfg_scale=1.0

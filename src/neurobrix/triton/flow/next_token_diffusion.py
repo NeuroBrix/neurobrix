@@ -36,7 +36,7 @@ from neurobrix.triton.scheduler.dpm_solver_pp import TritonDPMSolverPPScheduler
 from neurobrix.triton.cfg.engine import TritonCFGEngine
 
 # The rule and its history live in core.runtime_values.
-from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.runtime_values import max_tokens_of
 from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
@@ -151,7 +151,7 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
 
         # ── generation / diffusion params (data-driven) ──
         _ov = self.ctx.variable_resolver.resolved
-        max_steps = int(_ov.get("global.max_tokens", require_max_tokens(defaults)))
+        max_steps = int(max_tokens_of(_ov, defaults))
         ddpm_steps = int(_require_default(defaults, "ddpm_num_inference_steps"))
         _cfg_override = _ov.get("global.guidance_scale")
         cfg_scale = (float(_cfg_override) if _cfg_override is not None

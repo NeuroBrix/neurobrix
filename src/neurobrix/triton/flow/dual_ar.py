@@ -18,7 +18,7 @@ from nbxtensor.memory.device_transfer import parse_device_idx
 from nbxtensor.random.seeded_draw import draw_from_probabilities as _sample_token_np   # a census shadow replaces it
 
 # The rule and its history live in core.runtime_values.
-from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.runtime_values import max_tokens_of
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 from neurobrix.core.flow.shared_steps import _is_tensor, float32_host   # dual_ar and tts_llm, the same
 import logging
@@ -72,7 +72,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         # defaults, mirroring the compiled dual_ar flow (R30) — --temperature 0 ⇒
         # greedy. Without this the triton flow silently sampled at the default 0.7.
         _ov = self.ctx.variable_resolver.resolved
-        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
+        max_tokens = decode_bound(max_tokens_of(_ov, defaults))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
         top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
         # Deterministic shared-seed sampler RNG (R27/R28). Same seed + identical

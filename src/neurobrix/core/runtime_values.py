@@ -77,9 +77,20 @@ def resolve(name: str,
           "value for it.")
 
 
+def max_tokens_of(request, defaults):
+    """A generation's bound: the request's `global.max_tokens` FIRST, the container's `max_tokens` only when the
+    request carries none, else refused by name (`require_max_tokens`). The one order of every flow of both branches.
+
+    The container is asked lazily: `request.get("global.max_tokens", require_max_tokens(defaults))` evaluated the
+    default before the lookup, so a container without max_tokens was refused even when the request carried the
+    bound — the Triton serve of such a container was refused at its warm-up, which passes `global.max_tokens` 1.
+    """
+    asked = (request or {}).get("global.max_tokens")
+    return asked if asked is not None else require_max_tokens(defaults)
+
+
 def require_max_tokens(defaults):
-    """`max_tokens` from the container — never a literal (a request's own bound is read by the caller first:
-    `_ov.get("global.max_tokens", require_max_tokens(defaults))`).
+    """`max_tokens` from the container — never a literal (a request's own bound is read first: `max_tokens_of`).
 
     `defaults.get("max_tokens", 512)` stood at five sites and `..., 2048)` at
     four others: two literals disagreeing with each other inside one engine. A

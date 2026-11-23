@@ -177,7 +177,7 @@ def run_prompt_tokens(root: Path, prompt: str, defaults: Dict[str, Any], asked: 
     gen = str(generation_type(root) or "")
     seq_len = prompt_tokens(root, prompt, defaults) if gen.startswith("autoregressive") else None
     if gen == "autoregressive_text" and (window := (defaults.get("lm_config") or {}).get("max_position_embeddings")):
-        from neurobrix.core.runtime_values import require_max_tokens
-        refuse_past_reach("this prompt needs", seq_len, int(asked or require_max_tokens(defaults)), "the model",
-                          int(window), "its context window; shorten the prompt or lower --max-tokens")
+        from neurobrix.core.runtime_values import max_tokens_of
+        refuse_past_reach("this prompt needs", seq_len, int(max_tokens_of({"global.max_tokens": asked}, defaults)),
+                          "the model", int(window), "its context window; shorten the prompt or lower --max-tokens")
     return seq_len

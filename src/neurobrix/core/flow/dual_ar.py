@@ -19,7 +19,7 @@ from nbxtensor.random.seeded_draw import draw_from_probabilities   # the host dr
 from .base import ComponentFlowHandler, register_flow
 
 # The rule and its history live in core.runtime_values.
-from neurobrix.core.runtime_values import require_max_tokens
+from neurobrix.core.runtime_values import max_tokens_of
 import logging
 from neurobrix.core.flow.audio_utils import refuses_a_cloned_voice_without_its_clip
 _log = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class DualAREngine(ComponentFlowHandler):
         # defaults, mirroring the autoregressive flow — --temperature 0 ⇒ greedy.
         _ov = self.ctx.variable_resolver.resolved
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
-        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
+        max_tokens = decode_bound(max_tokens_of(_ov, defaults))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
         top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
 
