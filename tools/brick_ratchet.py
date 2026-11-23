@@ -21,6 +21,14 @@ percentile falls, never raised). EXISTING offenders are listed in `tools/brick_r
 none may be added, and one that no longer offends must leave the list (`--update` rewrites it, downward only).
 A `@...jit` kernel body is exempt from the length limit — one loop nest is one kernel — recognised by its decorator.
 
+TWINS (the owner's founding rules, RED_LINES.md line 19: the same mathematics once per branch is by design, not a
+duplicate). A file `<root>/triton/<brick>/<rest>` is the TWIN of `<root>/pytorch/<brick>/<rest>` when that file
+exists — by path alone, never by a list. A twin is held to its original's baseline entries (a function, a module, its
+tensor hits, its private imports and directions, with `neurobrix.triton.<brick>` read as `neurobrix.pytorch.<brick>`)
+until the baseline records the twin's own; a twin that grows past its original's entry is refused like any offender.
+The 95th percentile counts a twin function once (its original's), so doubling a brick moves no limit; `--stats`
+prints it both ways.
+
     python tools/brick_ratchet.py             # check: every refusal by name, exit 1 when there is one
     python tools/brick_ratchet.py --update    # rewrite the baseline; refused while anything got worse
     python tools/brick_ratchet.py --stats     # the percentiles the limits are drawn from
@@ -135,6 +143,21 @@ def _imports(tree: ast.AST, module: str, is_package: bool):
                 target = node.module or ""
             for alias in node.names:
                 yield target, alias.name
+
+
+def door_names(tree: ast.AST):
+    """(module, member) for every member a file takes through the branch door
+    (`branch_door.names("<brick>", "<sub>", "<member>", ...)`, string literals only), spelled on the PyTorch side: the
+    door names both sides, and a private member taken through it is a private import like any other."""
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "names"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id.endswith("branch_door")
+                and len(node.args) >= 3 and all(isinstance(a, ast.Constant) and isinstance(a.value, str)
+                                                 for a in node.args)):
+            brick, sub = node.args[0].value, node.args[1].value
+            module = f"neurobrix.pytorch.{brick}" + (f".{sub}" if sub else "")
+            for member in node.args[2:]:
+                yield module, member.value
 
 
 def _reaches(tree: ast.AST) -> int:
@@ -284,17 +307,53 @@ def tensor_hits(tree: ast.AST, rules: dict) -> list:
     return sorted(finder.hits)
 
 
+_TWIN = re.compile(r"^(?P<head>(?:.*/)?)triton/(?P<rest>[^/]+/.+)$")
+
+
+def original_of(rel: str, exists) -> str | None:
+    """The PyTorch-side original of a Triton-side twin, by path alone: `<head>triton/<brick>/<rest>` is the twin of
+    `<head>pytorch/<brick>/<rest>` when `exists(that path)`; None for any other file (red line 19)."""
+    m = _TWIN.match(rel)
+    if not m:
+        return None
+    orig = f"{m['head']}pytorch/{m['rest']}"
+    return orig if exists(orig) else None
+
+
+def _as_original(text: str, twins: dict) -> str:
+    """A finding of a twin written as its original's: the twin's path, and `neurobrix.triton.<brick>` of a doubled
+    brick, read as the PyTorch side's."""
+    for twin, orig in twins.items():
+        if text.startswith(twin):
+            text = orig + text[len(twin):]
+            break
+    for brick in {o.split("pytorch/", 1)[1].split("/", 1)[0] for o in twins.values()}:
+        text = text.replace(f"neurobrix.triton.{brick}", f"neurobrix.pytorch.{brick}")
+    return text
+
+
+def distinct_functions(st: dict) -> dict:
+    """`st["functions"]` with each twin function counted once: a twin's function whose original is measured is left
+    out (the percentile of a doubled brick is its original's)."""
+    twins = st.get("twins", {})
+    return {k: v for k, v in st["functions"].items()
+            if _as_original(k, twins) == k or _as_original(k, twins) not in st["functions"]}
+
+
 def measure(repo: Path = REPO, config: dict = None) -> dict:
-    """Everything the ratchet counts, per package: {package: {functions, private, direction, reach, modules, mute}}."""
+    """Everything the ratchet counts, per package: {package: {functions, private, direction, reach, modules, mute,
+    twins}}."""
     config = config or json.loads(CONFIG.read_text())
     state = {}
     for name, pkg in config["packages"].items():
         root, st = repo / pkg["root"], {"functions": {}, "private": [], "direction": [], "reach": 0, "modules": {},
-                                        "mute": [], "tensor_logic": {}}
+                                        "mute": [], "tensor_logic": {}, "twins": {}}
         rules = config.get("tensor_logic")
         rules = rules if rules and name in rules["packages"] else None
         for path in sorted(root.rglob("*.py")):
             source, rel = path.read_text(encoding="utf-8"), path.relative_to(repo).as_posix()
+            if (orig := original_of(rel, lambda r: (repo / r).is_file())) is not None:
+                st["twins"][rel] = orig
             tree = ast.parse(source)
             held = code_lines(source, tree)
             for key, length, deep, kernel in _functions(tree, held):
@@ -307,13 +366,19 @@ def measure(repo: Path = REPO, config: dict = None) -> dict:
                     st["direction"].append(f"{rel} -> {target}")
                 elif taken and _against(rel, f"{target}.{taken}", config["direction"]):
                     st["direction"].append(f"{rel} -> {target}.{taken}")
-            st["reach"] += _reaches(tree)
+            st["private"] += [f"{rel} <- {target}.{member}" for target, member in door_names(tree)
+                              if member.startswith("_") and not member.startswith("__")]
+            st.setdefault("reach_of", {})[rel] = _reaches(tree)
             hits = _unjustified(rel, tensor_hits(tree, rules), rules, st) if rules else []
             if hits:
                 st["tensor_logic"][rel] = hits
             st["modules"][rel] = len(held)
             if held and ast.get_docstring(tree) is None:
                 st["mute"].append(rel)
+        # a twin's reaches are its original's: only what it adds beyond them counts (red line 19)
+        reach_of = st.pop("reach_of", {})
+        st["reach"] = sum(n if rel not in st["twins"] else max(0, n - reach_of.get(st["twins"][rel], 0))
+                          for rel, n in reach_of.items())
         st["private"], st["direction"] = sorted(set(st["private"])), sorted(set(st["direction"]))
         if rules:                                    # an entry whose file is gone or holds none of its hits is stale
             seen = {(rel, what) for rel, what in st.get("justified_seen", [])}
@@ -330,7 +395,7 @@ def _unjustified(rel: str, hits: list, rules: dict, st: dict) -> list:
     list). A missing reason is refused at once; a count that no longer matches keeps the hits counted and is refused."""
     out = list(hits)
     for e in rules.get("justified", []):
-        if e.get("path") != rel:
+        if e.get("path") != rel and e.get("path") != st.get("twins", {}).get(rel):
             continue
         if not str(e.get("reason") or "").strip() or not isinstance(e.get("count"), int):
             raise ValueError(f"tools/brick_ratchet.json tensor_logic.justified: {e} needs a reason and a count")
@@ -352,23 +417,37 @@ def offenders(state: dict, config: dict) -> dict:
                 if (n > lim["max_code_lines"] and not kernel) or d > lim["max_depth"]}
         out[name] = {"functions": over, "private": st["private"], "direction": st["direction"], "reach": st["reach"],
                      "modules": {m: n for m, n in st["modules"].items() if n > config["max_module_code_lines"]},
-                     "mute": st["mute"], "tensor_logic": {m: len(h) for m, h in st["tensor_logic"].items()}}
+                     "mute": st["mute"], "tensor_logic": {m: len(h) for m, h in st["tensor_logic"].items()},
+                     "twins": dict(st.get("twins", {}))}
         if st.get("justified_mismatch"):            # a refusal of this run only, never a baseline figure
             out[name]["justified_mismatch"] = st["justified_mismatch"]
     return out
 
 
-def _grown(kind: str, now: dict, base: dict, unit: str):
+def _held(key: str, base: dict, twins: dict):
+    """The baseline key `key` is held by: its own, else, for a twin, its original's."""
+    if key in base:
+        return key
+    orig = _as_original(key, twins)
+    return orig if orig in base else key
+
+
+def _grown(kind: str, now: dict, base: dict, unit: str, twins: dict = None):
     for key, value in now.items():
+        key_base = _held(key, base, twins or {})
+        if key_base != key:
+            if any(a > b for a, b in zip(_seq(value), _seq(base[key_base]))):
+                yield f"{kind}: {key} grew past its original's entry ({key_base} {base[key_base]} -> {value} {unit})"
+            continue
         if key not in base:
             yield f"{kind}: {key} is new and over the limit ({value} {unit})"
         elif any(a > b for a, b in zip(_seq(value), _seq(base[key]))):
             yield f"{kind}: {key} grew ({base[key]} -> {value} {unit}): a listed offender only shrinks"
 
 
-def _tensor_grown(name: str, now: dict, base: dict):
+def _tensor_grown(name: str, now: dict, base: dict, twins: dict = None):
     for rel, n in now.items():
-        was = base.get(rel, 0)
+        was = base.get(_held(rel, base, twins or {}), 0)
         if n > was:
             yield (f"{name} tensor logic: {rel} holds {n} tensor-mechanism hits (baseline {was}"
                    f"{'' if was else ': a file that had none'}) — this code belongs in nbxtensor, never in the engine "
@@ -384,17 +463,19 @@ def check(found: dict, baseline: dict) -> list:
     worse, stale = [], []
     for name, now in found.items():
         base = baseline.get(name) or {"functions": {}, "private": [], "direction": [], "reach": 0, "modules": {}, "mute": []}
-        worse += _tensor_grown(name, now["tensor_logic"], base.get("tensor_logic", {}))
+        twins = now.get("twins", {})
+        worse += _tensor_grown(name, now["tensor_logic"], base.get("tensor_logic", {}), twins)
         worse += [f"{name} tensor logic: {m} — a JUSTIFIED entry must match its file exactly (remove it when its hits "
                   f"are gone)" for m in now.get("justified_mismatch", [])]
         stale += [f"{name} tensor logic: {rel} {n} -> {now['tensor_logic'].get(rel, 0)}"
                   for rel, n in base.get("tensor_logic", {}).items() if now["tensor_logic"].get(rel, 0) < n]
-        worse += _grown(f"{name} function", now["functions"], base["functions"], "code lines, depth")
-        worse += _grown(f"{name} module", now["modules"], base["modules"], "code lines")
+        worse += _grown(f"{name} function", now["functions"], base["functions"], "code lines, depth", twins)
+        worse += _grown(f"{name} module", now["modules"], base["modules"], "code lines", twins)
         for kind, why in (("private", "a private name taken from another module"),
                           ("direction", "an import against the declared direction"),
                           ("mute", "a module that states no responsibility (no docstring)")):
-            worse += [f"{name} {kind}: {x} — {why}" for x in now[kind] if x not in base[kind]]
+            worse += [f"{name} {kind}: {x} — {why}" for x in now[kind]
+                      if x not in base[kind] and _as_original(x, twins) not in base[kind]]
             stale += [f"{name} {kind}: {x}" for x in base[kind] if x not in now[kind]]
         if now["reach"] > base["reach"]:
             worse.append(f"{name} reach: {now['reach']} uses of x._name outside self / cls (baseline {base['reach']})")
@@ -412,13 +493,16 @@ def _percentile(values, p: float) -> int:
 
 
 def stats(state: dict) -> list:
+    """The percentiles the limits are drawn from, per package: each twin function counted once (the limits' own
+    reading), then every function counted (a doubled brick's twins included), so a record states both."""
     out = []
     for name, st in state.items():
-        lengths = [n for n, _, kernel in st["functions"].values() if not kernel]
-        depths = [d for _, d, _ in st["functions"].values()]
-        out.append(f"{name}: {len(st['functions'])} functions | code lines p95 {_percentile(lengths, .95)} "
-                   f"p99 {_percentile(lengths, .99)} max {max(lengths)} | depth p95 {_percentile(depths, .95)} "
-                   f"p99 {_percentile(depths, .99)} max {max(depths)} | code lines {sum(st['modules'].values())}")
+        for how, functions in (("twins once", distinct_functions(st)), ("every function", st["functions"])):
+            lengths = [n for n, _, kernel in functions.values() if not kernel]
+            depths = [d for _, d, _ in functions.values()]
+            out.append(f"{name} ({how}): {len(functions)} functions | code lines p95 {_percentile(lengths, .95)} "
+                       f"p99 {_percentile(lengths, .99)} max {max(lengths)} | depth p95 {_percentile(depths, .95)} "
+                       f"p99 {_percentile(depths, .99)} max {max(depths)} | code lines {sum(st['modules'].values())}")
     return out
 
 

@@ -55,6 +55,20 @@ LAYERS: dict[str, dict[str, str]] = {
 }
 
 ROOT = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "core"
+#: the vendorless layer: core/, and Prism, which left core/ on 23/11/2026 for its two branches (pytorch/prism and its
+#: Torch-free twin triton/prism) and stays vendorless on both
+ROOTS = (ROOT, ROOT.parent / "pytorch" / "prism", ROOT.parent / "triton" / "prism")
+
+
+def _as_original(key: str) -> str:
+    """A twin's site read as its original's (RED_LINES line 19, by path alone): `neurobrix/triton/<brick>/...` is the
+    twin of `neurobrix/pytorch/<brick>/...` when that file exists, and an adjudicated line holds for both."""
+    rel, sep, line = key.partition("::")
+    if rel.startswith("neurobrix/triton/"):
+        orig = "neurobrix/pytorch/" + rel[len("neurobrix/triton/"):]
+        if (ROOT.parents[1] / orig).exists():
+            return orig + sep + line
+    return key
 
 
 def excluded_vendors(layer: str, named_prefixes: set[str]) -> list[str]:
@@ -174,7 +188,7 @@ def _findings_in(path: Path) -> list[tuple[int, str, set[str]]]:
 
 def _live_sites() -> dict[str, tuple[Path, int, set[str]]]:
     sites: dict[str, tuple[Path, int, set[str]]] = {}
-    for path in sorted(ROOT.rglob("*.py")):
+    for path in sorted(p for root in ROOTS for p in root.rglob("*.py")):
         rel = path.relative_to(ROOT.parents[1]).as_posix()
         lines = path.read_text().splitlines()
         for lineno, _shape, named in _findings_in(path):
@@ -186,7 +200,7 @@ def test_vendorless_layer_does_not_branch_on_one_vendor():
     assert ROOT.is_dir(), f"vendorless layer not found at {ROOT}"
     findings = []
     for key, (_path, lineno, named) in sorted(_live_sites().items()):
-        if key in ALLOWED or key in KNOWN_OPEN:
+        if _as_original(key) in ALLOWED or _as_original(key) in KNOWN_OPEN:
             continue
         # A guard naming every accelerator excludes nobody under either
         # layer. That IS the vendorless form, so it is not a violation and

@@ -239,8 +239,9 @@ def _percentile_refusals(state, config, ceiling):
     out = []
     for name, st in state.items():
         lim = config["packages"][name]
-        for key, values in (("max_code_lines", [n for n, _, kernel in st["functions"].values() if not kernel]),
-                            ("max_depth", [d for _, d, _ in st["functions"].values()])):
+        functions = B.distinct_functions(st)        # a twin function counted once (red line 19)
+        for key, values in (("max_code_lines", [n for n, _, kernel in functions.values() if not kernel]),
+                            ("max_depth", [d for _, d, _ in functions.values()])):
             p95 = B._percentile(values, .95)
             if p95 > lim[key]:
                 out.append(f"{name} {key}: the measured 95th percentile {p95} is above the limit {lim[key]}")

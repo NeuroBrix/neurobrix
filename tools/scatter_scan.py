@@ -22,6 +22,15 @@ library, reviewed by hand; its header counts them. The guard test compares the t
 fails (the scatter grew), a definition listed but no longer found fails (it moved: delete its line), and the count
 never rises over the header (`tests/unit/nbxtensor_boundary/test_the_scatter_only_shrinks.py`). The scan reads the
 engine's source only.
+
+THE TWO BRANCHES (RED_LINES.md lines 16-22): a doubled brick lives at `pytorch/<brick>/` and `triton/<brick>/`. By
+PATH and NAME only, never from a list: a definition `f` of `triton/<brick>/<rel>.py` is the twin of `f` in
+`pytorch/<brick>/<rel>.py`. A twin is held to its original's entry: where the original is a row (or reviewed in
+NOT_SEMANTIC, or a whole module in MODULES_TO_LIBRARY), the twin is that row, never a second one; a twin's definition
+its original does not carry is its own row. `scan(twin_aware=False)` is the raw count (twins counted separately); the
+markdown header and `--counts` print both.
+
+    python3 tools/scatter_scan.py --counts      # the definitions both ways: raw and twin-aware
 """
 
 from __future__ import annotations
@@ -112,9 +121,23 @@ MODULES_TO_LIBRARY = {
 }
 
 
-def _files():
+#: the two branches, each a directory of the engine holding its side of every doubled brick
+SIDES = ("pytorch", "triton")
+
+
+def twin_original(rel: str, engine: Path = ENGINE):
+    """The path (relative to the engine) of the PyTorch file a `triton/<brick>/<rel>` file twins, when the brick is
+    doubled (a directory of that name under both branches) and that file exists; else None."""
+    parts = Path(rel).parts
+    if len(parts) < 3 or parts[0] != "triton" or not (engine / "pytorch" / parts[1]).is_dir():
+        return None
+    orig = Path("pytorch", *parts[1:])
+    return str(orig) if (engine / orig).is_file() else None
+
+
+def _files(engine: Path = ENGINE):
     for root in ROOTS:
-        base = ENGINE / root
+        base = engine / root
         if not base.exists():
             continue
         for p in sorted(base.rglob("*.py")):
@@ -123,11 +146,27 @@ def _files():
             yield p
 
 
-def scan():
+def scan(engine: Path = ENGINE, twin_aware: bool = True):
+    """The scattered definitions of the engine at `engine` (src/neurobrix by default): (path, symbol, where) rows.
+    `twin_aware` (the default) folds every twin into its original's row (module docstring); False is the raw scan."""
+    rows = _raw_scan(engine)
+    if not twin_aware:
+        return rows
+    keys = {(r[0], r[1]) for r in rows}
+    out = []
+    for r in rows:
+        orig = twin_original(r[0], engine)
+        if orig is not None and ((orig, r[1]) in keys or (orig, r[1]) in NOT_SEMANTIC or orig in MODULES_TO_LIBRARY):
+            continue                     # the twin is its original's row (or its original's review)
+        out.append(r)
+    return out
+
+
+def _raw_scan(engine: Path):
     rows = []
     ops_left = False
-    for p in _files():
-        rel = str(p.relative_to(ENGINE))
+    for p in _files(engine):
+        rel = str(p.relative_to(engine))
         if rel in PYTORCH_BRANCH_FILES or rel.startswith(PYTORCH_BRANCH_PREFIXES):
             continue
         if rel in MODULES_TO_LIBRARY:
@@ -185,13 +224,25 @@ def write_list(path: Path = LIST) -> int:
     return len(found)
 
 
+def counts_line(engine: Path = ENGINE) -> str:
+    """The scattered definitions counted both ways, as the list counts them (distinct path and symbol)."""
+    raw = {(r[0], r[1]) for r in scan(engine, twin_aware=False)}
+    aware = {(r[0], r[1]) for r in scan(engine)}
+    return (f"definitions: raw {len(raw)} (twins counted separately); twin-aware {len(aware)} "
+            f"(a twin is its original's row); the list's header: {read_list()[0].get('definitions')}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tsv", action="store_true")
     ap.add_argument("--write-list", action="store_true")
+    ap.add_argument("--counts", action="store_true", help="the definitions both ways: raw and twin-aware")
     a = ap.parse_args()
     if a.write_list:
         print(f"{LIST.name}: {write_list()} definitions")
+        return 0
+    if a.counts:
+        print(counts_line())
         return 0
     rows = scan()
     if a.tsv:
@@ -201,7 +252,7 @@ def main():
     mods = [r for r in rows if r[1] == "*"]
     defs = [r for r in rows if r[1] != "*"]
     print(f"# Tensor semantics outside nbxtensor: {len(mods)} modules to move, "
-          f"{len(defs)} definitions scattered in the engine\n")
+          f"{len(defs)} definitions scattered in the engine\n# {counts_line()}\n")
     print("| file | definition | where / destination |\n|---|---|---|")
     for r in rows:
         print(f"| {r[0]} | {r[1]} | {r[2]} |")

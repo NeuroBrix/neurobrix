@@ -1,11 +1,6 @@
 {
  "neurobrix": {
   "direction": [
-   "src/neurobrix/pytorch/prism/flow_bindings.py -> neurobrix.triton.flow.iterative_process",
-   "src/neurobrix/pytorch/prism/profiler.py -> nbxtensor.memory.pool",
-   "src/neurobrix/pytorch/prism/solver.py -> neurobrix.core.flow.base",
-   "src/neurobrix/pytorch/prism/solver.py -> neurobrix.core.flow.residency",
-   "src/neurobrix/pytorch/prism/solver.py -> neurobrix.core.runtime.graph.moe_fusion",
    "src/neurobrix/core/runtime/executor.py -> nbxtensor.memory.memory_pool",
    "src/neurobrix/core/runtime/graph/paged_kv_cache.py -> nbxtensor.memory.pages",
    "src/neurobrix/core/runtime/graph_executor.py -> nbxtensor.memory.device_transfer",
@@ -17,7 +12,17 @@
    "src/neurobrix/kernels/ops/fused_upsample_conv_torch.py -> torch.nn.functional",
    "src/neurobrix/kernels/ops/residual_chain_torch.py -> torch",
    "src/neurobrix/kernels/ops/residual_chain_torch.py -> torch.nn.functional",
-   "src/neurobrix/kernels/torch_interop.py -> torch"
+   "src/neurobrix/kernels/torch_interop.py -> torch",
+   "src/neurobrix/pytorch/prism/flow_bindings.py -> neurobrix.triton.flow.iterative_process",
+   "src/neurobrix/pytorch/prism/profiler.py -> nbxtensor.memory.pool",
+   "src/neurobrix/pytorch/prism/solver.py -> neurobrix.core.flow.base",
+   "src/neurobrix/pytorch/prism/solver.py -> neurobrix.core.flow.residency",
+   "src/neurobrix/pytorch/prism/solver.py -> neurobrix.core.runtime.graph.moe_fusion",
+   "src/neurobrix/triton/prism/flow_bindings.py -> neurobrix.triton.flow.iterative_process",
+   "src/neurobrix/triton/prism/profiler.py -> nbxtensor.memory.pool",
+   "src/neurobrix/triton/prism/solver.py -> neurobrix.core.flow.base",
+   "src/neurobrix/triton/prism/solver.py -> neurobrix.core.flow.residency",
+   "src/neurobrix/triton/prism/solver.py -> neurobrix.core.runtime.graph.moe_fusion"
   ],
   "functions": {
    "src/neurobrix/cli/__init__.py::_add_run_arguments": [
@@ -356,6 +361,282 @@
     63,
     1
    ],
+   "src/neurobrix/core/runtime/executor.py::RuntimeExecutor._create_flow_handler": [
+    240,
+    2
+   ],
+   "src/neurobrix/core/runtime/executor.py::RuntimeExecutor._init_strategy": [
+    72,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_ops.py::CompiledOpResolver._make_attention": [
+    76,
+    1
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_ops.py::CompiledOpResolver._make_view_reshape.view_or_reshape": [
+    25,
+    6
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence.__init__": [
+    69,
+    2
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_arg": [
+    77,
+    5
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_moe_fused_op": [
+    274,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_moe_fused_op.moe_fused_dispatch": [
+    168,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_op": [
+    71,
+    2
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._eliminate_detach_ops": [
+    72,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._eliminate_weight_transpose_ops": [
+    96,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._execute_const_fold": [
+    65,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._maybe_dump_tid_native": [
+    78,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._promote_seq_len_scalars_to_symbolic": [
+    218,
+    7
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._run_inner": [
+    280,
+    8
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._run_inner_multi_device": [
+    201,
+    8
+   ],
+   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence.compute_op_devices": [
+    66,
+    5
+   ],
+   "src/neurobrix/core/runtime/graph/kv_cache_wrapper.py::KVCacheAttentionWrapper.intercept_attention": [
+    104,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph/moe_fusion.py::_detect_gate_blends": [
+    86,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph/moe_fusion.py::_fuse_one_moe_layer": [
+    232,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph/moe_fusion.py::_fuse_softmax_after_topk_layer": [
+    169,
+    6
+   ],
+   "src/neurobrix/core/runtime/graph/moe_fusion.py::_fuse_softmax_first_dense_layer": [
+    251,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph/moe_fusion.py::_trace_expert_blocks": [
+    116,
+    6
+   ],
+   "src/neurobrix/core/runtime/graph/moe_fusion.py::detect_and_fuse_moe": [
+    79,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph/sequential_dispatcher.py::NativeATenDispatcher.dispatch": [
+    247,
+    7
+   ],
+   "src/neurobrix/core/runtime/graph/tensor_resolver.py::TensorResolver._resolve_arg_info": [
+    173,
+    9
+   ],
+   "src/neurobrix/core/runtime/graph/tensor_resolver.py::TensorResolver.get_input_dtype": [
+    18,
+    6
+   ],
+   "src/neurobrix/core/runtime/graph/tensor_resolver.py::TensorResolver.resolve_normalized": [
+    34,
+    5
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._compute_computable_buffers": [
+    75,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_all_ops": [
+    82,
+    5
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_compiled_graph": [
+    83,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_moe_fused_native": [
+    125,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_native_op": [
+    64,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._init_from_dag": [
+    115,
+    2
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._interpolate_learned_pos_embed": [
+    90,
+    3
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._mark_sdpa_k_layout": [
+    98,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._normalize_sdpa_scaling": [
+    68,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._patch_seq_len_in_ops": [
+    87,
+    6
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._prepare_execution": [
+    95,
+    7
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._run_triton": [
+    90,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._run_triton_sequential_ops": [
+    323,
+    7
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._store_op_outputs": [
+    103,
+    6
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor.bind_weight_keys": [
+    98,
+    4
+   ],
+   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor.set_moe_config": [
+    38,
+    5
+   ],
+   "src/neurobrix/core/runtime/loader.py::NBXRuntimeLoader.load": [
+    95,
+    4
+   ],
+   "src/neurobrix/core/runtime/resolution/input_resolver.py::InputResolver.resolve_component_inputs": [
+    38,
+    6
+   ],
+   "src/neurobrix/core/runtime/resolution/input_synthesizer.py::InputSynthesizer.apply_shape_transforms": [
+    73,
+    7
+   ],
+   "src/neurobrix/core/runtime/resolution/input_synthesizer.py::InputSynthesizer.synthesize_missing_inputs": [
+    169,
+    3
+   ],
+   "src/neurobrix/core/runtime/resolution/output_extractor.py::OutputExtractor.produces_encoder_hidden_states": [
+    19,
+    5
+   ],
+   "src/neurobrix/core/runtime/resolution/variable_resolver.py::VariableResolver._resolve_single": [
+    122,
+    4
+   ],
+   "src/neurobrix/core/runtime/shape_resolver.py::SymbolicShapeResolver.bind_from_inputs": [
+    77,
+    8
+   ],
+   "src/neurobrix/core/strategies/chunked_piece.py::ChunkedPiece._run_pass": [
+    53,
+    5
+   ],
+   "src/neurobrix/core/strategies/expert_store.py::build_expert_store_state": [
+    100,
+    3
+   ],
+   "src/neurobrix/core/strategies/layer_streaming.py::LayerStreamingStrategy._run_pieces": [
+    92,
+    3
+   ],
+   "src/neurobrix/core/strategies/zero3.py::Zero3Strategy._build_ratchet_state": [
+    108,
+    3
+   ],
+   "src/neurobrix/core/validators/nbx_validator.py::NBXValidator._validate_weights_index": [
+    85,
+    5
+   ],
+   "src/neurobrix/kernels/autotune_certify.py::_certify_loop": [
+    103,
+    5
+   ],
+   "src/neurobrix/kernels/autotune_certify.py::certify": [
+    63,
+    1
+   ],
+   "src/neurobrix/kernels/autotune_certify.py::certify_key": [
+    160,
+    4
+   ],
+   "src/neurobrix/kernels/autotune_certify.py::certify_key.certifying_run": [
+    88,
+    2
+   ],
+   "src/neurobrix/kernels/autotune_certify.py::price_key": [
+    100,
+    3
+   ],
+   "src/neurobrix/kernels/autotune_certify.py::rig_protocol_refusal": [
+    75,
+    2
+   ],
+   "src/neurobrix/kernels/metadata_ops.py::_reshape": [
+    160,
+    4
+   ],
+   "src/neurobrix/kernels/ops/fused_upsample_conv_torch.py::_fused_upsample_conv2d_torch": [
+    82,
+    2
+   ],
+   "src/neurobrix/kernels/ops/residual_chain_torch.py::band_streamed_chain_torch": [
+    79,
+    3
+   ],
+   "src/neurobrix/nbx/atomic_install.py::installing": [
+    69,
+    4
+   ],
+   "src/neurobrix/nbx/cache.py::NBXCache._extract_into": [
+    74,
+    2
+   ],
+   "src/neurobrix/nbx/container.py::NBXContainer.get_shard_sizes": [
+    25,
+    5
+   ],
+   "src/neurobrix/nbx/container.py::NBXContainer.load": [
+    58,
+    5
+   ],
    "src/neurobrix/pytorch/prism/autodetect.py::_amd_get_vram_mb": [
     26,
     6
@@ -564,282 +845,6 @@
     64,
     4
    ],
-   "src/neurobrix/core/runtime/executor.py::RuntimeExecutor._create_flow_handler": [
-    240,
-    2
-   ],
-   "src/neurobrix/core/runtime/executor.py::RuntimeExecutor._init_strategy": [
-    72,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_ops.py::CompiledOpResolver._make_attention": [
-    76,
-    1
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_ops.py::CompiledOpResolver._make_view_reshape.view_or_reshape": [
-    25,
-    6
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence.__init__": [
-    69,
-    2
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_arg": [
-    77,
-    5
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_moe_fused_op": [
-    274,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_moe_fused_op.moe_fused_dispatch": [
-    168,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._compile_op": [
-    71,
-    2
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._eliminate_detach_ops": [
-    72,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._eliminate_weight_transpose_ops": [
-    96,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._execute_const_fold": [
-    65,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._maybe_dump_tid_native": [
-    78,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._promote_seq_len_scalars_to_symbolic": [
-    218,
-    7
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._run_inner": [
-    280,
-    8
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence._run_inner_multi_device": [
-    201,
-    8
-   ],
-   "src/neurobrix/core/runtime/graph/compiled_sequence.py::CompiledSequence.compute_op_devices": [
-    66,
-    5
-   ],
-   "src/neurobrix/core/runtime/graph/kv_cache_wrapper.py::KVCacheAttentionWrapper.intercept_attention": [
-    104,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph/moe_fusion.py::_detect_gate_blends": [
-    86,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph/moe_fusion.py::_fuse_one_moe_layer": [
-    232,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph/moe_fusion.py::_fuse_softmax_after_topk_layer": [
-    169,
-    6
-   ],
-   "src/neurobrix/core/runtime/graph/moe_fusion.py::_fuse_softmax_first_dense_layer": [
-    251,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph/moe_fusion.py::_trace_expert_blocks": [
-    116,
-    6
-   ],
-   "src/neurobrix/core/runtime/graph/moe_fusion.py::detect_and_fuse_moe": [
-    79,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph/sequential_dispatcher.py::NativeATenDispatcher.dispatch": [
-    247,
-    7
-   ],
-   "src/neurobrix/core/runtime/graph/tensor_resolver.py::TensorResolver._resolve_arg_info": [
-    173,
-    9
-   ],
-   "src/neurobrix/core/runtime/graph/tensor_resolver.py::TensorResolver.get_input_dtype": [
-    18,
-    6
-   ],
-   "src/neurobrix/core/runtime/graph/tensor_resolver.py::TensorResolver.resolve_normalized": [
-    34,
-    5
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._compute_computable_buffers": [
-    75,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_all_ops": [
-    82,
-    5
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_compiled_graph": [
-    83,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_moe_fused_native": [
-    125,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._execute_native_op": [
-    64,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._init_from_dag": [
-    115,
-    2
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._interpolate_learned_pos_embed": [
-    90,
-    3
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._mark_sdpa_k_layout": [
-    98,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._normalize_sdpa_scaling": [
-    69,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._patch_seq_len_in_ops": [
-    87,
-    6
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._prepare_execution": [
-    95,
-    7
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._run_triton": [
-    90,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._run_triton_sequential_ops": [
-    323,
-    7
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor._store_op_outputs": [
-    103,
-    6
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor.bind_weight_keys": [
-    98,
-    4
-   ],
-   "src/neurobrix/core/runtime/graph_executor.py::GraphExecutor.set_moe_config": [
-    38,
-    5
-   ],
-   "src/neurobrix/core/runtime/loader.py::NBXRuntimeLoader.load": [
-    95,
-    4
-   ],
-   "src/neurobrix/core/runtime/resolution/input_resolver.py::InputResolver.resolve_component_inputs": [
-    38,
-    6
-   ],
-   "src/neurobrix/core/runtime/resolution/input_synthesizer.py::InputSynthesizer.apply_shape_transforms": [
-    73,
-    7
-   ],
-   "src/neurobrix/core/runtime/resolution/input_synthesizer.py::InputSynthesizer.synthesize_missing_inputs": [
-    169,
-    3
-   ],
-   "src/neurobrix/core/runtime/resolution/output_extractor.py::OutputExtractor.produces_encoder_hidden_states": [
-    19,
-    5
-   ],
-   "src/neurobrix/core/runtime/resolution/variable_resolver.py::VariableResolver._resolve_single": [
-    122,
-    4
-   ],
-   "src/neurobrix/core/runtime/shape_resolver.py::SymbolicShapeResolver.bind_from_inputs": [
-    77,
-    8
-   ],
-   "src/neurobrix/core/strategies/chunked_piece.py::ChunkedPiece._run_pass": [
-    53,
-    5
-   ],
-   "src/neurobrix/core/strategies/expert_store.py::build_expert_store_state": [
-    100,
-    3
-   ],
-   "src/neurobrix/core/strategies/layer_streaming.py::LayerStreamingStrategy._run_pieces": [
-    92,
-    3
-   ],
-   "src/neurobrix/core/strategies/zero3.py::Zero3Strategy._build_ratchet_state": [
-    108,
-    3
-   ],
-   "src/neurobrix/core/validators/nbx_validator.py::NBXValidator._validate_weights_index": [
-    85,
-    5
-   ],
-   "src/neurobrix/kernels/autotune_certify.py::_certify_loop": [
-    103,
-    5
-   ],
-   "src/neurobrix/kernels/autotune_certify.py::certify": [
-    63,
-    1
-   ],
-   "src/neurobrix/kernels/autotune_certify.py::certify_key": [
-    160,
-    4
-   ],
-   "src/neurobrix/kernels/autotune_certify.py::certify_key.certifying_run": [
-    88,
-    2
-   ],
-   "src/neurobrix/kernels/autotune_certify.py::price_key": [
-    100,
-    3
-   ],
-   "src/neurobrix/kernels/autotune_certify.py::rig_protocol_refusal": [
-    75,
-    2
-   ],
-   "src/neurobrix/kernels/metadata_ops.py::_reshape": [
-    160,
-    4
-   ],
-   "src/neurobrix/kernels/ops/fused_upsample_conv_torch.py::_fused_upsample_conv2d_torch": [
-    82,
-    2
-   ],
-   "src/neurobrix/kernels/ops/residual_chain_torch.py::band_streamed_chain_torch": [
-    79,
-    3
-   ],
-   "src/neurobrix/nbx/atomic_install.py::installing": [
-    69,
-    4
-   ],
-   "src/neurobrix/nbx/cache.py::NBXCache._extract_into": [
-    74,
-    2
-   ],
-   "src/neurobrix/nbx/container.py::NBXContainer.get_shard_sizes": [
-    25,
-    5
-   ],
-   "src/neurobrix/nbx/container.py::NBXContainer.load": [
-    58,
-    5
-   ],
    "src/neurobrix/serving/engine.py::InferenceEngine.generate": [
     72,
     1
@@ -976,6 +981,214 @@
     418,
     5
    ],
+   "src/neurobrix/triton/prism/autodetect.py::_amd_get_vram_mb": [
+    26,
+    6
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::_detect_cpu_linux": [
+    81,
+    5
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::_detect_cpu_windows": [
+    77,
+    5
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::_detect_vendor_windows": [
+    24,
+    6
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::_parse_smi_output": [
+    71,
+    4
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::_parse_system_profiler": [
+    74,
+    3
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::detect_hardware": [
+    70,
+    2
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::device_sharing": [
+    34,
+    5
+   ],
+   "src/neurobrix/triton/prism/autodetect.py::ensure_measured_facts": [
+    63,
+    3
+   ],
+   "src/neurobrix/triton/prism/chunked_region.py::TokenAxis._rule": [
+    66,
+    2
+   ],
+   "src/neurobrix/triton/prism/chunked_region.py::_poly_of": [
+    76,
+    0
+   ],
+   "src/neurobrix/triton/prism/chunked_region.py::plan_region": [
+    102,
+    3
+   ],
+   "src/neurobrix/triton/prism/expert_topology.py::read_expert_topology": [
+    66,
+    3
+   ],
+   "src/neurobrix/triton/prism/flow_bindings.py::FlowBindings.overrides": [
+    63,
+    4
+   ],
+   "src/neurobrix/triton/prism/host_footprint.py::host_footprint": [
+    123,
+    4
+   ],
+   "src/neurobrix/triton/prism/layer_partition.py::LayerPartitioner._chunk_regions": [
+    68,
+    5
+   ],
+   "src/neurobrix/triton/prism/layer_partition.py::LayerPartitioner._greedy_on": [
+    100,
+    3
+   ],
+   "src/neurobrix/triton/prism/layer_partition.py::LayerPartitioner._greedy_swapped": [
+    78,
+    4
+   ],
+   "src/neurobrix/triton/prism/layer_partition.py::LayerPartitioner._new_region": [
+    94,
+    2
+   ],
+   "src/neurobrix/triton/prism/layer_partition.py::build_segment_graph": [
+    204,
+    5
+   ],
+   "src/neurobrix/triton/prism/profiler.py::ActivationProfiler._resolve_shape": [
+    47,
+    5
+   ],
+   "src/neurobrix/triton/prism/profiler.py::ActivationProfiler.build_symbol_map": [
+    83,
+    3
+   ],
+   "src/neurobrix/triton/prism/profiler.py::ActivationProfiler.estimate_peak_memory": [
+    372,
+    5
+   ],
+   "src/neurobrix/triton/prism/runtime_widths.py::runtime_dtypes": [
+    79,
+    3
+   ],
+   "src/neurobrix/triton/prism/solver.py::ExecutionPlan.load": [
+    63,
+    1
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._build_plan": [
+    80,
+    2
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._compute_memory": [
+    241,
+    5
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._detect_op_level_tiling_pairs": [
+    151,
+    4
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._encode_component_tiling": [
+    108,
+    2
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._estimate_times": [
+    94,
+    6
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._fail_error": [
+    98,
+    3
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._identify_pixel_shuffle_chain_proxy_uids": [
+    64,
+    4
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._place_component": [
+    81,
+    2
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._scale_activations_to_request": [
+    97,
+    3
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._score_strategy": [
+    93,
+    4
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._solve_at_rung": [
+    598,
+    4
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._spatial_component_tiling": [
+    175,
+    4
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._spread_experts": [
+    63,
+    3
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._temporal_stream": [
+    117,
+    2
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._try_block_scatter": [
+    93,
+    5
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._try_layer_streaming_against": [
+    262,
+    3
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._try_layer_streaming_against._cut": [
+    133,
+    5
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._try_op_level_tiling": [
+    85,
+    2
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._try_pipeline_parallel": [
+    88,
+    5
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._try_weight_sharding": [
+    61,
+    5
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._vendor_tiling": [
+    68,
+    3
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver._zero3_resident_budgets": [
+    70,
+    4
+   ],
+   "src/neurobrix/triton/prism/solver.py::PrismSolver.solve": [
+    83,
+    3
+   ],
+   "src/neurobrix/triton/prism/solver.py::_consumed_weights": [
+    48,
+    5
+   ],
+   "src/neurobrix/triton/prism/solver.py::explain_plan": [
+    113,
+    4
+   ],
+   "src/neurobrix/triton/prism/solver.py::plan_record": [
+    74,
+    2
+   ],
+   "src/neurobrix/triton/prism/time_estimate.py::plan_seconds": [
+    64,
+    4
+   ],
    "src/neurobrix/triton/promotion.py::_spatial_promotion_pass": [
     410,
     5
@@ -1062,10 +1275,12 @@
    ]
   },
   "modules": {
-   "src/neurobrix/pytorch/prism/autodetect.py": 1853,
-   "src/neurobrix/pytorch/prism/solver.py": 6231,
    "src/neurobrix/core/runtime/graph/compiled_sequence.py": 2498,
    "src/neurobrix/core/runtime/graph_executor.py": 3391,
+   "src/neurobrix/pytorch/prism/autodetect.py": 1853,
+   "src/neurobrix/pytorch/prism/solver.py": 6231,
+   "src/neurobrix/triton/prism/autodetect.py": 1842,
+   "src/neurobrix/triton/prism/solver.py": 6229,
    "src/neurobrix/triton/sequence.py": 2457
   },
   "mute": [
@@ -1091,9 +1306,6 @@
    "src/neurobrix/core/flow/vlm.py <- neurobrix.core.flow.image_gen._require",
    "src/neurobrix/core/module/tokenizer/tekken_bpe.py <- neurobrix.core.module.tokenizer.tiktoken_bpe._byte_pair_merge",
    "src/neurobrix/core/module/tokenizer/tekken_bpe.py <- neurobrix.core.module.tokenizer.tiktoken_bpe._sanitize_surrogates",
-   "src/neurobrix/pytorch/prism/profiler.py <- neurobrix.pytorch.prism.runtime_widths._SDPA",
-   "src/neurobrix/pytorch/prism/solver.py <- neurobrix.pytorch.prism.profiler._is_attention",
-   "src/neurobrix/pytorch/prism/solver.py <- neurobrix.triton.weight_loader._BLOCK_RE",
    "src/neurobrix/core/runtime/executor.py <- neurobrix.core.module.temporal_stream_runner._empty_like_shape",
    "src/neurobrix/core/runtime/executor.py <- neurobrix.core.module.temporal_stream_runner._is_nbx",
    "src/neurobrix/core/runtime/graph/compiled_sequence.py <- neurobrix.triton.promotion._spatial_promotion_pass",
@@ -1109,6 +1321,9 @@
    "src/neurobrix/core/strategies/layer_streaming.py <- neurobrix.core.runtime.graph_executor._reset_cuda_peak",
    "src/neurobrix/core/strategies/triton/pipeline_parallel.py <- neurobrix.core.strategies.triton.block_scatter._nbx_device_str",
    "src/neurobrix/core/strategies/zero3.py <- neurobrix.core.runtime.graph_executor._reset_cuda_peak",
+   "src/neurobrix/pytorch/prism/profiler.py <- neurobrix.pytorch.prism.runtime_widths._SDPA",
+   "src/neurobrix/pytorch/prism/solver.py <- neurobrix.pytorch.prism.profiler._is_attention",
+   "src/neurobrix/pytorch/prism/solver.py <- neurobrix.triton.weight_loader._BLOCK_RE",
    "src/neurobrix/serving/engine.py <- neurobrix.core.runtime.prompt_length._flatten_tokenizer_output",
    "src/neurobrix/serving/session.py <- neurobrix.core.runtime.prompt_length._flatten_tokenizer_output",
    "src/neurobrix/triton/audio_frontend.py <- neurobrix.core.module.audio.mel_dsp._conformer_mel",
@@ -1133,12 +1348,54 @@
    "src/neurobrix/triton/flow/vlm.py <- neurobrix.triton.flow.image_gen._require",
    "src/neurobrix/triton/i2v_conditioning.py <- neurobrix.core.runtime.resolution.i2v_spec._vae_latent_stats",
    "src/neurobrix/triton/i2v_conditioning.py <- neurobrix.core.runtime.resolution.i2v_spec._vae_temporal_ratio",
+   "src/neurobrix/triton/prism/profiler.py <- neurobrix.triton.prism.runtime_widths._SDPA",
+   "src/neurobrix/triton/prism/solver.py <- neurobrix.triton.prism.profiler._is_attention",
+   "src/neurobrix/triton/prism/solver.py <- neurobrix.triton.weight_loader._BLOCK_RE",
    "src/neurobrix/triton/sequence.py <- neurobrix.core.device_utils._parse_device",
    "src/neurobrix/triton/sequential.py <- neurobrix.triton.sequence._BLOCK_RE",
    "src/neurobrix/triton/vace_control_conditioning.py <- neurobrix.core.runtime.resolution.vace_spec._vae_latent_stats",
    "src/neurobrix/triton/vace_control_conditioning.py <- neurobrix.triton.i2v_conditioning._to_channels_first"
   ],
   "reach": 511,
-  "tensor_logic": {}
+  "tensor_logic": {},
+  "twins": {
+   "src/neurobrix/triton/prism/__init__.py": "src/neurobrix/pytorch/prism/__init__.py",
+   "src/neurobrix/triton/prism/arena_probe.py": "src/neurobrix/pytorch/prism/arena_probe.py",
+   "src/neurobrix/triton/prism/attention_scratch.py": "src/neurobrix/pytorch/prism/attention_scratch.py",
+   "src/neurobrix/triton/prism/autodetect.py": "src/neurobrix/pytorch/prism/autodetect.py",
+   "src/neurobrix/triton/prism/chunked_region.py": "src/neurobrix/pytorch/prism/chunked_region.py",
+   "src/neurobrix/triton/prism/common/__init__.py": "src/neurobrix/pytorch/prism/common/__init__.py",
+   "src/neurobrix/triton/prism/common/allocation.py": "src/neurobrix/pytorch/prism/common/allocation.py",
+   "src/neurobrix/triton/prism/common/block_index.py": "src/neurobrix/pytorch/prism/common/block_index.py",
+   "src/neurobrix/triton/prism/common/dtype_resolver.py": "src/neurobrix/pytorch/prism/common/dtype_resolver.py",
+   "src/neurobrix/triton/prism/cpu_config.py": "src/neurobrix/pytorch/prism/cpu_config.py",
+   "src/neurobrix/triton/prism/expert_topology.py": "src/neurobrix/pytorch/prism/expert_topology.py",
+   "src/neurobrix/triton/prism/facts_probe.py": "src/neurobrix/pytorch/prism/facts_probe.py",
+   "src/neurobrix/triton/prism/flow_bindings.py": "src/neurobrix/pytorch/prism/flow_bindings.py",
+   "src/neurobrix/triton/prism/host_footprint.py": "src/neurobrix/pytorch/prism/host_footprint.py",
+   "src/neurobrix/triton/prism/intel_refusal.py": "src/neurobrix/pytorch/prism/intel_refusal.py",
+   "src/neurobrix/triton/prism/kept_launch_facts.py": "src/neurobrix/pytorch/prism/kept_launch_facts.py",
+   "src/neurobrix/triton/prism/launch_lines.py": "src/neurobrix/pytorch/prism/launch_lines.py",
+   "src/neurobrix/triton/prism/layer_partition.py": "src/neurobrix/pytorch/prism/layer_partition.py",
+   "src/neurobrix/triton/prism/load_ceiling.py": "src/neurobrix/pytorch/prism/load_ceiling.py",
+   "src/neurobrix/triton/prism/loader.py": "src/neurobrix/pytorch/prism/loader.py",
+   "src/neurobrix/triton/prism/loop_state.py": "src/neurobrix/pytorch/prism/loop_state.py",
+   "src/neurobrix/triton/prism/memory_budget.py": "src/neurobrix/pytorch/prism/memory_budget.py",
+   "src/neurobrix/triton/prism/memory_estimator.py": "src/neurobrix/pytorch/prism/memory_estimator.py",
+   "src/neurobrix/triton/prism/op_workspace.py": "src/neurobrix/pytorch/prism/op_workspace.py",
+   "src/neurobrix/triton/prism/other_card_models.py": "src/neurobrix/pytorch/prism/other_card_models.py",
+   "src/neurobrix/triton/prism/owed_facts.py": "src/neurobrix/pytorch/prism/owed_facts.py",
+   "src/neurobrix/triton/prism/plan_advice.py": "src/neurobrix/pytorch/prism/plan_advice.py",
+   "src/neurobrix/triton/prism/prefill_chunk.py": "src/neurobrix/pytorch/prism/prefill_chunk.py",
+   "src/neurobrix/triton/prism/profiler.py": "src/neurobrix/pytorch/prism/profiler.py",
+   "src/neurobrix/triton/prism/request_config.py": "src/neurobrix/pytorch/prism/request_config.py",
+   "src/neurobrix/triton/prism/runtime_widths.py": "src/neurobrix/pytorch/prism/runtime_widths.py",
+   "src/neurobrix/triton/prism/served_prefill.py": "src/neurobrix/pytorch/prism/served_prefill.py",
+   "src/neurobrix/triton/prism/solver.py": "src/neurobrix/pytorch/prism/solver.py",
+   "src/neurobrix/triton/prism/structure.py": "src/neurobrix/pytorch/prism/structure.py",
+   "src/neurobrix/triton/prism/temporal_stream.py": "src/neurobrix/pytorch/prism/temporal_stream.py",
+   "src/neurobrix/triton/prism/time_estimate.py": "src/neurobrix/pytorch/prism/time_estimate.py",
+   "src/neurobrix/triton/prism/work.py": "src/neurobrix/pytorch/prism/work.py"
+  }
  }
 }

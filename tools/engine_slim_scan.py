@@ -23,8 +23,22 @@ against, the engine's code-line count and the number of findings. The findings c
 to write a findings count above its header. The library read is the INSTALLED package
 (the release `pyproject.toml` pins), never a copy inside this repository.
 
+THE TWO BRANCHES (RED_LINES.md lines 16-22): a doubled brick lives at `src/neurobrix/pytorch/<brick>/` and
+`src/neurobrix/triton/<brick>/`. The scan reads that layout by PATH and NAME only, never from a maintained list:
+  * a TWIN: a definition in `triton/<brick>/<rel>.py` is the twin of the definition of the same qualified name in
+    `pytorch/<brick>/<rel>.py`. A twin is not a duplicate of its original, a reference from the other side of its
+    brick does not keep a definition alive, and a twin's finding that its original carries too (same kind, same symbol,
+    the side's name in an import read as `pytorch`) is the original's finding: it is folded into it, never counted
+    twice. A twin finding its original lacks is its own finding;
+  * the BRANCH DOOR: `branch_door.names("<brick>", "<sub>", "<m>", ...)` names the members `<m>` of
+    `neurobrix.pytorch.<brick>[.<sub>]` AND of `neurobrix.triton.<brick>[.<sub>]` (only string literals written at
+    the call; a package's member followed to the submodule its `__init__` imports it from): a member named through
+    the door is alive on both sides.
+`scan(..., twin_aware=False)` is the raw scan (twins counted separately, the door ignored): `--counts` prints both.
+
     python tools/engine_slim_scan.py            # the findings, one per line: kind, path, symbol, detail
     python tools/engine_slim_scan.py --lines    # the engine's code-line count
+    python tools/engine_slim_scan.py --counts   # findings and code lines both ways: raw, and twin/door-aware
     python tools/engine_slim_scan.py --write-list   # rewrite tools/engine_slim_list.tsv (refused if the findings rose)
 
 Standard library only (ast). A scan, not a proof: its rules are syntactic, so a finding is a question a person answers
@@ -180,6 +194,133 @@ def engine_lines(repo: Path = REPO) -> int:
     bricks = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bricks)
     return sum(len(bricks.code_lines(p.read_text(encoding="utf-8"))) for p in _py_files(repo / "src" / "neurobrix"))
+
+
+def engine_lines_twin_aware(repo: Path = REPO) -> Tuple[int, List[Tuple[str, int, int]]]:
+    """(the engine's code lines with every twin file counted only for what it holds past its original's lines, the
+    twin files that grew past their original: [(twin path, original's lines, twin's lines)]). The raw count is
+    `engine_lines`: the two differ by what the twins repeat of their originals."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("brick_ratchet", Path(__file__).with_name("brick_ratchet.py"))
+    bricks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bricks)
+    engine = repo / "src" / "neurobrix"
+    twins = Twins(engine)
+    count = lambda q: len(bricks.code_lines(q.read_text(encoding="utf-8")))
+    total, grew = 0, []
+    for p in _py_files(engine):
+        orig = twins.original_of(p)
+        if orig is None:
+            total += count(p)
+            continue
+        n, base = count(p), count(orig)
+        total += max(0, n - base)
+        if n > base:
+            grew.append((_rel(p, repo), base, n))
+    return total, grew
+
+
+# ─────────────────────────────── the two branches ───────────────────────────────
+
+#: the two branches of the engine, each a directory of src/neurobrix holding its side of every doubled brick
+SIDES = ("pytorch", "triton")
+
+
+class Twins:
+    """The engine's doubled bricks, read from its tree by path: a brick is doubled when a directory of the same name
+    stands under `pytorch/` and under `triton/`; a file `triton/<brick>/<rel>` is the twin of `pytorch/<brick>/<rel>`
+    when that file exists. No list: the layout is the relation."""
+
+    def __init__(self, engine: Path, enabled: bool = True):
+        self.engine = engine
+        here = [engine / s for s in SIDES]
+        self.bricks: Set[str] = set()      # disabled (the raw scan): no brick is doubled, no file is a twin
+        if enabled and all(d.is_dir() for d in here):
+            self.bricks = {d.name for d in here[0].iterdir() if d.is_dir() and d.name != "__pycache__"
+                           and (here[1] / d.name).is_dir()}
+
+    def side_of(self, p: Path) -> Optional[Tuple[str, str]]:
+        """(side, brick) of a file inside a doubled brick, else None."""
+        if not p.is_relative_to(self.engine):
+            return None
+        parts = p.relative_to(self.engine).parts
+        if len(parts) >= 3 and parts[0] in SIDES and parts[1] in self.bricks:
+            return parts[0], parts[1]
+        return None
+
+    def other_side(self, p: Path) -> Optional[Path]:
+        """The directory of the other side of `p`'s brick (None outside a doubled brick)."""
+        sb = self.side_of(p)
+        if sb is None:
+            return None
+        return self.engine / SIDES[1 - SIDES.index(sb[0])] / sb[1]
+
+    def original_of(self, p: Path) -> Optional[Path]:
+        """For a file of a brick's Triton side, the PyTorch file it twins (same brick, same relative path), when it
+        exists; else None."""
+        sb = self.side_of(p)
+        if sb is None or sb[0] != "triton":
+            return None
+        orig = self.engine / "pytorch" / p.relative_to(self.engine / "triton")
+        return orig if orig.is_file() else None
+
+    def twin_pair(self, p: Path, q: Path) -> bool:
+        """`p` and `q` are a twin and its original, in either order."""
+        return self.original_of(p) == q or self.original_of(q) == p
+
+
+#: the receiver text a door call is recognised by (`_branch_door.names`, `branch_door.module`,
+#: `importlib.import_module("neurobrix.branch_door").module`)
+DOOR = "branch_door"
+
+
+def door_references(tree: ast.AST) -> Set[Tuple[str, str]]:
+    """Every (module, member) a branch-door call names, on BOTH sides: `names(brick, sub, *members)` gives
+    (`neurobrix.<side>.<brick>[.<sub>]`, member) for each member; `module(brick, sub)` gives (that module, "").
+    Only string literals written at the call are read: a name computed at run time is not resolved."""
+    out: Set[Tuple[str, str]] = set()
+    for c in ast.walk(tree):
+        if not (isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr in ("names", "module")
+                and DOOR in ast.unparse(c.func.value)):
+            continue
+        args = list(c.args)
+        if any(isinstance(a, ast.Starred) for a in args):
+            continue
+        kw = {k.arg: k.value for k in c.keywords if k.arg}
+        brick = args[0] if args else kw.get("brick")
+        sub = args[1] if len(args) > 1 else kw.get("sub")
+        lit = lambda n: n.value if isinstance(n, ast.Constant) and isinstance(n.value, str) else None
+        if lit(brick) is None or (sub is not None and lit(sub) is None):
+            continue
+        members = [lit(a) for a in args[2:]] if c.func.attr == "names" else [""]
+        for side in SIDES:
+            mod = f"neurobrix.{side}.{lit(brick)}" + (f".{lit(sub)}" if sub is not None and lit(sub) else "")
+            out.update((mod, m) for m in members if m is not None)
+    return out
+
+
+def _package_reexports(trees: Dict[Path, ast.Module], repo: Path, library: Path) -> Dict[Tuple[str, str], Tuple[str, str]]:
+    """{(package, exported name): (module it is imported from, its name there)} of the engine's `__init__` files: a
+    member a door names on a package is followed to the submodule that defines it."""
+    out = {}
+    for p, t in trees.items():
+        if p.name != "__init__.py":
+            continue
+        pkg = _module_name(p, repo, library)
+        for n in t.body:
+            if not isinstance(n, ast.ImportFrom):
+                continue
+            base = pkg.split(".")[: len(pkg.split(".")) - (n.level - 1)] if n.level else []
+            src = ".".join(base + ([n.module] if n.module else [])) if n.level else (n.module or "")
+            for a in n.names:
+                out[(pkg, a.asname or a.name)] = (src, a.name)
+    return out
+
+
+def _twin_symbol(symbol: str) -> str:
+    """A finding's symbol read on the PyTorch side: an import of `neurobrix.triton.<x>` names `neurobrix.pytorch.<x>`
+    (a twin imports its own side where its original imports the other)."""
+    return symbol.replace("neurobrix.triton.", "neurobrix.pytorch.")
 
 
 class _Refs(ast.NodeVisitor):
@@ -344,10 +485,12 @@ def _library_facts(repo: Path = REPO, library: Path = LIBRARY) -> Dict[str, str]
     return out
 
 
-def scan(repo: Path = REPO, library: Path = LIBRARY) -> List[Finding]:
+def scan(repo: Path = REPO, library: Path = LIBRARY, twin_aware: bool = True) -> List[Finding]:
     """Every finding of the repository at `repo` against the library package at `library` (the installed one by
-    default), sorted (kind, path, symbol)."""
+    default), sorted (kind, path, symbol). `twin_aware` (the default) reads the two branches (the module docstring);
+    False gives the raw scan: twins counted separately, the door ignored."""
     ENGINE, LIBRARY = repo / "src" / "neurobrix", library
+    twins = Twins(ENGINE, enabled=twin_aware)
     usage_files = [p for r in [repo / u for u in USAGE_ROOTS] + [library] if r.is_dir() for p in _py_files(r)]
     trees = {p: _parse(p) for p in usage_files}
     lib_trees = {p: t for p, t in trees.items() if p.is_relative_to(LIBRARY)}
@@ -365,10 +508,22 @@ def scan(repo: Path = REPO, library: Path = LIBRARY) -> List[Finding]:
         for p in repo.glob(g):
             if p.is_file():
                 data_words.update(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", p.read_text(encoding="utf-8", errors="replace")))
-    total = defaultdict(int)                       # name -> number of files referring to it
+    naming: Dict[str, Set[Path]] = defaultdict(set)    # name -> the files referring to it
     for p, r in refs.items():
         for n in r.names:
-            total[n] += 1
+            naming[n].add(p)
+    door: Set[Tuple[str, str]] = set()
+    if twin_aware:
+        for t in trees.values():
+            door |= door_references(t)
+        reexp = _package_reexports(eng_trees, repo, library)
+        todo = list(door)
+        while todo:
+            key = todo.pop()
+            target = reexp.get(key)
+            if target and target not in door:
+                door.add(target)
+                todo.append(target)
     calls: Dict[str, List[ast.Call]] = defaultdict(list)
     for r in refs.values():
         for k, v in r.calls.items():
@@ -390,9 +545,13 @@ def scan(repo: Path = REPO, library: Path = LIBRARY) -> List[Finding]:
                 continue
             if _is_registered(node) or name in data_words:
                 continue
-            # used elsewhere: another file names it; or this file names it outside its own body
-            elsewhere = total.get(name, 0) - (1 if name in own.names else 0)
-            if elsewhere > 0:
+            if owner is None and (_module_name(p, repo, library), name) in door:
+                continue                                   # named through the branch door: alive on both sides
+            # used elsewhere: another file names it (the other side of its brick is not a use); or this file names it
+            # outside its own body
+            other = twins.other_side(p)
+            elsewhere = [q for q in naming.get(name, ()) if q != p and not (other and q.is_relative_to(other))]
+            if elsewhere:
                 continue
             body_names = self_refs.get(id(node), set())
             in_file_outside = name in own.names and (name not in body_names or _count_name(t, name) > _count_name(node, name))
@@ -402,20 +561,23 @@ def scan(repo: Path = REPO, library: Path = LIBRARY) -> List[Finding]:
             findings.append(("dead", _rel(p, repo, library), symbol, "no reference outside its own body (tests excluded)"))
 
     # 2. duplicate
-    groups: Dict[str, List[Tuple[Path, str]]] = defaultdict(list)
+    groups: Dict[str, List[Tuple[Path, str, str]]] = defaultdict(list)
     for p, t in list(eng_trees.items()) + [(p, t) for p, t in lib_trees.items() if t is not None]:
-        for node in ast.walk(t):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                k = body_key(node)
-                if k:
-                    groups[k].append((p, node.name))
+        for node, qual in _functions_qualified(t):
+            k = body_key(node)
+            if k:
+                groups[k].append((p, node.name, qual))
     for k, members in groups.items():
         if len(members) < 2:
             continue
-        for p, name in members:
+        for p, name, qual in members:
             if p.is_relative_to(ENGINE):
-                others = ", ".join(f"{_rel(q, repo, library)}::{m}" for q, m in members if (q, m) != (p, name))
-                findings.append(("duplicate", _rel(p, repo, library), name, f"same body as {others}"))
+                # a twin and its original (same qualified name, twin files) are one definition written per branch
+                others = [(q, m) for q, m, qq in members if (q, qq) != (p, qual)
+                          and not (qq == qual and twins.twin_pair(p, q))]
+                if others:
+                    findings.append(("duplicate", _rel(p, repo, library), name,
+                                     "same body as " + ", ".join(f"{_rel(q, repo, library)}::{m}" for q, m in others)))
 
     # 3. wrapper
     lib_names_by_module: Dict[str, Set[str]] = {}
@@ -467,7 +629,39 @@ def scan(repo: Path = REPO, library: Path = LIBRARY) -> List[Finding]:
             if isinstance(node, ast.Dict) and _dtype_size_table(node):
                 findings.append(("fact", _rel(p, repo, library), f"dtype size table at line {node.lineno}",
                                  "nbxtensor.dtype exposes itemsize / itemsize_table"))
+    if twin_aware:
+        findings = _fold_twins(findings, twins, repo, library)
     return sorted(set(findings))
+
+
+def _fold_twins(findings: List[Finding], twins: Twins, repo: Path, library: Path) -> List[Finding]:
+    """Every twin finding its original carries too (same kind, same symbol read on the PyTorch side) folded into the
+    original's: the original's entry covers its twin, never listed twice."""
+    keys = {(k, p, _twin_symbol(s)) for k, p, s, _ in findings}
+    out = []
+    for k, p, s, d in findings:
+        orig = twins.original_of(repo / p)
+        if orig is not None and (k, _rel(orig, repo, library), _twin_symbol(s)) in keys:
+            continue
+        out.append((k, p, s, d))
+    return out
+
+
+def _functions_qualified(tree: ast.AST) -> List[Tuple[ast.AST, str]]:
+    """Every function of `tree` (nested ones included) with its qualified name (`Class.method`, `outer.inner`)."""
+    out = []
+
+    def walk(node, prefix):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                qual = f"{prefix}{child.name}"
+                if not isinstance(child, ast.ClassDef):
+                    out.append((child, qual))
+                walk(child, qual + ".")
+            else:
+                walk(child, prefix)
+    walk(tree, "")
+    return out
 
 
 def _count_name(node, name: str) -> int:
@@ -516,9 +710,26 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="the engine's slimming scan")
     ap.add_argument("--lines", action="store_true", help="print the engine's Python line count")
     ap.add_argument("--write-list", action="store_true", help=f"rewrite {LIST.name} (refused if the findings rose)")
+    ap.add_argument("--counts", action="store_true",
+                    help="print the findings and code lines both ways: raw (twins counted separately, the door "
+                         "ignored) and twin/door-aware")
     a = ap.parse_args(argv)
     if a.lines:
         print(engine_lines())
+        return 0
+    if a.counts:
+        lib = installed_library()
+        # counted as the list counts them: distinct (kind, path, symbol)
+        raw = {f[:3] for f in scan(REPO, lib, twin_aware=False)}
+        aware = {f[:3] for f in scan(REPO, lib)}
+        lines, (lines_aware, grew) = engine_lines(), engine_lines_twin_aware()
+        by_kind = lambda f: ", ".join(f"{k} {sum(1 for x in f if x[0] == k)}" for k in ("dead", "duplicate", "wrapper", "fact"))
+        print(f"findings: raw {len(raw)} ({by_kind(raw)}); twin/door-aware {len(aware)} ({by_kind(aware)}); "
+              f"the list's header: {read_list()[0].get('findings')}")
+        print(f"engine_lines: raw {lines}; twin-aware {lines_aware} (a twin counted past its original's lines); "
+              f"the list's header: {read_list()[0].get('engine_lines')}")
+        for rel, base, n in grew:
+            print(f"twin grew past its original: {rel} {n} code lines (its original: {base})")
         return 0
     if a.write_list:
         print(f"{LIST.name}: {write_list()} findings")
