@@ -37,7 +37,7 @@ from pathlib import Path
 import pytest
 
 from neurobrix.pytorch.prism.solver import PrismSolver
-from neurobrix.core.strategies import STRATEGY_REGISTRY
+from neurobrix.pytorch.strategies import STRATEGY_REGISTRY
 
 
 def _solver_strategy_names() -> set[str]:
@@ -84,7 +84,7 @@ def test_cpu_streaming_places_everything_on_the_host():
     """It shares CPUExecutionStrategy deliberately — same placement, and the
     plan's lazy loading_mode is what makes it a distinct rung. If it ever
     needs different PLACEMENT, it needs its own class."""
-    from neurobrix.core.strategies.cpu_execution import CPUExecutionStrategy
+    from neurobrix.pytorch.strategies.cpu_execution import CPUExecutionStrategy
 
     assert STRATEGY_REGISTRY["cpu_streaming"] is CPUExecutionStrategy
     assert STRATEGY_REGISTRY["cpu_execution"] is CPUExecutionStrategy
@@ -183,7 +183,7 @@ def test_expert_store_is_a_component_strategy_not_a_rung():
     """Where `expert_store` lives, stated: written into a component by the solver, built by the
     factory, served by Zero3Strategy through the lazy_sequential and zero3 rungs — and in neither
     plan registry, which `get_strategy(plan.strategy)` alone reads."""
-    from neurobrix.core.strategies.triton import TRITON_REGISTRY
+    from neurobrix.triton.strategies import TRITON_REGISTRY
     assert "expert_store" in _solver_component_strategy_names()
     assert "expert_store" in _component_namespace()
     assert "expert_store" not in _solver_strategy_names()

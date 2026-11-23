@@ -51,7 +51,7 @@ def _prepare_on_first_device(self, component_name: str, inputs: Dict[str, Any]) 
     return self.transfer_dict(inputs, target_device, self.use_async)
 
 class BlockScatterSteps:
-    """What the compiled and the Triton `BlockScatterStrategy` ran alike (core/strategies/block_scatter.py, core/strategies/triton/block_scatter.py)."""
+    """What the compiled and the Triton `BlockScatterStrategy` ran alike (pytorch/strategies/block_scatter.py, triton/strategies/block_scatter.py)."""
 
     def is_fgp_component(self, component_name: str) -> bool:
         return component_name in self.fgp_components
@@ -125,7 +125,7 @@ class BlockScatterSteps:
 
 
 class ComponentPlacementLazySteps:
-    """What the compiled and the Triton `ComponentPlacementLazyStrategy` ran alike (core/strategies/component_placement.py, core/strategies/triton/component_placement.py)."""
+    """What the compiled and the Triton `ComponentPlacementLazyStrategy` ran alike (pytorch/strategies/component_placement.py, triton/strategies/component_placement.py)."""
 
     def __init__(self, context: StrategyContext, strategy_name: str = "component_placement_lazy"):
         super().__init__(context, strategy_name)
@@ -144,7 +144,7 @@ class ComponentPlacementLazySteps:
 
 
 class ComponentPlacementSteps:
-    """What the compiled and the Triton `ComponentPlacementStrategy` ran alike (core/strategies/component_placement.py, core/strategies/triton/component_placement.py)."""
+    """What the compiled and the Triton `ComponentPlacementStrategy` ran alike (pytorch/strategies/component_placement.py, triton/strategies/component_placement.py)."""
 
     def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Transfer inputs to component's device (NBXTensor)."""
@@ -200,7 +200,7 @@ class ComponentPlacementSteps:
 
 
 class CPUExecutionSteps:
-    """What the compiled and the Triton `CPUExecutionStrategy` ran alike (core/strategies/cpu_execution.py, core/strategies/triton/cpu_execution.py)."""
+    """What the compiled and the Triton `CPUExecutionStrategy` ran alike (pytorch/strategies/cpu_execution.py, triton/strategies/cpu_execution.py)."""
 
     def unload_weights(self, component_name: str) -> None:
         if self._eager:
@@ -224,7 +224,7 @@ class CPUExecutionSteps:
 
 
 class LazySequentialSteps:
-    """What the compiled and the Triton `LazySequentialStrategy` ran alike (core/strategies/lazy_sequential.py, core/strategies/triton/lazy_sequential.py)."""
+    """What the compiled and the Triton `LazySequentialStrategy` ran alike (pytorch/strategies/lazy_sequential.py, triton/strategies/lazy_sequential.py)."""
 
     def _get_component_strategy(self, component_name: str) -> str:
         alloc = self.context.allocations.get(component_name)
@@ -261,7 +261,7 @@ class LazySequentialSteps:
 
 
 class PipelineParallelSteps:
-    """What the compiled and the Triton `PipelineParallelStrategy` ran alike (core/strategies/pipeline_parallel.py, core/strategies/triton/pipeline_parallel.py)."""
+    """What the compiled and the Triton `PipelineParallelStrategy` ran alike (pytorch/strategies/pipeline_parallel.py, triton/strategies/pipeline_parallel.py)."""
 
     def is_pp_component(self, component_name: str) -> bool:
         return component_name in self.pp_components
@@ -311,7 +311,7 @@ class PipelineParallelSteps:
 
 
 class SingleGPUSteps:
-    """What the compiled and the Triton `SingleGPUStrategy` ran alike (core/strategies/single_gpu.py, core/strategies/triton/single_gpu.py)."""
+    """What the compiled and the Triton `SingleGPUStrategy` ran alike (pytorch/strategies/single_gpu.py, triton/strategies/single_gpu.py)."""
 
     def prepare_inputs(
         self,
@@ -323,7 +323,7 @@ class SingleGPUSteps:
 
 
 class WeightShardingSteps:
-    """What the compiled and the Triton `WeightShardingStrategy` ran alike (core/strategies/weight_sharding.py, core/strategies/triton/weight_sharding.py)."""
+    """What the compiled and the Triton `WeightShardingStrategy` ran alike (pytorch/strategies/weight_sharding.py, triton/strategies/weight_sharding.py)."""
 
     def execute_component(
         self,

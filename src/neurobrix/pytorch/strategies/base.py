@@ -326,7 +326,7 @@ class ExecutionStrategy(ABC):
         """
         # Duck-type detection: NBXTensor exposes to_cuda/to_cpu and
         # has _device attr. This avoids a hard import dependency on
-        # kernels.nbx_tensor from a core/strategies path that may run
+        # kernels.nbx_tensor from a pytorch/strategies path that may run
         # before triton kernels are loaded.
         if hasattr(tensor, 'to_cuda') and hasattr(tensor, '_device'):
             # Triton path — zero torch. Parse "<prefix>:N" → int device_idx.

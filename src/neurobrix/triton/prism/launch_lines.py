@@ -2,7 +2,7 @@
 
 Why it exists. A launch that measures the machine for its generated hardware profile is silent for seconds to minutes
 (0.6.2: 570 s without a line); it says what it does, once. And what it says must be what it does: the reload rate of a
-stored dtype is written only from three reloads in a row within 5 % (`core/strategies/layer_streaming._note_reload`),
+stored dtype is written only from three reloads in a row within 5 % (`pytorch/strategies/layer_streaming._note_reload`),
 so on a machine that is not quiet a LATER launch makes those reloads again — said with the first launch's line, that
 launch claimed "First launch on this machine ... once" at every launch until the rate settled (2026-11-11, a Mac with
 a virtual machine running: launches 2 and 3).

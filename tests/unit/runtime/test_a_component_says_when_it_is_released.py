@@ -59,7 +59,7 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
     branch's from torch, the Triton branch's from its own allocator (no torch there). The Mac, 2026-10-15 01:58:
     a 1.3 GB segment computed under a 19 GB wired footprint, and nothing said whether that was live tensors or a cache."""
     from types import SimpleNamespace as NS
-    from neurobrix.core.strategies.layer_streaming import _segment_memory_line
+    from neurobrix.pytorch.strategies.layer_streaming import _segment_memory_line
     from nbxtensor.memory.allocator import DeviceAllocator as DA
     import neurobrix.core.device_utils as du
     synced = []

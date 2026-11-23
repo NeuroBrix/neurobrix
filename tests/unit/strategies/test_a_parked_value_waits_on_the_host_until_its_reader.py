@@ -1,6 +1,6 @@
 """A swapped component (`StrategyContext.layer_swapped`, Prism `layer_stream_swapped`) parks every value the next
 piece does not read on the host, and brings each value a piece reads to that piece's device first
-(`LayerStreamingStrategy._run_pieces`, `core/strategies/value_parking`): the rule Prism priced in
+(`LayerStreamingStrategy._run_pieces`, `pytorch/strategies/value_parking`): the rule Prism priced in
 `LayerPartitioner._greedy_swapped`. The skip `a` below is made by the first piece and read by the last.
 
 Injection (seen red, then restored green, 2026-10-22): the parking loop skipped -> `a` is never parked (red)."""
@@ -9,8 +9,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
-from neurobrix.core.strategies import value_parking as VP
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies import value_parking as VP
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 
 class _Tensor:
@@ -58,7 +58,7 @@ class _Piece:
 
 
 def _run(swapped, monkeypatch):
-    import neurobrix.core.strategies.layer_streaming as LS
+    import neurobrix.pytorch.strategies.layer_streaming as LS
     # the per-piece memory report reads a real device; what it prints is not what is judged here
     monkeypatch.setattr(LS, "_segment_memory_line", lambda seg: "")
     monkeypatch.setattr(LS, "_reset_segment_peak", lambda seg: None)

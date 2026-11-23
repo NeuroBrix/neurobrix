@@ -44,7 +44,7 @@ class ExecutorFactory:
 
     # Strategy to executor mapping, keyed by `ComponentAllocation.strategy` — the COMPONENT
     # namespace: the plan strategies a component carries, plus `expert_store`, which only a
-    # component carries (it is no plan strategy; core/strategies/__init__.py says why).
+    # component carries (it is no plan strategy; pytorch/strategies/__init__.py says why).
     # test_solver_registry_parity.py holds every name the solver writes into a component to it.
     # Every strategy uses GraphExecutor. Execution flow is handled by strategies/ module.
     STRATEGY_MAP = {
@@ -69,7 +69,7 @@ class ExecutorFactory:
         "lazy_sequential": "graph",
         "zero3": "graph",
         # zero3's ratchet with the dense part resident and the routed experts served from an
-        # expert cache on the card (core/strategies/expert_store.py)
+        # expert cache on the card (pytorch/strategies/expert_store.py)
         "expert_store": "graph",
 
         # === CPU-only (Doctrine R35 last-resort cascade) ===

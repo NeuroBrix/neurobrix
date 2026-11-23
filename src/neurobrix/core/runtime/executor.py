@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
 from neurobrix.core.runtime.factory import ExecutorFactory
 from neurobrix.core.config import get_family_defaults, get_family_config, get_device_prefix
-from neurobrix.core.strategies import get_strategy, StrategyContext, ExecutionStrategy
+from neurobrix.pytorch.strategies import get_strategy, StrategyContext, ExecutionStrategy
 from neurobrix.nbx.cache import ensure_extracted
 
 # Import modular components
@@ -1451,7 +1451,7 @@ class RuntimeExecutor:
             if alloc:
                 sub = getattr(alloc, 'strategy', '') or ''
                 if sub:
-                    from neurobrix.core.strategies import (
+                    from neurobrix.pytorch.strategies import (
                         strategy_manages_weight_residency)
                     return strategy_manages_weight_residency(sub)
         return False
@@ -1521,7 +1521,7 @@ class RuntimeExecutor:
         layer-streaming pieces' rule), on its device, in the run's engine."""
         _ts = _branch_door.names("prism", "", "temporal_stream")[0]
         from neurobrix.core.module.temporal_stream_runner import run_stream
-        from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+        from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
         cache_path = ensure_extracted(Path(self._nbx_path_str))
         memo = self.__dict__.setdefault("_stream_runtime", {})
         park = bool(spec.get("park_states"))

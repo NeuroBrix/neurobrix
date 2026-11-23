@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from neurobrix.core.runtime.loader import RuntimePackage
     from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    from neurobrix.core.strategies import ExecutionStrategy
+    from neurobrix.pytorch.strategies import ExecutionStrategy
 
 
 @dataclass

@@ -114,8 +114,8 @@ def test_every_plan_boundary_is_in_the_graph_the_strategy_cuts(model, comp, mode
     from types import SimpleNamespace
     from neurobrix.pytorch.prism.autodetect import load_default_profile
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    from neurobrix.core.strategies.base import StrategyContext
-    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    from neurobrix.pytorch.strategies.base import StrategyContext
+    from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
     root, plan = _plan(model, mode, rung)
     bounds = (plan.layer_stream_plan or {}).get(comp)

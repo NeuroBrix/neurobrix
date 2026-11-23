@@ -152,7 +152,7 @@ def reloads(container_dir: str, component: str, hardware_id: str, engine: str, n
     from neurobrix.triton.prism.loader import load_profile
     from neurobrix.triton.prism.solver import PrismSolver, ComponentAllocation
     from neurobrix.core.runtime.factory import ExecutorFactory
-    from neurobrix.core.strategies import layer_streaming as LS
+    from neurobrix.pytorch.strategies import layer_streaming as LS
     container, profile, AD.ACTIVE_HARDWARE_ID = NBXContainer.load(container_dir), load_profile(hardware_id), hardware_id
     if engine == "triton":
         from neurobrix.triton.dtype import declare_hardware_profile

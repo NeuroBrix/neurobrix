@@ -35,7 +35,7 @@ import ast
 import inspect
 
 from neurobrix.pytorch.prism import solver as _solver
-from neurobrix.core.strategies import STRATEGY_REGISTRY
+from neurobrix.pytorch.strategies import STRATEGY_REGISTRY
 
 
 def _the_door() -> tuple[str, ast.FunctionDef, str]:

@@ -645,7 +645,7 @@ class Zero3Strategy(ExecutionStrategy):
                     transfer_stream_torch = None
 
         # `expert_store` (Prism, `_zero3_resident_budgets`): the dense part resident, the routed
-        # experts served from an expert cache on the card (core/strategies/expert_store.py).
+        # experts served from an expert cache on the card (pytorch/strategies/expert_store.py).
         alloc = self.context.allocations.get(component_name)
         if isinstance(alloc, dict) and alloc.get('strategy') == "expert_store":
             from .expert_store import build_expert_store_state

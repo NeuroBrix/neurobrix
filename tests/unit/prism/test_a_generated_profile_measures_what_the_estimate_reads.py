@@ -127,7 +127,7 @@ def test_an_unsteady_reload_is_kept_at_its_low_draw_until_a_steady_one(hw, monke
     replace it; an unsteady one never replaces a kept figure. What this test would do if the code were wrong: nothing
     kept after an unsteady three (red: the probe owed again), the high or median draw priced (red), a steady measure
     not replacing it (red), a second unsteady measure moving it (red)."""
-    from neurobrix.core.strategies import layer_streaming as LS
+    from neurobrix.pytorch.strategies import layer_streaming as LS
     from neurobrix import branch_door
     branch_door.choose("compiled")                      # this process runs the PyTorch branch, whose Prism is A
     _profile(hw, "default-abc", DEV)
@@ -249,7 +249,7 @@ def test_a_streamed_pricing_reloads_the_smallest_component_of_each_unstated_stor
 def test_the_reload_counts_an_nbxtensor_s_bytes():
     """Flex.1-alpha triton, 2026-11-04: `_weights_bytes` took `nbytes` first, a METHOD on NBXTensor (ATen's API), and died
     on int(method) at the first streamed reload. What this would do if the order came back: TypeError — RED."""
-    from neurobrix.core.strategies import layer_streaming as LS
+    from neurobrix.pytorch.strategies import layer_streaming as LS
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import parse_dtype
     ex = type("E", (), {"_weights": {"w": NBXTensor.zeros((4, 8), parse_dtype("float32"), "cpu"), "none": None}})()
@@ -260,7 +260,7 @@ def test_the_reload_counts_a_zero_size_nbxtensor_as_zero():
     """Sana's text encoder holds zero-size constants (shape (0,), `_nbytes` 0): `_nbytes or nbytes` fell through to the
     METHOD and 0.6.3's first launch from PyPI died on int(method) in the arena probe's reload (2026-11-09). Red if a
     count of 0 is read as absent."""
-    from neurobrix.core.strategies import layer_streaming as LS
+    from neurobrix.pytorch.strategies import layer_streaming as LS
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.dtype.nbx_dtype import parse_dtype
     f32 = parse_dtype("float32")

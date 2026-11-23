@@ -32,7 +32,7 @@ P-PRISM-NEVER-REFUSE v2 — 2026-05-12.
 from typing import Dict, Any, Optional, Set
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix.core.strategies.shared_steps import CPUExecutionSteps, execute_whole_component   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import CPUExecutionSteps, execute_whole_component   # the steps both branches share
 
 
 class CPUExecutionStrategy(CPUExecutionSteps, ExecutionStrategy):

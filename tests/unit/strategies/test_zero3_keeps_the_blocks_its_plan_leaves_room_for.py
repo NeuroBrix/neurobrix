@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from neurobrix.core.strategies.zero3 import Zero3Strategy
+from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
 
 MIB = 1024 * 1024
 N_BLOCKS = 4

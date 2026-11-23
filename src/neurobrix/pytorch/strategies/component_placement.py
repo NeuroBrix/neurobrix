@@ -21,7 +21,7 @@ import torch
 from neurobrix.core.device_utils import device_empty_cache
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix.core.strategies.shared_steps import ComponentPlacementLazySteps, ComponentPlacementSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import ComponentPlacementLazySteps, ComponentPlacementSteps   # the steps both branches share
 
 
 class ComponentPlacementStrategy(ComponentPlacementSteps, ExecutionStrategy):

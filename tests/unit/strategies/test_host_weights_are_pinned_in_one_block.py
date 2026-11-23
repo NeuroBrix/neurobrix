@@ -1,4 +1,4 @@
-"""The PyTorch engine pins its host-held weights in ONE registered block, in place (core/strategies/pinned_block.py).
+"""The PyTorch engine pins its host-held weights in ONE registered block, in place (pytorch/strategies/pinned_block.py).
 
 Per-weight `pin_memory()` made a pinned copy of every weight through PyTorch's host allocator, which rounds each block up
 to a power of two (a 3 MB expert takes 4 MB, 2.6 GiB takes 4 GiB, measured 2026-11-06), while the originals stayed alive:
@@ -13,7 +13,7 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a c
 
 
 def test_the_weights_become_pinned_views_of_one_block_of_their_exact_size():
-    from neurobrix.core.strategies.pinned_block import pin_in_one_block, _ALIGN
+    from neurobrix.pytorch.strategies.pinned_block import pin_in_one_block, _ALIGN
     g = torch.Generator().manual_seed(0)
     w = {"a": torch.randn(3, 1000, generator=g), "b": torch.randn(77, generator=g).half(),
          "c": torch.randn(64, 32, generator=g).t()}                      # a non-contiguous one
@@ -29,7 +29,7 @@ def test_the_weights_become_pinned_views_of_one_block_of_their_exact_size():
 
 
 def test_the_block_is_unregistered_when_its_holder_goes(monkeypatch):
-    from neurobrix.core.strategies import pinned_block as PB
+    from neurobrix.pytorch.strategies import pinned_block as PB
     w = {"a": torch.ones(1 << 16)}
     holder = PB.pin_in_one_block(w)
     ptr = holder.block.data_ptr()
@@ -53,7 +53,7 @@ def test_the_block_is_registered_once_filled(monkeypatch):
     # the originals (Qwen3-Coder-30B native: 118 GB anonymous for 57.6 GB of weights, 2026-11-06). Wrong code (the
     # register before the copies) finds the block's bytes not yet the weights' — red.
     import ctypes
-    from neurobrix.core.strategies import pinned_block as PB
+    from neurobrix.pytorch.strategies import pinned_block as PB
     w = {"a": torch.full((1 << 12,), 7.0)}
     real, seen = torch.cuda.cudart(), []
 

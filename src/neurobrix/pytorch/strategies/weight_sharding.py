@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional, List, Set
 import torch
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix.core.strategies.shared_steps import WeightShardingSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import WeightShardingSteps   # the steps both branches share
 
 
 class WeightShardingStrategy(WeightShardingSteps, ExecutionStrategy):

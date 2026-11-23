@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional, Set
 import torch
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix.core.strategies.shared_steps import SingleGPUSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import SingleGPUSteps   # the steps both branches share
 
 
 class SingleGPUStrategy(SingleGPUSteps, ExecutionStrategy):

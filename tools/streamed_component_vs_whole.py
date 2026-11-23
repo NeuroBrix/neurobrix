@@ -130,8 +130,8 @@ def main():
     dtype = plan.components[comp].dtype
 
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    from neurobrix.core.strategies.base import StrategyContext
-    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    from neurobrix.pytorch.strategies.base import StrategyContext
+    from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
     family = json.loads((root / "manifest.json").read_text()).get("family", "")
     # The card this runs on, from this machine's own detected profile — never a vendor or an
     # architecture written here (R23). The PLAN is the Mac's; the EXECUTION is this card's.

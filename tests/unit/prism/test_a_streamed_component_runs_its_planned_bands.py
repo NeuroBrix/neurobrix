@@ -116,7 +116,7 @@ def test_the_forward_is_the_executor_s_hook_not_a_replaced_method(mode):
 
 def test_an_executor_without_the_hook_is_refused_by_name():
     from types import SimpleNamespace
-    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
     ex = SimpleNamespace(register_op_uid_interceptors=lambda *a, **k: None)
     with pytest.raises(RuntimeError, match=r"'c'.*follow_interceptor_registrations"):
         LayerStreamingStrategy._follow(ex, "c", op_uid=lambda *a, **k: None)

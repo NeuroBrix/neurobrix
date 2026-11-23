@@ -2782,7 +2782,7 @@ class PrismSolver:
             # asked for on a single-GPU profile ("not available for this device count"),
             # which a cascade-derived `valid` would have turned back into a bare "invalid".
             try:
-                from neurobrix.core.strategies import STRATEGY_REGISTRY as _REG
+                from neurobrix.pytorch.strategies import STRATEGY_REGISTRY as _REG
                 valid = set(_REG.keys())
             except Exception:  # noqa: BLE001 — registry unavailable: fall back to the cascade
                 valid = {n for n, _ in strategies}

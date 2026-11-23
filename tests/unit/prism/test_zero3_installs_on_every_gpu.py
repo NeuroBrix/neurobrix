@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.strategies.zero3 import _ZERO3_GPU_PREFIXES
+from neurobrix.pytorch.strategies.zero3 import _ZERO3_GPU_PREFIXES
 
 
 @pytest.mark.parametrize("dev", ["cuda:0", "cuda:7"])
@@ -45,7 +45,7 @@ def test_cpu_does_not_install():
 def test_resolution_and_install_use_the_same_set():
     """They disagreed before, and the disagreement was the bug."""
     import inspect
-    from neurobrix.core.strategies import zero3
+    from neurobrix.pytorch.strategies import zero3
 
     src = inspect.getsource(zero3)
     assert src.count("_ZERO3_GPU_PREFIXES") >= 3, (

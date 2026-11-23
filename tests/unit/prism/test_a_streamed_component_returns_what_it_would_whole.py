@@ -42,7 +42,7 @@ import torch
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
 from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_for_branch
 from neurobrix.core.runtime.graph_executor import GraphExecutor
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 B, T_BUILD, D, V = 2, 5, 4, 8
 COMPONENT = "language_model"

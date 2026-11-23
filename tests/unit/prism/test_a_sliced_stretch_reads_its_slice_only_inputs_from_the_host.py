@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
 from neurobrix.pytorch.prism.chunked_region import ChunkPass, RegionPlan, sliced_reads
-from neurobrix.core.strategies import value_parking as VP
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies import value_parking as VP
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 
 def _plan():
@@ -79,7 +79,7 @@ class _Piece:
 
 
 def test_the_strategy_leaves_a_slice_only_input_on_the_host(monkeypatch):
-    import neurobrix.core.strategies.layer_streaming as LS
+    import neurobrix.pytorch.strategies.layer_streaming as LS
     monkeypatch.setattr(LS, "_segment_memory_line", lambda seg: "")
     monkeypatch.setattr(LS, "_reset_segment_peak", lambda seg: None)
     pieces = [_Piece(0, ["x"], ["skip", "h"]), _Piece(1, ["skip", "h"], ["z"], sliced=["skip"])]

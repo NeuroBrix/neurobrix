@@ -586,7 +586,7 @@ class DtypeEngine:
     def accumulation_dtype(self, dtype: torch.dtype) -> torch.dtype:
         """The dtype the partials of a contraction split over its reduced axis are summed in
         (`contraction_accumulator_dtype`), for a partial of `dtype` — the stitch of a stretch run
-        in slices (`core/strategies/chunked_piece`) asks the engine, never the pass dtype."""
+        in slices (`pytorch/strategies/chunked_piece`) asks the engine, never the pass dtype."""
         return getattr(torch, contraction_accumulator_dtype(_dtype_name(dtype)))
 
     def align_attention_operands(self, q, k, v):

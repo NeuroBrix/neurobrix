@@ -17,7 +17,7 @@ from neurobrix.core.device_utils import device_empty_cache
 from typing import Dict, Optional, Any, Set
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix.core.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
 
 logger = logging.getLogger(__name__)
 

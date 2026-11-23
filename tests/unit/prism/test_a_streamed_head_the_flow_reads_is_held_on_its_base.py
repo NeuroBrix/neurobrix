@@ -64,8 +64,8 @@ def test_the_plan_reserves_the_weights_of_a_streamed_head(monkeypatch):
 
 
 def _strategy(topology, root="/nowhere"):
-    from neurobrix.core.strategies.base import StrategyContext
-    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    from neurobrix.pytorch.strategies.base import StrategyContext
+    from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
     ctx = StrategyContext(strategy_name="layer_streaming", allocations={}, component_executors={},
                           topology=topology, runtime_package=SimpleNamespace(cache_path=root))
     return LayerStreamingStrategy(ctx, "layer_streaming")

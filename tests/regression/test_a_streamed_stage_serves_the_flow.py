@@ -111,8 +111,8 @@ def test_the_base_holds_the_flow_reads_and_a_piece_borrows_them(tmp_path):
     from neurobrix.pytorch.prism import InputConfig, PrismSolver
     from neurobrix.pytorch.prism.autodetect import load_default_profile
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    from neurobrix.core.strategies.base import StrategyContext
-    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    from neurobrix.pytorch.strategies.base import StrategyContext
+    from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
     from neurobrix.nbx import NBXContainer
     from neurobrix.triton.weight_loader import is_block_key
     from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung,

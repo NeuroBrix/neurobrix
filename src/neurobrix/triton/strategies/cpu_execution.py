@@ -1,6 +1,6 @@
 """CPU Execution Strategy — triton path (NBXTensor, zero torch).
 
-Behavioural duplicate of core/strategies/cpu_execution.py. All components
+Behavioural duplicate of pytorch/strategies/cpu_execution.py. All components
 on host. NOTE: NBX Triton kernels are GPU-only; a true Triton-CPU compute
 backend is a separate workstream. This class preserves the strategy contract
 (device routing to "cpu") torch-free so the triton branch is complete; the
@@ -9,9 +9,9 @@ runtime surfaces a clear error if GPU-less NBX compute is actually invoked.
 
 from typing import Dict, Any, Optional, Set
 
-from ..base import StrategyContext
+from neurobrix.pytorch.strategies.base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.core.strategies.shared_steps import CPUExecutionSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import CPUExecutionSteps   # the steps both branches share
 
 
 class CPUExecutionStrategy(CPUExecutionSteps, TritonStrategy):

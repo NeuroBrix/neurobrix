@@ -11,8 +11,8 @@ import pytest
 import torch
 
 from neurobrix.pytorch.prism.chunked_region import MIX, NORM, TokenAxis
-from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
-from neurobrix.core.strategies.value_parking import to_host
+from neurobrix.pytorch.strategies.tiled_norm import group_norm_apply, norm_statistics
+from neurobrix.pytorch.strategies.value_parking import to_host
 
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE", os.path.expanduser("~/.neurobrix/cache")))
 MOCHI_VAE = CACHE / "mochi-1-preview" / "components" / "vae" / "graph.json"

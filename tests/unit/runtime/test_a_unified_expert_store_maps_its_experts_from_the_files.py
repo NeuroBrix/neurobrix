@@ -19,7 +19,7 @@ from neurobrix.core.runtime.expert_files import (
     bind_views, expert_graph_names, expert_loader_keys, locate)
 from neurobrix.core.runtime.expert_residency import FUSED_OP, ExpertResidency
 from neurobrix.core.runtime.graph.expert_store import TorchExpertStore
-from neurobrix.core.strategies.expert_store import holds_expert_files
+from neurobrix.pytorch.strategies.expert_store import holds_expert_files
 from neurobrix.nbx.weight_presence import AbsentWeightError
 
 SHAPE = (4, 3)
@@ -151,9 +151,9 @@ def test_only_a_unified_expert_store_is_held_from_the_files():
 @pytest.mark.parametrize("brick", ["zero3", "lazy_sequential"])
 def test_nothing_of_a_unified_expert_store_is_pinned(brick, monkeypatch):
     if brick == "zero3":
-        from neurobrix.core.strategies.zero3 import Zero3Strategy as S
+        from neurobrix.pytorch.strategies.zero3 import Zero3Strategy as S
     else:
-        from neurobrix.core.strategies.lazy_sequential import LazySequentialStrategy as S
+        from neurobrix.pytorch.strategies.lazy_sequential import LazySequentialStrategy as S
     s = S.__new__(S)
     s.context = SimpleNamespace(allocations={"lm": _alloc()}, _plan=None)
     view = torch.ones(SHAPE, dtype=torch.bfloat16)

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.strategies.base import ExecutionStrategy
+from neurobrix.pytorch.strategies.base import ExecutionStrategy
 
 
 class _NBX:
@@ -100,7 +100,7 @@ def da(monkeypatch):
 
 
 def _sync(dev):
-    from neurobrix.core.strategies.triton.base import TritonStrategy
+    from neurobrix.triton.strategies.base import TritonStrategy
     TritonStrategy.synchronize_device(dev)            # the library's named wait, the strategy's own (2026-11-12)
 
 

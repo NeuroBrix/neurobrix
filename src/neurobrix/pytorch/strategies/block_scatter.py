@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional, List, Set
 import torch
 
 from .base import ExecutionStrategy, StrategyContext
-from neurobrix.core.strategies.shared_steps import BlockScatterSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import BlockScatterSteps   # the steps both branches share
 
 
 class BlockScatterStrategy(BlockScatterSteps, ExecutionStrategy):

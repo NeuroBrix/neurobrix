@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.strategies.base import StrategyContext
-from neurobrix.core.strategies.single_gpu import SingleGPUStrategy
+from neurobrix.pytorch.strategies.base import StrategyContext
+from neurobrix.pytorch.strategies.single_gpu import SingleGPUStrategy
 
 
 class _Executor:

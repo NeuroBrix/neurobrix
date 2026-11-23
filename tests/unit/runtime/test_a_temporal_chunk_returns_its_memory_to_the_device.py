@@ -26,7 +26,7 @@ def _executor(monkeypatch, mode):
     branch_door.choose(mode)                            # the process runs this mode's branch: its Prism plans
     ts = branch_door.module("prism", "temporal_stream")
     from neurobrix.core.module import temporal_stream_runner as tsr
-    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
     monkeypatch.setattr(ts, "load", lambda cache, comp: decl)
     monkeypatch.setattr(tsr, "handed_inputs", lambda dag: frozenset())
     monkeypatch.setattr(tsr, "state_interceptors", lambda decl, park: {})

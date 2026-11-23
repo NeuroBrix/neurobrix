@@ -11,7 +11,7 @@ import weakref
 from types import SimpleNamespace
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
-from neurobrix.core.strategies.chunked_piece import ChunkedPiece
+from neurobrix.pytorch.strategies.chunked_piece import ChunkedPiece
 
 
 class _Out:

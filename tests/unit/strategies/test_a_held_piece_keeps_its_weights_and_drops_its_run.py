@@ -4,7 +4,7 @@ loads and unloads around each run, as before. Before (the Mac, 2026-10-27 23:26)
 mochi-1-preview's transformer held 15.3 GB with 10.8 GB of held weights and MPS refused at the 27th piece. No card."""
 from types import SimpleNamespace
 
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 
 class Piece:

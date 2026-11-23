@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.strategies import (
+from neurobrix.pytorch.strategies import (
     STRATEGY_REGISTRY, strategy_manages_weight_residency)
 
 
@@ -97,7 +97,7 @@ def test_only_strategies_that_manage_residency_say_so():
     claimed = {n for n in set(STRATEGY_REGISTRY) | set(ExecutorFactory.STRATEGY_MAP)
                if strategy_manages_weight_residency(n)}
     # expert_store (2026-10-12) is zero3's ratchet with the dense part resident and the routed
-    # experts served from a cache on the card (core/strategies/expert_store.py): it drives its
+    # experts served from a cache on the card (pytorch/strategies/expert_store.py): it drives its
     # weights exactly as zero3 does.
     assert claimed == {"zero3", "layer_streaming", "expert_store"}, (
         f"strategies claiming to manage their own weight residency: "
@@ -130,7 +130,7 @@ def test_the_table_and_the_classes_agree():
     strategies declare, and this test is the only thing keeping them equal.
     It imports the classes deliberately — a test may, a triton run may not.
     """
-    from neurobrix.core.strategies import (
+    from neurobrix.pytorch.strategies import (
         _MANAGES_WEIGHT_RESIDENCY, _strategy_class, STRATEGY_REGISTRY)
 
     for name in STRATEGY_REGISTRY:

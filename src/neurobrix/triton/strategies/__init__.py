@@ -7,7 +7,7 @@ entry so any model that goes through the triton branch gets a zero-torch
 placement strategy. (tp_sharding is NOT a strategy — it is the shard-creation
 utility used by weight_sharding's "tp:" prefix.)
 
-Two-modes doctrine: these are deliberate duplicates of core/strategies/*.py,
+Two-modes doctrine: these are deliberate duplicates of pytorch/strategies/*.py,
 sharing only the StrategyContext contract — never compute code. The heavy
 zero3 ratchet is reused via mixin (it is already NBXTensor-capable) rather
 than duplicated.

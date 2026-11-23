@@ -42,9 +42,9 @@ execution — and it is a different defect from the ordering one this file gates
 """
 from __future__ import annotations
 
-from neurobrix.core.strategies.base import ExecutionStrategy
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
-from neurobrix.core.strategies.zero3 import Zero3Strategy
+from neurobrix.pytorch.strategies.base import ExecutionStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
 
 
 def test_the_two_capabilities_are_distinct():
@@ -162,7 +162,7 @@ def test_the_skip_is_taken_only_when_the_strategy_SAYS_it_took_over():
 def test_a_strategy_that_takes_nothing_over_leaves_the_load_to_the_runtime():
     """The behaviour itself, on the strategy rather than on the source: a component with no
     segments in the plan must report that it was NOT taken over."""
-    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
     st = object.__new__(LayerStreamingStrategy)
     st._segments_for = lambda name: []
     st._installed = set()

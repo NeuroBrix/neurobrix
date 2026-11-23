@@ -12,7 +12,7 @@ import weakref
 from types import SimpleNamespace
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 
 class _Tensor:
@@ -68,7 +68,7 @@ _made: dict = {}
 
 
 def test_a_parked_value_is_off_the_device_while_the_next_piece_runs(monkeypatch):
-    import neurobrix.core.strategies.layer_streaming as LS
+    import neurobrix.pytorch.strategies.layer_streaming as LS
     monkeypatch.setattr(LS, "_segment_memory_line", lambda seg: "")
     monkeypatch.setattr(LS, "_reset_segment_peak", lambda seg: None)
     _made.clear()

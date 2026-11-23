@@ -28,8 +28,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 from nbxtensor.ops.axis_slices import accumulate, own, put_slice, store, take_slice, take_slice_cyclic, whole_shape
 from neurobrix import branch_door as _branch_door
 
-from neurobrix.core.strategies.value_parking import to_device
-from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
+from neurobrix.pytorch.strategies.value_parking import to_device
+from neurobrix.pytorch.strategies.tiled_norm import group_norm_apply, norm_statistics
 from neurobrix.core.runtime.graph_executor import output_key
 
 

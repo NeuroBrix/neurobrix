@@ -3,7 +3,7 @@
 Before it, the ratchet never built in that engine (no arena sequence), so every host weight
 crossed to the card at every use (Janus-Pro-7B on a 16 GB card, stage B).
 """
-from neurobrix.core.strategies.zero3 import Zero3Strategy
+from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
 from neurobrix.triton.sequential import SequentialWeightView
 
 

@@ -25,7 +25,7 @@ where the rule lives, so a change there is a change to price here:
         `_load_with_pinned_dma`), the pinned host cache emptied when the component's load ends (`load_component`,
         `load_component_with_shard_map`); a component HELD on the host (shards on "cpu": zero3, an expert store) is
         loaded to the host unpinned and then copied, one weight at a time, into ONE block registered once filled
-        (core/strategies/pinned_block.py) — its weights once, its steady term; Qwen3-Coder-30B native, 2026-11-06:
+        (pytorch/strategies/pinned_block.py) — its weights once, its steady term; Qwen3-Coder-30B native, 2026-11-06:
         anonymous peak 62.5 GB for 57.6 GB held, where the whole-component rule priced 115 GB of loading;
     compiled, a component the plan STREAMS (layer_streaming): the loader reads one tensor at a time per
         worker and keeps at most `io.pinned_uploads_in_flight` uploads outstanding, then empties the

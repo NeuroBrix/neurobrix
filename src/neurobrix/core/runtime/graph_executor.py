@@ -3949,7 +3949,7 @@ class GraphExecutor:
             topk_indices=store.get(idx_tid) if blended else None,
             topk_weights=store.get(w_tid) if blended else None,
             weights_per_call=per_call,
-            # Strategy `expert_store` (core/strategies/expert_store.py): the routed experts are
+            # Strategy `expert_store` (pytorch/strategies/expert_store.py): the routed experts are
             # served from the component's store, named by the layer's first gate weight id.
             expert_store=None if attrs.get("stacked_experts") else getattr(self, "_expert_store", None),
             expert_layer=None if attrs.get("stacked_experts") else attrs["expert_gate_weight_ids"][0],
@@ -5602,7 +5602,7 @@ class GraphExecutor:
         partial of `dtype` (`accumulation_dtype` of the engine the mode runs: the ATen
         `DtypeEngine` in compiled and sequential, the `TritonDtypeEngine` in the Triton modes,
         torch-free there — R33). Asked by a stretch run in slices of a token axis
-        (`core/strategies/chunked_piece`) where it joins the slices of a contraction."""
+        (`pytorch/strategies/chunked_piece`) where it joins the slices of a contraction."""
         if self.mode in ("triton", "triton_sequential"):
             eng = getattr(getattr(self, "_triton_seq", None), "_dtype_engine", None)
             if eng is None:
@@ -5620,7 +5620,7 @@ class GraphExecutor:
     def pin_fp32_ops(self, uids) -> None:
         """From the next run on, the ops `uids` compute in fp32 and keep an fp32 output, in every
         mode — the precision contract's island semantics, set by a plan rather than a calibration
-        record. Asked by a stretch run in slices (`core/strategies/chunked_piece`): the partial of a
+        record. Asked by a stretch run in slices (`pytorch/strategies/chunked_piece`): the partial of a
         contraction over the sliced axis is produced at the accumulator's width, so the slices are
         summed unrounded and the sum is stored once, as the whole op rounds once. Compiled and
         triton rebuild their sequence with the pins; triton-sequential resolves them at each run;

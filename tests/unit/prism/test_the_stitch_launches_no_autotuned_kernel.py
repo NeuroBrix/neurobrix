@@ -1,6 +1,6 @@
 """The stitch that joins a sliced stretch launches no autotuned kernel: it holds no key of the census.
 
-A stretch run in slices of a token axis (`core/strategies/chunked_piece.ChunkedPiece.run`) executes
+A stretch run in slices of a token axis (`pytorch/strategies/chunked_piece.ChunkedPiece.run`) executes
 ops graph.json does not carry: the slice taken of each input (`take_slice`: unflatten, narrow,
 contiguous), the slice written into the whole output (`put_slice`: view, narrow, copy_), the copy an
 arena cannot overwrite (`own`: new_empty, copy_) and the sum of a contraction's partials

@@ -4,7 +4,7 @@ copied there) and the dense part primed — inside the weight load, a load span.
 first run, 7.7 s of copies and 3.4 s of compile counted in Qwen3-30B-A3B's 19 s time to first token. No card."""
 from types import SimpleNamespace
 
-from neurobrix.core.strategies.zero3 import Zero3Strategy
+from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
 
 
 def _strategy(monkeypatch, alloc):

@@ -31,7 +31,7 @@ import pytest
 
 from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_for_branch
 from neurobrix.core.runtime.graph_executor import GraphExecutor, output_key
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 COMPONENT = "transformer"
 EMBED_DIM = 8

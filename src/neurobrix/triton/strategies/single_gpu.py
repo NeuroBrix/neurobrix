@@ -1,6 +1,6 @@
 """Single GPU Execution Strategy — triton path (NBXTensor, zero torch).
 
-Behavioural duplicate of `core/strategies/single_gpu.py`, rebased on
+Behavioural duplicate of `pytorch/strategies/single_gpu.py`, rebased on
 `TritonStrategy` so transfers/sync are NBXTensor-native. The logic is
 identical (all components on one GPU, lazy/eager loading from the Prism
 plan); only the transfer base differs (two-modes doctrine).
@@ -8,9 +8,9 @@ plan); only the transfer base differs (two-modes doctrine).
 
 from typing import Dict, Any, Optional, Set
 
-from ..base import StrategyContext
+from neurobrix.pytorch.strategies.base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.core.strategies.shared_steps import SingleGPUSteps, execute_whole_component   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import SingleGPUSteps, execute_whole_component   # the steps both branches share
 
 
 class SingleGPUStrategy(SingleGPUSteps, TritonStrategy):

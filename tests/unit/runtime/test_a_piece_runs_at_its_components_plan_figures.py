@@ -7,7 +7,7 @@ with no budget and the compiled engine refused it by name (2026-10-15 16:02, mai
 
 What this test does if the code is wrong: it fails when a piece's executor does not carry the base's budget or cliff.
 """
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 
 class _Base:

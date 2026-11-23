@@ -15,7 +15,7 @@ language model beside it, which has blocks, was primed and ran.)
 """
 from __future__ import annotations
 
-from neurobrix.core.strategies.zero3 import Zero3Strategy
+from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
 
 
 class _Seq:

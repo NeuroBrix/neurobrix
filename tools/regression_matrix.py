@@ -963,7 +963,7 @@ def classify_paths(repo: Path, paths, mapping: dict) -> dict:
         others = [r for n, b in mapping["branches"].items() if n != name for r in b["roots"]]
         key = tuple(others)
         if key not in closures:
-            # the other branches' roots, minus this branch's own deeper roots (core/ holds core/strategies/triton/)
+            # the other branches' roots, minus this branch's own deeper roots (core/ holds triton/strategies/)
             mine = mapping["branches"][name]["roots"]
             starts = []
             for r in others:

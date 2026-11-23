@@ -12,7 +12,7 @@ import weakref
 from types import SimpleNamespace
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 
 class _Tensor:
@@ -61,7 +61,7 @@ class _Piece:
 
 
 def test_a_received_value_is_freed_at_its_last_use_inside_the_piece(monkeypatch):
-    import neurobrix.core.strategies.layer_streaming as LS
+    import neurobrix.pytorch.strategies.layer_streaming as LS
     monkeypatch.setattr(LS, "_segment_memory_line", lambda seg: "")
     monkeypatch.setattr(LS, "_reset_segment_peak", lambda seg: None)
     alive = {}
@@ -80,7 +80,7 @@ def test_a_value_handed_to_a_piece_a_later_piece_reads_stays_for_it(monkeypatch)
     # A stretch run in slices replaces its segment after the hand-over was decided on the segments: a piece may be handed
     # a value the stretch after it reads. MiniCPM-o-4_5 triton on the M4 Pro (2026-11-06): "segment 3 of 'llm.model'
     # needs ['aten.mul::16::out_0'] and nothing before it produced them". Red if the strategy pops it from `values`.
-    import neurobrix.core.strategies.layer_streaming as LS
+    import neurobrix.pytorch.strategies.layer_streaming as LS
     monkeypatch.setattr(LS, "_segment_memory_line", lambda seg: "")
     monkeypatch.setattr(LS, "_reset_segment_peak", lambda seg: None)
     alive = {}

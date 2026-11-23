@@ -28,7 +28,7 @@ from neurobrix.core.module.temporal_stream_runner import run_stream
 from neurobrix.core.paths import cache_dir
 from neurobrix.pytorch.prism import temporal_stream as ts
 from neurobrix.core.runtime.graph_executor import GraphExecutor
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 torch = pytest.importorskip("torch")
 

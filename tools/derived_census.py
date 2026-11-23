@@ -1617,7 +1617,7 @@ def tile_bindings(g: dict, syms: dict, spec: dict) -> list:
 
 def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) -> list:
     """[(op uids, binding)] of the stretches the plan runs in slices of a token axis
-    (`plan.layer_stream_chunks[comp]`, run by `core/strategies/chunked_piece.ChunkedPiece`): the
+    (`plan.layer_stream_chunks[comp]`, run by `pytorch/strategies/chunked_piece.ChunkedPiece`): the
     ops of the stretch's SLICED passes (`plan_region` on the graph the executor runs), at each
     length a slice READS (`slice_reads` over the slice count — the runtime's own split, widened by the stretch's
     halo). A pass

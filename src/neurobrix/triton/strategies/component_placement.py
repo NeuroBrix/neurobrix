@@ -1,6 +1,6 @@
 """Component Placement Execution Strategy — triton path (NBXTensor, zero torch).
 
-Behavioural duplicate of core/strategies/component_placement.py, rebased on
+Behavioural duplicate of pytorch/strategies/component_placement.py, rebased on
 TritonStrategy. Whole components are distributed across GPUs; activations
 move across devices at component boundaries through NBXTensor.to_cuda
 (via the TritonStrategy transfer helpers). Two-modes doctrine: same
@@ -9,9 +9,9 @@ contract as the pytorch strategy, NBXTensor compute path.
 
 from typing import Dict, Any, Optional
 
-from ..base import StrategyContext
+from neurobrix.pytorch.strategies.base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.core.strategies.shared_steps import ComponentPlacementLazySteps, ComponentPlacementSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import ComponentPlacementLazySteps, ComponentPlacementSteps   # the steps both branches share
 
 
 class ComponentPlacementStrategy(ComponentPlacementSteps, TritonStrategy):

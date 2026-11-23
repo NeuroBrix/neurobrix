@@ -145,7 +145,7 @@ def _compiled_loader(root: Path, comp: str, used: List[Path]):
             with WeightLoader(str(root)) as ld:
                 w = ld.load_component(comp, "cpu" if host else tdev, torch.float16, only=only)
             if host:
-                # the compiled engine's host-held path pins what it loads (core/strategies/zero3.py,
+                # the compiled engine's host-held path pins what it loads (pytorch/strategies/zero3.py,
                 # lazy_sequential.py: `tensor.contiguous().pin_memory()`) — a mapped view not yet read is no load
                 w = {k: t.contiguous().pin_memory() for k, t in w.items()}
             tsync()

@@ -38,7 +38,7 @@ from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_f
 from neurobrix.pytorch.prism.chunked_region import TokenAxis, plan_region
 from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 from neurobrix.core.runtime.graph_executor import GraphExecutor
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 B, T_BUILD, D = 2, 6, 4
 COMPONENT = "transformer"
@@ -245,7 +245,7 @@ def test_a_planned_band_inside_a_sliced_stretch_is_refused_and_one_outside_reach
 
     Injection (seen red, then restored green, 2026-10-05): the refusal's `hit` emptied -> the
     planned band is accepted."""
-    from neurobrix.core.strategies.chunked_piece import ChunkedPiece
+    from neurobrix.pytorch.strategies.chunked_piece import ChunkedPiece
     holder = _Holder()
     piece = ChunkedPiece(_graph(), holder, _chunk(2), lambda g, lender: None)
     with pytest.raises(RuntimeError, match=r"plan tiles \['aten\.bmm::1'\] inside the stretch"):
@@ -287,7 +287,7 @@ def test_a_contraction_s_slices_are_summed_in_the_engine_s_accumulator(mode, mon
         assertion red in both engines; before the pin existed the value assertion was red in
         sequential (max 0.0957 > 0.05)."""
     from neurobrix.core.dtype import engine as DE
-    from neurobrix.core.strategies import chunked_piece as CP
+    from neurobrix.pytorch.strategies import chunked_piece as CP
     # placed as on a card: the host's fp32 rule would leave no half partial to sum
     monkeypatch.setattr(DE, "compute_dtype_for_placement", lambda device, dtype: dtype)
     seen = {"acc": [], "store": []}
@@ -369,7 +369,7 @@ def test_the_triton_stitch_sums_at_the_accumulator_and_stores_the_op_s_own_dtype
 
     Injection (seen red, then restored green, 2026-10-21): `accumulation_dtype` on `NBXDtype(dtype)`
     as on main -> "triton.language.float32 is not a valid NBXDtype" at the first partial, both modes."""
-    from neurobrix.core.strategies import chunked_piece as CP
+    from neurobrix.pytorch.strategies import chunked_piece as CP
     from nbxtensor.dtype.nbx_dtype import parse_dtype
     name = lambda d: parse_dtype(d).name
     seen = {"acc": [], "store": []}

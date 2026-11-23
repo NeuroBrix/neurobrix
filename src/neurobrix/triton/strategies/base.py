@@ -5,8 +5,8 @@ waited for by nbxtensor (`backend.device_names.to_named_device` / `synchronize_n
 triton path. Strategy logic subclasses live alongside this file (`triton/single_gpu.py`, …) and inherit this base
 instead of the torch one, so a triton-only NeuroBrix install carries no torch dependency on the placement layer.
 
-The two-modes doctrine: `compiled` strategies (core/strategies/*.py) and
-`triton` strategies (core/strategies/triton/*.py) are deliberately
+The two-modes doctrine: `compiled` strategies (pytorch/strategies/*.py) and
+`triton` strategies (triton/strategies/*.py) are deliberately
 duplicated, sharing only the `StrategyContext` contract — never compute
 code. `get_strategy()` routes by `context.mode`.
 """
@@ -15,7 +15,7 @@ from typing import Dict, Any
 
 from nbxtensor.backend.device_names import to_named_device, synchronize_named
 
-from ..base import ExecutionStrategy
+from neurobrix.pytorch.strategies.base import ExecutionStrategy
 from nbxtensor import memory as _nbx_memory
 
 

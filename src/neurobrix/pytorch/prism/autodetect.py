@@ -2635,7 +2635,7 @@ def _measure_arena_factor(hardware_id: str, device: dict) -> float:
 
 def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloaded_bytes: int, seconds: float,
                      what: str, spread: Optional[Tuple[float, float]] = None) -> bool:
-    """The engine measured ITSELF reloading streamed pieces at a real run (`core/strategies/layer_streaming.py`): the
+    """The engine measured ITSELF reloading streamed pieces at a real run (`pytorch/strategies/layer_streaming.py`): the
     pieces a token loads again — read from the container through the page cache, decoded, converted, uploaded —
     `reloaded_bytes` in `seconds`. Written on a GENERATED profile only, as `host_measured.weight_reload_gbps.{engine}.
     {stored}` when neither it nor the vendor file states it: the fact Prism prices a per-token reload with BEFORE the run

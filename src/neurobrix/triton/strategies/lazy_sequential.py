@@ -1,6 +1,6 @@
 """Lazy Sequential Strategy — triton path (NBXTensor, zero torch).
 
-Behavioural duplicate of core/strategies/lazy_sequential.py. One component
+Behavioural duplicate of pytorch/strategies/lazy_sequential.py. One component
 resident at a time; peak GPU = max(single component), not sum(all). The
 zero3 sub-strategy CPU-pinning is handled by the NBX weight loader (host
 allocation via cudaMallocHost at load time), so the strategy-level pin is a
@@ -10,11 +10,11 @@ no-op here — unlike the torch path which pins via torch.Tensor.pin_memory().
 import logging
 from typing import Dict, Optional, Any, Set
 
-from ..base import StrategyContext
+from neurobrix.pytorch.strategies.base import StrategyContext
 from nbxtensor.backend.device_names import ACCELERATOR_PREFIXES
 
 from .base import TritonStrategy
-from neurobrix.core.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
 from nbxtensor import memory as _nbx_memory
 
 
@@ -115,7 +115,7 @@ class LazySequentialStrategy(LazySequentialSteps, TritonStrategy):
         if self._get_component_strategy(component_name) not in ("zero3", "expert_store"):
             return
         if getattr(self, "_zero3_brick", None) is None:
-            from ..zero3 import Zero3Strategy
+            from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
             self._zero3_brick = Zero3Strategy(
                 self.context, strategy_name="triton_lazy_sequential+zero3")
         self._zero3_brick.install_for_executor(component_name, executor)

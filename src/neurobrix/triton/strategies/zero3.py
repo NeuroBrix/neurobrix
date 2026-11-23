@@ -14,7 +14,7 @@ follow-up for the two-version split. The triton entry point itself adds no
 torch.
 """
 
-from ..zero3 import Zero3Strategy as _SharedZero3
+from neurobrix.pytorch.strategies.zero3 import Zero3Strategy as _SharedZero3
 from .base import TritonStrategy
 
 

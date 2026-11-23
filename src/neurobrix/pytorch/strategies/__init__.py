@@ -151,7 +151,7 @@ STRATEGY_REGISTRY = _LazyRegistry({
     # name Prism writes into one `ComponentAllocation.strategy` of a plan whose own strategy is
     # `lazy_sequential` or `zero3` (`_place_component` Strategy 2.5, `_zero3_resident_budgets`) —
     # and `get_strategy` is only ever asked the plan's. Its runtime half is a ratchet STATE of
-    # Zero3Strategy, reached through both rungs (core/strategies/expert_store.py). The component
+    # Zero3Strategy, reached through both rungs (pytorch/strategies/expert_store.py). The component
     # namespace is `ExecutorFactory.STRATEGY_MAP`; test_solver_registry_parity.py holds both.
 
     # === CPU-only (Doctrine R35 last-resort cascade) ===
@@ -204,7 +204,7 @@ def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrat
 
     mode = getattr(context, "mode", "compiled")
     if mode in ("triton", "triton_sequential"):
-        from .triton import TRITON_REGISTRY
+        from neurobrix.triton.strategies import TRITON_REGISTRY
         triton_class = TRITON_REGISTRY.get(strategy_name)
         if triton_class is not None:
             return triton_class(context, strategy_name)

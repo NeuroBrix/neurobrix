@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import torch
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
-from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+from neurobrix.pytorch.strategies.layer_streaming import LayerStreamingStrategy
 
 
 class _Strategy(LayerStreamingStrategy):

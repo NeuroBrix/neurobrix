@@ -4,7 +4,7 @@ The Triton loader keeps a zero3 component's non-block weights (embeddings, norms
 host bytes are zero; the grant then went to the blocks alone and the non-block weights sat beside it,
 priced nowhere. Qwen2.5-Coder-14B --triton on one V100-16GB held 9 blocks on top of them and ran out of
 memory at the second pass, short by 38 MB (2026-11-12 23:08)."""
-from neurobrix.core.strategies.zero3 import Zero3Strategy
+from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
 
 
 class _W:

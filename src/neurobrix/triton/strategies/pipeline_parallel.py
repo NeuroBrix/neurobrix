@@ -1,6 +1,6 @@
 """Pipeline Parallel Execution Strategy — triton path (NBXTensor, zero torch).
 
-Behavioural duplicate of core/strategies/pipeline_parallel.py. Layers are
+Behavioural duplicate of pytorch/strategies/pipeline_parallel.py. Layers are
 distributed sequentially across GPUs (greedy fill) via the Prism shard_map;
 the NBX weight loader places each layer-range on its device and the triton
 sequence crosses GPU boundaries only at the split points. Source-device
@@ -9,10 +9,10 @@ detection uses NBXTensor `_device_idx` (no torch `.device`).
 
 from typing import Dict, Any, Optional, List, Set
 
-from ..base import StrategyContext
+from neurobrix.pytorch.strategies.base import StrategyContext
 from .base import TritonStrategy
 from .block_scatter import _nbx_device_str
-from neurobrix.core.strategies.shared_steps import PipelineParallelSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import PipelineParallelSteps   # the steps both branches share
 
 
 class PipelineParallelStrategy(PipelineParallelSteps, TritonStrategy):

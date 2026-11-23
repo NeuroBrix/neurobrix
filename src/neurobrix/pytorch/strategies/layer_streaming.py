@@ -24,7 +24,7 @@ import os
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.core.runtime.graph_executor import output_key
-from neurobrix.core.strategies.base import ExecutionStrategy
+from neurobrix.pytorch.strategies.base import ExecutionStrategy
 import logging
 from nbxtensor import memory as _nbx_memory
 from neurobrix import branch_door as _branch_door
@@ -386,7 +386,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         chunks = (getattr(self.context, "layer_chunks", None) or {}).get(component_name) or []
         if not chunks:
             return executors
-        from neurobrix.core.strategies.chunked_piece import ChunkedPiece
+        from neurobrix.pytorch.strategies.chunked_piece import ChunkedPiece
         at = {(f, l): i for i, (f, l) in enumerate(bounds)}
         for chunk in chunks:
             i = at.get((chunk["first_op"], chunk["last_op"]))
@@ -558,7 +558,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
             if swapped:
-                from neurobrix.core.strategies.value_parking import to_device, to_host
+                from neurobrix.pytorch.strategies.value_parking import to_device, to_host
                 dev = getattr(seg_exec, "device", None)
                 # a sliced stretch reads some of its inputs only in slices: those stay on the host, each pass
                 # uploading its slice (`ChunkedPiece.sliced_input_names`, the rule Prism prices)

@@ -1,6 +1,6 @@
 """Block Scatter Execution Strategy — triton path (NBXTensor, zero torch).
 
-Behavioural duplicate of core/strategies/block_scatter.py. Blocks within a
+Behavioural duplicate of pytorch/strategies/block_scatter.py. Blocks within a
 component are distributed across GPUs (best-fit-decreasing) via the Prism
 shard_map; the NBX weight loader places each block's weights on its device
 and the triton sequence aligns ops at block boundaries. Source-device
@@ -9,9 +9,9 @@ detection uses NBXTensor `_device_idx` (no torch `.device`).
 
 from typing import Dict, Any, Optional, List, Set
 
-from ..base import StrategyContext
+from neurobrix.pytorch.strategies.base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.core.strategies.shared_steps import BlockScatterSteps   # the steps both branches share
+from neurobrix.pytorch.strategies.shared_steps import BlockScatterSteps   # the steps both branches share
 
 
 def _nbx_device_str(tensor: Any) -> Optional[str]:

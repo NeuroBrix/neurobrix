@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.strategies.triton.lazy_sequential import _names_accelerator
+from neurobrix.triton.strategies.lazy_sequential import _names_accelerator
 
 
 NVIDIA = ["cuda:0", "cuda:1", "cuda:7"]
@@ -72,7 +72,7 @@ class _T:
 
 
 def _transfer(dev):
-    from neurobrix.core.strategies.triton.base import TritonStrategy
+    from neurobrix.triton.strategies.base import TritonStrategy
     t = _T()
     out = TritonStrategy.transfer_tensor(None, t, dev)
     return out.moved_to

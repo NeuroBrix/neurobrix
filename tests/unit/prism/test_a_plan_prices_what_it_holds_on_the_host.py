@@ -63,7 +63,7 @@ def test_a_compiled_whole_load_is_priced_per_tensor_and_a_host_held_component_un
     # Every compiled load reads one tensor at a time per worker, at most `pinned_in_flight` uploads outstanding, and
     # empties the pinned host cache when the component ends (core/io/weight_loader.py); a component HELD on the host
     # loads there unpinned and is copied, one weight at a time, into one block registered once filled
-    # (core/strategies/pinned_block.py). What this does if the price were wrong: the whole component read and pinned
+    # (pytorch/strategies/pinned_block.py). What this does if the price were wrong: the whole component read and pinned
     # (2 x its bytes: Qwen3-Coder-30B priced 115 GB of loading for 57.6 GB of weights, measured 62.5 GB peak) — red.
     keys = {"lm": {f"w{i}": (i + 1) * MB for i in range(20)}}
     shards = {"lm": {f"s{i}": 21 * MB for i in range(10)}}

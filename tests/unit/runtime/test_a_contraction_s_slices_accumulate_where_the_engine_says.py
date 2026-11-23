@@ -1,6 +1,6 @@
 """A contraction split over the axis it reduces is summed where the DtypeEngine says, in both engines.
 
-A stretch run in slices of a token axis (`core/strategies/chunked_piece`) sums the partials of a
+A stretch run in slices of a token axis (`pytorch/strategies/chunked_piece`) sums the partials of a
 contraction over the slices. The dtype of that sum is a dtype decision, so it belongs to the
 DtypeEngine (`accumulation_dtype`), never to the pass dtype the partials arrive in: float32 for a
 half partial, the dtype itself for float32 and float64, the sum stored once in the op's own dtype.

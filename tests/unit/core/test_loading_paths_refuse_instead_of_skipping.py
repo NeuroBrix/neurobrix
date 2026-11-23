@@ -14,7 +14,7 @@ import pathlib
 
 import pytest
 
-from neurobrix.core.strategies.base import ExecutionStrategy
+from neurobrix.pytorch.strategies.base import ExecutionStrategy
 
 STRATEGIES = pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "core" / "strategies"
 
