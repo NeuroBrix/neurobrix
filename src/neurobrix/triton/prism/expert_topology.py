@@ -34,7 +34,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from neurobrix.nbx.neurotax import SynonymRegistry as _NeuroTax
+from neurobrix.triton.neurotax import SynonymRegistry as _NeuroTax
 
 MB = 1024 * 1024
 

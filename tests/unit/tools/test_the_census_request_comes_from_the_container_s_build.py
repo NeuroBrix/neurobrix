@@ -47,7 +47,7 @@ STALE = ["--height", "768", "--width", "1024"]        # the old container's deri
 
 def _container(root: Path) -> Path:
     """An image container built at 960x1088: the smallest set the runtime loader accepts."""
-    from neurobrix.nbx.neurotax import NEUROTAX_VERSION
+    from neurobrix.pytorch.neurotax import NEUROTAX_VERSION
     d = root / MODEL
     (d / "runtime").mkdir(parents=True)
     (d / "components" / "transformer").mkdir(parents=True)

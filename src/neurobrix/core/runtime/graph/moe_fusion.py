@@ -17,7 +17,8 @@ from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 import re
 import os
 
-from neurobrix.nbx.neurotax import SynonymRegistry as _NeuroTax
+from neurobrix import branch_door as _branch_door
+_NeuroTax = _branch_door.names("neurotax", "", "SynonymRegistry")[0]
 import logging
 _log = logging.getLogger(__name__)
 

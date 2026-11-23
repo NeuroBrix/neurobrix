@@ -32,7 +32,7 @@ import torch
 from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence
 from neurobrix.core.runtime.loader import NBXRuntimeLoader
 from neurobrix.nbx.fixed_point import FIXED_POINT_FLAG, unstamped_components
-from neurobrix.nbx.neurotax import NEUROTAX_VERSION
+from neurobrix.pytorch.neurotax import NEUROTAX_VERSION
 
 
 def _sym(i, built):

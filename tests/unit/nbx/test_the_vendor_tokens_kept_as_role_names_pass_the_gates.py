@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.nbx.neurotax import SynonymRegistry as R
+from neurobrix.pytorch.neurotax import SynonymRegistry as R
 
 # token -> every registry key that lands on it (its own spelling and its vendors' synonyms)
 KEPT = {

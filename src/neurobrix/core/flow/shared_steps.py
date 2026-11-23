@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from nbxtensor.tensor import NBXTensor
-from neurobrix.nbx.neurotax import normalize_tensor_name_strict
+from neurobrix import branch_door as _branch_door
+normalize_tensor_name_strict = _branch_door.names("neurotax", "", "normalize_tensor_name_strict")[0]
 import logging
 
 

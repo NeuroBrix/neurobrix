@@ -23,7 +23,7 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from neurobrix.nbx.neurotax import SynonymRegistry
+from neurobrix.triton.neurotax import SynonymRegistry
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype
 from nbxtensor.memory.memory_pool import release_flow_memory

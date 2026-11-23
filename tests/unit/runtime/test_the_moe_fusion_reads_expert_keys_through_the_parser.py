@@ -9,7 +9,7 @@ expert synthesized under `gate`).
 from __future__ import annotations
 
 from neurobrix.core.runtime.graph import moe_fusion as M
-from neurobrix.nbx.neurotax import normalize_tensor_name
+from neurobrix.pytorch.neurotax import normalize_tensor_name
 
 
 def _graph(present_experts, num_experts):

@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
 # The parser's docstring names the file; the container validator checks it is PRESENT (a
 # container's completeness), and binds nothing.
-ALLOWED = {"nbx/neurotax.py", "core/validators/nbx_validator.py"}
+ALLOWED = {"pytorch/neurotax/__init__.py", "triton/neurotax/__init__.py", "core/validators/nbx_validator.py"}
 
 
 def test_no_engine_module_reads_the_map():

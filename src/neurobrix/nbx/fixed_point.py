@@ -14,7 +14,7 @@ The writer records that fact on every component it leaves at the fixed point:
 writer's revision (an existing free-form per-component dict, no new field — R18). A
 container carrying a graph without it was not written at the fixed point and may still
 depend on the deleted compensation, so it is refused by name before any weight I/O, like a
-container of another NeuroTax version (`nbx.neurotax.NEUROTAX_VERSION`).
+container of another NeuroTax version (`<branch>.neurotax.NEUROTAX_VERSION`).
 """
 from __future__ import annotations
 

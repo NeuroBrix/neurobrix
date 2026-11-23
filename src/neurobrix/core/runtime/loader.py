@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 
 from neurobrix.nbx.cache import ensure_extracted
+from neurobrix import branch_door as _branch_door      # the branch's own NeuroTax twin, asked at the call
 
 @dataclass(frozen=True)
 class RuntimePackage:
@@ -91,13 +92,13 @@ class NBXRuntimeLoader:
                     f"build published next to this variant.")
 
         # 1c. The neurotaxe's version: same major, minor at most the engine's; refused by name else.
-        from neurobrix.nbx.neurotax import refuse_other_neurotax
+        refuse_other_neurotax = _branch_door.module("neurotax").refuse_other_neurotax
         refuse_other_neurotax(core_data["manifest"].get("neurotax_version"), str(cache_path))
 
         # 1d. The parser's own law (the owner, 2026-10-04 02:05): every weight key is a fixed point of
         # the engine's parser. The version string cannot tell a container of the partial 5.0
         # vocabulary from a complete one; its keys can. One pass over each component's index.
-        from neurobrix.nbx.neurotax import refuse_non_canonical
+        refuse_non_canonical = _branch_door.module("neurotax").refuse_non_canonical
         for _wi in sorted((cache_path / "components").glob("*/weights_index.json")):
             refuse_non_canonical(self._load_json_from_cache(_wi).get("tensors") or {},
                                  container=cache_path.name, component=_wi.parent.name)

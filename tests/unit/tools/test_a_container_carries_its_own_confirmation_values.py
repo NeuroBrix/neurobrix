@@ -77,7 +77,7 @@ def test_an_unknown_key_is_refused_by_name():
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
     """A cache holding one video container built at 720x1280; returns a writer of its topology."""
-    from neurobrix.nbx.neurotax import NEUROTAX_VERSION
+    from neurobrix.pytorch.neurotax import NEUROTAX_VERSION
     d = tmp_path / "cache" / MODEL
     (d / "runtime").mkdir(parents=True)
     (d / "components" / "transformer").mkdir(parents=True)

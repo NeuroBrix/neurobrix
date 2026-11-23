@@ -48,7 +48,7 @@ def _topo(gate=None, conf=None):
 
 @pytest.fixture
 def cache(tmp_path, monkeypatch):
-    from neurobrix.nbx.neurotax import NEUROTAX_VERSION
+    from neurobrix.pytorch.neurotax import NEUROTAX_VERSION
     d = tmp_path / "cache" / MODEL
     (d / "runtime").mkdir(parents=True)
     (d / "components" / "transformer").mkdir(parents=True)

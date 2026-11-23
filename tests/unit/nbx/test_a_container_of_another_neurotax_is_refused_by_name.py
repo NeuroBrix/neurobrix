@@ -17,7 +17,7 @@ import json
 import pytest
 
 from neurobrix.core.runtime.loader import NBXRuntimeLoader
-from neurobrix.nbx.neurotax import NEUROTAX_VERSION, _neurotax_major_minor
+from neurobrix.pytorch.neurotax import NEUROTAX_VERSION, _neurotax_major_minor
 
 MAJOR, MINOR = _neurotax_major_minor(NEUROTAX_VERSION)
 

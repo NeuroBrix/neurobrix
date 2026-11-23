@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.nbx.neurotax import normalize_tensor_name_strict
+from neurobrix.pytorch.neurotax import normalize_tensor_name_strict
 
 # parakeet-tdt-1.1b's joint component, partial keys -> complete keys (the cache, 2026-10-04)
 JOINT_KEYS = {"pred_proj.weight": "dec_weight", "pred_proj.bias": "dec_bias",

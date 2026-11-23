@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.nbx.neurotax import NEUROTAX_VERSION, first_non_canonical, refuse_non_canonical
+from neurobrix.pytorch.neurotax import NEUROTAX_VERSION, first_non_canonical, refuse_non_canonical
 from neurobrix.core.runtime.loader import NBXRuntimeLoader
 
 

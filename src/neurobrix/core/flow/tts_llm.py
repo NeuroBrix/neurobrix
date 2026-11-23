@@ -19,7 +19,7 @@ ZERO SEMANTIC: No knowledge of specific models.
 ZERO HARDCODE: All parameters from NBX container.
 """
 
-from neurobrix.nbx.neurotax import SynonymRegistry
+from neurobrix.pytorch.neurotax import SynonymRegistry
 from neurobrix.core.memory.manager import release_flow_memory
 import time
 from neurobrix import decode_stop

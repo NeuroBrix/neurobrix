@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.nbx.neurotax import NeuroTaxParser, SynonymRegistry, first_non_canonical
+from neurobrix.pytorch.neurotax import NeuroTaxParser, SynonymRegistry, first_non_canonical
 
 ROLES = {
     "A_log": "decay_log",

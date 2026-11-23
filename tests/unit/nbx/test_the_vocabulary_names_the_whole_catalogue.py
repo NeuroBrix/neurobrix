@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.nbx.neurotax import (NEUROTAX_VERSION, SynonymRegistry, normalize_tensor_name,
+from neurobrix.pytorch.neurotax import (NEUROTAX_VERSION, SynonymRegistry, normalize_tensor_name,
                                     normalize_tensor_name_strict)
 
 REFUSED_5_0 = (Path(__file__).parent / "data" / "neurotax_5_0_refused_tokens.txt").read_text().split()

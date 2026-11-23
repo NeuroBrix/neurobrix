@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 
-from neurobrix.nbx.neurotax import SynonymRegistry, normalize_tensor_name, normalize_tensor_name_strict
+from neurobrix.pytorch.neurotax import SynonymRegistry, normalize_tensor_name, normalize_tensor_name_strict
 
 
 def test_every_canonical_token_maps_to_itself():

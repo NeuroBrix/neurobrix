@@ -22,14 +22,6 @@ from .spec import (
 
 from .container import NBXContainer, ComponentData
 
-# NeuroTax - Universal tensor naming taxonomy
-from .neurotax import (
-    SynonymRegistry,
-    ParsedTensor,
-    NeuroTaxParser,
-    normalize_tensor_name,
-    normalize_tensor_name_strict,
-)
 
 # Fast Loading - Cache + Direct GPU
 from .cache import NBXCache, get_cache, ensure_extracted
