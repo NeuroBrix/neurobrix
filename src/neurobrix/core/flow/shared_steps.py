@@ -275,10 +275,7 @@ def effective_sampling(ctx, defaults):
     if resolver is None:
         return config, explicit
     for name in SAMPLING_PARAMS:
-        try:
-            val = resolver.get(f"global.{name}", None)
-        except Exception:
-            continue
+        val = resolver.get(f"global.{name}", None)
         if val is None:
             continue
         config[name] = val

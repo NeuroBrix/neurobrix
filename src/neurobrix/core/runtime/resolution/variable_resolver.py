@@ -60,6 +60,9 @@ def _dump_init_latent(name, tensor_to_numpy):
     _log.debug(f"[init-latent] {name} {tuple(arr.shape)} {arr.dtype} -> {path}")
 
 
+_NO_DEFAULT = object()   # get() was given no default: an absent variable raises
+
+
 class VariableResolver:
     """
     NeuroBrix Variable Resolver v0.1
@@ -192,13 +195,12 @@ class VariableResolver:
         """Manually sets a resolved variable value (e.g. user input)."""
         self.resolved[var_name] = value
 
-    def get(self, var_name: str, default: Any = None) -> Any:
-        """Retrieves a resolved variable, resolving it if necessary.
+    def get(self, var_name: str, default: Any = _NO_DEFAULT) -> Any:
+        """A variable's value: the resolved one, else the contract's, resolved now.
 
-        Args:
-            var_name: Variable name (e.g., "global.height")
-            default: Default value if variable not found (None raises KeyError)
-        """
+        A variable found in neither is answered by `default` when the caller gives one, None included: an explicit
+        None is the caller saying "absent is a legitimate answer and I handle it" (a request that sets no flag, an
+        optional port). With no default given, the absence raises KeyError naming the variable."""
         if var_name in self.resolved:
             return self.resolved[var_name]
 
@@ -206,7 +208,7 @@ class VariableResolver:
             self.resolved[var_name] = self._resolve_single(var_name, self.contract[var_name])
             return self.resolved[var_name]
 
-        if default is not None:
+        if default is not _NO_DEFAULT:
             return default
 
         # SPRINT 0 - R0.3: Enhanced error messages for debugging

@@ -31,7 +31,6 @@ from neurobrix.core.runtime.card_handoff import to_card
 import logging
 _log = logging.getLogger(__name__)
 
-_SENTINEL = object()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1159,8 +1158,8 @@ class AutoregressiveHandler(FlowHandler):
                 raise RuntimeError(f"ZERO FALLBACK: Missing VQ executors: {missing}")
 
             # CFG weight — MUST come from defaults (set by the build toolchain from model_registry.yml)
-            cli_cfg = self.ctx.variable_resolver.get("global.guidance_scale", default=_SENTINEL)
-            if cli_cfg is not _SENTINEL:
+            cli_cfg = self.ctx.variable_resolver.get("global.guidance_scale", default=None)
+            if cli_cfg is not None:
                 cfg_weight = float(cli_cfg)
             else:
                 cfg_weight = defaults.get("guidance_scale")
@@ -1199,9 +1198,8 @@ class AutoregressiveHandler(FlowHandler):
 
         # Priority 0: Pre-tokenized input (from serving chat path).
         # Token IDs already include chat template + special tokens — no re-tokenization.
-        _NO_PRETOKENIZED = object()
-        pre_tokenized = self.ctx.variable_resolver.get("global.input_token_ids", default=_NO_PRETOKENIZED)
-        if pre_tokenized is not _NO_PRETOKENIZED:
+        pre_tokenized = self.ctx.variable_resolver.get("global.input_token_ids", default=None)
+        if pre_tokenized is not None:
             if isinstance(pre_tokenized, list):
                 input_ids = torch.tensor([pre_tokenized], dtype=torch.long, device=device)
             else:
@@ -1234,8 +1232,8 @@ class AutoregressiveHandler(FlowHandler):
         # CFG check (image only)
         use_cfg = False
         if gen_type == "autoregressive_image":
-            cli_cfg = self.ctx.variable_resolver.get("global.guidance_scale", default=_SENTINEL)
-            if cli_cfg is not _SENTINEL:
+            cli_cfg = self.ctx.variable_resolver.get("global.guidance_scale", default=None)
+            if cli_cfg is not None:
                 cfg_weight = float(cli_cfg)
             else:
                 cfg_weight = defaults.get("guidance_scale")
@@ -1310,8 +1308,8 @@ def _build_generator_config(defaults: Dict, resolver: Any, gen_type: str) -> Dic
     config.update(resolve_sampling(resolver, defaults, f"{gen_type} (compiled)"))
 
     # The request's token budget over the container's
-    cli_val = resolver.get("global.max_tokens", default=_SENTINEL)
-    if cli_val is not _SENTINEL:
+    cli_val = resolver.get("global.max_tokens", default=None)
+    if cli_val is not None:
         config["max_tokens"] = int(cli_val)
 
     return config
