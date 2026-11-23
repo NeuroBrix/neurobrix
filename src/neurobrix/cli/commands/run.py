@@ -179,9 +179,8 @@ def play_turns(args, turns, executor, pkg, execution_plan, inputs, drain) -> int
     from neurobrix.core.runtime.output_dispatch import _extract_text
     from neurobrix.core.runtime_values import resolve as _resolve_runtime
     from neurobrix.core.runtime import run_timings
-    family = pkg.manifest.get("family")
-    if family != "llm":
-        raise SystemExit(f"ERROR: --turns plays a chat session, which needs an LLM; '{args.model}' is '{family}'")
+    from neurobrix.core.runtime.prompt_length import declared_context_keeps
+    declared_context_keeps(pkg.defaults, "--turns")        # the container decides, not its family
     executor.setup()
     tokenizer = executor.modules.get("tokenizer")
     if tokenizer is None:

@@ -54,6 +54,21 @@ def decode_bound(rendered: int, reach: int, source: str, asked: Optional[int] = 
     return left
 
 
+def declared_context_keeps(defaults: Optional[Dict[str, Any]], what: str) -> None:
+    """A conversation kept across turns (`neurobrix run --turns`, a served chat session, a request that carries its
+    history) runs only for a container that declares it keeps one — runtime/defaults.json `context: {"keeps": true}`;
+    the container decides, not its family (supervisor 23/11, order B). Declared false, or not declared, refused by
+    name: the engine supplies no answer of its own."""
+    ctx = (defaults or {}).get("context")
+    if not isinstance(ctx, dict) or "keeps" not in ctx:
+        raise RuntimeError(f"ZERO FALLBACK: {what} keeps a conversation, and the container does not declare whether "
+                           'it keeps one (runtime/defaults.json: context {"keeps": ...}): it is the container\'s '
+                           "to say, not the engine's")
+    if not ctx["keeps"]:
+        raise RuntimeError(f"ZERO FALLBACK: {what} keeps a conversation, and this container declares it keeps none "
+                           '(runtime/defaults.json: context {"keeps": false})')
+
+
 def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
     """Normalize tokenizer return into a flat List[int]."""
     if hasattr(token_ids, 'input_ids'):

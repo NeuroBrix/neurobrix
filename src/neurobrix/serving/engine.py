@@ -549,6 +549,8 @@ class InferenceEngine:
             raise RuntimeError(
                 f"ZERO FALLBACK: chat() requires LLM family, got '{self._family}'."
             )
+        from neurobrix.core.runtime.prompt_length import declared_context_keeps
+        declared_context_keeps(self._pkg.defaults, "a chat session")
         decode = self._decode_inputs(kwargs)
 
         if self._session is None:
@@ -594,6 +596,9 @@ class InferenceEngine:
                 f"'agent' in modes.supported; family '{self._family}' "
                 f"declares {supported or 'none'}."
             )
+        if sum(m.get("role") != "system" for m in messages) > 1:     # the request carries its history
+            from neurobrix.core.runtime.prompt_length import declared_context_keeps
+            declared_context_keeps(self._pkg.defaults, "a request with its history")
         decode = self._decode_inputs(kwargs)
         token_ids, tokenizer = self._rendered(messages, tools), self._executor.modules["tokenizer"]
         from neurobrix.core.runtime.prompt_length import refuse_past_reach
