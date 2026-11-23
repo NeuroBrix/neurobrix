@@ -15,3 +15,17 @@ def test_a_routed_graph_is_refused_and_a_plain_one_passes(monkeypatch):
     dag = {"ops": {}, "execution_order": []}
     assert moe_fusion._unfused(dag, "llm", False) is dag
     assert moe_fusion._unfused(dag, "image", False) is dag
+
+
+def test_the_switch_reaches_the_refusal_through_the_fusion_pass_itself(monkeypatch):
+    """qa 1298-1: through detect_and_fuse_moe, the door every caller uses: a switch that returned the graph silently
+    there (the mutant) would pass the test of _unfused alone; here it is red."""
+    monkeypatch.setenv("NBX_DISABLE_MOE_FUSION", "1")
+    monkeypatch.setattr(moe_fusion, "_wide_topks", lambda ops, order: ["aten.topk::0"])
+    with pytest.raises(RuntimeError, match="carries the build-time routing as constants"):
+        moe_fusion.detect_and_fuse_moe({"ops": {}, "execution_order": []}, "llm")
+    with pytest.raises(RuntimeError, match="carries the build-time routing as constants"):
+        moe_fusion.detect_and_fuse_moe({"ops": {}, "execution_order": []}, "image", declared=True)
+    monkeypatch.setattr(moe_fusion, "_wide_topks", lambda ops, order: [])
+    dag = {"ops": {}, "execution_order": []}
+    assert moe_fusion.detect_and_fuse_moe(dag, "llm") is dag
