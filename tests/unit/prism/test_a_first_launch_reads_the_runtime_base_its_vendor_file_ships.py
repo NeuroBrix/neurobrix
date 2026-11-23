@@ -50,3 +50,13 @@ def test_volta_ships_its_base_for_the_release_it_was_measured_on():
     f = pathlib.Path(neurobrix.__file__).parent / "config" / "vendors" / "nvidia" / "volta.yml"
     measured = yaml.safe_load(f.read_text())["measured"]
     assert measured["runtime_base_mb"] == {"compiled": 803, "triton": 207} and measured["runtime_base_library"]
+
+
+def test_a_figure_that_names_no_library_release_is_refused_by_name(monkeypatch, tmp_path):
+    """qa 1263-2: a shipped runtime base without `runtime_base_library` is a data error of the vendor file, refused
+    by name — never read as if it were this release's."""
+    import pytest
+    from neurobrix.core.prism import loader
+    monkeypatch.setattr(loader, "vendor_block", lambda d, k: {"runtime_base_mb": {"triton": 354}})
+    with pytest.raises(RuntimeError, match="names none cannot be read"):
+        O.shipped_or_sibling_base({"model": "M4"}, tmp_path / "p.yml", "triton")

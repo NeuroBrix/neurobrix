@@ -187,6 +187,10 @@ def shipped_or_sibling_base(device: dict, path, engine: str) -> Optional[int]:
     shipped = (block.get("runtime_base_mb") or {}).get(engine)
     # the base is the runtime's footprint for ONE library release (the Dell 11-17/11: triton 206, 481, 643 as the
     # library moved): a figure measured on another release is not read — the sibling or the one measure answers
-    if shipped is not None and str(block.get("runtime_base_library")) == str(nbxtensor.__version__):
+    if shipped is not None and "runtime_base_library" not in block:      # qa 1263-2: a figure must name its release
+        raise RuntimeError(f"ZERO FALLBACK: the vendor file of {device.get('model', 'this card')} ships "
+                           "measured.runtime_base_mb with no runtime_base_library: a runtime base is the footprint of "
+                           "one nbxtensor release, and a figure that names none cannot be read")
+    if shipped is not None and str(block["runtime_base_library"]) == str(nbxtensor.__version__):
         return int(shipped)
     return base_from_siblings(path.parent, exclude=path, engine=engine).get(engine)
