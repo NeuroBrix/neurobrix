@@ -25,6 +25,7 @@ from neurobrix.kernels.classification import kernel_for as _kernel_for
 import numpy as np
 
 from nbxtensor import device as _nbx_device, inspection as _inspection, memory as _nbx_memory
+from nbxtensor.memory.device_transfer import needs_move, transfer_tensor   # both transfer walkers (args, kwargs)
 from nbxtensor.memory.oom_advice import annotate as _oom_annotate
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
@@ -3949,7 +3950,6 @@ class TritonSequence(SequenceSteps):
         # views, which is exactly what native does).
         if self._find_cuda_arg(args) is None:
             return args
-        from nbxtensor.memory.device_transfer import needs_move, transfer_tensor
 
         new_args = []
         for a in args:
@@ -3968,7 +3968,7 @@ class TritonSequence(SequenceSteps):
         return new_args
 
     def _transfer_kwargs(self, kwargs, target_dev: int):
-        """Transfer NBXTensor kwargs to target CUDA device."""
+        """Transfer NBXTensor kwargs to target CUDA device (the library's transfer, imported for the module)."""
         new_kw = {}
         for k, v in kwargs.items():
             if isinstance(v, NBXTensor) and needs_move(v, target_dev):
