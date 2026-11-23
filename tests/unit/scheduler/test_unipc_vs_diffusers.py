@@ -37,7 +37,7 @@ Rank-agnosticism is asserted on TWO latent shapes:
 
 Run:
   source ~/ml/venv/bin/activate
-  cd ~/NeuroBrix_System
+  cd <the checkout>
   python -m pytest tests/unit/scheduler/test_unipc_vs_diffusers.py -x -q
 or directly (no pytest needed):
   python tests/unit/scheduler/test_unipc_vs_diffusers.py

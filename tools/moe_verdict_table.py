@@ -61,7 +61,7 @@ def common_prefix(a: str, b: str) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", required=True, help="moe_routing_<date> directory")
-    ap.add_argument("--trace-len", type=int, default=23)
+    ap.add_argument("--build-len", type=int, default=23)
     args = ap.parse_args()
 
     vendor = {r["rendered_len"]: r for r in

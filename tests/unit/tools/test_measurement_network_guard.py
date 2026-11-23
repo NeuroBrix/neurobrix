@@ -37,7 +37,7 @@ with the_workshop_configuration():
 # Captured verbatim from `mount` on this machine, 2026-09-11.
 MACOS = """/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)
 devfs on /dev (devfs, local, nobrowse)
-192.0.2.40:~/NeuroBrix_System on ~/Mounts/Dell-NeuroBrix (nfs)
+192.0.2.40:~/the_checkout on ~/Mounts/Dell-NeuroBrix (nfs)
 192.0.2.20:/nvme/neurobrix_cache on ~/Mounts/Super-NeuroBrix-Cache (nfs)
 192.0.2.20:/data/models on ~/Mounts/Super-Models (nfs)
 map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)
@@ -45,7 +45,7 @@ map auto_home on /System/Volumes/Data/home (autofs, automounted, nobrowse)
 
 # The Linux form, which the same parser has to read: the rig has two sides.
 LINUX = """/dev/nvme0n1p2 on / type ext4 (rw,relatime)
-203.0.113.1:/data/models on ~/NeuroBrix_System/models type nfs (rw,vers=4.2)
+203.0.113.1:/data/models on ~/the_checkout/models type nfs (rw,vers=4.2)
 203.0.113.1:/nvme/ai_work on ~/scratch type nfs4 (rw,relatime)
 tmpfs on /run type tmpfs (rw,nosuid)
 """

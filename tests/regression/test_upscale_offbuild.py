@@ -17,7 +17,7 @@ stayed red, while the BUILD-SIZE cell flipped green->red and made
 the regression attributable in one cycle (2026-08-28).
 
 Born from the upscaler build-value collision + frozen window-count
-pair (DETTE: D-RETRACE-SWIN2SR-SYMBOLIC; the class covers the seven
+pair (DETTE: D-REBUILD-SWIN2SR-SYMBOLIC; the class covers the seven
 Swin-window artifacts — see
 models/_agents/archives/dell/validation_outputs_pre_2026_09_01/spatial_freeze_census_2026_08_27/VERDICT.md).
 
@@ -68,7 +68,7 @@ OFF_BUILD_RECT_HW = (240, 320)
 CELLS = [
     pytest.param("Real-ESRGAN-x4", id="realesrgan"),
     # Hard PASS since 2026-08-28: the collision-free stimulus plus the
-    # window-count recovery closed D-RETRACE-SWIN2SR-SYMBOLIC, and this
+    # window-count recovery closed D-REBUILD-SWIN2SR-SYMBOLIC, and this
     # cell XPASSed on all four combinations. The xfail was removed with
     # the rebuild, never left to rot into a silent pass.
     pytest.param("swin2SR-classical-sr-x4-64", id="swin2sr"),

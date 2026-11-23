@@ -50,8 +50,8 @@ def test_flex_pieces_compute_what_the_whole_transformer_computes(mode, rung, tmp
                     pytrace=False)
     out = tmp_path / "report.json"
     proc = subprocess.run(
-        [os.environ["NEUROBRIX_PYTHON"], str(TOOL), "Flex.1-alpha", "transformer", mode, "trace",
-         "trace", "18186", str(rung), str(out), "1024", "1024"],
+        [os.environ["NEUROBRIX_PYTHON"], str(TOOL), "Flex.1-alpha", "transformer", mode, "build",
+         "build", "18186", str(rung), str(out), "1024", "1024"],
         cwd=REPO, env={**os.environ, "PYTHONPATH": str(REPO / "src")},
         capture_output=True, text=True, timeout=3600)
     assert proc.returncode == 0, proc.stderr[-3000:]

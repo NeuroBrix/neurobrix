@@ -15,7 +15,7 @@ loaded by file path purely as the algorithm oracle.
 
 Run:
   source ~/ml/venv/bin/activate
-  cd ~/NeuroBrix_System
+  cd <the checkout>
   python tests/unit/scheduler/test_cogvideox_ddim_vs_vendor.py
 """
 from __future__ import annotations
@@ -27,10 +27,10 @@ import numpy as np
 import torch
 
 VENDOR_FILE = (
-    "~/NeuroBrix_System/forge/vendors/diffusers/0.30.1/"
+    "<the build tool>/vendors/diffusers/0.30.1/"
     "diffusers/schedulers/scheduling_ddim_cogvideox.py"
 )
-VENDOR_ROOT = "~/NeuroBrix_System/forge/vendors/diffusers/0.30.1"
+VENDOR_ROOT = "<the build tool>/vendors/diffusers/0.30.1"
 
 COG_CONFIG = {
     "num_train_timesteps": 1000,

@@ -26,10 +26,10 @@ read by the person who is not — which, at hour nine, is everyone.
 
 Usage:
     from artefact_witness import witness
-    w = witness(graph_path, not_before=("git", "forge", "tracer/worker.py"))
+    w = witness(graph_path, not_before=("git", "<the build tool>", "<its worker file>"))
     print(w.line)          # names it, always, pass or fail
 
-    python tools/artefact_witness.py PATH --not-before-commit forge tracer/worker.py
+    python tools/artefact_witness.py PATH --not-before-commit <the build tool> <its worker file>
     python tools/artefact_witness.py PATH --not-before-file OTHER
 """
 from __future__ import annotations

@@ -65,7 +65,7 @@ class AnalysisReport:
 
     def add_suspect(self, op_uids: list[str], detail: str) -> None:
         self.suspects.append(Finding(
-            category="forge_suspect", op_uids=op_uids, detail=detail,
+            category="build_suspect", op_uids=op_uids, detail=detail,
         ))
 
     # -- summaries -----------------------------------------------------

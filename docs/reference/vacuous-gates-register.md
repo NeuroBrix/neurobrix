@@ -801,7 +801,7 @@ handshake before any data is sent; the report was still false when it was read.
 **The correction that matters for whoever reads the debt in six months.** The
 interception was the LaLiga/Cloudflare judicial block applied by Spanish
 operators during matches, not an attack. Its certificate is **self-signed by a
-blocking device**, not forged: nobody impersonated the hub, an appliance signed
+blocking device**, not counterfeit: nobody impersonated the hub, an appliance signed
 its own name. The refusal was right either way — *bypassing an interception is
 deciding alone that it is benign* — and the remedy was not to wait it out but to
 stop taking the road it watches: the rack now publishes through its own
@@ -2274,7 +2274,7 @@ and make one of its branches produce an observable.
 
 ### 86 — five guards that exited 2 from the wrong event, and could only report
 
-**Where.** `.claude/hooks/{no-cache-hacks,no-silent-fallback,confidentiality,trace-seq-len,
+**Where.** `.claude/hooks/{no-cache-hacks,no-silent-fallback,confidentiality,<seq-len>,
 runtime}-guard.sh`, this rack, found 2026-09-22. Since `?`.
 
 **What they did.** Every one of them ends `exit 2  # Block the edit`, and their headers say

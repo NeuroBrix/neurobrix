@@ -81,7 +81,7 @@ def _profiler(tmp_path, graph):
 def test_no_config_binds_to_the_build_and_says_so(tmp_path):
     prof = _profiler(tmp_path, _graph(build_time=9, coefficient=1))
     result = prof.estimate_peak_memory()
-    assert result.binding == "trace"
+    assert result.binding == "build"
     assert result.symbol_map == {"s0": 1, "s1": 9}
 
 
@@ -94,7 +94,7 @@ def test_a_supplied_config_is_marked_as_a_request(tmp_path):
 def test_the_repr_carries_the_binding(tmp_path):
     """A number travels; it must not travel without its request."""
     prof = _profiler(tmp_path, _graph(build_time=9, coefficient=1))
-    assert "trace-bound" in repr(prof.estimate_peak_memory())
+    assert "build-bound" in repr(prof.estimate_peak_memory())
 
 
 def test_a_graph_with_no_build_value_is_refused_not_guessed(tmp_path):

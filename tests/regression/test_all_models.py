@@ -187,7 +187,7 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str,
       family=llm                      → --prompt + --max-tokens
       family=multimodal               → --mode <gen_type> + --prompt
                                         (Janus: build is image-only, the
-                                        CLI enforces --mode == trace type)
+                                        CLI enforces --mode == the built type)
       flow in STT_FLOWS               → --audio only (Whisper, Parakeet)
       flow == audio_llm               → --audio + --prompt (Voxtral,
                                         canary-qwen, granite-speech:

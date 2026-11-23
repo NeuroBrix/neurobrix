@@ -158,7 +158,7 @@ def census(root: Path, second_point: Path | None):
                                    "ops_per_chunk": slope}
         rows.append({
             "component": f"{model}/{comp}", "kind": row_kind,
-            "traced_extent": traced, "compression": compression,
+            "built_extent": built, "compression": compression,
             "k_trace": k_build, "k_runtime": k_run, "runtime_frames": run_frames,
             "ops": len(graph.get("ops") or {}),
             "share_explained": sig["share"], "groups": sig["groups"],
@@ -206,7 +206,7 @@ def main() -> int:
                 and r["k_runtime"] != r["k_trace"])
         verdict = ("unrolled, LIVE" if live else
                    "unrolled, theoretical" if unrolled else "—")
-        print(f"{r['component']:52s} {r['kind']:9s} {r['traced_extent']:>4} "
+        print(f"{r['component']:52s} {r['kind']:9s} {r['built_extent']:>4} "
               f"{r['k_trace']:>5} {str(r['k_runtime']):>6} {r['ops']:>6} "
               f"{r['share_explained']:>6.2f}  {verdict}")
 

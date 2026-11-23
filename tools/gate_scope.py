@@ -1912,7 +1912,7 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
         for c in cs:
             sel[cls].setdefault(c, []).append(why)
 
-    report["retraced"] = cells.rebuilt
+    report["rebuilt"] = cells.rebuilt
     report["gated_classes"] = sorted(cells.gated)
     for cls in cfg["classes"]:
         if cls not in cells.gated:

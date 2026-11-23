@@ -76,7 +76,7 @@ RUNGS = [4096, 6144, 8192, 16384]
 # refuses before streaming is tried and the cell proves nothing. Open-Sora-v2's 2026-09-13 build
 # declares no resolution (the container builder dd2fa21 adds the vendor's); its built extent is used here.
 REQUESTS = {"Open-Sora-v2": dict(height=112, width=176, num_frames=51, temporal_compression=4)}
-SCALES = {"trace": lambda t: t, "twice": lambda t: 2 * t, "far": lambda t: 7 * t + 1}
+SCALES = {"build": lambda t: t, "twice": lambda t: 2 * t, "far": lambda t: 7 * t + 1}
 
 
 def _walk_symbols(obj, out, known):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The certified directory is committed and pushed WHILE it is being written.
 
-    tools/certified_checkpoint.py --repo ~/NeuroBrix_System \\
+    tools/certified_checkpoint.py --repo <the checkout> \\
         --dir src/neurobrix/config/autotune --producer-pid 1234 --producer-pid 1235 \\
         --interval 600 --record ~/nbx/campaigns/<date>_<name>/RUN.md
 

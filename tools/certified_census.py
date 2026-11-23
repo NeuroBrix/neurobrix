@@ -382,7 +382,7 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
         # runs and its keys are harvested (at the build value of the frozen dimension), so the
         # model is certified for what it can run today. Dropping it harvested nothing for 17
         # of 59 containers (2026-09-21).
-        row.update(status="retrace", frozen=frozen)
+        row.update(status="rebuild", frozen=frozen)
     probe = _tiling_probe(model, fam, reqs[0], log_dir)
     if probe is not None:
         reqs = list(reqs) + [probe]
@@ -430,10 +430,10 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
                     if ri:
                         if row["status"] == "ok":
                             row["status"] = "probe_failed"
-                        elif row["status"] == "retrace":
-                            row["status"] = "retrace+probe_failed"
+                        elif row["status"] == "rebuild":
+                            row["status"] = "rebuild+probe_failed"
                     else:
-                        row["status"] = "failed" if "retrace" not in row["status"] else "retrace+failed"
+                        row["status"] = "failed" if "rebuild" not in row["status"] else "rebuild+failed"
     row["keys"] = len(keys)
     row["_keys"] = sorted(keys)
     return row
@@ -623,12 +623,12 @@ def main() -> int:
                       + (f"  frozen: {len(r['frozen'])} symbol(s)" if r["frozen"] else "")
                       + (f"  UNADJUDICATED: {len(r['derived_breaks'])} derived-relation break(s)"
                          if r.get("derived_breaks") else ""), flush=True)
-                if r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed") and not trows:
+                if r["status"] in ("ok", "rebuild", "probe_failed", "rebuild+probe_failed") and not trows:
                     # every shadow ran and none formed a key: not the knowledge that the model forms none
                     r["status"] = "no_keys"
                     print(f"[census] table {table.name}: {m} — no key formed by any shadow, its previous rows kept",
                           flush=True)
-                elif r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed"):
+                elif r["status"] in ("ok", "rebuild", "probe_failed", "rebuild+probe_failed"):
                     removed, written = _T.replace_model(table, m, trows)
                     print(f"[census] table {table.name}: {m} — {removed} row(s) replaced by {written}", flush=True)
                 else:
@@ -654,8 +654,8 @@ def main() -> int:
     census = {"format": FORMAT, "hardware": a.hardware, "engine_version": engine_version,
               "date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
               "modes": modes, "rungs_mb": rungs, "wall_s": round(time.time() - t0, 1),
-              "models": rows, "retrace_queue": sorted(m for m, r in rows.items() if r["status"] == "retrace"),
-              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable", "retrace+failed", "refused", "no_keys")),
+              "models": rows, "rebuild_queue": sorted(m for m, r in rows.items() if r["status"] == "rebuild"),
+              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable", "rebuild+failed", "refused", "no_keys")),
               "refused": {m: r["refusal"] for m, r in sorted(rows.items()) if r["status"] == "refused"},
               "probe_failed": sorted(m for m, r in rows.items() if "probe_failed" in r["status"]),
               "entries": entries}
@@ -670,7 +670,7 @@ def main() -> int:
     if a.out:
         write_json_atomic(Path(a.out), census)
     n_ok = sum(1 for r in rows.values() if r["status"] == "ok")
-    print(f"\n[census] {len(entries)} key(s) from {n_ok} model(s); rebuild queue {len(census['retrace_queue'])}; "
+    print(f"\n[census] {len(entries)} key(s) from {n_ok} model(s); rebuild queue {len(census['rebuild_queue'])}; "
           f"failed {len(census['failed'])} (refused {len(census['refused'])}); {census['wall_s']} s; table {table}")
     if a.directory:
         c = census["coverage"]

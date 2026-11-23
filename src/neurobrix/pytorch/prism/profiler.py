@@ -489,7 +489,7 @@ class ActivationProfile:
     #              input_tids_for_fusion_detection)
     overflow_ops: List = None  # type: ignore  # Optional[List[Tuple[...]]]
     #: WHICH REQUEST THIS NUMBER IS ABOUT. "request" when a caller supplied an
-    #: InputConfig; "trace" when none was given and the profile was bound to the
+    #: InputConfig; "build" when none was given and the profile was bound to the
     #: extents the container was actually built at. A peak in gigabytes reads
     #: like a property of the model; it is a property of a request, and until
     #: 2026-09-12 a caller who passed nothing silently got a 1024x1024 batch-2
@@ -1037,13 +1037,13 @@ class ActivationProfiler:
         binding = "request"
         if input_config is None:
             input_config = InputConfig()          # for dtype only
-            binding = "trace"
+            binding = "build"
 
         if dtype_bytes is None:
             # a request that names no dtype plans at the widest, float32: over-estimating is the safe direction
             dtype_bytes = _itemsize.itemsize(input_config.dtype or "float32")
 
-        if binding == "trace":
+        if binding == "build":
             symbol_map = self.sample_symbol_map()
         else:
             # Build symbol map for shape resolution (positional base + this

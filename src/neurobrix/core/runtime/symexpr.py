@@ -3,7 +3,7 @@
 A container's graph.json carries symbolic values as JSON trees: in `symbolic_shape.dims` (a
 tensor's extents), in the size lists of view/reshape/expand/factory ops, and at the scalar slots
 of ops whose value follows the request (a `linspace` bound, an `arange` end). the container builder emits them
-(`SymInt.to_json` for integers, `tracer/symbolic/extent_provenance.py` for reals); every runtime
+(`SymInt.to_json` for integers, the build's own extent provenance for reals); every runtime
 reader evaluates them HERE — the ATen shape resolver (`shape_resolver.py`), the Triton symbol
 resolver (`triton/symbols.py`), both compiled sequences' expression arguments, both sequential
 argument paths, Prism's profiler and the census derivation through the Triton resolver. R30: one

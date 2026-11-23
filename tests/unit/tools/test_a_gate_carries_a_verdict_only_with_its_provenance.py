@@ -142,7 +142,7 @@ def test_a_carried_row_is_never_reused_as_a_measurement(world):
 def _red_record(world, g, mode="triton"):
     return _yaml(world.tmp, "reds.yml", "reds", [{"model": "B", "mode": mode, "source_gate": str(g),
                                                   "date": "2026-10-10T10:00:00Z", "engine": BASE,
-                                                  "cause": "frozen pos table", "red_cells": "B | trace"}])
+                                                  "cause": "frozen pos table", "red_cells": "B | build"}])
 
 
 def test_a_known_red_is_carried_red_with_its_cause(world):
@@ -151,7 +151,7 @@ def test_a_known_red_is_carried_red_with_its_cause(world):
     assert ("B", "triton") not in world.ran
     r = _rows(world)[("B", "triton")]
     assert r["rc"] == 1 and r["carried"]["kind"] == "known-red" and r["carried"]["reason"] == "frozen pos table"
-    assert r["carried"]["red_cells"] == "B | trace"
+    assert r["carried"]["red_cells"] == "B | build"
 
 
 def test_a_claimed_red_runs(world):

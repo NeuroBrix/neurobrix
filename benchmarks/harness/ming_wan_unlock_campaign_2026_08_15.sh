@@ -9,7 +9,7 @@
 #   threshold 0.05 (their best weapon, documented in pins — clause 6).
 # All arms N=5 warm-daemon requests; artifacts in the R29 media tree.
 set -uo pipefail
-cd ~/NeuroBrix_System
+cd "${NBX_CHECKOUT:?the checkout this campaign runs from}"
 RB="python3 benchmarks/harness/run_bench.py --repetitions 5 --gpu 2"
 
 run_arms () {  # $1 row ; remaining args = config flag

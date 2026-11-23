@@ -54,12 +54,12 @@ def test_an_environment_variable_overrides_a_role(atelier, monkeypatch, tmp_path
 
 
 def test_an_interpreter_is_resolved_at_use_not_at_import(atelier):
-    """A tool names its interpreter at import (`interpreter("forge")`); a machine that declares no such environment
+    """A tool names its interpreter at import (`interpreter("<role>")`); a machine that declares no such environment
     imports it and is refused only when a run uses it (the Mac collected 19 tool tests as errors, 2026-10-23).
     Injection (seen red): `interpreter` resolving at construction -> red."""
     import os
-    py = A.interpreter("forge")                       # this machine declares no builder python
-    with pytest.raises(A.AtelierUndeclared, match="forge"):
+    py = A.interpreter("build")                       # this machine declares no builder python
+    with pytest.raises(A.AtelierUndeclared, match="build"):
         os.fspath(py)
     assert os.fspath(A.interpreter("engine")) == "/venvs/engine/bin/python"
     assert str(A.interpreter("engine")) + " -V" == "/venvs/engine/bin/python -V"
@@ -70,5 +70,5 @@ def test_an_interpreter_compares_as_the_path_it_resolves_to(monkeypatch):
     Interpreter is unequal to the path string it resolves to."""""
     import atelier as A
     monkeypatch.setattr(A, "python", lambda name: f"/venvs/{name}/bin/python")
-    assert A.interpreter("forge") == "/venvs/forge/bin/python"
-    assert A.interpreter("forge") != "/venvs/engine/bin/python"
+    assert A.interpreter("build") == "/venvs/build/bin/python"
+    assert A.interpreter("build") != "/venvs/engine/bin/python"

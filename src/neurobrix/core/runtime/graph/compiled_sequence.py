@@ -13,7 +13,7 @@ Performance gains vs legacy:
 
 Based on:
 - CUDA Graphs (capture/replay pattern)
-- JAX JIT (tracing + compilation)
+- JAX JIT (graph capture + compilation)
 - TorchDynamo (graph mode)
 """
 

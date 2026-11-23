@@ -403,7 +403,7 @@ def pytest_collection_modifyitems(config, items):
             "   A battery run from here would spend hours of cards to report a missing "
             "file as a model failure (2026-09-05: 30 red cells of 33, all of them this).\n"
             "   Copy them in from the working tree before launching:\n"
-            + "".join(f"     install -D ~/NeuroBrix_System/{a} {root}/{a}\n" for a in missing),
+            + "".join(f"     install -D <the working tree>/{a} {root}/{a}\n" for a in missing),
             returncode=2)
     if config.getoption("--runslow"):
         return
