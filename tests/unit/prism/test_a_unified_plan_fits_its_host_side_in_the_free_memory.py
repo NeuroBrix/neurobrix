@@ -6,7 +6,7 @@ said in clear, and the smaller plan's host side fits the reading — never a run
 at 12 652 MB free; 2026-10-25 16:56, HAT-L (157 MB of weights) planned layer_streaming beside another run and
 single_gpu a minute later. Reproduced on the Mac's profile (_pinned_machine.APPLE_M4_PRO); no card."""
 import pytest
-from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, pin_host, profile
 CASES = {"Janus-Pro-7B": 384, "Flex.1-alpha": 1024}     # each model's request extent (its CLI default)

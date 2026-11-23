@@ -40,7 +40,7 @@ import json
 import pytest
 
 from neurobrix.core.optim.passes.normalize import boundaries_present, normalize_for_branch
-from neurobrix.core.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 from tests.conftest import installed_container
 
 MOE_MODEL = "DeepSeek-Coder-V2-Lite-Instruct"

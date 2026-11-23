@@ -69,7 +69,7 @@ from typing import Any, Dict, Optional
 def _triton_pure_passes():
     """The triton branch's graph-pure rewrites, in the order `sequence.py` applies them.
 
-    Imported lazily: `core/prism` plans for both engines, and a module-level import of the
+    Imported lazily: `pytorch/prism` plans for both engines, and a module-level import of the
     Triton branch here would put it on the compiled path's import graph for no reason.
     """
     from neurobrix.triton.sequence import TritonSequence as _TS

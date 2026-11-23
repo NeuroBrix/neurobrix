@@ -20,7 +20,7 @@ from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, profile, p
 
 
 def _solver(mode="compiled"):
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     s = PrismSolver()
     s._mode = mode
     s._growth_model = "mochi-1-preview"

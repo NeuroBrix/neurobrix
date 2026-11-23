@@ -140,7 +140,7 @@ class InputSynthesizer:
                 break
 
         # Fallback to plan/config if no tensors in inputs.
-        # The Plan dataclass (`core/prism/solver.py::Plan`) exposes
+        # The Plan dataclass (`pytorch/prism/solver.py::Plan`) exposes
         # `primary_device` as a full device string ("cuda:2") via a
         # @property — it does NOT expose `primary_device_index`. The
         # previous `getattr(plan, 'primary_device_index', 0)` therefore

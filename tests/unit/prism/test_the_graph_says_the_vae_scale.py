@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory, PrismSolver
 from tests.conftest import installed_container
 
 MB = 1024 * 1024
@@ -34,7 +34,7 @@ def _spec(monkeypatch, model, h, w, frames, weights_mb, act_mb, over_mb, rung_mb
     monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32", raising=False)
     monkeypatch.setattr(s, "_run_dtype", lambda n: "float32", raising=False)   # the dtype the cut runs at
     monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None, raising=False)   # the stub has no profile
-    from neurobrix.core.prism.profiler import InputConfig
+    from neurobrix.pytorch.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=2, height=h, width=w, num_frames=frames, vae_scale=32,
                                   temporal_compression=4)
     mem = ComponentMemory("vae", weights_mb * MB, act_mb * MB, over_mb * MB)
@@ -69,7 +69,7 @@ def test_a_declared_upscale_that_disagrees_with_the_graph_is_refused(monkeypatch
     (comp / "profile.json").write_text(json.dumps(prof))
     monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: 0))
     s = PrismSolver()
-    from neurobrix.core.prism.profiler import InputConfig
+    from neurobrix.pytorch.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=1, height=1024, width=1024)
     with pytest.raises(ValueError, match="declares upscale 2 and its graph measures 4"):
         s._spatial_component_tiling(_Container(tmp_path), "model", ComponentMemory("model", 64 * MB, 90000 * MB, 100 * MB), 16384)

@@ -2,7 +2,7 @@
 norm over a sliced axis are taken ONCE over its whole input (`norm_statistics`, fp32, a fixed summation order: frame by
 frame, group by group), then each slice is normalised with them (`group_norm_apply`). The result is the whole op's
 up to the summation order of the statistics. No model, no family is named; the chunked piece calls it for every
-`NORM` its stretch starts at (`core/prism/chunked_region.py`). Both engines: torch here, the Triton engine's NBXTensor
+`NORM` its stretch starts at (`pytorch/prism/chunked_region.py`). Both engines: torch here, the Triton engine's NBXTensor
 twin in `kernels/wrappers.group_norm_statistics` / `group_norm_apply` (the first and second pass of its own group norm
 kernel, the statistics taken in the same fp32 sum and sum of squares). R33: torch is imported on the torch branch only."""
 from __future__ import annotations

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import autodetect as A
+from neurobrix.pytorch.prism import autodetect as A
 
 RTX = {"model": "NVIDIA GeForce RTX 3050 Ti Laptop GPU", "brand": "nvidia", "memory_mb": 4096, "index": 0}
 TIGER_LAKE = {"vendor_id": 0x8086, "device_id": 0x9a60, "bus": "0000:00:02.0",

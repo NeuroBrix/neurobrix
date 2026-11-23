@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism.expert_topology import _LAYERS
+from neurobrix.pytorch.prism.expert_topology import _LAYERS
 from neurobrix.core.strategies import expert_store as ES
 
 

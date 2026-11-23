@@ -97,7 +97,7 @@ class _Container:
 
 
 def test_prism_prices_the_next_token_diffusion_cache_for_both_contexts(tmp_path):
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     from neurobrix.core.state.price import kv_token_bytes
     solver = PrismSolver.__new__(PrismSolver)
     c = _Container(tmp_path, {**VIBEVOICE_TOPO, "state": {"model.language_model": [VIBEVOICE_KV]}},
@@ -108,7 +108,7 @@ def test_prism_prices_the_next_token_diffusion_cache_for_both_contexts(tmp_path)
 
 
 def test_prism_prices_the_image_generation_cache_at_the_guidance_batch(tmp_path):
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     from neurobrix.core.state.price import kv_token_bytes
     solver = PrismSolver.__new__(PrismSolver)
     c = _Container(tmp_path, {**JANUS_TOPO, "state": {"language_model": [JANUS_KV]}}, {"guidance_scale": 5.0})
@@ -155,7 +155,7 @@ def test_serving_a_decoder_without_a_declared_window_is_refused_by_that_name(tmp
     """Serve plans the full context window; VibeVoice's decoder declares none (its declared KV state carries no
     window). The plan said 'no strategy can fit model + KV cache' — a budget — where the cause is the missing window."""
     import pytest
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     solver = PrismSolver.__new__(PrismSolver)
     solver._serve_mode = True
     solver._serve_requested = True

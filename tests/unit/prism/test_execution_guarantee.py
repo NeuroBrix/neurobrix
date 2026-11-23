@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory, PrismSolver
 
 
 class _Mem:
@@ -109,8 +109,8 @@ def test_streaming_forces_lazy_loading():
     # Executed, not read from the source: the source pin broke when layer_streaming joined the rule
     # (2026-10-04) while the behaviour it pinned held. A small plan on a roomy card is what the
     # generic rule would have made eager.
-    from neurobrix.core.prism.solver import ComponentMemory, DeviceState
-    from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
+    from neurobrix.pytorch.prism.solver import ComponentMemory, DeviceState
+    from neurobrix.pytorch.prism.structure import DeviceBrand, DeviceSpec
     from tests.unit.prism._pinned_machine import V100_16GB, profile
     spec = DeviceSpec(index=0, name="dev", memory_mb=16384, compute_capability="7.0",
                       supports_dtypes=["float16"], architecture="volta", brand=DeviceBrand.NVIDIA)
@@ -123,7 +123,7 @@ def test_streaming_forces_lazy_loading():
 
 
 def test_the_plan_carries_a_selection_reason():
-    from neurobrix.core.prism.solver import ExecutionPlan
+    from neurobrix.pytorch.prism.solver import ExecutionPlan
 
     assert "selection_reason" in ExecutionPlan.__dataclass_fields__, (
         "the reason must travel with the plan, not only be printed"
@@ -197,4 +197,4 @@ def test_the_capacity_refusal_is_raised_from_one_place_only():
     raised = 'f"This model cannot run on this machine.'      # the message as raised (comments may name it)
     sites = [(str(p.relative_to(src)), p.read_text(errors="replace").count(raised)) for p in src.rglob("*.py")
              if raised in p.read_text(errors="replace")]
-    assert sites == [("core/prism/solver.py", 1)], sites
+    assert sites == [("pytorch/prism/solver.py", 1)], sites

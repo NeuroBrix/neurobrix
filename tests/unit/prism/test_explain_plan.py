@@ -2,7 +2,7 @@
 
 Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_explain_plan.py
 """
-from neurobrix.core.prism.solver import ComponentAllocation, ComponentMemory, ExecutionPlan, explain_plan
+from neurobrix.pytorch.prism.solver import ComponentAllocation, ComponentMemory, ExecutionPlan, explain_plan
 
 
 def _plan(**kw):

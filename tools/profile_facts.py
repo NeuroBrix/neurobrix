@@ -37,13 +37,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atelier import writable  # noqa: E402
 
-# The measuring primitives are the engine's own (core/prism/facts_probe.py): one code for this tool's full measurement
+# The measuring primitives are the engine's own (pytorch/prism/facts_probe.py): one code for this tool's full measurement
 # and for a machine's first launch (the supervisor's S2, 2026-10-27).
-from neurobrix.core.prism.facts_probe import (  # noqa: E402
+from neurobrix.pytorch.prism.facts_probe import (  # noqa: E402
     block_keys, copies, matmul_tflops, storage_read_gbps, stored_dtype)
 from nbxtensor.backend.host_measure import host_matmul_gflops, host_memory_gbps  # noqa: E402  the library's (qa 1231-4)
-from neurobrix.core.prism import facts_probe as _probe  # noqa: E402
-from neurobrix.core.prism.autodetect import FIRST_LAUNCH as _FL  # noqa: E402  the probes' settings, one table
+from neurobrix.pytorch.prism import facts_probe as _probe  # noqa: E402
+from neurobrix.pytorch.prism.autodetect import FIRST_LAUNCH as _FL  # noqa: E402  the probes' settings, one table
 
 
 def system_share_mb(readings: int = 30, every_s: float = 10.0) -> dict:

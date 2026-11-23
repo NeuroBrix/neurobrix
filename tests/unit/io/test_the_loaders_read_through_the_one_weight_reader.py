@@ -68,7 +68,7 @@ def test_a_forked_child_builds_its_own_reader(W, monkeypatch):
 
 
 def test_no_count_is_read_from_a_profile_or_the_system_file(W):
-    from neurobrix.core.prism.cpu_config import CPUConfig
+    from neurobrix.pytorch.prism.cpu_config import CPUConfig
     cpu = CPUConfig.from_yaml_dict({"model": "m", "cores": 4, "threads": 8, "ram_mb": 1, "architecture": "arm64"})
     assert not hasattr(cpu, "io_workers")
     assert "num_workers" not in (yaml.safe_load(W.SYSTEM_YML.read_text()).get("io") or {})
@@ -92,7 +92,7 @@ def test_no_loader_keeps_a_pool_or_a_count_of_its_own():
 
 
 def test_the_launch_line_says_what_the_loads_measured(W, tmp_path):
-    from neurobrix.core.prism import launch_lines
+    from neurobrix.pytorch.prism import launch_lines
     assert W.weight_reader_said() is None                       # nothing read: nothing said
     W.declare_load_ceiling(2)
     p = tmp_path / "w.bin"

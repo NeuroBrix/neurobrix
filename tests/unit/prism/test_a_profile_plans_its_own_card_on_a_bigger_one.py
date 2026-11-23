@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import copy
 
-from neurobrix.core.prism import solver as S
+from neurobrix.pytorch.prism import solver as S
 from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
 
 MEASURED = {"runtime_total_mb": 16151, "runtime_context_mb": 306}     # the rack's default-ff6008b7, measured 2026-10-27

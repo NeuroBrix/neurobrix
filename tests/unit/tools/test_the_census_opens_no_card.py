@@ -26,8 +26,8 @@ PROFILE = "v100-32g"
 
 
 def test_the_workers_cores_come_from_the_given_profile_never_from_detection(monkeypatch):
-    from neurobrix.core.prism import autodetect as AD
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism import autodetect as AD
+    from neurobrix.pytorch.prism.loader import load_profile
 
     def detection(*_a, **_k):
         raise AssertionError("the census ran the machine's detection")

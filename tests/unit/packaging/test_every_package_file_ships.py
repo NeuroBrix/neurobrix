@@ -60,7 +60,7 @@ def test_a_missing_census_file_is_refused_by_name(tmp_path):
 
 
 def test_a_certified_hardware_without_its_census_is_a_broken_install(tmp_path, monkeypatch):
-    from neurobrix.core.prism import prefill_chunk as PC
+    from neurobrix.pytorch.prism import prefill_chunk as PC
     from neurobrix.kernels import census_table as T
     census = tmp_path / "config" / "census"
     (tmp_path / "config" / "autotune" / "nvidia" / "volta").mkdir(parents=True)     # a certified hardware

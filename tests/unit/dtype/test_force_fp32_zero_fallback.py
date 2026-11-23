@@ -20,7 +20,7 @@ from typing import Dict, List
 
 import pytest
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 
 class _StubComponent:

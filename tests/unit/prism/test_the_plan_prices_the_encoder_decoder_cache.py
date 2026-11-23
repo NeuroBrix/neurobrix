@@ -32,8 +32,8 @@ def test_the_decoder_is_the_flows_autoregressive_stage():
 
 
 def test_the_plan_prices_the_decoders_cache_at_its_graphs_geometry(monkeypatch):
-    from neurobrix.core.prism.profiler import InputConfig
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.profiler import InputConfig
+    from neurobrix.pytorch.prism.solver import PrismSolver
     from neurobrix.nbx.container import NBXContainer
     from tests.unit.prism._pinned_machine import V100_16GB, container_root, impose_rung, pin_dedicated_card, profile
     pin_dedicated_card(monkeypatch, 16151, 267, "the rack's card 0, 2026-09-29")

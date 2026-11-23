@@ -56,7 +56,7 @@ class NativeATenDispatcher:
 
     def __init__(self, device: Optional[str] = None, compute_dtype: Optional[torch.dtype] = None,
                  dtype_engine=None, attention_budget=None):
-        # Prism's attention scores budget for this component (core/prism/attention_scratch.py); None: none stated.
+        # Prism's attention scores budget for this component (pytorch/prism/attention_scratch.py); None: none stated.
         self._attention_budget = attention_budget
         # The executor's DtypeEngine: attention operands that disagree are aligned by ITS
         # decision (`align_attention_operands`), the compiled engine's own.

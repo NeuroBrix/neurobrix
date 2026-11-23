@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import plan_advice as pa
+from neurobrix.pytorch.prism import plan_advice as pa
 
 _MB = 1024 * 1024
 _GB = 1024 * _MB
@@ -104,7 +104,7 @@ def test_the_refusal_text_itself_carries_the_lines():
     A helper nothing calls is the failure mode this repository catalogues, so the
     cell reaches the real refusal rather than the function behind it.
     """
-    from neurobrix.core.prism.solver import PrismSolver, ComponentMemory
+    from neurobrix.pytorch.prism.solver import PrismSolver, ComponentMemory
 
     class _Dev:
         def __init__(self, mb):

@@ -8,7 +8,7 @@
   {"in": "src/neurobrix/core/", "never": ["neurobrix.cli", "neurobrix.serving"], "why": "the engine's core never knows its doors"},
   {"in": "src/neurobrix/triton/", "never": ["neurobrix.cli", "neurobrix.serving", "torch"], "why": "the Triton branch never knows the doors, and is torch-free (R33)"},
   {"in": "src/neurobrix/kernels/", "never": ["neurobrix.cli", "neurobrix.serving", "torch"], "why": "kernels are torch-free (R33)"},
-  {"in": "src/neurobrix/core/prism/", "never": ["neurobrix.core.flow", "neurobrix.triton.flow", "neurobrix.core.runtime.graph", "neurobrix.triton.sequence"], "why": "the planner decides; it never reaches into what executes"},
+  {"in": "src/neurobrix/pytorch/prism/", "never": ["neurobrix.core.flow", "neurobrix.triton.flow", "neurobrix.core.runtime.graph", "neurobrix.triton.sequence"], "why": "the planner decides; it never reaches into what executes"},
   {"in": "src/neurobrix/core/", "never": ["triton", "nbxtensor.memory.allocator", "nbxtensor.memory.arena", "nbxtensor.memory.memory_pool", "nbxtensor.memory.pool", "nbxtensor.memory.pages", "nbxtensor.memory.paged_kv", "nbxtensor.memory.kv_host_pages", "nbxtensor.memory.slab", "nbxtensor.memory.vmm", "nbxtensor.memory.device_memory", "nbxtensor.memory.device_transfer", "nbxtensor.memory.pointer_tables", "nbxtensor.memory.shadow", "nbxtensor.memory.metal", "nbxtensor.backend.launcher", "nbxtensor.backend.replay_graph", "nbxtensor.backend.runtime", "nbxtensor.backend.level_zero_driver", "nbxtensor.backend.metal_device", "nbxtensor.backend.triton_ext_driver"], "why": "the engine's core keeps policy and computes with torch; it never imports the library's tensor mechanics (allocator, arenas, pools, copies, launches, replay) directly (owner rule 2026-11-12)"}
  ],
  "tensor_logic": {
@@ -28,7 +28,7 @@
   "torch_library": ["torch"],
   "torch_only_attributes": ["untyped_storage"],
   "justified": [
-   {"path": "src/neurobrix/core/prism/autodetect.py", "what": "ctypes.create_string_buffer", "count": 1,
+   {"path": "src/neurobrix/pytorch/prism/autodetect.py", "what": "ctypes.create_string_buffer", "count": 1,
     "reason": "hardware detection, not tensor work: the buffer Windows' GetLogicalProcessorInformationEx fills with the cores' efficiency classes, for the machine profile (Orchestrateur 2026-11-13 04:00, (d))"},
    {"path": "src/neurobrix/kernels/__init__.py", "what": "nbxtensor.backend.launcher.install", "count": 1,
     "reason": "one call into nbxtensor's public launcher API at import; the engine holds no launcher state (Orchestrateur 2026-11-13 04:00, (d))"},

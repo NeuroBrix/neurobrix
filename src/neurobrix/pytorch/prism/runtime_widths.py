@@ -20,7 +20,7 @@ Where the rules come from. Everything that can be CALLED is called: the Triton e
 classes and its fp32-constant rule (`triton/dtype.py`), the stored-weight rule
 (`triton/weight_loader.stored_dtype_in_compute`) and the compiled engine's own weight and constant
 rules (`core/dtype/config.compiled_weight_dtype` / `compiled_constant_dtype`), the seam predicate
-(`core/prism/layer_partition.is_seam_tensor`), the op-name aliases
+(`pytorch/prism/layer_partition.is_seam_tensor`), the op-name aliases
 (`kernels/classification.canonical_aten`), and the precision contract's own functions
 (`core/runtime/precision_contract`, `core/dtype/calibration`). What cannot be called without
 a device — the per-op wrap decisions of `TritonDtypeEngine.wrap_op`, the wrappers' output
@@ -47,7 +47,7 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Opti
 
 from neurobrix.core.dtype.config import compiled_constant_dtype, compiled_weight_dtype
 from neurobrix.core.dtype.entry_width import enters_at_built_width
-from neurobrix.core.prism.layer_partition import is_seam_tensor
+from neurobrix.pytorch.prism.layer_partition import is_seam_tensor
 from neurobrix.kernels.classification import canonical_aten
 from neurobrix.triton import dtype as _tdt
 from neurobrix.core.dtype.built_island import is_built_fp32_island   # the engines' one predicate

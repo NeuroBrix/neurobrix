@@ -16,9 +16,9 @@ _BRANCH_DISTRIBUTIONS = ("torch", "triton")
 
 
 def _devices() -> list:
-    """The accelerators, from the engine's own detection (`core/prism/autodetect`),
+    """The accelerators, from the engine's own detection (`pytorch/prism/autodetect`),
     the one Prism plans from: every vendor its OS probes know, no framework import."""
-    from neurobrix.core.prism.autodetect import detect_devices
+    from neurobrix.pytorch.prism.autodetect import detect_devices
     devices, _brand = detect_devices()
     return [{"index": d["index"], "name": d["model"], "memory_bytes": int(d["memory_mb"]) << 20,
              "brand": d["brand"], "architecture": d["architecture"],
@@ -51,7 +51,7 @@ def info_record(args) -> dict:
             if model_dir.is_dir() and (model_dir / "manifest.json").exists():
                 rec["models"].append({"name": model_dir.name,
                                       "size_bytes": sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())})
-    from neurobrix.core.prism.loader import list_available_profiles
+    from neurobrix.pytorch.prism.loader import list_available_profiles
     rec["hardware_profiles"] = list_available_profiles()      # the committed ones and this machine's generated ones
     try:
         from neurobrix.serving.engine import daemon_identity
@@ -91,7 +91,7 @@ def cmd_info(args):
 
     if args.hardware or show_all:
         print("\nHardware Profiles:")
-        from neurobrix.core.prism.loader import list_available_profiles
+        from neurobrix.pytorch.prism.loader import list_available_profiles
         _profiles = list_available_profiles()                 # the committed ones and this machine's generated ones
         for _name in _profiles:
             print(f"  - {_name}")

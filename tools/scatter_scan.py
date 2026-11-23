@@ -41,7 +41,7 @@ LIST = Path(__file__).with_name("scatter_list.tsv")
 # (core/runtime/graph, core/flow, kernels/metadata_ops.py ...) is a separate
 # product by design and is NOT a migration target: torch is its tensor
 # library. Its files are skipped.
-ROOTS = ("triton", "kernels", "core/prism", "core/memory", "core/module",
+ROOTS = ("triton", "kernels", "pytorch/prism", "core/memory", "core/module",
          "core/runtime", "core/state")
 SKIP_PARTS = ("triton_kernels_ref", "__pycache__")
 PYTORCH_BRANCH_PREFIXES = ("core/runtime/graph/",)
@@ -54,19 +54,19 @@ PYTORCH_BRANCH_FILES = {"kernels/metadata_ops.py", "core/runtime/torch_allocator
 # Names the pattern catches that are NOT tensor semantics (reviewed by hand;
 # a line here says why, and the list only grows with a reason).
 NOT_SEMANTIC = {
-    ("core/prism/chunked_region.py", "region_carriers"): "a region's carrier tensors, Prism's tiling plan",
+    ("pytorch/prism/chunked_region.py", "region_carriers"): "a region's carrier tensors, Prism's tiling plan",
     ("core/module/tiling_engine.py", "_detect_pixel_shuffle_broadcast_chains"): "graph pattern detection",
     ("triton/promotion.py", "_promote_int"): "symbolic seq_len promotion of build constants (a graph pass)",
     ("triton/promotion.py", "_promote_int_value"): "symbolic seq_len promotion of build constants (a graph pass)",
-    ("core/prism/solver.py", "_arena_over_allocation"): "Prism's decision on a fact of the library (the arena's "
+    ("pytorch/prism/solver.py", "_arena_over_allocation"): "Prism's decision on a fact of the library (the arena's "
         "bytes, nbxtensor.memory.layout; the device's largest allocation, the profile) — COST.md section 2",
-    ("core/prism/solver.py", "_store_arena_over_allocation"): "Prism's decision on a fact of the library (an expert "
+    ("pytorch/prism/solver.py", "_store_arena_over_allocation"): "Prism's decision on a fact of the library (an expert "
         "store's dense arena, nbxtensor.memory.layout) — COST.md section 2",
-    ("core/prism/autodetect.py", "_measure_arena_factor"): "the engine measuring a profile fact at its first launch "
-        "(the arena's hold over Prism's walk, core/prism/arena_probe): the hold is the library's own peak window",
-    ("core/prism/solver.py", "_arena_door"): "Prism's policy over a plan, reading the two facts above — COST.md "
+    ("pytorch/prism/autodetect.py", "_measure_arena_factor"): "the engine measuring a profile fact at its first launch "
+        "(the arena's hold over Prism's walk, pytorch/prism/arena_probe): the hold is the library's own peak window",
+    ("pytorch/prism/solver.py", "_arena_door"): "Prism's policy over a plan, reading the two facts above — COST.md "
         "section 2",
-    ("core/prism/solver.py", "_arena_mb_of"): "reads the arena bytes the library laid out (ComponentMemory.arena_bytes) "
+    ("pytorch/prism/solver.py", "_arena_mb_of"): "reads the arena bytes the library laid out (ComponentMemory.arena_bytes) "
         "and refuses where none was",
     ("triton/weight_loader.py", "_load_shard_into_arenas"): "the engine's loading policy over one shard (which weight on "
         "which device or the host, at which dtype, widened or not; DESIGN.md section 3: the engine keeps its loading "

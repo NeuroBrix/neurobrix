@@ -9,8 +9,8 @@ the Triton engine about 360 MB (a kernel compiled and launched). Before this bra
 `runtime_base_mb` and autodetect measures nothing: these fail. Since the ruling of 22/11/2026 17:43 (line 3) each
 engine's base is measured by its own child at that engine's first launch (`_measure_runtime_base_mb(engine)`).
 """
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism.cpu_config import CPUConfig
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism.cpu_config import CPUConfig
 
 
 def test_both_engines_are_measured_here(needs_device):     # the Triton engine's base is a kernel launched on a card
@@ -35,7 +35,7 @@ def test_a_probe_started_by_a_large_process_measures_itself_not_its_parent():
     # Linux carries ru_maxrss across fork and exec: under a 2.4 GB test process every probe read its
     # parent's size at both ends and the base came out 0 (2026-09-27). The kernel's per-image counters
     # (VmRSS / VmHWM) start fresh at exec; this holds 1.5 GB and asks for a positive base below it.
-    from neurobrix.core.prism import host_footprint as H
+    from neurobrix.pytorch.prism import host_footprint as H
     held = bytearray(1536 << 20)
     for i in range(0, len(held), 4096):
         held[i] = 1

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from neurobrix.core.prism.solver import _consumed_weights, _held_weight_sizes
+from neurobrix.pytorch.prism.solver import _consumed_weights, _held_weight_sizes
 from nbxtensor.memory.layout import ARENA_ALIGNMENT, arena_layout
 
 

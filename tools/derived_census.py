@@ -315,7 +315,7 @@ def _widths_at(key, shape, compute, g=None):
     ONLY through `shape_of`, so equal answers give equal widths, exactly. The pass was 76 % of a Qwen3-Coder
     derivation job (py-spy, 2026-10-23), recomputed at each of ~1 200 prompt lengths of one bisection, where it
     reads M <= 4 and an empty extent and nothing more. Returns copies: callers own what they get."""
-    from neurobrix.core.prism.runtime_widths import binding_signature
+    from neurobrix.pytorch.prism.runtime_widths import binding_signature
     # The pass's results belong to ONE graph: a key names the component, not its graph, and two graphs under one
     # name (a test's synthetic graphs, a container derived again after a change) must never share widths — the entry
     # holds its graph and is served only to that very object (as _FIXED does; the reference keeps its id unreused).
@@ -382,7 +382,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
                skip=(), only=None, axis_values=None, axes=(), out_dtypes=None):
     """`derive_component`'s body at one binding — and, when `axis_values` names value-derived
     axes, at those extents (`only`: the ops to derive, `skip`: the ops not to)."""
-    from neurobrix.core.prism import runtime_widths as RW
+    from neurobrix.pytorch.prism import runtime_widths as RW
     from nbxtensor.ops import launch_keys as LK
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     g = runtime_graph(model, comp)
@@ -606,14 +606,14 @@ def _contract(model: str, comp: str, g: dict, cdtype: str):
     dtype): it reads the calibration record and the runtime graph, never the request's extents, and an
     extent probe recomputed it over the whole graph each time (openaudio's LM, hundreds of probes per
     extent). The widths that DO read the request (the matmul store rule's M) stay per probe."""
-    from neurobrix.core.prism import runtime_widths as RW
+    from neurobrix.pytorch.prism import runtime_widths as RW
     key = (model, comp, str(cdtype))
     if key not in _CONTRACTS:
         _CONTRACTS[key] = RW.plan_time_contract(CACHE / model, component_file(comp)[0], g, cdtype)
     return _CONTRACTS[key]
 
 
-#: A component's chunk graphs (its temporal stream, `core/prism/temporal_stream.py`) are derived as variants of it:
+#: A component's chunk graphs (its temporal stream, `pytorch/prism/temporal_stream.py`) are derived as variants of it:
 #: "<component>#stream_first" reads components/<component>/stream_first.json.
 VARIANT = "#"
 
@@ -1525,7 +1525,7 @@ def cut_bindings(model: str, comp: str, g: dict, syms: dict, plan: dict) -> list
     each chunk length (`plan.component_stream`), its vendor's tiles at each tile extent the request makes
     (`plan.component_tiling[comp]["vendor"]`, `core/module/vendor_tiling.py`), each tile in its stream when the plan
     streams it; an engine tile (`tile_bindings`); else the component whole at the request."""
-    from neurobrix.core.prism import temporal_stream as _ts
+    from neurobrix.pytorch.prism import temporal_stream as _ts
     table = (g.get("symbolic_context") or {}).get("symbols") or {}
     by_name = {v.get("name"): k for k, v in table.items()}
     tilings = plan.get("component_tiling") or {}
@@ -1624,7 +1624,7 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
     that does not touch the axis runs once at the request's binding, already derived. One entry
     per binding, its ops every stretch's at it ({op uid: pinned at the accumulator's width}): the
     component is derived once per length (SANA's 40 stretches take 4)."""
-    from neurobrix.core.prism.chunked_region import (
+    from neurobrix.pytorch.prism.chunked_region import (
         TokenAxis, plan_region, region_carriers, slice_reads)
     chunks = (plan.get("layer_stream_chunks") or {}).get(comp) or []
     if not chunks:
@@ -1672,7 +1672,7 @@ def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) ->
 def plan_tiling(plan: dict, comp: str):
     """(TilingView, {tiled op uid: tile factor}) of a component — the plan's op-level cut as the
     width pass and the tiled launches read it (empty when the component has none)."""
-    from neurobrix.core.prism import runtime_widths as RW_
+    from neurobrix.pytorch.prism import runtime_widths as RW_
     ot = (plan.get("op_level_tiling_ops") or {}).get(comp) or {}
     fus = ot.get("fusion_pairs", [])
     til = ot.get("tiled_ops", [])
@@ -2411,7 +2411,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
     """Every key class of every value-derived extent, by the census's own bisection
     (`census.bisect_extent`) over the derived keys — nothing runs."""
     from neurobrix.kernels import census as _census
-    from neurobrix.core.prism import runtime_widths as RW_
+    from neurobrix.pytorch.prism import runtime_widths as RW_
     dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
     found = set()
     for name, lo, hi, chain in extent_sites(model, topo, defaults, plan, prompt, audio_path,
@@ -2545,7 +2545,7 @@ def _session_chunks(model, mode, plan, defaults, session, cdtype, graph_at, has_
     C = kv.get("prefill_chunk")
     cands_rows = [c for c in P.prefill_chunk_candidates(page, P.session_prefill_rows(defaults)) if c <= reach]
     # The chunk sizes a session's turns can run: the plan's C, or — none chosen yet — every candidate, the keys whose
-    # certification lets Prism choose one (core/prism/prefill_chunk.py). A turn with no chunk planned runs its own rows
+    # certification lets Prism choose one (pytorch/prism/prefill_chunk.py). A turn with no chunk planned runs its own rows
     # in one chunk: those keys cross every turn length with every whole-page key length (measured 2026-11-08: +841
     # keys on TinyLlama, +1 169 on deepseek-moe-16b-chat; Qwen3-30B-A3B's ~442 pages x ~400 row classes on each of the
     # class's rungs did not finish in 50 minutes) — not derived, so such a turn under certified-only names its key.
@@ -2587,7 +2587,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     """The (op uid, kernel, key) triples one request forms at one rung and mode — DERIVED from the
     plan record and the graphs, never executed — with the plan, the prompt's token count and the
     items the derivation cannot place yet (`unhandled`, a Counter: a model with any is not derived)."""
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     from nbxtensor.ops import autotune_certified as C
     from neurobrix.kernels import census as _census
     from types import SimpleNamespace
@@ -2629,8 +2629,8 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     # through `ActivationProfiler.build_symbol_map` at the request (no placement floor).
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
-    from neurobrix.core.prism.profiler import ActivationProfiler
-    from neurobrix.core.prism import runtime_widths as RW_
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism import runtime_widths as RW_
     if "op_level_tiling_ops" not in plan:
         raise SystemExit("the plan record names no per-op tiling (`op_level_tiling_ops`): this "
                          "tree's --explain-plan predates it, and the widths need the plan's cut")
@@ -2695,7 +2695,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
                     unhandled[f"{comp}: symbol {sid} '{info.get('name')}' unbound by the plan's map"] += 1
             # The flow's per-component bindings (CFG batch, the encoders' tokenized length, the
             # denoiser's text axis, a FLUX denoiser's packed inputs) are IN this map: the request's
-            # InputConfig carries `core.prism.flow_bindings.FlowBindings`, the plan's own rules.
+            # InputConfig carries `pytorch.prism.flow_bindings.FlowBindings`, the plan's own rules.
         if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
             continue
         for comp_v, b in cut_bindings(a.model, comp, g, syms, plan):
@@ -2801,7 +2801,7 @@ def _norm_logs(obj):
 
 
 #: The plan record's fields priced FROM THE EXPLAINING PROCESS ITSELF: `host_footprint` holds its `resident` term,
-#: what the planning process holds when Prism prices, "passed in measured" (core/prism/host_footprint.py) — it
+#: what the planning process holds when Prism prices, "passed in measured" (pytorch/prism/host_footprint.py) — it
 #: moves from one explanation to the next (TinyLlama, 2026-10-22: 171 057 152 then 171 933 696 bytes). The
 #: derivation reads none of them (tests/unit/census/test_the_census_scope_is_what_the_rows_are_derived_from.py
 #: derives with them removed), so the digest leaves them out; any other field of the record is hashed.
@@ -2975,7 +2975,7 @@ def _machine_cores(hw: str) -> int:
     detection behind `load_default_profile` opens a driver context on every visible card, and a derivation, cardless
     by construction, held 306 MiB on each of the rack's four cards for over an hour (2026-11-08 16:37, two Qwen3-30B
     tables: the device suite refused every card as busy)."""
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     cpu = getattr(load_profile(hw), "cpu", None)
     if cpu is None:
         raise RuntimeError("derived census: this machine's hardware profile declares no cpu: section, so the workers "
@@ -3002,7 +3002,7 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int, hw: str, running: int 
     pool sized once at the start of Qwen3-Coder, while a gate held 207 GiB, ran its 13 derivations one at a time
     for hours after the gate had ended (2026-10-23 21:34 -> 23:10)."""
     from nbxtensor.backend.host_memory import memory_state
-    from neurobrix.core.prism.memory_budget import rung_down_mb
+    from neurobrix.pytorch.prism.memory_budget import rung_down_mb
     cores = max(0 if running else 1, _machine_cores(hw) - int(os.getloadavg()[0]))
     state = memory_state()
     free = state.available_mb
@@ -3171,7 +3171,7 @@ def table(a) -> int:
     # A census without its hardware profile is a setup error, never Prism's verdict on a model: every model would
     # read as "does not run on this class" and the run would end 0 with no row (the Mac, a fresh worktree, 2026-10-20).
     try:
-        from neurobrix.core.prism.loader import load_profile
+        from neurobrix.pytorch.prism.loader import load_profile
         load_profile(hw)
     except Exception as e:
         raise SystemExit(f"--hardware {hw!r}: the hardware profile cannot be loaded ({e}) — a fresh worktree carries "

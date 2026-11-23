@@ -44,7 +44,7 @@ def test_protected_keys_are_never_freed():
 
 
 def test_prism_prices_by_the_rule_the_runtime_frees_by(monkeypatch):
-    from neurobrix.core.prism import profiler
+    from neurobrix.pytorch.prism import profiler
     order, ops = _graph()
     assert profiler.dag_last_uses({"execution_order": order, "ops": ops}) == {
         tid: order[i] for tid, i in liveness.last_uses(order, ops).items()}

@@ -5,9 +5,9 @@ neighbour is still there. The cells feed the planner a reading through the same 
 """
 from __future__ import annotations
 import pytest
-from neurobrix.core.prism.solver import DeviceState, PrismSolver
-from neurobrix.core.prism.memory_budget import rung_down_mb
-from neurobrix.core.prism.memory_budget import DeviceReading, execution_door
+from neurobrix.pytorch.prism.solver import DeviceState, PrismSolver
+from neurobrix.pytorch.prism.memory_budget import rung_down_mb
+from neurobrix.pytorch.prism.memory_budget import DeviceReading, execution_door
 
 
 def _solver():
@@ -28,7 +28,7 @@ def test_the_effective_capacity_is_the_pools_fact_whatever_a_neighbour_holds():
 
 
 def test_prepare_devices_reads_the_driver_for_a_discrete_card(monkeypatch):
-    from neurobrix.core.prism import solver as S
+    from neurobrix.pytorch.prism import solver as S
     from nbxtensor.memory.allocator import DeviceAllocator as D
     class _Dev:
         memory_mb = 32000

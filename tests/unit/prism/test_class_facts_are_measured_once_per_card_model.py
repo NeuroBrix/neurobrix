@@ -14,10 +14,10 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import owed_facts as OF
-from neurobrix.core.prism import kept_launch_facts as K
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import owed_facts as OF
+from neurobrix.pytorch.prism import kept_launch_facts as K
+from neurobrix.pytorch.prism import facts_probe as P
 from nbxtensor.backend import host_measure as H
 
 CALLS = []

@@ -12,8 +12,8 @@ The files were accepted against the USABLE part of the card; the cache beside th
 What this test would do if the code were wrong: the cache planned with the first card's files exceeds what one
 component may hold there — RED (seen twice: 3 084 MB + 28 999 MB summed over both cards; then 2 366 MB + 28 999 MB
 against the whole rung)."""
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.loader import load_profile
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.loader import load_profile
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import container_root, pin_dedicated_card, pin_host, pin_no_calibration
 

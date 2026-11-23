@@ -31,10 +31,10 @@ import pytest
 import yaml
 
 import nbxtensor.backend.host_memory as host_memory
-import neurobrix.core.prism.loader as profile_loader
-import neurobrix.core.prism.solver as solver_mod
+import neurobrix.pytorch.prism.loader as profile_loader
+import neurobrix.pytorch.prism.solver as solver_mod
 from nbxtensor.backend.host_memory import MemoryState
-from neurobrix.core.prism.memory_budget import DeviceReading
+from neurobrix.pytorch.prism.memory_budget import DeviceReading
 from tests.conftest import installed_container
 
 
@@ -129,7 +129,7 @@ def pin_host(monkeypatch, total_mb: int, available_mb: int, why: str) -> None:
     term of the plan's host footprint). Left live, it is whatever the suite ran before: mochi-1-preview on the calm
     Mac streamed its VAE alone (56 MB resident) and sliced it after DeepSeek-Coder-V2-Lite's fused graphs had been
     normalized in the same process (3 400 MB resident, 2026-11-03)."""
-    from neurobrix.core.prism import host_footprint
+    from neurobrix.pytorch.prism import host_footprint
     st = MemoryState(total_mb=total_mb, available_mb=available_mb, source=f"injected: {why}")
     monkeypatch.setattr(solver_mod, "memory_state", lambda: st)
     monkeypatch.setattr(host_memory, "memory_state", lambda: st)
@@ -140,7 +140,7 @@ def pin_reload(monkeypatch, engine: str, stored: str, gbps: float, why: str) -> 
     """The host's per-token reload rate for `engine` at `stored` width (`weight_reload_gbps`, which Prism prices a
     streamed piece's reload at and refuses to estimate without — e0d521e8), as the scenario states it, with `why`."""
     import dataclasses
-    from neurobrix.core.prism import time_estimate as TE
+    from neurobrix.pytorch.prism import time_estimate as TE
     real = TE.host_facts
 
     def facts(*a, **k):

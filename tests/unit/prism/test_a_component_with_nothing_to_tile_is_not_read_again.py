@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 
 def _container(tmp_path, input_shape):

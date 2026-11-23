@@ -214,7 +214,7 @@ class Zero3Strategy(ExecutionStrategy):
         plan = getattr(self.context, '_plan', None)
         cpu_ram_mb = getattr(plan, 'cpu_ram_mb', 0) if plan else 0
         if cpu_ram_mb > 0:
-            from neurobrix.core.prism.cpu_config import should_pin_memory, CPUConfig
+            from neurobrix.pytorch.prism.cpu_config import should_pin_memory, CPUConfig
             cpu = CPUConfig(
                 model="runtime", cores=1, threads=1,
                 ram_mb=cpu_ram_mb, architecture="",

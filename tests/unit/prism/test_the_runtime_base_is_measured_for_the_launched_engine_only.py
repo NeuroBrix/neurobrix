@@ -13,8 +13,8 @@ import subprocess
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import facts_probe as P
 from nbxtensor.backend import host_measure as H
 
 DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch", "supports_dtypes": ["float16"],

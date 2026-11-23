@@ -13,9 +13,9 @@ from types import SimpleNamespace as NS
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import owed_facts as OF
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import owed_facts as OF
+from neurobrix.pytorch.prism import facts_probe as P
 
 DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch", "supports_dtypes": ["float16"],
        "memory_mb": 16384, "runtime_total_mb": 16000, "runtime_context_mb": 300,
@@ -26,7 +26,7 @@ DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch"
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     import neurobrix.core.paths as paths
-    from neurobrix.core.prism import arena_probe as AP
+    from neurobrix.pytorch.prism import arena_probe as AP
     monkeypatch.setattr(A, "HARDWARE_DIR", tmp_path)
     cache = tmp_path / "cache"
     c = cache / "M" / "components" / "lm"
@@ -60,7 +60,7 @@ def test_the_first_launch_reloads_nothing(home):
                                           ((("lazy_sequential", {}), ("layer_streaming", {})), True)])
 def test_the_probe_runs_when_a_streamed_candidate_is_priced(home, monkeypatch, ranked, owed):
     container, probed = home
-    import neurobrix.core.prism.loader as L
+    import neurobrix.pytorch.prism.loader as L
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")
     monkeypatch.setattr(L, "load_profile", lambda hw: NS(host_measured={"weight_reload_gbps": {"compiled": {"BF16": 1.0}}}))
     profile = NS(host_measured=None, devices=[NS(measured={"memory_gbps": 900.0})])   # the facts a timed plan has

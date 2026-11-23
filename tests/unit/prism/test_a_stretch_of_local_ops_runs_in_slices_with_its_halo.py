@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import chunked_region as CR
+from neurobrix.pytorch.prism import chunked_region as CR
 
 S = {"type": "symbol", "id": "s1", "trace": 7}
 

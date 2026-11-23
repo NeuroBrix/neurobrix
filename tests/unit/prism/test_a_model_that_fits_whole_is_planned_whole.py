@@ -48,10 +48,10 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.core.flow.base import resident_together, saved_output_components
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism.layer_partition import LayerPartitioner
-from neurobrix.core.prism.profiler import ActivationProfiler, weight_transposes_read_in_place
-from neurobrix.core.prism.solver import unified_device_bytes
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.profiler import ActivationProfiler, weight_transposes_read_in_place
+from neurobrix.pytorch.prism.solver import unified_device_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._graph import as_graph
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, impose_rung, no_door,
@@ -112,7 +112,7 @@ def test_janus_is_planned_whole_on_the_idle_mac(monkeypatch):
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     # the planning process's own memory, pinned at a fresh run's (resident 99 MB in the judged run): in a long test
     # process it grows and enters the plan's host side (+463 MB in the full suite, the Mac 2026-10-28)
-    import neurobrix.core.prism.host_footprint as HF
+    import neurobrix.pytorch.prism.host_footprint as HF
     monkeypatch.setattr(HF, "process_footprint_now", lambda: 100 << 20)
     p, s = _plan("Janus-Pro-7B", mode)
     assert p.strategy in WHOLE, f"Janus [{mode}] planned {p.strategy!r}"

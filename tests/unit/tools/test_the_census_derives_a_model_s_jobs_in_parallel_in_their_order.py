@@ -50,7 +50,7 @@ def test_the_workers_are_what_the_free_memory_holds_not_the_cores(monkeypatch):
     then by the cores and the jobs; unread memory runs one at a time. Red if the cores alone decide."""
     import types
     from nbxtensor.backend import host_memory as HM
-    from neurobrix.core.prism import memory_budget as MB
+    from neurobrix.pytorch.prism import memory_budget as MB
     monkeypatch.setattr(DC, "_machine_cores", lambda hw: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
@@ -84,7 +84,7 @@ def test_the_cores_are_the_profiles_not_the_machines_threads(monkeypatch):
     workers are the profile's cores (rule 1). Red with the count read from the machine."""
     import types
     from nbxtensor.backend import host_memory as HM
-    from neurobrix.core.prism import loader as LO
+    from neurobrix.pytorch.prism import loader as LO
     monkeypatch.setattr(DC.os, "cpu_count", lambda: 80)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(HM, "memory_state", lambda: types.SimpleNamespace(available_mb=1_000_000))
@@ -107,7 +107,7 @@ def test_the_workers_leave_what_the_gate_cells_reserved_and_say_their_own(monkey
     import os
     import types
     from nbxtensor.backend import host_memory as HM
-    from neurobrix.core.prism import memory_budget as MB
+    from neurobrix.pytorch.prism import memory_budget as MB
     monkeypatch.setattr(DC, "_machine_cores", lambda hw: 12)
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 8192, 16384])
@@ -148,7 +148,7 @@ def test_a_running_gate_cell_is_not_counted_twice(monkeypatch, tmp_path, worksho
     import os
     import types
     from nbxtensor.backend import host_memory as HM
-    from neurobrix.core.prism import memory_budget as MB
+    from neurobrix.pytorch.prism import memory_budget as MB
     monkeypatch.setattr(DC, "_machine_cores", lambda hw: 64)            # the profile's cores (f9121b8b), never the host's
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [65536, 98304, 131072])
@@ -167,7 +167,7 @@ def test_the_room_keeps_the_scheduler_s_headroom(monkeypatch, tmp_path, workshop
     import os
     import types
     from nbxtensor.backend import host_memory as HM
-    from neurobrix.core.prism import memory_budget as MB
+    from neurobrix.pytorch.prism import memory_budget as MB
     monkeypatch.setattr(DC, "_machine_cores", lambda hw: 128)           # the profile's cores (f9121b8b), never the host's
     monkeypatch.setattr(DC.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [65536, 131072, 196608])

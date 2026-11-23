@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 from neurobrix.core.strategies import STRATEGY_REGISTRY
 
 
@@ -116,7 +116,7 @@ def _solver_component_strategy_names() -> set[str]:
     `strategy=` of every ComponentAllocation(...) it builds (a variable followed to its
     assignments in the same function), and every `<allocation>.strategy = ...` (a plan's own
     strategy is not a component's: targets on a `plan` are left to the cascade's test)."""
-    from neurobrix.core.prism import solver as _solver
+    from neurobrix.pytorch.prism import solver as _solver
     tree = ast.parse(Path(inspect.getsourcefile(_solver)).read_text(encoding="utf-8"))
     names: set[str] = set()
     for node in tree.body:

@@ -49,7 +49,7 @@ memory:
   # (7 579 - 157) / 6 215 = 1.19. The live tensors alone are 0.62x the walk: the excess is the pool's parking.
   # Output bit-equal to the judged artefact (7ab1111f). Native on the same request: 10 113 MB (sampled MPS driver).
   # Since 2026-11-03 (the owner 17:22, the supervisor 17:35 7c): MEASURED BY THE ENGINE at each machine's first Triton
-  # launch (autodetect._measure_arena_factor, core/prism/arena_probe) into its generated profile — the hand-run
+  # launch (autodetect._measure_arena_factor, pytorch/prism/arena_probe) into its generated profile — the hand-run
   # measurement above (1.19) is kept as the reference a first launch is compared with, never served from here. The
   # first such launch on this M4 Pro (TinyLlama triton, 2026-11-03 20:02, output = its reference sha) wrote 1.477.
   triton_arena_activation_factor: null
@@ -67,7 +67,7 @@ memory:
   # memory-efficient kernel on MPS (pytorch/pytorch#179294, maintainer, 2026-04). It writes the full [B, H, Tq, Tk]
   # scores: Allegro native at 720x1280 (79 200 tokens) added ~13 GB in the transformer's first second on an M4 Pro
   # (the Mac, 2026-10-15). Prism prices those scores and the compiled engine runs such an attention in query chunks
-  # (core/prism/attention_scratch.py): each chunk's fp32 scores within this fraction of the device's memory, its rows
+  # (pytorch/prism/attention_scratch.py): each chunk's fp32 scores within this fraction of the device's memory, its rows
   # a multiple of this file's sdpa_math_min_chunk_rows.
   compiled_sdpa_full_scores: true
   # THE COMPILED ENGINE'S CONV3D WORKSPACE, beside its input and output, as a fraction of its input's bytes: MPS's
@@ -84,7 +84,7 @@ memory:
   compiled_conv3d_workspace_floor_bytes: 1073741824
   compiled_conv3d_workspace_source: "measured 2026-11-05, M4 Pro 24 GB, MPS watermark bisection of one conv3d per process, 36 shapes; campagnes/2026_11_02_m4_apple/conv3d_ws/law.jsonl (run 37b)"
   # What the compiled engine's other ops hold beside input, output and operand copies while they run, per op type, as a
-  # fraction of the op's first input's bytes (core/prism/op_workspace.py). MPS decomposes aten::linalg_vector_norm into
+  # fraction of the op's first input's bytes (pytorch/prism/op_workspace.py). MPS decomposes aten::linalg_vector_norm into
   # full-size intermediates before the fp32 copy the wrapper makes: VACE's 52-frame encoder chunk held 9.95 GiB at that op
   # where the price said 3.2 GB live (the Mac, 2026-10-18 08:10). `null` = declared, not measured: a plan holding the op is
   # refused by name on this device until the Mac's ceiling bisection of the op alone (T = 4, 8, 16) writes the value.
@@ -113,7 +113,7 @@ memory:
   # stream completes in the full run (0.5 still overran, the default 1.4 let the cache reach 31 GB).
   compiled_allocator_low_watermark_ratio: 0.2
   # MEASURED 2026-10-18 on the M4 Pro: MPS's "other allocations" (outside torch's) at the OOM of five VACE runs: 3.08-3.77
-  # GiB; the maximum, rounded up: memory a compiled plan never prices, taken off the unified room (core/prism/solver.py).
+  # GiB; the maximum, rounded up: memory a compiled plan never prices, taken off the unified room (pytorch/prism/solver.py).
   compiled_private_reserve_mb: 3900
 
   # State pages (state engine step 2, core/state/price.paged_cache_params): the granule a page row is placed at.
@@ -360,7 +360,7 @@ host_measured:
   # language model's 2 segments (13.8 GB together, fp16) re-read 716 times in 2 348 s -> 3.28 s per 6.9 GB segment
   # per engine and stored dtype (the estimator's key, time_estimate.reload_bps): this one is the triton loader on BF16
   # Since 2026-11-03 (the supervisor 22:50): no longer stated here — the engine measures it at each machine's first launch
-  # (core/prism/arena_probe.reloads, per stored dtype of the cache) into the generated profile's host_measured, read over
+  # (pytorch/prism/arena_probe.reloads, per stored dtype of the cache) into the generated profile's host_measured, read over
   # this block key by key; the Janus figure above (2.1 GB/s, triton BF16) stays as the reference it is compared with.
   # what a sliced stretch whose inputs wait on the host moves through host memory per second (its slices cut from the
   # host tensors + its outputs assembled), measured IN SITU by the Mac 2026-10-28 05:12-05:16 on stable 58b39d7e

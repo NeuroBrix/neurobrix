@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.pytorch.prism.profiler import ActivationProfiler, InputConfig
 
 
 def _graph(build_time: int, coefficient: int):

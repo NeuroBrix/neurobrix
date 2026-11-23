@@ -26,7 +26,7 @@ from nbxtensor.dtype.itemsize import itemsize_table
 from neurobrix.core.paths import cache_dir
 
 BYTES_MAP = itemsize_table()   # the one table (dtypes.yml), read through the PyTorch reader
-from neurobrix.core.prism.memory_estimator import compute_dtype_factor
+from neurobrix.pytorch.prism.memory_estimator import compute_dtype_factor
 # a dtype's width is read by the one reader of the table (`get_dtype_bytes_per_element` deleted for it, M3)
 from nbxtensor.dtype.itemsize import itemsize
 
@@ -127,8 +127,8 @@ def test_the_historical_widths_for_an_absent_operand_are_unchanged():
 def test_a_request_that_names_no_dtype_still_plans():
     """The call that went red, as its own cell: a profile asked with no request (`InputConfig()`, no dtype) plans at
     float32's 4 bytes."""
-    from neurobrix.core.prism import InputConfig
-    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism import InputConfig
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
     from tests.unit.prism.test_profile_says_which_request_it_is_about import _graph
     assert InputConfig().dtype is None
     g = _graph(3, 1)

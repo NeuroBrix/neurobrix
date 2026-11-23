@@ -9,7 +9,7 @@ layer_streaming at 4 096, which reloaded the language model's segments every ste
 2 400 s timeout. At 15 800 MB free the same container plans single_gpu. A lazy strategy at the top rung
 holds one component's load at a time, which fits the reading. Reproduced on the Mac's profile
 (_pinned_machine.APPLE_M4_PRO) with the host reader set to the run's reading; no card."""
-from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, pin_host, profile
 

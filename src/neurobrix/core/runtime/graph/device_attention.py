@@ -1,4 +1,4 @@
-"""The compiled engine's attention, as the device can run it (core/prism/attention_scratch.py is its price).
+"""The compiled engine's attention, as the device can run it (pytorch/prism/attention_scratch.py is its price).
 
 On a device whose vendor file states `memory.compiled_sdpa_full_scores: true` — PyTorch's MPS attention is the fused math
 path, it writes the whole [B, H, Tq, Tk] score matrix (pytorch/pytorch#179294) — an attention whose scores exceed the
@@ -27,7 +27,7 @@ _SAID = set()         # the (shape, budget) cuts already said: one line per dist
 
 
 def _memory(hardware):
-    from neurobrix.core.prism.attention_scratch import vendor_memory_of
+    from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
     key = tuple(hardware)
     if key not in _MEMORY:
         _MEMORY[key] = vendor_memory_of(*key)
@@ -48,7 +48,7 @@ def scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p: float = 0.0
     if hardware is None:
         raise ValueError(f"ZERO FALLBACK: an attention on {q.device} was given no hardware — whether its device writes "
                          f"its full scores is read from the vendor file of the plan's device, never assumed")
-    from neurobrix.core.prism.attention_scratch import writes_full_scores, chunk_plan, chunks_in_flight
+    from neurobrix.pytorch.prism.attention_scratch import writes_full_scores, chunk_plan, chunks_in_flight
     memory = _memory(hardware)
     if not writes_full_scores(memory):
         return _plain(q, k, v, attn_mask, dropout_p, is_causal, scale)

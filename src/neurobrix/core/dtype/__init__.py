@@ -8,8 +8,8 @@ Consolidates all dtype-related code:
 3. engine.py - DtypeEngine (single dtype decision engine)
 
 Previously duplicated across:
-- core/prism/common/dtype_resolver.py
-- core/prism/common/allocation.py
+- pytorch/prism/common/dtype_resolver.py
+- pytorch/prism/common/allocation.py
 - core/runtime/weight_loader.py
 
 ZERO HARDCODE: Import from here for all dtype operations.

@@ -1298,8 +1298,8 @@ def _bind_hardware_profile() -> str:
     """Hand Prism's hardware profile to the wrappers exactly as the CLI does
     before a request (`set_hardware_profile`): the flag `has_native_bf16` and
     the per-device VRAM the wrappers read for their dtype decisions."""
-    from neurobrix.core.prism import load_profile
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism import load_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from nbxtensor.ops import wrappers as W
     hw_id = get_or_create_default_profile()
     from neurobrix.triton.dtype import declare_hardware_profile
@@ -1649,7 +1649,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     # The working-set budget (`--working-set-mb`): what this run may hold, the figure its guard
     # kills at; None = no price door (the operand bound alone). The floor is the process now.
     budget_bytes = int(working_set_mb) * 2**20 if working_set_mb else None
-    from neurobrix.core.prism.host_footprint import process_footprint_now
+    from neurobrix.pytorch.prism.host_footprint import process_footprint_now
     floor_bytes = process_footprint_now() if working_set_mb else 0
     if budget_bytes is not None:
         log(f"[certify] working-set budget {budget_bytes / 2**20:.0f} MiB; the process's floor now "
@@ -1926,7 +1926,7 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             t0 = time.time()
             if budget_bytes is not None:
                 # the floor is the process NOW, before this key — never the one read at the start
-                from neurobrix.core.prism.host_footprint import process_footprint_now
+                from neurobrix.pytorch.prism.host_footprint import process_footprint_now
                 floor_bytes = process_footprint_now()
             try:
                 tol = _tolerance(vendor, profile, dtype)

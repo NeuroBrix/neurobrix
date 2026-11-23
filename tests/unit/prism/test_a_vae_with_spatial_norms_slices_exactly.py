@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from neurobrix.core.prism.chunked_region import MIX, NORM, TokenAxis
+from neurobrix.pytorch.prism.chunked_region import MIX, NORM, TokenAxis
 from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
 from neurobrix.core.strategies.value_parking import to_host
 

@@ -1,6 +1,6 @@
-"""Three defects in `core/prism/solver.py` the Mac found and could not fix (`9675411a`).
+"""Three defects in `pytorch/prism/solver.py` the Mac found and could not fix (`9675411a`).
 
-`core/prism` is this rack's. The Mac read them in the census shadow — no card, no weights —
+`pytorch/prism` is this rack's. The Mac read them in the census shadow — no card, no weights —
 and wrote them up rather than reaching into another machine's subtree. Each is closed here
 with the injection that turns its cell red.
 
@@ -31,9 +31,9 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism.solver import PrismSolver, _device_is_unified
+from neurobrix.pytorch.prism.solver import PrismSolver, _device_is_unified
 
-SOLVER_SRC = Path(__file__).resolve().parents[3] / "src/neurobrix/core/prism/solver.py"
+SOLVER_SRC = Path(__file__).resolve().parents[3] / "src/neurobrix/pytorch/prism/solver.py"
 
 
 # ─────────────────────────── 1. the unified guard on zero3 ───────────────────────────
@@ -132,7 +132,7 @@ def test_the_door_models_a_smaller_card_not_a_smaller_host_on_discrete_memory(mo
     the ladder — never the door, never a live reading. The door capped it (2026-09-29): the census
     refused Allegro at the 16 GB top rung, where cpu_streaming needs 89 148 MB of host and the live
     card plans it. (Red with the door returned for every profile.)"""
-    from neurobrix.core.prism.solver import rung_down_mb
+    from neurobrix.pytorch.prism.solver import rung_down_mb
     monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "8192")
     got = _Solver()._host_budget_mb(_PD())
     assert got == float(rung_down_mb(_P.cpu.ram_mb)), got
@@ -140,7 +140,7 @@ def test_the_door_models_a_smaller_card_not_a_smaller_host_on_discrete_memory(mo
 
 
 def test_without_the_door_the_host_budget_is_still_a_rung(monkeypatch):
-    from neurobrix.core.prism.memory_budget import memory_ladder_mb
+    from neurobrix.pytorch.prism.memory_budget import memory_ladder_mb
     monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
     assert _Solver()._host_budget_mb(_P()) in set(memory_ladder_mb()) | {0.0}
 

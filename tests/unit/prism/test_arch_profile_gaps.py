@@ -27,7 +27,7 @@ from neurobrix.core.config.loader import (
     UnsupportedArchitectureError,
     get_vendor_config,
 )
-from neurobrix.core.prism.autodetect import _nvidia_cc_to_arch
+from neurobrix.pytorch.prism.autodetect import _nvidia_cc_to_arch
 
 
 # 2026-11-17 (GitHub issue 6): turing and ada have their own profiles, read from NVIDIA's documentation (below); the

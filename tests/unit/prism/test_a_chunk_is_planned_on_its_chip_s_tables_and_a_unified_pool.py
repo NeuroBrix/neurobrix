@@ -34,13 +34,13 @@ def _record(model_root, container_sha):
 def _plan(monkeypatch, tmp_path, machine, vendor, table, cls, kv_devices=None):
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
-    from neurobrix.core.prism import PrismSolver, prefill_chunk as PC
+    from neurobrix.pytorch.prism import PrismSolver, prefill_chunk as PC
     from neurobrix.kernels import census_table as T
     from neurobrix.nbx import NBXContainer
     pin_no_calibration(monkeypatch)
     if vendor == "nvidia":      # a discrete card is read by its driver: the test plans one, on any host, card-less too
-        from neurobrix.core.prism import solver as solver_mod
-        from neurobrix.core.prism.memory_budget import DeviceReading
+        from neurobrix.pytorch.prism import solver as solver_mod
+        from neurobrix.pytorch.prism.memory_budget import DeviceReading
         monkeypatch.setattr(solver_mod, "read_device_sharing", lambda i: DeviceReading(
             kind="device", capacity_mb=16151, free_mb=15845, own_context_mb=306, measured=True,
             source="injected: a quiet card (the test plans; no card is read)"))

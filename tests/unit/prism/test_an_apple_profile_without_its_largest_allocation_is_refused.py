@@ -22,7 +22,7 @@ from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, profile
 
 
 def test_the_detection_that_cannot_ask_the_device_refuses_by_name(monkeypatch):
-    from neurobrix.core.prism import autodetect
+    from neurobrix.pytorch.prism import autodetect
     monkeypatch.setitem(sys.modules, "Metal", None)          # `import Metal` raises ImportError
     with pytest.raises(RuntimeError, match="maxBufferLength"):
         autodetect._detect_apple_max_allocation_mb()

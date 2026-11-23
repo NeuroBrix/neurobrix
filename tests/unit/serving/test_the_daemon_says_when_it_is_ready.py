@@ -182,7 +182,7 @@ def test_without_a_hardware_flag_the_daemon_resolves_its_profile_in_its_own_proc
     """`serve` without --hardware hands the daemon no profile; the daemon resolves it itself, after the fork — a
     launcher that detects the machine before forking leaves a CUDA context the child cannot use (measured
     2026-11-08: cudaErrorInitializationError, the plan fell to cpu_execution)."""
-    from neurobrix.core.prism import autodetect
+    from neurobrix.pytorch.prism import autodetect
     calls = []
     monkeypatch.setattr(autodetect, "get_or_create_default_profile", lambda: calls.append(1) or "default-xyz")
     engine = LoadingEngine()

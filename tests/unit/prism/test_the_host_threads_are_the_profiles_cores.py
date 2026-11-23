@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism.cpu_config import CPUConfig, apply_thread_config
+from neurobrix.pytorch.prism.cpu_config import CPUConfig, apply_thread_config
 
 _VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "TRITON_CPU_MAX_THREADS")
 

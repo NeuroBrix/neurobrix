@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 
 KB = 1024
 
@@ -110,9 +110,9 @@ def test_the_sana_4k_decoder_is_priced_at_what_it_held():
     from tests.conftest import installed_container
     cache = installed_container("Sana_1600M_4Kpx_BF16")
     from neurobrix.nbx import NBXContainer
-    from neurobrix.core.prism.loader import load_profile
-    from neurobrix.core.prism.profiler import InputConfig
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.loader import load_profile
+    from neurobrix.pytorch.prism.profiler import InputConfig
+    from neurobrix.pytorch.prism.solver import PrismSolver
     container = NBXContainer.load(str(cache))
     vae = [c for c in container.get_neural_components() if c.name == "vae"]
     request = InputConfig(batch_size=1, height=3072, width=4096, dtype="float16", vae_scale=32)

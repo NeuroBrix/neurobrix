@@ -51,9 +51,9 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism.layer_partition import LayerPartitioner
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.solver import ComponentMemory
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._graph import as_graph
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung, no_door,
@@ -104,7 +104,7 @@ def _plan(model, mode):
 def _rung_below_the_largest_component(monkeypatch, model, mode) -> int:
     """The highest ladder rung under the model's largest whole component (its cost at the top rung): the rung at
     which that component streams inside itself and nothing smaller is asked of the cut."""
-    from neurobrix.core.prism.memory_budget import memory_ladder_mb
+    from neurobrix.pytorch.prism.memory_budget import memory_ladder_mb
     no_door(monkeypatch)
     p, s = _plan(model, mode)
     dev = s._prepare_devices(profile(APPLE_M4_PRO))[0]

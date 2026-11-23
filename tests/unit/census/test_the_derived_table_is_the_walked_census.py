@@ -27,7 +27,7 @@ def _rows(path, model):
 
 
 def test_the_derived_rows_are_the_walked_rows(workshop_configuration, tmp_path):
-    from neurobrix.core.prism.loader import profile_path
+    from neurobrix.pytorch.prism.loader import profile_path
     if not profile_path(PROFILE).exists():
         pytest.fail(f"the rack's profile {PROFILE} is not at {profile_path(PROFILE)} (the machine's generated "
                     f"profiles: written by its first launch)")

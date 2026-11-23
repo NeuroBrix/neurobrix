@@ -17,7 +17,7 @@ F16, F32 = NBXDtype.float16, NBXDtype.float32
 
 def _empty_contract():
     """No fp16 contract, as the engine's own object says it (the derivation reads `contract.safe` since 2026-10-26)."""
-    from neurobrix.core.prism.runtime_widths import conservative_contract
+    from neurobrix.pytorch.prism.runtime_widths import conservative_contract
     return conservative_contract("the rules cells: no contract")
 
 
@@ -194,7 +194,7 @@ def test_a_spatial_downscaler_reads_pixels_whatever_its_time_map():
     (time a concrete 1) and Allegro-TI2V's / Wan2.1-I2V's (a time map neither class recognises)
     were bound latent-side: priced 8 x 8 too small per frame and derived at the latent grid while
     the walk encoded 160 x 352 pixels. Injection: the temporal-class requirement restored -> RED."""
-    from neurobrix.core.prism.profiler import is_downscale_graph
+    from neurobrix.pytorch.prism.profiler import is_downscale_graph
 
     def dag(t_in, t_out):
         return {"tensors": {"input::x": {"shape": [1, 3, t_in, 112, 176]},

@@ -7,7 +7,7 @@ Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_the_plan_counts_what_
 """
 from types import SimpleNamespace
 
-from neurobrix.core.prism.solver import _consumed_weight_bytes
+from neurobrix.pytorch.prism.solver import _consumed_weight_bytes
 
 
 def test_non_block_weights_are_budgeted_and_unrouted_experts_are_not():

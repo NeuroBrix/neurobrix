@@ -11,8 +11,8 @@ What this test does if the code were wrong: the cast left off the op's figure, o
 a slice — red."""
 from __future__ import annotations
 
-from neurobrix.core.prism.layer_partition import LayerPartitioner
-from neurobrix.core.prism.runtime_widths import ExecutedWidths
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.runtime_widths import ExecutedWidths
 
 
 def _t(shape, dtype="float32", **kw):

@@ -36,7 +36,7 @@ MODEL = "TinyLlama-1.1B-Chat-v1.0"
 def _plan(monkeypatch):
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     from neurobrix.nbx import NBXContainer
     pin_no_calibration(monkeypatch)
     c = NBXContainer.load(str(container_root(MODEL)))
@@ -53,7 +53,7 @@ def test_the_plan_states_a_session_reach_beyond_the_run_cache(monkeypatch):
 
 
 def test_a_kv_plan_survives_its_save_and_restore(monkeypatch, tmp_path):
-    from neurobrix.core.prism.solver import ExecutionPlan
+    from neurobrix.pytorch.prism.solver import ExecutionPlan
     p = _plan(monkeypatch)
     p.kv_cache_plan.initial_cache_len = 96               # a serve plan's first request size
     p.save(tmp_path / "plan.json")

@@ -2,14 +2,14 @@
 rules — so a host ledger reserves what the plan says and a measured peak can judge it.
 
 The owner's rule of 2026-09-27 14:27: never a per-model table; the plan's placement on this profile.
-Each case below is one rule of core/prism/host_footprint.py, read from the runtime; before this branch
+Each case below is one rule of pytorch/prism/host_footprint.py, read from the runtime; before this branch
 the module does not exist and every case fails.
 """
 from types import SimpleNamespace as NS
 
 import pytest
 
-from neurobrix.core.prism import host_footprint as H
+from neurobrix.pytorch.prism import host_footprint as H
 
 MB = 1 << 20
 DT = {"float16": 2, "bfloat16": 2, "float32": 4}
@@ -123,7 +123,7 @@ def test_a_unified_device_s_plan_is_held_on_the_host():
 def test_the_solver_counts_the_device_plan_only_for_a_unified_profile():
     """Injection: `unified_device_bytes` returning the plan on a discrete card, or 0 on a unified
     one -> RED."""
-    from neurobrix.core.prism.solver import unified_device_bytes
+    from neurobrix.pytorch.prism.solver import unified_device_bytes
     plan = NS(total_memory_mb=18085.0)
     assert unified_device_bytes(plan, NS(devices=[NS(has_unified_memory=True)])) == 18085 * MB
     assert unified_device_bytes(plan, NS(devices=[NS(has_unified_memory=False)] * 4)) == 0

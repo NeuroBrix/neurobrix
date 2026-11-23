@@ -15,9 +15,9 @@ import copy
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.loader import load_profile
-from neurobrix.core.prism.solver import ProfileFactMissing
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.loader import load_profile
+from neurobrix.pytorch.prism.solver import ProfileFactMissing
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (V100_16GB, container_root, pin_dedicated_card, pin_host,
                                               pin_no_calibration, profile)

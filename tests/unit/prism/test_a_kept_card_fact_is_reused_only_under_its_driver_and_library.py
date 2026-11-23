@@ -8,8 +8,8 @@ What each test would do if the code were wrong: a chunk of another driver reused
 under the same key (red), a sibling's stale chunk taken (red), reload rates of another library kept (red)."""
 from __future__ import annotations
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import kept_launch_facts as K
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import kept_launch_facts as K
 from tests.unit.prism.test_class_facts_are_measured_once_per_card_model import (  # noqa: F401 — the fixture
     C16, CALLS, _read, _write, hw)
 

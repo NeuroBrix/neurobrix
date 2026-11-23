@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.solver import (
+from neurobrix.pytorch.prism.solver import (
     ComponentAllocation, ComponentMemory, ExecutionPlan, PrismSolver, explain_plan,
 )
 

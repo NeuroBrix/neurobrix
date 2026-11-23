@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism.flow_bindings import FlowBindings
+from neurobrix.pytorch.prism.flow_bindings import FlowBindings
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -50,25 +50,25 @@ def test_the_flow_still_turns_the_text_head_s_amp_off_where_the_price_says_so():
     ({"batch_size": 1}, {"guidance_scale": 7.5}, {"dtype": "float16"}, (2, 2, "float16")),
 ])
 def test_the_batch_and_the_dtype_of_a_plan_follow_the_container_not_a_literal(defaults, family, manifest, want):
-    from neurobrix.core.prism.request_config import request_batch_and_dtype
+    from neurobrix.pytorch.prism.request_config import request_batch_and_dtype
     assert request_batch_and_dtype(None, defaults, family, manifest, 1) == want
 
 
 def test_a_container_that_declares_no_dtype_is_refused_not_given_one():
-    from neurobrix.core.prism.request_config import request_batch_and_dtype
+    from neurobrix.pytorch.prism.request_config import request_batch_and_dtype
     from neurobrix.core.runtime_values import MissingRuntimeValue
     with pytest.raises(MissingRuntimeValue):
         request_batch_and_dtype(None, {}, {}, {}, 1)
 
 
 def test_a_serving_session_gets_the_same_three_as_plan_fields():
-    from neurobrix.core.prism.request_config import served_plan_fields
+    from neurobrix.pytorch.prism.request_config import served_plan_fields
     assert served_plan_fields(None, {}, {"dtype": "bfloat16"}) == {"batch_size": 1, "guidance_passes": None,
                                                                    "dtype": "bfloat16"}
 
 
 def test_the_compiled_engine_reads_the_text_head_s_transpose_in_place_and_no_other(tmp_path):
-    from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler, InputConfig
     fb = _bindings(tmp_path, {"type": "autoregressive_text", "lm_component": "language_model",
                               "head_component": "lm_head"})
     cfg = InputConfig(batch_size=1, dtype="float16", flow=fb)
@@ -103,7 +103,7 @@ def test_a_head_run_with_amp_off_copies_no_operand_to_fp32(tmp_path):
     """On fp16 hardware an uncontracted mm runs under the fp32 wrapper, which copies its weight to fp32 while it runs
     — priced, rightly, for a component with AMP on. The flow's text head has AMP off: no wrapper, no copy (Qwen3-Coder:
     1 187 MB planned for a copy no run makes, 2026-11-10)."""
-    from neurobrix.core.prism.runtime_widths import conservative_contract, plan_time_contract, runtime_widths
+    from neurobrix.pytorch.prism.runtime_widths import conservative_contract, plan_time_contract, runtime_widths
     fb = _bindings(tmp_path, {"type": "autoregressive_text", "lm_component": "language_model",
                               "head_component": "lm_head"})
     kw = dict(attention_operands="narrowest", has_native_bf16=False, stores_fp64=False)

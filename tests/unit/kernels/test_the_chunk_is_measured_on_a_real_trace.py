@@ -66,7 +66,7 @@ def test_several_traces_are_named_never_picked(monkeypatch, tmp_path):
 
 
 def test_the_first_launch_probe_measures_on_the_trace(monkeypatch):
-    from neurobrix.core.prism import facts_probe as P
+    from neurobrix.pytorch.prism import facts_probe as P
     from nbxtensor.memory import vmm as V
     monkeypatch.setattr(V.Vmm, "load", staticmethod(lambda libs: object()))
     monkeypatch.setattr(V.Vmm, "_reachable_from", lambda self: None)   # the peer grant needs a driver: not asked here

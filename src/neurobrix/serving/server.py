@@ -150,7 +150,7 @@ class ServingDaemon:
         # `engine` is injected only by a test (a fake engine that yields tokens
         # without a model); the daemon builds its InferenceEngine.
         self._engine = engine if engine is not None else InferenceEngine(model_name, hardware_id, mode)
-        # an Intel GPU refused at run time (core/prism/intel_refusal.py): the daemon reloads once on the CPU plan — only
+        # an Intel GPU refused at run time (pytorch/prism/intel_refusal.py): the daemon reloads once on the CPU plan — only
         # when it resolved the machine's profile itself (an explicit --hardware is the user's: it is not replaced)
         self._auto_hardware, self._intel_refused = not hardware_id, False
         self._idle_timeout = idle_timeout
@@ -282,17 +282,17 @@ class ServingDaemon:
         cannot use (cudaErrorInitializationError)."""
         if self._engine.hardware_id:
             return
-        from neurobrix.core.prism.autodetect import get_or_create_default_profile
+        from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
         self._engine.hardware_id = get_or_create_default_profile()
 
     def _reload_after_intel_refusal(self, exc: BaseException) -> Optional[str]:
-        """An Intel GPU's refusal (core/prism/intel_refusal.py: nbxtensor's IntelDeviceError in `exc`'s chain, with a
+        """An Intel GPU's refusal (pytorch/prism/intel_refusal.py: nbxtensor's IntelDeviceError in `exc`'s chain, with a
         result that says the chip cannot do it, naming a device this daemon's profile plans) — called on the engine's
         thread: said by name, recorded, the machine detected again and a NEW engine loaded once on the plan it then
         gets; the refused device's engine is released only once the new one is loaded, so a reload that fails leaves
         the daemon as it was (its error raised: the caller's). Returns the sentence; None when there is no such
         refusal, when the daemon already reloaded after one, or when its profile was given (`--hardware`)."""
-        from neurobrix.core.prism import intel_refusal
+        from neurobrix.pytorch.prism import intel_refusal
         err = intel_refusal.intel_error(exc)
         if err is None or err.result not in intel_refusal.CANNOT or self._intel_refused or not self._auto_hardware:
             return None
@@ -305,7 +305,7 @@ class ServingDaemon:
         _log.warning(f"[Daemon] {said}")
         intel_refusal.record(devices, f"refused at run time: {err.call}: {err.result}", old.hardware_id)
         new = type(old)(old.model_name, None, old.mode)
-        from neurobrix.core.prism.autodetect import get_or_create_default_profile
+        from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
         new.hardware_id = get_or_create_default_profile()
         new.load()
         self._engine = new

@@ -37,9 +37,9 @@ import inspect
 import pytest
 
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile as build_profile   # built, never a machine's own profile (register 102)
-from neurobrix.core.prism.solver import (
+from neurobrix.pytorch.prism.solver import (
     ComponentMemory, DeviceState, PrismSolver)
-from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
+from neurobrix.pytorch.prism.structure import DeviceBrand, DeviceSpec
 
 _GB = 1024 ** 3
 

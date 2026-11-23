@@ -49,7 +49,7 @@ def runtime(monkeypatch):
         monkeypatch.setattr(R, "invalidate_current_device_cache", lambda: None)
         monkeypatch.setattr(DeviceAllocator, "clear_last_error", staticmethod(lambda: None))
         monkeypatch.setattr(DeviceAllocator, "restore_device", staticmethod(lambda prev: setattr(fake, "current", prev)))
-        from neurobrix.core.prism import autodetect
+        from neurobrix.pytorch.prism import autodetect
         monkeypatch.setattr(autodetect, "device_sharing", lambda index: None)     # no sharing tool answers
         return fake
     return install
@@ -57,14 +57,14 @@ def runtime(monkeypatch):
 
 def test_prism_never_builds_a_card_of_0_mb_from_a_broken_driver(runtime):
     runtime([5 << 30, 9 << 30], refuse={0: 700, 1: 700})
-    from neurobrix.core.prism import memory_budget as B
+    from neurobrix.pytorch.prism import memory_budget as B
     with pytest.raises(DeviceQueryError, match=r"error 700"):
         B.read_device_sharing(1)
 
 
 def test_a_card_a_healthy_runtime_answers_is_read_with_its_real_figures_unmeasured_for_sharing(runtime):
     runtime([5 << 30, 9 << 30])
-    from neurobrix.core.prism import memory_budget as B
+    from neurobrix.pytorch.prism import memory_budget as B
     r = B.read_device_sharing(1)
     assert r.capacity_mb == 32 << 10 and r.free_mb == 9 << 10
     assert not r.measured

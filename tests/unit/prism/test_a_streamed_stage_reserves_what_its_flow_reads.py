@@ -18,8 +18,8 @@ import json
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import _graph_constant_bytes
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import _graph_constant_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung,
                                               pin_host, profile)

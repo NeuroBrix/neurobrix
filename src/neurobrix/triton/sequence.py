@@ -30,7 +30,7 @@ from nbxtensor.memory.oom_advice import annotate as _oom_annotate
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.backend.runtime import invalidate_current_device_cache
-from neurobrix.core.prism.memory_budget import DEFERRED_DRAIN_COUNT, deferred_drain_policy
+from neurobrix.pytorch.prism.memory_budget import DEFERRED_DRAIN_COUNT, deferred_drain_policy
 
 from nbxtensor.memory.deferred_frees import DeferredFrees
 from nbxtensor.memory.memory_pool import break_aliases
@@ -56,7 +56,7 @@ _log = logging.getLogger(__name__)
 # pool off (default) every drain is a cudaFree→cudaMalloc cycle, so draining
 # eagerly on a model that HAS headroom is pure churn (a fixed 650 MiB cap was
 # measured to regress CogVideoX-2b VAE decode ~49% with ~21 GB free — no
-# benefit). So `core.prism.memory_budget.deferred_drain_policy()` returns
+# benefit). So `pytorch.prism.memory_budget.deferred_drain_policy()` returns
 # (cliff, floor, pressure_reserve, freecheck_interval): the queue always
 # drains at `cliff` (2 GB, throughput ceiling — unchanged when there is
 # headroom, hence NO runtime regression), and drains EARLY (at `floor`) only
@@ -97,7 +97,7 @@ def _parse_env_int(name: str, default: int) -> int:
 
 
 # The pressure-branch floor a NBX_DEFERRED_DRAIN_RESERVE override re-enables the branch at (a debug / A-B knob; the
-# run's own floor is the vendor file's, `core.prism.memory_budget.deferred_drain_policy`).
+# run's own floor is the vendor file's, `pytorch.prism.memory_budget.deferred_drain_policy`).
 _DEFERRED_DRAIN_FLOOR_DEFAULT = 268_435_456     # 256 MiB
 
 
@@ -105,7 +105,7 @@ def _resolve_drain_policy(planned_cliff: Optional[int] = None):
     """Resolve the per-run deferred-drain policy once, applying env overrides.
 
     Returns `(cliff, floor, reserve, interval, count_limit)`. The config-driven
-    base comes from `core.prism.memory_budget.deferred_drain_policy()`; the cliff is then the
+    base comes from `pytorch.prism.memory_budget.deferred_drain_policy()`; the cliff is then the
     PLAN's (`planned_cliff`, `ComponentAllocation.deferred_drain_cliff_bytes`)
     when Prism set one — Prism budgeted this device against that figure, never
     against the profile's, and the pressure floor never exceeds it. Two env
@@ -606,10 +606,10 @@ class TritonSequence(SequenceSteps):
     @staticmethod
     def _rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
         """Rewire tensor_id references in a single arg dict — the one shared walk
-        (`core/prism/layer_partition.rewire_arg`, torch-free): type=tensor / tensor_ref,
+        (`pytorch/prism/layer_partition.rewire_arg`, torch-free): type=tensor / tensor_ref,
         type=tensor_tuple and nested type=list. Shared by _eliminate_detach_ops and
         _eliminate_weight_transpose_ops, and by a streamed piece's seam aliasing."""
-        from neurobrix.core.prism.layer_partition import rewire_arg
+        from neurobrix.pytorch.prism.layer_partition import rewire_arg
         return rewire_arg(arg, rewire)
 
     def _apply_rewire_to_remaining_ops(

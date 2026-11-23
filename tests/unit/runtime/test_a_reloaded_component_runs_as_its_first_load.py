@@ -33,8 +33,8 @@ CHILD = r'''
 import hashlib, json, os, sys
 from neurobrix.cli.utils import find_model
 from neurobrix.nbx import NBXContainer
-from neurobrix.core.prism import PrismSolver, load_profile
-from neurobrix.core.prism.autodetect import get_or_create_default_profile
+from neurobrix.pytorch.prism import PrismSolver, load_profile
+from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
 from neurobrix.core.runtime.loader import NBXRuntimeLoader
 from neurobrix.core.runtime.executor import RuntimeExecutor
 from neurobrix.cli import create_parser

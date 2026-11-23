@@ -50,7 +50,7 @@ def main() -> int:
     from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output
     from neurobrix.core.runtime.lm_facts import session_lm_name
 
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     engine = InferenceEngine(a.model, a.hardware or get_or_create_default_profile(), mode=a.mode)
     engine.load()
     kv_plan = engine._plan.kv_cache_plan

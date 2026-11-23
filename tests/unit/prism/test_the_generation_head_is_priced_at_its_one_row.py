@@ -1,6 +1,6 @@
 """The flow's generation head is priced at the ONE row both engines feed it (`core/flow/autoregressive.py`
 `get_logits(hidden[:, -1:, :])`, the Triton strategies' `hidden.select(1, T - 1)`), and a serving session's prefill
-chunk is raised while the plan's residents hold (`core/prism/served_prefill.py`).
+chunk is raised while the plan's residents hold (`pytorch/prism/served_prefill.py`).
 
 Before (2026-11-10): the head's `seq_len` symbol was bound by name to the request's prompt rows. Qwen3-Coder-30B-A3B's
 151 936-wide head was priced 1.2 MB a prompt row — 1 184 MB between a 128-row and a 1 024-row prefill chunk, for
@@ -21,7 +21,7 @@ No card. Run: python -m pytest tests/unit/prism/test_the_generation_head_is_pric
 import dataclasses
 import json
 
-from neurobrix.core.prism.served_prefill import solve_served as SP_solve_served
+from neurobrix.pytorch.prism.served_prefill import solve_served as SP_solve_served
 import pytest
 from tests.unit.prism._pinned_machine import container_root, profile, V100_16GB, pin_no_calibration, pin_dedicated_card
 
@@ -37,13 +37,13 @@ MODEL = "TinyLlama-1.1B-Chat-v1.0"
 
 
 def _flow():
-    from neurobrix.core.prism.flow_bindings import FlowBindings
+    from neurobrix.pytorch.prism.flow_bindings import FlowBindings
     root = container_root(MODEL)
     return FlowBindings(json.loads((root / "topology.json").read_text()), root, MODEL), root
 
 
 def test_the_head_takes_one_row_and_only_the_head():
-    from neurobrix.core.prism import InputConfig
+    from neurobrix.pytorch.prism import InputConfig
     fb, _ = _flow()
     assert fb.head_rows("lm_head") == 1
     assert fb.head_rows("lm_head", InputConfig(seq_len=1024)) == 1
@@ -52,8 +52,8 @@ def test_the_head_takes_one_row_and_only_the_head():
 
 
 def test_the_profiler_binds_the_heads_sequence_to_one_row():
-    from neurobrix.core.prism import InputConfig
-    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism import InputConfig
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
     fb, root = _flow()
     dag = json.loads((root / "components" / "lm_head" / "graph.json").read_text())
     seq = [s for s, i in dag["symbolic_context"]["symbols"].items() if i["name"] == "seq_len"]
@@ -70,7 +70,7 @@ def test_the_profiler_binds_the_heads_sequence_to_one_row():
 
 
 def _served(monkeypatch, mode):
-    from neurobrix.core.prism import InputConfig, PrismSolver
+    from neurobrix.pytorch.prism import InputConfig, PrismSolver
     from neurobrix.nbx import NBXContainer
     pin_no_calibration(monkeypatch)
     fb, root = _flow()
@@ -87,14 +87,14 @@ def test_a_served_compiled_plan_raises_its_chunk_while_the_plan_holds(monkeypatc
     assert base.kv_cache_plan.prefill_chunk == 128, base.kv_cache_plan.prefill_chunk_reason   # the prompt margin
     # TinyLlama on a 16 GB card: every size up to the cache's reach holds the plan
     assert kv.prefill_chunk == used.seq_len == 2048 and kv.max_cache_len == 2048, (kv.prefill_chunk, used.seq_len)
-    from neurobrix.core.prism.served_prefill import resident_signature, UNTIMED
+    from neurobrix.pytorch.prism.served_prefill import resident_signature, UNTIMED
     assert f"compiled engine keeps {UNTIMED}" in kv.prefill_chunk_reason
     assert resident_signature(plan) == resident_signature(base)
     assert used.flow is cfg.flow and used.prefill_keys == 2048 and dataclasses.replace(used, seq_len=None, prefill_keys=None, prefill_key_dtype=None) == cfg
 
 
 def test_the_raise_ends_at_the_first_size_that_moves_a_resident(monkeypatch):
-    from neurobrix.core.prism import served_prefill as SP
+    from neurobrix.pytorch.prism import served_prefill as SP
     solver, c, cfg = _served(monkeypatch, "compiled")
     real = SP.resident_signature
     # a resident gives way from 1 024 priced rows on (as Qwen3-Coder's expert block does at 4 096 on two V100-32GB)
@@ -105,7 +105,7 @@ def test_the_raise_ends_at_the_first_size_that_moves_a_resident(monkeypatch):
 
 
 def test_a_size_no_plan_fits_ends_the_raise(monkeypatch):
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     solver, c, cfg = _served(monkeypatch, "compiled")
     real = PrismSolver.solve_smart
 
@@ -120,7 +120,7 @@ def test_a_size_no_plan_fits_ends_the_raise(monkeypatch):
 
 def test_the_solver_says_untimed_with_the_modules_own_phrase(monkeypatch):
     """Reworded, the solver's reason would turn the raise off without a word: both are built from one constant."""
-    from neurobrix.core.prism import served_prefill as SP
+    from neurobrix.pytorch.prism import served_prefill as SP
     monkeypatch.setattr(SP, "UNTIMED", "no timing at all")
     solver, c, cfg = _served(monkeypatch, "compiled")
     plan, used = SP_solve_served(c, profile(V100_16GB), cfg, mode="compiled")

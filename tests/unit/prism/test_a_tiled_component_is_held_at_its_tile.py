@@ -16,7 +16,7 @@ Run: python -m pytest tests/unit/prism/test_a_tiled_component_is_held_at_its_til
 """
 from types import SimpleNamespace as NS
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 MIB = 1024 * 1024
 

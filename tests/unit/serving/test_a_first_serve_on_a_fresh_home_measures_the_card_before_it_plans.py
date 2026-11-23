@@ -27,9 +27,9 @@ class _Stop(Exception):
 
 @pytest.fixture
 def fresh_home(tmp_path, monkeypatch):
-    from neurobrix.core.prism import autodetect as A
-    from neurobrix.core.prism import facts_probe as P
-    from neurobrix.core.prism import loader as L
+    from neurobrix.pytorch.prism import autodetect as A
+    from neurobrix.pytorch.prism import facts_probe as P
+    from neurobrix.pytorch.prism import loader as L
     hw = tmp_path / "hardware"
     hw.mkdir()
     monkeypatch.setattr(A, "HARDWARE_DIR", hw)
@@ -61,7 +61,7 @@ def fresh_home(tmp_path, monkeypatch):
     def load_profile(hardware_id):
         planned.append(real(hardware_id))
         return planned[-1]
-    import neurobrix.core.prism as PRISM
+    import neurobrix.pytorch.prism as PRISM
     monkeypatch.setattr(L, "load_profile", load_profile)
     monkeypatch.setattr(PRISM, "load_profile", load_profile)
     monkeypatch.setattr(PR, "open_declared", lambda *a, **k: (_ for _ in ()).throw(_Stop()))
@@ -81,7 +81,7 @@ def test_the_first_serve_reads_the_card_s_runtime_figures_before_it_plans(fresh_
 
 
 def test_the_served_launch_names_its_profile_for_the_loader_s_own_rates(fresh_home, monkeypatch):
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     from neurobrix.serving.engine import InferenceEngine
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", None)
     with pytest.raises(_Stop):

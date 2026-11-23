@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import host_footprint as HF
+from neurobrix.pytorch.prism import host_footprint as HF
 from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels import autotune_certify as CF
 

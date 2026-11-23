@@ -100,7 +100,7 @@ def tree_of(repo: Path, sha: str, scratch: Path = SCRATCH) -> Path:
     if arch.returncode != 0:
         raise SystemExit(f"REFUSED: git archive {sha} failed: {arch.stderr.decode()[:200]}")
     subprocess.run(["tar", "-x", "-C", str(tmp)], input=arch.stdout, check=True)
-    # The machine's GENERATED profiles live in ONE place (core/prism/loader.GENERATED_DIR, ~/.neurobrix/hardware): a
+    # The machine's GENERATED profiles live in ONE place (pytorch/prism/loader.GENERATED_DIR, ~/.neurobrix/hardware): a
     # tree whose loader reads them there gets none copied in (a copy in its package is refused by name); a tree from
     # before that reads them from its own config/hardware/, so it gets the machine's, from that one place.
     loader_src = (tmp / "src" / "neurobrix" / "core" / "prism" / "loader.py").read_text()

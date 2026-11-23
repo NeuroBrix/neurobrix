@@ -64,7 +64,7 @@ _SAVE_FLOAT_COPIES = 2
 
 def host_bytes_per_output_element(family: str) -> int:
     """Host bytes the output boundary holds per element of the run's final tensor, for `family`'s declared
-    output format — Prism prices the run's output from it (core/prism/host_footprint.py). A family whose
+    output format — Prism prices the run's output from it (pytorch/prism/host_footprint.py). A family whose
     format depends on the mode is priced at the dearest of its formats, never a guess at the mode."""
     fmt = get_output_format(family)
     bit_depth = int(get_output_processing(family).get("bit_depth", 8))

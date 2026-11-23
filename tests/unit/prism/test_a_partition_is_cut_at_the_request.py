@@ -9,7 +9,7 @@ written twice. Before this branch the partitioner takes no symbol map: these fai
 from tests.unit.prism._graph import as_graph
 import pytest
 
-from neurobrix.core.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 
 
 def _graph():
@@ -28,7 +28,7 @@ def test_the_build_is_what_it_sizes_without_a_request():
 
 def test_the_request_is_what_it_sizes_with_one():
     # 100 x 100 at the request, at the width the runtime EXECUTES each activation at — the widths the plan
-    # prices it with (core/prism/runtime_widths, given by the solver). Since the estimator (2026-09-28) an
+    # prices it with (pytorch/prism/runtime_widths, given by the solver). Since the estimator (2026-09-28) an
     # fp32 activation the engine keeps in fp32 costs 4 bytes, not the compute dtype's 2: the partition cuts
     # at what the plan pays, in both directions.
     g = _graph()

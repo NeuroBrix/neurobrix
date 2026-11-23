@@ -53,7 +53,7 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 from neurobrix.kernels.torch_interop import nbx_to_torch
 class _MockProfile:
     def __init__(self, has_native_bf16: bool):
-        from neurobrix.core.prism.autodetect import load_default_profile
+        from neurobrix.pytorch.prism.autodetect import load_default_profile
         self.has_native_bf16 = has_native_bf16
         self.devices = load_default_profile().devices      # the host's: its float64 is declared
 

@@ -28,7 +28,7 @@ from .graph_executor import GraphExecutor
 from neurobrix.nbx.cache import ensure_extracted
 
 if TYPE_CHECKING:
-    from neurobrix.core.prism.solver import ComponentAllocation
+    from neurobrix.pytorch.prism.solver import ComponentAllocation
     from neurobrix.core.components.base import ComponentHandler
 
 

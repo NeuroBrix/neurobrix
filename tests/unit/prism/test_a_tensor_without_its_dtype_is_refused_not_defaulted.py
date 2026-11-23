@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 
 
 def _sizer():

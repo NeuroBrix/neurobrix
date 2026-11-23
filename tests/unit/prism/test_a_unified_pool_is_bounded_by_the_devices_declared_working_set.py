@@ -6,7 +6,7 @@ and the execution door refused it at every free reading this machine ever has (t
 """
 from __future__ import annotations
 from types import SimpleNamespace
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 
 def _solver(mode="triton"):

@@ -14,8 +14,8 @@ slab, which has no per-expert host tensor for the store to copy, planned as a st
 """
 from __future__ import annotations
 
-from neurobrix.core.prism.expert_topology import ExpertTopology, RoutedLayer
-from neurobrix.core.prism.solver import ComponentAllocation, PrismSolver
+from neurobrix.pytorch.prism.expert_topology import ExpertTopology, RoutedLayer
+from neurobrix.pytorch.prism.solver import ComponentAllocation, PrismSolver
 
 MB = 1024 * 1024
 
@@ -82,7 +82,7 @@ def test_a_stacked_slab_or_a_dense_component_is_never_a_store():
 
 
 def test_the_plan_carries_the_strategy_and_the_cache_across_a_save(tmp_path):
-    from neurobrix.core.prism.solver import ExecutionPlan
+    from neurobrix.pytorch.prism.solver import ExecutionPlan
     a = ComponentAllocation(name="lm", devices=["zero3:cuda:0"], dtype="float16", memory_mb=57000.0,
                             architecture="", vendor="", strategy="expert_store",
                             resident_weight_mb=2642.0, expert_cache_mb=1126.0)

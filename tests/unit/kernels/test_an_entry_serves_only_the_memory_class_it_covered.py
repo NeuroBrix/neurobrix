@@ -153,7 +153,7 @@ def test_the_profile_name_and_its_reading_share_one_rule():
     grammar were written twice (autodetect builds, the directory parsed). Now
     the builder and the parser live together in Prism's structure module and
     this pins their round trip — for the rack's two cards and an odd MB count."""
-    from neurobrix.core.prism.structure import (memory_class_gb, single_card_profile_id,
+    from neurobrix.pytorch.prism.structure import (memory_class_gb, single_card_profile_id,
                                                 rig_profile_id, memory_class_from_profile_id)
     for mb in (16384, 16160, 32768, 32510, 24576):
         assert memory_class_from_profile_id(single_card_profile_id("v100-16gb", mb)) == memory_class_gb(mb)

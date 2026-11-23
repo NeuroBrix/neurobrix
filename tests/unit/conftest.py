@@ -27,7 +27,7 @@ def declared_profile(monkeypatch):
     from nbxtensor.ops import wrappers as W
     from nbxtensor.backend import capabilities as K
     from nbxtensor.backend import device_facts as F
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     from neurobrix.triton.dtype import declare_hardware_profile
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", W._NBX_HW_PROFILE)
     monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", W._NBX_HAS_NATIVE_BF16)
@@ -66,7 +66,7 @@ def needs_device():
     reason = sys.modules["_no_device"].absence()
     if reason is not None:
         pytest.skip(reason)
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     if not getattr(load_default_profile(), "devices", None):
         pytest.skip("no device in this host's profile (a card-less run)")
 

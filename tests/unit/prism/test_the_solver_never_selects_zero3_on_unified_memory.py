@@ -10,11 +10,11 @@ single op ran. Selection must consult the same device door the budget does.
 """
 from __future__ import annotations
 
-from neurobrix.core.prism.loader import load_profile
-from neurobrix.core.prism.solver import (
+from neurobrix.pytorch.prism.loader import load_profile
+from neurobrix.pytorch.prism.solver import (
     ComponentMemory, DeviceState, PrismSolver,
 )
-from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
+from neurobrix.pytorch.prism.structure import DeviceBrand, DeviceSpec
 
 
 class _NoComponents:

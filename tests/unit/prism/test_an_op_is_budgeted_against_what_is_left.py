@@ -42,7 +42,7 @@ import json
 
 import pytest
 
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 from tests.unit.prism._graph import as_graph
 
 MB = 1024 * 1024

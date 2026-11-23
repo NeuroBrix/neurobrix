@@ -1,4 +1,4 @@
-"""The serving daemon and an Intel GPU's refusal at run time (core/prism/intel_refusal.py; the Dell's review 2026-11-10
+"""The serving daemon and an Intel GPU's refusal at run time (pytorch/prism/intel_refusal.py; the Dell's review 2026-11-10
 16:0x): at load or at a request, a refusal of a chip the daemon's own profile plans is said by name, recorded for that
 device, and a NEW engine is loaded ONCE on the profile detection then gives; the refused engine is released only once
 the new one is loaded, so a reload that fails leaves the daemon as it was. A second refusal, a result that is no verdict
@@ -8,7 +8,7 @@ deleted, the old engine released before the new one loads (a daemon with no engi
 import pytest
 
 from nbxtensor.backend.level_zero import IntelDeviceError
-from neurobrix.core.prism import autodetect, intel_refusal
+from neurobrix.pytorch.prism import autodetect, intel_refusal
 from neurobrix.serving.server import ServingDaemon
 
 PROFILE = "devices:\n- {index: 0, brand: intel, model: Arc A770, pci_id: '8086:56a0'}\n"

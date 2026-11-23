@@ -226,7 +226,7 @@ def test_upscaler_serve_warm_unaligned_exact_size(mode: str,
     """
     from PIL import Image
 
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.serving.engine import InferenceEngine
 
     from neurobrix.cli.utils import find_model   # absent or renamed: the test fails, loudly
@@ -262,7 +262,7 @@ def test_upscaler_serve_warm_unaligned_exact_size(mode: str,
 def test_upscaler_serve_warm_output_shape(mode: str, tmp_path: Path) -> None:
     from PIL import Image
 
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.serving.engine import InferenceEngine
 
     from neurobrix.cli.utils import find_model   # absent or renamed: the test fails, loudly

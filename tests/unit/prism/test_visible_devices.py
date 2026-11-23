@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 
 @pytest.fixture

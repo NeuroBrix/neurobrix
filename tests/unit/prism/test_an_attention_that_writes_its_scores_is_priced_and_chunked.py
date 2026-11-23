@@ -72,12 +72,12 @@ def test_every_vendor_file_states_whether_its_compiled_attention_writes_its_scor
 
 
 def test_the_price_is_what_a_device_writes():
-    from neurobrix.core.prism.attention_scratch import scores_budget, scratch_bytes
+    from neurobrix.pytorch.prism.attention_scratch import scores_budget, scratch_bytes
     apple = {"compiled_sdpa_full_scores": True, "compiled_sdpa_scores_device_fraction": 0.1,
              "sdpa_math_min_chunk_rows": 128, "compiled_sdpa_chunks_in_flight": 2}
     budget = scores_budget(apple, 18186)
     assert budget == int(18186 * 1024 * 1024 * 0.1)
-    from neurobrix.core.prism.attention_scratch import chunk_plan
+    from neurobrix.pytorch.prism.attention_scratch import chunk_plan
     full = 2 * 24 * 79200 * 79200 * 4
     # Allegro at 720x1280: 79 200 tokens, 2 x 24 heads — one 128-row band of all heads is over budget, so the cut is
     # two chunks in flight share the 1.91 GB: one head by bands of 2 944 rows (0.95 GB / 316 800 B a row, in 128-row
@@ -94,7 +94,7 @@ def test_the_price_is_what_a_device_writes():
 
 
 def test_prism_adds_the_scores_to_the_attentions_in_op_figure():
-    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
     S = {"type": "symbol", "id": "s0"}
     graph = {"tensors": {"q": {"shape": [1, 2, 64, 16], "dtype": "float32", "is_input": True},
                          "k": {"shape": [1, 2, 64, 16], "dtype": "float32", "is_input": True},
@@ -142,9 +142,9 @@ def test_a_broadcast_key_head_is_kept_and_a_foreign_head_count_refused():
 
 
 def test_the_plan_states_the_budget_its_attention_was_priced_at():
-    from neurobrix.core.prism import PrismSolver
-    from neurobrix.core.prism.solver import ComponentAllocation, ExecutionPlan
-    from neurobrix.core.prism.attention_scratch import scores_budget, vendor_memory
+    from neurobrix.pytorch.prism import PrismSolver
+    from neurobrix.pytorch.prism.solver import ComponentAllocation, ExecutionPlan
+    from neurobrix.pytorch.prism.attention_scratch import scores_budget, vendor_memory
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, profile
     s = PrismSolver()
     s._mode = "compiled"

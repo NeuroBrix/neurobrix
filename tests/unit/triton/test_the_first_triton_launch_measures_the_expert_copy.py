@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 def test_the_first_triton_launch_measures_the_copy_only_where_the_profile_has_none(monkeypatch, tmp_path):
-    from neurobrix.core.prism import autodetect as AD
+    from neurobrix.pytorch.prism import autodetect as AD
     import yaml
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
     monkeypatch.setattr("neurobrix.core.paths.cache_dir", lambda: tmp_path / "no-cache")   # no reload probe here
@@ -36,7 +36,7 @@ def test_the_first_triton_launch_measures_the_copy_only_where_the_profile_has_no
 def test_a_unified_device_is_not_probed(monkeypatch, tmp_path):
     """On a unified device the experts are mapped in place (Strategy 2.5): the first launch measures no card-side copy
     (whose Triton launch does not bind on Metal, the Mac 2026-11-03 10:43) and writes none."""
-    from neurobrix.core.prism import autodetect as AD
+    from neurobrix.pytorch.prism import autodetect as AD
     import yaml
     monkeypatch.setattr(AD, "HARDWARE_DIR", tmp_path)
     monkeypatch.setattr("neurobrix.core.paths.cache_dir", lambda: tmp_path / "no-cache")   # no reload probe here

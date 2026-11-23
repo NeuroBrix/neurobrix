@@ -1,4 +1,4 @@
-"""Prism's reading of a temporal stream declaration (`core/prism/temporal_stream.py`): the schedule a request runs is
+"""Prism's reading of a temporal stream declaration (`pytorch/prism/temporal_stream.py`): the schedule a request runs is
 exact by the conditions the declaration writes, and the longest chunk that fits; the vendor's chunks when declared;
 a stale declaration refused.
 
@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from neurobrix.core.prism import temporal_stream as ts
+from neurobrix.pytorch.prism import temporal_stream as ts
 
 S = {"type": "symbol", "id": "s1"}
 
@@ -86,7 +86,7 @@ def test_a_vendor_tiling_declaration_that_says_when_is_refused(tmp_path):
     import hashlib
     import json
     import pytest
-    from neurobrix.core.prism import temporal_stream as ts
+    from neurobrix.pytorch.prism import temporal_stream as ts
     comp = tmp_path / "components" / "vae"
     comp.mkdir(parents=True)
     (comp / "graph.json").write_text("{}")

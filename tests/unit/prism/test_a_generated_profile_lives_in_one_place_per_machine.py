@@ -12,8 +12,8 @@ import pytest
 import yaml
 
 from neurobrix.core.dtype import calibration
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import loader as L
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import loader as L
 
 
 @pytest.mark.engine_home_layout

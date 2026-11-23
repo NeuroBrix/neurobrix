@@ -2288,7 +2288,7 @@ class GraphExecutor:
         """The loader's own measurement of this load, handed to the active generated profile (`kept_launch_facts.
         note_weight_load`: the loader's rate, S2, which Prism's estimate reads from the next plan on, and the width the
         weight reader reached, row 167)."""
-        from neurobrix.core.prism import kept_launch_facts
+        from neurobrix.pytorch.prism import kept_launch_facts
         kept_launch_facts.note_weight_load(engine, nbx_path, component, where, landed, seconds)
 
     def _load_weights_native(self, nbx_path, component, shard_map, only=None):

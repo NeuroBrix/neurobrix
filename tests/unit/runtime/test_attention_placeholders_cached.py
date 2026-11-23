@@ -11,8 +11,8 @@ from neurobrix.core.runtime.graph import compiled_ops as CO
 def _hardware():
     """(vendor, architecture) of the machine's profile — the attention reads from its vendor file whether its device
     writes its full scores, and refuses without it."""
-    from neurobrix.core.prism import load_profile
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism import load_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     d = load_profile(get_or_create_default_profile()).devices[0]
     return (getattr(d.brand, "value", d.brand), d.architecture)
 

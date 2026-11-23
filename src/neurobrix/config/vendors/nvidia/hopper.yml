@@ -39,7 +39,7 @@ memory:
   compiled_allocator_settings: "expandable_segments:True"
   # THE COMPILED ENGINE'S ATTENTION: PyTorch dispatches scaled_dot_product_attention on this device to its flash or
   # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
-  # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.
+  # the memory-efficient workspace, pytorch/prism/memory_estimator.py). Nothing to chunk.
   compiled_sdpa_full_scores: false
   # THE COMPILED ENGINE'S CONV3D WORKSPACE, beside its input and output, as a fraction of its input's bytes: none to
   # price. cuDNN takes what the caching allocator can give and no more — on an out-of-memory it halves the workspace
@@ -50,7 +50,7 @@ memory:
   # give (above), so no conv refuses to start under a fixed amount.
   compiled_conv3d_workspace_floor_bytes: 0
   # What the compiled engine's other ops hold beside input, output and operand copies while they run, per op type, as a
-  # fraction of the op's first input's bytes (core/prism/op_workspace.py `op_workspace_fractions`). ATen's CUDA reductions
+  # fraction of the op's first input's bytes (pytorch/prism/op_workspace.py `op_workspace_fractions`). ATen's CUDA reductions
   # and norms run in one kernel pass with no full-size intermediate: none observed in the per-op live probes of the Wan
   # and mochi causal-VAE chunks on V100 (2026-10-17, nbx/tmp/stream_tri_mem.py). An empty table: nothing beyond the price.
   compiled_op_workspace: {}

@@ -120,7 +120,7 @@ class FlowBindings:
         lm = gen.get("lm_component")
         if not lm or self.cache_path is None:
             return None
-        from neurobrix.core.prism.time_estimate import resolve_flow_name
+        from neurobrix.pytorch.prism.time_estimate import resolve_flow_name
         names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
             if (self.cache_path / "components").exists() else []
         if resolve_flow_name(lm, names) != comp:
@@ -144,7 +144,7 @@ class FlowBindings:
         head = (self.flow.get("generation") or {}).get("head_component")
         if not head or self.cache_path is None or getattr(input_config, "scoring", False):
             return None
-        from neurobrix.core.prism.time_estimate import resolve_flow_name
+        from neurobrix.pytorch.prism.time_estimate import resolve_flow_name
         names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
             if (self.cache_path / "components").exists() else []
         return 1 if resolve_flow_name(head, names) == comp else None
@@ -160,7 +160,7 @@ class FlowBindings:
         head = gen.get("head_component")
         if gen.get("type") != "autoregressive_text" or not head or self.cache_path is None:
             return False
-        from neurobrix.core.prism.time_estimate import resolve_flow_name
+        from neurobrix.pytorch.prism.time_estimate import resolve_flow_name
         names = [p.name for p in (self.cache_path / "components").iterdir() if p.is_dir()] \
             if (self.cache_path / "components").exists() else []
         return resolve_flow_name(head, names) == comp
@@ -246,7 +246,7 @@ class FlowBindings:
                 continue
             n = enc_len.get(enc)
             if n is None:
-                from neurobrix.core.prism.profiler import ActivationProfiler
+                from neurobrix.pytorch.prism.profiler import ActivationProfiler
                 ge = self.graph(enc)
                 be = ActivationProfiler(ge).build_symbol_map(input_config, placement_floor=False,
                                                              flow=False)
@@ -278,7 +278,7 @@ class FlowBindings:
         vae = next(iter(self.flow.get("post_loop") or []), None)
         if vae is None:
             return None
-        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
         from neurobrix.triton.symbols import SymbolResolver
         gv = self.graph(vae)
         bv = ActivationProfiler(gv).build_symbol_map(input_config, placement_floor=False, flow=False)

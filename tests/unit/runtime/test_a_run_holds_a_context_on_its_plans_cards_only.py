@@ -91,7 +91,7 @@ def test_crossing_two_cards_leaves_the_process_on_those_two():
 
 
 def test_prism_reads_a_card_from_the_drivers_tool_without_the_runtime(monkeypatch):
-    from neurobrix.core.prism import autodetect, memory_budget
+    from neurobrix.pytorch.prism import autodetect, memory_budget
     from nbxtensor.memory.allocator import DeviceAllocator
 
     def no_runtime(*a, **k):
@@ -106,7 +106,7 @@ def test_prism_reads_a_card_from_the_drivers_tool_without_the_runtime(monkeypatc
 
 
 def test_prism_asks_the_runtime_only_when_no_tool_answers(monkeypatch):
-    from neurobrix.core.prism import autodetect, memory_budget
+    from neurobrix.pytorch.prism import autodetect, memory_budget
     from nbxtensor.memory.allocator import DeviceAllocator
     monkeypatch.setattr(autodetect, "device_sharing", lambda index: None)
     monkeypatch.setattr(DeviceAllocator, "free_memory_mb", staticmethod(lambda index: 1000.0))

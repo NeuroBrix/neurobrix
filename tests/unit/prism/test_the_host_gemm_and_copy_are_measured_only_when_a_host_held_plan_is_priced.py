@@ -12,12 +12,12 @@ from types import SimpleNamespace as NS
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import owed_facts as OF
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import owed_facts as OF
+from neurobrix.pytorch.prism import facts_probe as P
 from nbxtensor.backend import host_measure as H
-from neurobrix.core.prism import time_estimate as T
-from neurobrix.core.prism.work import Work
+from neurobrix.pytorch.prism import time_estimate as T
+from neurobrix.pytorch.prism.work import Work
 
 DEV = {"brand": "nvidia", "model": "Unknown-Card", "architecture": "unknownarch", "supports_dtypes": ["float16"],
        "runtime_total_mb": 16000, "runtime_context_mb": 300,
@@ -37,7 +37,7 @@ def home(tmp_path, monkeypatch):
     (tmp_path / "default-abc.yml").write_text(yaml.safe_dump({"id": "default-abc", "cpu": {"model": "x"},
                                                               "devices": [dict(DEV)]}))
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")
-    import neurobrix.core.prism.loader as L        # the profile read back: the file this test's home holds
+    import neurobrix.pytorch.prism.loader as L        # the profile read back: the file this test's home holds
     monkeypatch.setattr(L, "load_profile", lambda hw: NS(host_measured=_host(tmp_path)))
     return tmp_path, calls
 

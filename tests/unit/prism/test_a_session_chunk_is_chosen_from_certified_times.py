@@ -1,5 +1,5 @@
 """Prism chooses a serving session's prefill chunk C from the certified times of each candidate's census keys
-(docs/design/prism_kv.md §5bis; core/prism/prefill_chunk.py), never a constant; None, its reason stated, when no
+(docs/design/prism_kv.md §5bis; pytorch/prism/prefill_chunk.py), never a constant; None, its reason stated, when no
 candidate's keys are all certified.
 
 Before (A, 2026-11-08): `KVCachePlan.prefill_chunk` was always None — "Prism chooses no C yet" — and the exactness
@@ -41,7 +41,7 @@ def _record(costs_by_rows):
 
 
 def test_the_cheapest_certified_candidate_is_chosen():
-    from neurobrix.core.prism import prefill_chunk as PC
+    from neurobrix.pytorch.prism import prefill_chunk as PC
     times = {"(64,)": 1.0, "(128,)": 1.5}
 
     def served(kernel, dtype, key):
@@ -65,7 +65,7 @@ def test_the_cheapest_certified_candidate_is_chosen():
 
 
 def test_a_tie_takes_the_smaller_chunk():
-    from neurobrix.core.prism import prefill_chunk as PC
+    from neurobrix.pytorch.prism import prefill_chunk as PC
     rec = {"candidates": [{"rows": 64, "graph": [["k", "a", "fp32", 1]], "attention": []},
                           {"rows": 128, "graph": [["k", "b", "fp32", 1]], "attention": []}]}
     assert PC.choose(rec, [64, 128], 128, lambda k, d, key: 2.0 if key == "b" else 1.0)[0] == 64
@@ -74,7 +74,7 @@ def test_a_tie_takes_the_smaller_chunk():
 def _plan(monkeypatch, tmp_path, mode, served, container=None):
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
-    from neurobrix.core.prism import PrismSolver, prefill_chunk as PC
+    from neurobrix.pytorch.prism import PrismSolver, prefill_chunk as PC
     from neurobrix.kernels import census_table as T
     from neurobrix.nbx import NBXContainer
     pin_no_calibration(monkeypatch)

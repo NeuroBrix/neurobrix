@@ -147,7 +147,7 @@ def explain_argv(command: str) -> List[str]:
 
 def arena_factor(hardware_id: str, device: str) -> Optional[float]:
     """The vendor file's measured `memory.triton_arena_activation_factor` of `device` in the profile `hardware_id`."""
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     from neurobrix.core.config.loader import vendor_config_for_device
     prof = load_profile(hardware_id)
     idx = int(device.split(":")[1]) if device.startswith("cuda:") else None
@@ -168,8 +168,8 @@ def cell_profile(row: dict, tree: Path, _seen: Dict[str, tuple] = {}) -> tuple:
     import regression_matrix as RM
     argv = shlex.split(row["command"])
     if "--hardware" in argv:
-        from neurobrix.core.prism.loader import load_profile
-        from neurobrix.core.prism.structure import memory_class_from_profile_id
+        from neurobrix.pytorch.prism.loader import load_profile
+        from neurobrix.pytorch.prism.structure import memory_class_from_profile_id
         hw = argv[argv.index("--hardware") + 1]
         cls = memory_class_from_profile_id(load_profile(hw).id)
         if cls is None:
@@ -233,7 +233,7 @@ def main(argv=None) -> int:
     tree = Path(a.tree).resolve()
     python = a.python or str(atelier.python("engine"))
     profiles = {(r["model"], r["mode"]): cell_profile(r, tree) for r in rows}
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     threads = {load_profile(h).cpu.compute_threads for h, _ in profiles.values()}   # the profile's threads (rule 1)
     workers = min(min(threads), len(rows))
     out.parent.mkdir(parents=True, exist_ok=True)

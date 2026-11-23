@@ -7,7 +7,7 @@ its default: Wan2.1-VACE's control encoder was keyed at batch 1 while the run fe
 (inactive, reactive) pair, batch 2 (the Mac's zero-miss gate, 2026-10-04 19:19, `aten.convolution::0`
 conv2d_forward (2, 3, 162, 162, ...)). `test_the_vace_control_encoder_runs_the_pair` could not see it:
 it replaces the flag reader. Injection: the registration removed from `FlowBindings.__init__` -> RED."""
-from neurobrix.core.prism.flow_bindings import FlowBindings
+from neurobrix.pytorch.prism.flow_bindings import FlowBindings
 from neurobrix.nbx import component_flags
 
 

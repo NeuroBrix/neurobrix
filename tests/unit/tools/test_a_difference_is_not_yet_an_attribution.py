@@ -6,7 +6,7 @@ on its own:
 * `CogVideoX-2b` carries `nondeterministic: ["A", "B"]` — three repetitions,
   three shas, in BOTH arms — and the video comparison agrees at 43.6 dB;
 * `Kokoro-82M` was printed DIFFERENT by a `--paired 1` tree gate against
-  `7de1560`, a commit touching one file, `core/prism/solver.py`. Two runs of the
+  `7de1560`, a commit touching one file, `pytorch/prism/solver.py`. Two runs of the
   SAME tree then gave two shas. The change could not have moved it and did not.
 
 With one run per arm there is no repetition, so nothing in the record separates

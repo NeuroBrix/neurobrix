@@ -18,7 +18,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.core.config.loader import get_vendor_config
-from neurobrix.core.prism.memory_budget import deferred_drain_policy_of
+from neurobrix.pytorch.prism.memory_budget import deferred_drain_policy_of
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile
 from tests.unit.prism.test_a_streamed_llm_keeps_its_cache_inside_the_rung import LLMS, _solve
 

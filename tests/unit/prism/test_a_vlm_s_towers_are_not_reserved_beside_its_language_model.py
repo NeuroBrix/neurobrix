@@ -33,8 +33,8 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.core.flow.base import resident_together
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, pin_host, profile
 

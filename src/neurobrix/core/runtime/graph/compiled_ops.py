@@ -199,7 +199,7 @@ class CompiledOpResolver:
                  activations_fp16_safe: bool = False, fp32_op_uids=None,
                  narrow_op_uids=None, hardware=None, attention_budget=None):
         self.device = device
-        # Prism's attention scores budget (core/prism/attention_scratch.py): the figure a device writing full scores
+        # Prism's attention scores budget (pytorch/prism/attention_scratch.py): the figure a device writing full scores
         # cuts its attention at; None where the plan states none.
         self.attention_budget = attention_budget
         self.dtype = dtype

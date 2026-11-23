@@ -9,8 +9,8 @@ What the test would do if the code were wrong: the untouched card's budget is it
 the live 4-card machine is weight_sharding, not the shadow's (red). No card."""
 from __future__ import annotations
 
-from neurobrix.core.prism import solver as solver_mod
-from neurobrix.core.prism.memory_budget import DeviceReading, budget_mb
+from neurobrix.pytorch.prism import solver as solver_mod
+from neurobrix.pytorch.prism.memory_budget import DeviceReading, budget_mb
 from tests.unit.prism._pinned_machine import pin_host
 
 PROFILE = "c4140-4xv100-16GB-nvlink"
@@ -25,7 +25,7 @@ def _untouched_cards(monkeypatch, total_mb=16151):
 
 
 def _profile():
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     return load_profile(PROFILE)
 
 

@@ -32,8 +32,8 @@ def _bind_executing_profile(monkeypatch):
     does): when the replay cache lacks the census's amax key, the autotuner's row-reduce prune reads
     `memory.max_registers_per_block` from it and refuses without one (ZERO FALLBACK — the red of 2026-10-25, three
     runs on main a182a3f6 while the key was absent; a sweep found the key bounded once the profile was there)."""
-    from neurobrix.core.prism import load_profile
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism import load_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from nbxtensor.ops import wrappers as W
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", W._NBX_HW_PROFILE)   # restored after the test
     W.set_hardware_profile(load_profile(get_or_create_default_profile()))

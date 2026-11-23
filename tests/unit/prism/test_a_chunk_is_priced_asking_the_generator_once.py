@@ -9,7 +9,7 @@ launcher.py:503 under prefill_chunk.served.
 What this test does if the code is wrong: the generator is asked once per key priced — red (seen red on lot-a
 3508bf42d: 5 asks for 5 keys)."""
 from nbxtensor.ops import autotune_certified as AC
-from neurobrix.core.prism import prefill_chunk as P
+from neurobrix.pytorch.prism import prefill_chunk as P
 
 
 def test_the_generator_is_asked_once_for_every_key_priced(monkeypatch):

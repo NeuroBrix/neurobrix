@@ -11,7 +11,7 @@ suite was read cell by cell. Register entry 51.
 
 Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_an_empty_visible_set_is_a_cpu_host.py
 """
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 
 def test_no_visible_gpu_is_its_own_environment(monkeypatch):

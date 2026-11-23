@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, impose_rung, pin_host, profile
 

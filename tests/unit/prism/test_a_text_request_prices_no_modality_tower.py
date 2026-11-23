@@ -12,7 +12,7 @@ from __future__ import annotations
 import inspect
 
 from neurobrix.core.flow.base import TOWER_INPUTS, unloaded_by_request
-from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
 
 FLOW = {"flow": {"type": "vlm",
                  "vlm": {"vision_component": "vision", "vision_projection_component": "projector",
@@ -57,7 +57,7 @@ def test_the_plan_reads_the_request_inputs(monkeypatch):
 
 
 def test_the_activation_walk_skips_an_unloaded_component():
-    from neurobrix.core.prism import solver
+    from neurobrix.pytorch.prism import solver
     src = inspect.getsource(solver.PrismSolver._compute_memory)
     assert "comp.name not in unloaded" in src
 
@@ -85,7 +85,7 @@ def test_an_unloaded_tower_hands_no_output_to_the_later_phases(monkeypatch):
 
 def test_no_pass_of_the_plan_follows_an_unloaded_component():
     # the request-size scaler of the memory pass and the work table of the time estimate skip it too
-    from neurobrix.core.prism import solver
+    from neurobrix.pytorch.prism import solver
     mem = inspect.getsource(solver.PrismSolver._compute_memory)
     assert "activation_bytes, activation_profiled = (0, True) if comp.name in unloaded else (" in \
         mem.split("self._scale_activations_to_request(")[0][-400:]

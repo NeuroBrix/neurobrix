@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import copy
 
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 from tests.unit.prism._pinned_machine import pin_host
 
 
@@ -50,7 +50,7 @@ def test_a_parked_state_is_priced_only_while_it_is_on_the_card():
 def _solve(monkeypatch, memory_mb, total_mb):
     from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config, no_door
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     prof = copy.deepcopy(V100_16GB)
     prof["devices"][0].update(memory_mb=memory_mb, runtime_total_mb=total_mb)   # the card as its runtime reads it
     no_door(monkeypatch)

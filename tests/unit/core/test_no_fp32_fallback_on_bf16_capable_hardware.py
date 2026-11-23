@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 
 class _Comp:

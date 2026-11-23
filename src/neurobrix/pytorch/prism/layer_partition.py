@@ -154,14 +154,14 @@ class LayerPartitioner:
         # the caller's absence of one, as before.
         self._symbol_map = symbol_map
         self._compute_dtype_bytes = compute_dtype_bytes
-        # {tensor_id: bytes per element} each activation is EXECUTED at (core/prism/runtime_widths),
+        # {tensor_id: bytes per element} each activation is EXECUTED at (pytorch/prism/runtime_widths),
         # the width the placement estimate prices it at — a segment is cut at what the plan pays
         self._widths = widths or {}
         self._resolver = None
         if symbol_map is not None:
             if compute_dtype_bytes is None:
                 raise ValueError("ZERO FALLBACK: sizing at a request needs the plan's compute dtype width")
-            from neurobrix.core.prism.profiler import ActivationProfiler
+            from neurobrix.pytorch.prism.profiler import ActivationProfiler
             self._resolver = ActivationProfiler(graph)
         self.ops: Dict[str, Any] = graph.get("ops") or {}
         self.order: List[str] = list(graph.get("execution_order") or [])
@@ -194,7 +194,7 @@ class LayerPartitioner:
         log-sum-exp, a RoPE `copy_` result) was never freed and the curve climbed to the last op:
         Wan2.2-I2V-A14B's transformer at 480x832x81, 108 800 MB of "activations alone" (the Mac's
         refusal, 2026-10-04); this rule prices 7 737 MB."""
-        from neurobrix.core.prism.profiler import dag_last_uses
+        from neurobrix.pytorch.prism.profiler import dag_last_uses
         index = {uid: i for i, uid in enumerate(self.order)}
         return {tid: index[uid] for tid, uid in dag_last_uses(self._dag).items() if uid in index}
 
@@ -240,7 +240,7 @@ class LayerPartitioner:
 
     def _walk_liveness(self) -> None:
         """One walk of the order, filling both curves (`live_activation_curve`, `op_peak_curve`)."""
-        from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
+        from neurobrix.pytorch.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
         last = self._last_use()
         outputs = set(self._dag.get("output_tensor_ids") or [])
         curve, during, live = [], [], 0
@@ -492,7 +492,7 @@ class LayerPartitioner:
         memo = self.__dict__.setdefault("_intervals_memo", {})
         if memo_key in memo:
             return memo[memo_key]
-        from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
+        from neurobrix.pytorch.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
         last = dict(self._last_use())
         prod: Dict[str, int] = {}
         size: Dict[str, int] = {}
@@ -762,7 +762,7 @@ class LayerPartitioner:
         slices, cut from their host tensors (`ChunkedPiece._run_pass` take_slice), and its outputs assembled whole
         (put_slice) — the term the slicing adds to such a stretch's time (the Mac's diagnosis 4b, 2026-10-28: 2.4-2.9 s of
         cuts and 0.5-1.3 s of assembly per host-read stretch of mochi's VAE, against 0.1 s on the device)."""
-        from neurobrix.core.prism.chunked_region import sliced_reads
+        from neurobrix.pytorch.prism.chunked_region import sliced_reads
         return int(sum(self._bytes_at(t, self._symbol_map) for t in sliced_reads(plan, self.ops))
                    + sum(self._bytes_at(t, self._symbol_map) for t in plan.outputs if t in self.tensors))
 
@@ -778,13 +778,13 @@ class LayerPartitioner:
         return self._resolver._compute_size(shape, t)
 
     def _axis(self, sym: str, unit: int = 1):
-        from neurobrix.core.prism.chunked_region import TokenAxis
+        from neurobrix.pytorch.prism.chunked_region import TokenAxis
         if (sym, unit) not in self._axes:
             self._axes[(sym, unit)] = TokenAxis(self._dag, sym, unit)
         return self._axes[(sym, unit)]
 
     def _op_symbols(self) -> Dict[str, Any]:
-        from neurobrix.core.prism.chunked_region import op_symbols
+        from neurobrix.pytorch.prism.chunked_region import op_symbols
         if self._op_syms is None:
             self._op_syms = op_symbols(self._dag)
         return self._op_syms
@@ -832,7 +832,7 @@ class LayerPartitioner:
     def _pass_peak(self, cp, sym: str, c: int, chunked: bool, unit: int = 1) -> int:
         """The live activations of one pass at slice `c` (in units of `unit` of the symbol): its own curve
         (its ops alone, its targets kept) plus the contiguous slices of the stretch's inputs it is fed."""
-        from neurobrix.core.prism.chunked_region import pass_graph
+        from neurobrix.pytorch.prism.chunked_region import pass_graph
         key = (tuple(cp.ops), sym, unit, c if chunked else 0)
         if key not in self._pass_peak_memo:
             sm = dict(self._symbol_map)
@@ -873,7 +873,7 @@ class LayerPartitioner:
             # whole to the device (each view's root once), never what else is live (`LayerStreamingStrategy._run_pieces`)
             # — and of those, an input read only in slices stays on the host, its slices uploaded pass by pass
             # (`chunked_region.sliced_reads`; counted in `fed` below)
-            from neurobrix.core.prism.chunked_region import sliced_reads
+            from neurobrix.pytorch.prism.chunked_region import sliced_reads
             _prod, _last, size, root = self._value_intervals()
             on_host = sliced_reads(plan, self.ops) if host else set()
             before = sum(size.get(r, 0) for r in {root.get(t, t) for t in plan.inputs if t not in on_host})
@@ -913,7 +913,7 @@ class LayerPartitioner:
         why not). Activations first: the curve's hottest op not yet in a stretch is enclosed in
         one (`_new_region`), a stretch over the target is sliced finer, until every op's live set
         leaves room for the most weight one piece must hold."""
-        from neurobrix.core.prism.chunked_region import token_symbols
+        from neurobrix.pytorch.prism.chunked_region import token_symbols
         syms = token_symbols(self._dag, self._symbol_map)
         if not syms:
             return None, "no symbol of this graph is bound from a dimension of one of its inputs"
@@ -947,7 +947,7 @@ class LayerPartitioner:
                 continue
             best: Optional[_Region] = None
             whys: List[str] = []
-            from neurobrix.core.prism.chunked_region import axis_units
+            from neurobrix.pytorch.prism.chunked_region import axis_units
             # every token symbol, and each in the unit its graph divides it by (a window's rows)
             units_memo = self.__dict__.setdefault("_axis_units_memo", {})
             for sy in syms:
@@ -1022,7 +1022,7 @@ class LayerPartitioner:
         """A stretch around op `h` run in slices of `ax.sym`: the ops over the target around it
         (none may mix the axis), widened to the seams where the least is live — before its first op
         and after its last — among the ops that do not mix the axis either."""
-        from neurobrix.core.prism.chunked_region import MIX, NORM, plan_region, region_carriers
+        from neurobrix.pytorch.prism.chunked_region import MIX, NORM, plan_region, region_carriers
         if ax.verdicts[h].kind == MIX:
             return None, f"{self.order[h]} mixes the axis ({ax.verdicts[h].reason})"
         # An existing stretch on THIS axis is no wall: a seam may enclose it whole, and the two run as one, in one
@@ -1275,7 +1275,7 @@ def weight_views(graph: Dict[str, Any]) -> Dict[str, Tuple[str, List[str]]]:
     (`LayerPartitioner._op_weight_names`). Carried across a seam it outlived the weights its piece
     unloaded — HAT-S at 2048 px on 16 GB: the next piece's addmm read a linear's transposed weight at
     an address its piece had freed (2026-10-22)."""
-    from neurobrix.core.prism.profiler import VIEW_OP_TYPES
+    from neurobrix.pytorch.prism.profiler import VIEW_OP_TYPES
     tensors = graph.get("tensors") or {}
     ops = graph.get("ops") or {}
     out: Dict[str, Tuple[str, List[str]]] = {}
@@ -1317,7 +1317,7 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     the component's own outputs it produces. Those two sets are exactly what
     must cross the seam, and they are computed here rather than assumed.
 
-    `pass_ops` / `outputs`: one PASS of a stretch run in slices (core/prism/chunked_region.py) — a
+    `pass_ops` / `outputs`: one PASS of a stretch run in slices (pytorch/prism/chunked_region.py) — a
     subset of the segment's ops, in order, and the tensors it hands out — instead of the whole
     range and what is read after it. Everything else (seam aliasing, carried symbols) is the
     segment's rule, unchanged.

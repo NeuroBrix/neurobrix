@@ -7,7 +7,7 @@ MEASURED facts (the owner, 15:16): the runtime's own context, the engine's measu
 
 What this test would do if the code were wrong: the two capacities read 95 % of the declared figures and both
 assertions fail. Seen red on b6d36c2b (17 277 / 15 565), green with the coefficient removed."""
-from neurobrix.core.prism import PrismSolver
+from neurobrix.pytorch.prism import PrismSolver
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, pin_dedicated_card, pin_host, profile
 
 

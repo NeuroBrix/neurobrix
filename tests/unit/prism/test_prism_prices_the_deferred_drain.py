@@ -31,7 +31,7 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.core.config.loader import get_vendor_config
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 from tests.unit.prism._pinned_machine import V100_16GB, impose_rung, pin_dedicated_card, profile
 
 MB = 1024 * 1024
@@ -100,7 +100,7 @@ def _component_of_whole(s_t, dev_t, whole_target):
 
 def _plan_cliff(s, dev, mem, placed_on) -> int:
     """The cliff `_assign_drain_cliffs` sets on a one-component plan placed on `placed_on`."""
-    from neurobrix.core.prism.solver import ComponentAllocation
+    from neurobrix.pytorch.prism.solver import ComponentAllocation
     alloc = ComponentAllocation(name="denoiser", devices=[placed_on.split("zero3:")[-1]],
                                 dtype="float16", memory_mb=mem.total_mb, architecture="volta",
                                 vendor="nvidia",
@@ -154,7 +154,7 @@ def test_a_component_leaving_less_than_the_floor_is_not_held_whole_under_triton(
 
 
 def test_the_hot_loop_drains_at_the_plans_cliff_and_the_door_still_pins_it(monkeypatch):
-    from neurobrix.core.prism.memory_budget import deferred_drain_policy, deferred_drain_policy_of
+    from neurobrix.pytorch.prism.memory_budget import deferred_drain_policy, deferred_drain_policy_of
     from neurobrix.triton.sequence import TritonSequence, _resolve_drain_policy
 
     monkeypatch.delenv("NBX_DEFERRED_DRAIN_BYTES", raising=False)
@@ -180,7 +180,7 @@ def test_no_declared_profile_is_refused_by_name_not_a_silent_cliff(monkeypatch):
     """The library's reader this replaces returned a 2 GB cliff on no profile and on ANY exception (a ZERO FALLBACK
     breach). The engine's refuses by name."""
     from nbxtensor.ops import wrappers as W
-    from neurobrix.core.prism.memory_budget import deferred_drain_policy
+    from neurobrix.pytorch.prism.memory_budget import deferred_drain_policy
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", None)
     with pytest.raises(RuntimeError, match="no profile with a device was declared"):
         deferred_drain_policy()

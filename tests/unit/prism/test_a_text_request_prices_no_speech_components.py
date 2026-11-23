@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 
 from neurobrix.core.flow.base import requests_speech, resident_together, unloaded_by_request
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory
 from tests.unit.prism._pinned_machine import container_root
 
 MB = 1024 * 1024

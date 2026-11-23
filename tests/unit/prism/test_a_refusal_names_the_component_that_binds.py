@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory, PrismSolver
 
 _MB = 1024 * 1024
 

@@ -17,9 +17,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.profiler import temporal_causal_downscale_ratio, temporal_downscale_ratio
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.profiler import temporal_causal_downscale_ratio, temporal_downscale_ratio
+from neurobrix.pytorch.prism.solver import ComponentMemory
 
 GB = 1024 ** 3
 RUNG_MB = 16384
@@ -102,7 +102,7 @@ def test_a_causal_encoder_is_sized_at_the_requests_pixels_not_its_latent():
     time/height/width bind to the request's pixel extents, as a linear encoder's always did. On
     the old binding this binds the latent extents (21, 44, 104) and the Wan encoder was sized at
     1.1 GB for 81 frames of 352x832."""
-    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
     g = _encoder_graph(True)
     g["symbolic_context"] = {"symbols": {
         "s0": {"name": "batch", "trace_value": 1}, "s1": {"name": "time", "trace_value": 9},

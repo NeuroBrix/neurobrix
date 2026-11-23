@@ -15,9 +15,9 @@ import pytest
 
 from types import SimpleNamespace
 
-from neurobrix.core.prism import solver as S
-from neurobrix.core.prism import time_estimate as TE
-from neurobrix.core.prism.work import Work
+from neurobrix.pytorch.prism import solver as S
+from neurobrix.pytorch.prism import time_estimate as TE
+from neurobrix.pytorch.prism.work import Work
 
 
 class _NoTopology:
@@ -159,7 +159,7 @@ def test_the_tiling_rung_says_why_it_declines_sana_4k_on_16gb(monkeypatch):
     `aten.view::95` whatever its bands — an op-level tile cuts an op's own output, never what earlier ops hold — over
     the 11 885 MB the card leaves beside the weights. The next step is the region cut (activation architecture, step
     C), named, not pretended."""
-    from neurobrix.core.prism.solver import ComponentMemory, DeviceState
+    from neurobrix.pytorch.prism.solver import ComponentMemory, DeviceState
     MB = 2**20
     s = S.PrismSolver.__new__(S.PrismSolver)
     s.oom_reserve_mb = 3072

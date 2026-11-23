@@ -20,7 +20,7 @@ _DRIVER = r"""
 import json, os
 from neurobrix.cli.commands import registry
 from neurobrix.triton import replay
-from neurobrix.core.prism import loader
+from neurobrix.pytorch.prism import loader
 from neurobrix.core.dtype import calibration
 from neurobrix.serving import protocol
 from neurobrix.core.runtime import render_checkpoint

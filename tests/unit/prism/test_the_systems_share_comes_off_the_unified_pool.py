@@ -2,7 +2,7 @@
 pool a plan may fill (the Mac, 2026-10-26: 6 994 MB of 24 576 held by macOS and its apps; the door decided Ming and
 Qwen3-VL by luck at the calm-free edge). What this test would do if the code were wrong: the pool reads the declared
 working set less the base (18 013 MB) — RED; with the share it is 24 576 - 6 994 - the engine's base."""
-from neurobrix.core.prism import PrismSolver
+from neurobrix.pytorch.prism import PrismSolver
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile
 
 

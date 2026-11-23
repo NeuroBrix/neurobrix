@@ -106,8 +106,8 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
     transformer. ~5-10 GB peak on V100 32GB."""
     import torch
     from neurobrix.nbx import NBXContainer
-    from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism import PrismSolver, load_profile, InputConfig
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.cli.commands.run import find_model

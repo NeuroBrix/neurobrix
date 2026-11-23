@@ -5,7 +5,7 @@ Commands: run, info, inspect, validate, import, list, remove, clean, hub
 """
 
 # The host's thread counts are NOT set here: the hardware profile is their one source
-# (core/prism/cpu_config.apply_thread_config, called once the profile is read, before execution).
+# (pytorch/prism/cpu_config.apply_thread_config, called once the profile is read, before execution).
 # 2026-10-26: this block set OMP_NUM_THREADS / MKL_NUM_THREADS from the machine's core count at import.
 import os
 import sys

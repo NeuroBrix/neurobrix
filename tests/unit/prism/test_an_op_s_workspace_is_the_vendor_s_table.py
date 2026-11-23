@@ -15,8 +15,8 @@ import types
 
 import pytest
 
-from neurobrix.core.prism.op_workspace import op_workspace_fraction, op_workspace_fractions
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.op_workspace import op_workspace_fraction, op_workspace_fractions
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 
 
 def test_the_table_is_read_and_refused_by_name():
@@ -63,8 +63,8 @@ def test_the_profiler_adds_the_fraction_of_the_input_at_the_op_and_nothing_elsew
 
 
 def test_the_solver_prices_the_compiled_engine_from_the_vendor_table_and_the_triton_engines_from_their_kernels(monkeypatch):
-    from neurobrix.core.prism import PrismSolver
-    from neurobrix.core.prism import attention_scratch as A
+    from neurobrix.pytorch.prism import PrismSolver
+    from neurobrix.pytorch.prism import attention_scratch as A
     S = PrismSolver()
     prof = types.SimpleNamespace(devices=[types.SimpleNamespace(memory_mb=16384, architecture="volta", brand="nvidia", index=0)])
     monkeypatch.setattr(A, "vendor_memory", lambda d: {"compiled_op_workspace": {"aten::linalg_vector_norm": 2.0}})
@@ -78,5 +78,5 @@ def test_the_solver_prices_the_compiled_engine_from_the_vendor_table_and_the_tri
 
 @pytest.mark.parametrize("vendor,arch,expect", [("nvidia", "volta", {}), ("apple", "apple_m4_pro", {"aten::linalg_vector_norm": 0.01})])
 def test_every_shipped_vendor_file_states_its_table(vendor, arch, expect):
-    from neurobrix.core.prism.attention_scratch import vendor_memory_of
+    from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
     assert op_workspace_fractions(vendor_memory_of(vendor, arch)) == expect

@@ -133,7 +133,7 @@ def test_the_certifying_device_says_whether_its_memory_is_unified(monkeypatch):
         # The REAL DeviceSpec, whose has_unified_memory is a property: a SimpleNamespace stub
         # with a method there kept this test green while every real profile raised
         # "'bool' object is not callable" (2026-09-27, the Mac's certify).
-        from neurobrix.core.prism.structure import DeviceSpec
+        from neurobrix.pytorch.prism.structure import DeviceSpec
         dev = DeviceSpec(index=0, name="d", memory_mb=24576, compute_capability="0",
                          supports_dtypes=["float16"], unified_memory=uni)
         monkeypatch.setattr(wrappers, "get_hardware_profile", lambda d=dev: types.SimpleNamespace(devices=[d]))

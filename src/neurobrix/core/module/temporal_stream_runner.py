@@ -1,6 +1,6 @@
 """Run a component in temporal chunks through the stream the container builder derived from its graph — one brick, both engines (R30).
 
-The plan (`ExecutionPlan.component_stream`, `core/prism/temporal_stream.py`) names the schedule: the first chunk's
+The plan (`ExecutionPlan.component_stream`, `pytorch/prism/temporal_stream.py`) names the schedule: the first chunk's
 input frames, then each next chunk's. The container carries the two graphs: the first chunk's (the clip graph plus the
 states it leaves) and every later chunk's (the states in and out), and the declaration (`stream.json`) naming the
 input, the output and its time axis, and the states. This brick feeds each chunk with the states the previous one

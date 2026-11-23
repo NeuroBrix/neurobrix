@@ -515,13 +515,13 @@ def cell_request(model: str) -> list:
 @functools.lru_cache(maxsize=None)
 def cell_profile(gpu: str, src: Path) -> tuple:
     """(profile id, rung MB) a cell on card `gpu` runs under: the id the runtime resolves with that card
-    visible (core/prism/autodetect.get_or_create_default_profile — detection, no allocation), and the
+    visible (pytorch/prism/autodetect.get_or_create_default_profile — detection, no allocation), and the
     card's memory class from that profile's own id (structure.memory_class_from_profile_id: the one
     rounding the census rows' `rungs_mb` and the certified directory share). RuntimeError when either
     cannot be read — said by the caller, never guessed."""
-    code = ("from neurobrix.core.prism.autodetect import get_or_create_default_profile as g\n"
-            "from neurobrix.core.prism.loader import load_profile\n"
-            "from neurobrix.core.prism.structure import memory_class_from_profile_id as m\n"
+    code = ("from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile as g\n"
+            "from neurobrix.pytorch.prism.loader import load_profile\n"
+            "from neurobrix.pytorch.prism.structure import memory_class_from_profile_id as m\n"
             "h = g(); print(h, m(load_profile(h).id))")
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
     p = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=300)

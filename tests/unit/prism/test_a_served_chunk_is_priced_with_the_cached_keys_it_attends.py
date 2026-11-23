@@ -1,7 +1,7 @@
 """A serving session's prefill chunk attends its own rows AND every cached key: the ONE reserve it has for that
 (`price.session_chunk_attention_bytes`: rows x reach at the item size of its dense mask — the cache's dtype on the
 compiled engine, float32 on the Triton engine) is priced into the decoder's activations
-(`served_prefill.chunk_mask_bytes`, the keys and their dtype stated by core/prism/served_prefill.py), and it is the
+(`served_prefill.chunk_mask_bytes`, the keys and their dtype stated by pytorch/prism/served_prefill.py), and it is the
 figure both engines' wrappers spend: a plain chunk on its mask, a chunk over spilled positions on its scores.
 
 Before (2026-11-10): the walk priced the pass over its own rows only. Once the head's wrongly priced room was freed,
@@ -21,7 +21,7 @@ import dataclasses
 
 import pytest
 
-from neurobrix.core.prism.served_prefill import solve_served as SP_solve_served
+from neurobrix.pytorch.prism.served_prefill import solve_served as SP_solve_served
 from tests.unit.prism._pinned_machine import profile, V100_16GB, pin_dedicated_card
 
 @pytest.fixture(autouse=True)

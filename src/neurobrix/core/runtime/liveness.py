@@ -1,7 +1,7 @@
 """The liveness of a graph — ONE rule for every engine that frees a tensor or prices its lifetime.
 
 Three copies of this rule existed and drifted (stage B P1, 2026-10-10): the placement estimate
-(core/prism/profiler.py) read an op's `input_tensor_ids`, the Triton sequence and the compiled
+(pytorch/prism/profiler.py) read an op's `input_tensor_ids`, the Triton sequence and the compiled
 sequential executor read the tensors the op's `attributes` args/kwargs reference — the ones the
 op actually receives. Over the 49 containers (610 811 ops) the two sources agree on every
 activation; they differ only on 62 `aten::lift_fresh` ops of one graph, whose `param::` constant

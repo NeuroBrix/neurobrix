@@ -14,8 +14,8 @@ import sys
 
 import pytest
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import facts_probe as P
 
 
 def test_the_child_sees_the_card_alone_and_reads_it_as_its_device_0(monkeypatch):

@@ -42,8 +42,8 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.core.optim.passes.normalize import normalize_for_branch
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.layer_partition import Segment, build_segment_graph
 from neurobrix.nbx import NBXContainer
 from neurobrix.triton.symbols import SymbolResolver
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung,

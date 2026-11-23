@@ -10,8 +10,8 @@ link to an undeclared node passes silently.
 import pytest
 import yaml
 
-from neurobrix.core.prism import loader as L
-from neurobrix.core.prism.structure import ClusterNode, DeviceSpec, NodeLink, PrismProfile
+from neurobrix.pytorch.prism import loader as L
+from neurobrix.pytorch.prism.structure import ClusterNode, DeviceSpec, NodeLink, PrismProfile
 
 
 def _dev(i):

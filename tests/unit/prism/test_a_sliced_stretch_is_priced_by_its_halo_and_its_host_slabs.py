@@ -7,7 +7,7 @@ the M4 Pro (stable, 2026-10-28): calm (1-frame temporal chunks) 207.5 s, at an i
 plans priced the same. Without the host fact the sliced plan is not timed, said by name. No card."""
 import pytest
 
-import neurobrix.core.prism.solver as S
+import neurobrix.pytorch.prism.solver as S
 from tests.unit.prism._pinned_machine import pin_host, pin_reload
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _plan, no_door
 
@@ -37,7 +37,7 @@ def test_the_sliced_plan_pays_its_halo_and_its_host_slabs(monkeypatch):
 
 
 def test_without_the_host_slab_rate_the_sliced_plan_is_not_timed(monkeypatch):
-    import neurobrix.core.prism.time_estimate as TE
+    import neurobrix.pytorch.prism.time_estimate as TE
     real = TE.host_facts
     import dataclasses
     monkeypatch.setattr(TE, "host_facts", lambda m: dataclasses.replace(real(m), slab_bps=None))

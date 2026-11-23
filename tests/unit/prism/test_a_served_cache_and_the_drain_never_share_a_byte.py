@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (V100_32GB, container_root, no_door, pin_host, pin_no_calibration,
                                               pin_shared_card, profile)

@@ -52,7 +52,7 @@ class _M:
 
 
 def test_the_kv_estimate_comes_out_of_the_decoders_own_figures():
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     s = PrismSolver()
     s._lm_component_name = "lm"
     mem = {"lm": _M(1000, 600), "vision": _M(1500, 300)}
@@ -64,7 +64,7 @@ def test_the_kv_estimate_comes_out_of_the_decoders_own_figures():
 
 
 def test_the_cache_is_sized_on_the_decoders_cards_only():
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     s = PrismSolver()
     s._lm_component_name = "lm"
     allocs = {"lm": ("cuda:1", {"block.0": "cuda:1", "block.1": "cuda:2"}), "vae": "cuda:0", "enc": "zero3:cuda:3"}

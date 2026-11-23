@@ -367,7 +367,7 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
     """
     if profile is None and hardware:
         import yaml
-        from neurobrix.core.prism.loader import profile_path
+        from neurobrix.pytorch.prism.loader import profile_path
         path = profile_path(hardware)
         if not path.exists():
             raise RuntimeError(f"census: the hardware profile {hardware!r} is not at {path}; the shadow cannot choose a vendor profile")

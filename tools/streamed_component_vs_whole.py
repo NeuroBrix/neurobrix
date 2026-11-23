@@ -43,7 +43,7 @@ sys.path.insert(0, str(REPO))
 
 def _plan(model, mode, host_free, rung, h, w):
     import pytest
-    from neurobrix.core.prism import InputConfig, PrismSolver
+    from neurobrix.pytorch.prism import InputConfig, PrismSolver
     from neurobrix.nbx import NBXContainer
     from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung,
                                                   pin_host, profile)
@@ -135,7 +135,7 @@ def main():
     family = json.loads((root / "manifest.json").read_text()).get("family", "")
     # The card this runs on, from this machine's own detected profile — never a vendor or an
     # architecture written here (R23). The PLAN is the Mac's; the EXECUTION is this card's.
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     here = load_default_profile().devices[0]
     vendor = str(getattr(here, "brand", "") or "").split(".")[-1].lower()
     arch = str(getattr(here, "architecture", "") or "")

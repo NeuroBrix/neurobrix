@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import PlanNotComputable, _graph_constant_bytes
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import PlanNotComputable, _graph_constant_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
                                               pin_host, pin_no_calibration, pin_shared_card, profile)
@@ -185,7 +185,7 @@ def test_after_the_fp32_fallback_the_reserve_and_the_plan_read_fp32(monkeypatch)
     # the planning process's own resident memory, pinned: it enters the plan's host side, and after the file's earlier
     # cells loaded their containers the rack's test process held enough to fire the execution door — a busy re-plan
     # this stub of the fallback (it sets no dtype) was never meant to reach; red in file order on the rack only
-    import neurobrix.core.prism.host_footprint as _HF
+    import neurobrix.pytorch.prism.host_footprint as _HF
     monkeypatch.setattr(_HF, "process_footprint_now", lambda: 200 << 20)
     s = PrismSolver()
     calls = {"n": 0}

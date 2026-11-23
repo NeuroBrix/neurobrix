@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.runtime_widths import runtime_dtypes, conservative_contract
+from neurobrix.pytorch.prism.runtime_widths import runtime_dtypes, conservative_contract
 
 ISLAND = {"input_dtypes": ["float32", "float32"], "output_dtypes": ["float32"]}
 HALF = {"input_dtypes": ["bfloat16", "bfloat16"], "output_dtypes": ["bfloat16"]}

@@ -6,9 +6,9 @@ guess. The Dell's curve for Qwen3-30B-A3B (2026-10-28): 8 -> 0.30, 16 -> 0.53, 3
 blocks held on the home unpriced its 4 V100 decode went 381 -> 468 ms. No card."""
 import pytest
 
-import neurobrix.core.prism.expert_topology as ET
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism.loader import load_profile
+import neurobrix.pytorch.prism.expert_topology as ET
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism.loader import load_profile
 from tests.unit.prism._pinned_machine import pin_dedicated_card, pin_host, pin_no_calibration
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config, no_door
 

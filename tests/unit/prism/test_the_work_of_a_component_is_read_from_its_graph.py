@@ -1,4 +1,4 @@
-"""The work one run of a component does (core/prism/work.py): two flops per multiply-add of a product, a convolution
+"""The work one run of a component does (pytorch/prism/work.py): two flops per multiply-add of a product, a convolution
 and an attention, read from the resolved shapes; a weight's bytes counted once whichever op meets it first (a view's
 transpose included); a view moves no activation bytes.
 
@@ -6,7 +6,7 @@ What these tests would do if the code were wrong: a contraction read on the wron
 wrong flops — the first case; a weight read through `aten::t` counted as an activation, or not at all, fails the
 third; a view's copy counted fails it too.
 """
-from neurobrix.core.prism import work as W
+from neurobrix.pytorch.prism import work as W
 
 
 def test_products_convolutions_and_attention_count_their_multiply_adds():

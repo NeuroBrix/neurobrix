@@ -11,7 +11,7 @@ import types
 
 import pytest
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 GPUS = ("0, GPU-aaaa0000-1111, Disabled, 9000, 16384\n"
         "1, GPU-bbbb0000-2222, Disabled, 300, 16384\n"

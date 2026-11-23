@@ -7,7 +7,7 @@ Exact by construction: the same ops on the same bits give the same bits, and any
 
 ONE entry per sequence: a run whose invariant inputs differ (the other branch of a guidance split into two passes, the
 next window of an encoder-decoder) replaces it. That bound is what Prism prices — the frontier and the kept inputs held
-for a whole run (`core/prism/profiler.estimate_peak_memory(held_tids=...)`) — and it holds no matter how a flow calls.
+for a whole run (`pytorch/prism/profiler.estimate_peak_memory(held_tids=...)`) — and it holds no matter how a flow calls.
 
 A run that binds the VERY SAME tensor objects as the evaluating run (same object, same storage address — the state holds
 them, so neither can be recycled) reuses the state without comparing bits: their bits can change only by an in-place

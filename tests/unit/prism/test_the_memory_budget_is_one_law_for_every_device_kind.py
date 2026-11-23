@@ -1,4 +1,4 @@
-"""Hocine Benkelaya's memory doctrine, as one law in `core/prism/memory_budget.py` (the owner, 2026-09-21):
+"""Hocine Benkelaya's memory doctrine, as one law in `pytorch/prism/memory_budget.py` (the owner, 2026-09-21):
 
 * a SHARED pool — unified memory, a display on the device, memory another process holds, a
   reading that could not be taken, host RAM — is budgeted at its FREE reading rounded DOWN onto
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb, describe, execution_door, host_budget_mb,
+from neurobrix.pytorch.prism.memory_budget import (DeviceReading, budget_mb, describe, execution_door, host_budget_mb,
                                                 memory_ladder_mb, rung_down_mb, tile_rung_mb)
 
 
@@ -87,7 +87,7 @@ def test_host_ram_goes_through_the_same_ladder():
 
 
 def test_the_solver_budgets_a_hand_built_device_state_by_the_same_law():
-    from neurobrix.core.prism.solver import DeviceState, PrismSolver
+    from neurobrix.pytorch.prism.solver import DeviceState, PrismSolver
     s = PrismSolver.__new__(PrismSolver)
     idle = DeviceState(device_string="cuda:0", capacity_mb=16384.0)
     assert s._effective_capacity_mb(idle) == 16384.0            # dedicated: whole (a state carries no context figure)

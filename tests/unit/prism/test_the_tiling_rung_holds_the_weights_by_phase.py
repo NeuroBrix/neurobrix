@@ -13,7 +13,7 @@ What this test would do if the code were wrong: the rung declines on the sum of 
 streamed one — the first assertion fails. Seen red on 34171d6c, green with `held_of` (the weights resident while
 the component runs). No card: the Mac's pinned profile, the plan derived."""
 import pytest
-from neurobrix.core.prism import PrismSolver
+from neurobrix.pytorch.prism import PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, no_door, pin_host, profile
 

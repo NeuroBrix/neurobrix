@@ -25,7 +25,7 @@ import subprocess
 
 import pytest
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 _POOLS = """  Pool Info:
     Pool 1

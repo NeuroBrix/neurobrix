@@ -32,7 +32,7 @@ rack:
   # the file the reader opens for those values (source: core/config/loader.py, get_vendor_config:
   # `CONFIG_ROOT / "vendors" / vendor / f"{architecture}.yml"`, CONFIG_ROOT = src/neurobrix/config)
   reader_files: "src/neurobrix/config/vendors/{0}/{1}.yml"
-  profile_loader: "neurobrix.core.prism.loader:load_profile"
+  profile_loader: "neurobrix.pytorch.prism.loader:load_profile"
   # The launcher's target, bound from the class's hardware profile exactly as the census shadow binds it: behind
   # the door (no card) no driver answers which VENDOR profile applies, the driver's construction fails and is
   # never cached, and every call that reads the vendor profile re-probes it — measured 2026-10-12: 37.6 ms per
@@ -51,10 +51,10 @@ classes:
 # The planner: a change inside it is judged by the plan it emits for each cell (`--explain-plan --json`),
 # old tree against new tree, never by its code.
 planner:
-  packages: [neurobrix.core.prism]
+  packages: [neurobrix.pytorch.prism]
   # the environment of a plan-only run (no card: the census door plans for the class's devices)
   env: {NBX_CENSUS: "1", NBX_CENSUS_DEVICES: "1"}
-  # every decision the plan carries (core/prism/solver.plan_record): a field left out is a planner change the gate
+  # every decision the plan carries (pytorch/prism/solver.plan_record): a field left out is a planner change the gate
   # cannot see. kv_cache, deferred_drain_cliffs, layer_stream_chunks, expert_working_set and cpu_ram_mb were absent
   # until 2026-10-16: the state engine's step 1 (e83b3d1e2) moved whisper's KV cache from 576 to 448 positions and
   # its gate scoped 0 cells.
@@ -64,7 +64,7 @@ planner:
                 tiling_exactness,
                 component_stream]
   # what the plan record says ABOUT the choice (why, what it beat, what it refused, the rungs it searched) — never
-  # what runs. Every key of core/prism/solver.plan_record is in plan_fields or here
+  # what runs. Every key of pytorch/prism/solver.plan_record is in plan_fields or here
   # (tests/unit/tools/test_the_gate_compares_every_decision_the_plan_carries.py).
   # estimated_s / time_estimates: what the estimator SAYS about the choice; execution_door: the moment's free
   # reading against the plan at planning time (the plan stands, the door fires at execution) — none of it runs.
@@ -72,7 +72,7 @@ planner:
   # are in `components`), the record says why.
   explanation_fields: [why, candidates, refused, unified_rungs_tried, stream_declined, estimated_s, time_estimates,
                        execution_door, refused_devices]
-  # what the planning process measures of itself, and the fields that add it (source: core/prism/host_footprint.py,
+  # what the planning process measures of itself, and the fields that add it (source: pytorch/prism/host_footprint.py,
   # `resident_bytes` "what the planning process holds when it prices (the caller measures it)", summed into
   # `total_bytes`): it moves with any change to the process, never with the plan
   measured: {host_footprint.resident_bytes: [host_footprint.total_bytes]}

@@ -445,7 +445,7 @@ class CompiledSequence(SequenceSteps):
         # freed memory for any request (CUDA's), or no device named (the executor's tests).
         self._release_from: Optional[int] = None
         if hardware is not None and device.type != "cpu":
-            from neurobrix.core.prism.attention_scratch import vendor_memory_of
+            from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
             _mem = vendor_memory_of(*hardware)
             if "compiled_allocator_retention" not in _mem:
                 raise KeyError(f"ZERO FALLBACK: {hardware[0]}/{hardware[1]}'s vendor file states no "
@@ -784,10 +784,10 @@ class CompiledSequence(SequenceSteps):
 
         # Apply rewire to all tensor references in remaining ops
         def _rewire_arg(arg: Any) -> Any:
-            # The one argument walk (`core/prism/layer_partition.rewire_arg`): a `tensor_id` of
+            # The one argument walk (`pytorch/prism/layer_partition.rewire_arg`): a `tensor_id` of
             # any type, a `tensor_tuple`, a nested `list` — this private copy knew `tensor`,
             # `tensor_tuple` and `list` only.
-            from neurobrix.core.prism.layer_partition import rewire_arg
+            from neurobrix.pytorch.prism.layer_partition import rewire_arg
             return rewire_arg(arg, rewire)
 
         for op_uid in execution_order:
@@ -1132,10 +1132,10 @@ class CompiledSequence(SequenceSteps):
 
         # Reuse the same rewire logic as detach elimination
         def _rewire_arg(arg: Any) -> Any:
-            # The one argument walk (`core/prism/layer_partition.rewire_arg`): a `tensor_id` of
+            # The one argument walk (`pytorch/prism/layer_partition.rewire_arg`): a `tensor_id` of
             # any type, a `tensor_tuple`, a nested `list` — this private copy knew `tensor`,
             # `tensor_tuple` and `list` only.
-            from neurobrix.core.prism.layer_partition import rewire_arg
+            from neurobrix.pytorch.prism.layer_partition import rewire_arg
             return rewire_arg(arg, rewire)
 
         for op_uid in execution_order:

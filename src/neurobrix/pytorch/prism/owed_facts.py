@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import yaml
 
-from neurobrix.core.prism import launch_lines
+from neurobrix.pytorch.prism import launch_lines
 
 _log = logging.getLogger(__name__)
 
@@ -26,10 +26,10 @@ def measure_owed(mode, ranked, container, profile) -> None:
     line 5). Each is said in one line where it is measured; what
     was written is read back into `profile`, under the keys the estimate reads. A fact a plan needs is never a
     default: one that cannot be measured here leaves the candidate not estimated, said by name."""
-    from neurobrix.core.prism import autodetect
-    from neurobrix.core.prism.host_footprint import engine_of
-    from neurobrix.core.prism.solver import STRATEGY_RANK
-    from neurobrix.core.prism import time_estimate as TE
+    from neurobrix.pytorch.prism import autodetect
+    from neurobrix.pytorch.prism.host_footprint import engine_of
+    from neurobrix.pytorch.prism.solver import STRATEGY_RANK
+    from neurobrix.pytorch.prism import time_estimate as TE
     if not any(getattr(d, "measured", None) for d in profile.devices):
         return                  # no measured device facts: no candidate is timed, none owes a measure
     hw, engine = autodetect.ACTIVE_HARDWARE_ID, engine_of(mode)
@@ -44,7 +44,7 @@ def measure_owed(mode, ranked, container, profile) -> None:
     if any(TE.on_host(a) for _s, _n, allocs, _d in ranked for a in (allocs or {}).values()):
         measured |= bool(measure_host_facts(hw))
     if measured:
-        from neurobrix.core.prism.loader import load_profile
+        from neurobrix.pytorch.prism.loader import load_profile
         profile.host_measured = load_profile(hw).host_measured
 
 
@@ -55,7 +55,7 @@ def each_rank_priced(ranked, priced, estimates):
     rank present only); when the selection turns every candidate of it down (its host side declined, the arena door, a
     KV cache that does not fit), the streamed or host-placed plan that wins is ordered by its measured time, never by
     the figure taken before its facts existed (qa 1231-2). A rank never reached is never measured."""
-    from neurobrix.core.prism.solver import STRATEGY_RANK, order_candidates
+    from neurobrix.pytorch.prism.solver import STRATEGY_RANK, order_candidates
     for i, rank in enumerate(dict.fromkeys(STRATEGY_RANK.get(c[1], 9) for c in ranked)):
         group = [c for c in ranked if STRATEGY_RANK.get(c[1], 9) == rank]
         if i:
@@ -70,11 +70,11 @@ def measure_host_facts(hardware_id: Optional[str]) -> List[str]:
     ruling of 22/11/2026 17:43, line 5. The host's block lies over the vendor's key by key (`loader.load_profile`): only
     what neither states is measured, once, and kept in the generated profile. Returns the keys written; [] when none is
     owed, on a committed profile or under a census shadow."""
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     path = A.generated_profile(hardware_id)
     if path is None:
         return []
-    from neurobrix.core.prism.loader import vendor_block
+    from neurobrix.pytorch.prism.loader import vendor_block
     from nbxtensor.backend import host_measure as H      # the library's measures (qa 1231-4: numpy measures are its own)
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
@@ -101,11 +101,11 @@ def measure_reload_rates(hardware_id: Optional[str], engine: str, container_dir=
     stored so, at least the loader-rate floor and at most the card, reloaded in its own process (`arena_probe.child`),
     which writes the rate with its spread (`note_reload_rate`): measured once, kept. Returns the stored dtypes probed;
     [] when none is owed, on a committed profile or under a census shadow."""
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     path = A.generated_profile(hardware_id)
     if path is None:
         return []
-    from neurobrix.core.prism.loader import vendor_block
+    from neurobrix.pytorch.prism.loader import vendor_block
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
     if not devices:
@@ -133,7 +133,7 @@ def measure_reload_rates(hardware_id: Optional[str], engine: str, container_dir=
     if not probes:
         return []
     launch_lines.say("reload", A.work_said(probes, None, 0))
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     for _bytes, root, comp, st in probes:
         r = A.child(root, comp, hardware_id, engine)
         _log.debug(f"   [Auto-detect] {engine} {st} reloads of {r['container']}:{r['component']}: "

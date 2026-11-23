@@ -8,7 +8,7 @@ embedding. Where that table lives is the plan's decision, not the flow's:
   * a component held whole on a card has its table on the card;
   * a component Prism maps to the host (`zero3:<card>`: every shard on "cpu") has, on the
     compiled engine, ALL its weights pinned on the host for the whole run — the non-block
-    ones included (`core/prism/host_footprint.py` prices exactly that; the graph's own
+    ones included (`pytorch/prism/host_footprint.py` prices exactly that; the graph's own
     non-block ops receive the weight as a per-op scratch copy,
     `CompiledSequence.mark_cpu_weighted_ops_for_transfer`). The card was budgeted for the
     activations only.

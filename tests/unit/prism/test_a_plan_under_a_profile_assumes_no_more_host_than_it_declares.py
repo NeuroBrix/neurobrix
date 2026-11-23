@@ -32,9 +32,9 @@ import logging
 import pytest
 
 from nbxtensor.backend.host_memory import MemoryState
-from neurobrix.core.prism import solver as _solver_mod
-from neurobrix.core.prism.loader import load_profile
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism import solver as _solver_mod
+from neurobrix.pytorch.prism.loader import load_profile
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 logging.disable(logging.WARNING)
 

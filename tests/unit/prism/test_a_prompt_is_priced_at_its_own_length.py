@@ -58,7 +58,7 @@ def test_the_language_models_sequence_is_bound_to_the_request_not_the_margin():
 
 
 def test_the_planned_activation_grows_with_the_prompt(monkeypatch):
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     pin_no_calibration(monkeypatch)
     act = {}
     for name, prompt in (("short", SHORT), ("long", LONG)):

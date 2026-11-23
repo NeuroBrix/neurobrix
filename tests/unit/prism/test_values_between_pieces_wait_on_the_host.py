@@ -13,7 +13,7 @@ under its real 20 KB (the piece assertion red); the skip counted as live in ever
 (red); an op over the budget alone not named -> the refusal assertion red."""
 from __future__ import annotations
 
-from neurobrix.core.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 
 KB = 1024
 

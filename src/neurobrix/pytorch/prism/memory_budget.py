@@ -163,13 +163,13 @@ def describe(r: DeviceReading) -> str:
 # ----------------------------------------------------------------------------- readings
 def read_device_sharing(index: int) -> DeviceReading:
     """The sharing facts of one card, read from the driver's own tool through the vendor's
-    seam (`neurobrix.core.prism.autodetect.device_sharing`): its capacity and free memory, display activity, memory
+    seam (`neurobrix.pytorch.prism.autodetect.device_sharing`): its capacity and free memory, display activity, memory
     other processes hold, the runtime's own context. The tool answers WITHOUT a context on the card: reading a card
     through the runtime (`DeviceAllocator.free_memory_mb`) creates this process's context there, and a plan that then
     never names the card kept it — 306 MiB on the second card of a two-card profile for a model planned on the first
     (2026-11-10). The runtime is asked only when no seam answers; the card is then read as shared
     (`measured=False`) — the plan rounds the free figure down, the safe side."""
-    from neurobrix.core.prism import autodetect
+    from neurobrix.pytorch.prism import autodetect
     facts = autodetect.device_sharing(index)
     if facts is not None and facts.get("total_mb") and facts.get("free_mb") is not None:
         return DeviceReading(kind="device", capacity_mb=float(facts["total_mb"]), free_mb=float(facts["free_mb"]),

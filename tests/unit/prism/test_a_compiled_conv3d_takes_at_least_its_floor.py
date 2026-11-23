@@ -1,5 +1,5 @@
 """A compiled conv3d is priced at max(floor, fraction x input) — the floor being what the device's conv3d takes whatever
-its size (`memory.compiled_conv3d_workspace_floor_bytes`, core/prism/op_workspace.py).
+its size (`memory.compiled_conv3d_workspace_floor_bytes`, pytorch/prism/op_workspace.py).
 
 The Mac's law (RUN 37b, 2026-11-05, M4 Pro, MPS watermark bisection of one conv3d per process, 36 shapes): under the MPS
 heap, ~1 GiB, no conv3d runs; above ~800 MB of input the workspace is 1.08-1.60 x the input. Before this the floor sat
@@ -18,9 +18,9 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism.attention_scratch import vendor_memory_of
-from neurobrix.core.prism.op_workspace import conv3d_workspace_bytes
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
+from neurobrix.pytorch.prism.op_workspace import conv3d_workspace_bytes
 
 VENDORS = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "config" / "vendors"
 GiB = 1 << 30

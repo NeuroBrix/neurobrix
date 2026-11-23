@@ -27,7 +27,7 @@ DRIVER = textwrap.dedent("""
     from pathlib import Path
     import neurobrix  # the engine first: it puts its own tree's nbxtensor on the path
     from nbxtensor.backend import host_memory as HM
-    from neurobrix.core.prism import solver as S, loader as LD
+    from neurobrix.pytorch.prism import solver as S, loader as LD
     st = HM.MemoryState(available_mb=8400, source="simulated")
     HM.memory_state = lambda: st
     S.memory_state = lambda: st

@@ -15,8 +15,8 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.core import workspace as W
-from neurobrix.core.prism import kept_launch_facts as kept
-from neurobrix.core.prism import load_ceiling
+from neurobrix.pytorch.prism import kept_launch_facts as kept
+from neurobrix.pytorch.prism import load_ceiling
 
 
 def _plan():

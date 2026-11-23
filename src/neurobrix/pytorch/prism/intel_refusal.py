@@ -48,7 +48,7 @@ CANNOT = frozenset({"ZE_RESULT_ERROR_UNSUPPORTED_VERSION", "ZE_RESULT_ERROR_UNSU
 
 
 def _record_dir() -> Path:
-    from neurobrix.core.prism.autodetect import HARDWARE_DIR
+    from neurobrix.pytorch.prism.autodetect import HARDWARE_DIR
     return Path(HARDWARE_DIR) / "intel_runtime_refusals"
 
 
@@ -92,7 +92,7 @@ def intel_error(exc: Optional[BaseException]):
 def planned_devices(hardware_id: Optional[str]) -> List[Dict[str, Any]]:
     """The Intel devices the GENERATED profile `hardware_id` plans (its file's own entries: index, model, pci_id)."""
     import yaml
-    from neurobrix.core.prism.autodetect import HARDWARE_DIR
+    from neurobrix.pytorch.prism.autodetect import HARDWARE_DIR
     path = Path(HARDWARE_DIR) / f"{hardware_id}.yml"
     if not hardware_id or not path.exists():
         return []
@@ -119,7 +119,7 @@ def record(devices: List[Dict[str, Any]], reason: str, hardware_id: Optional[str
     """Record each device as refused under the versions in force (one file per chip, replaced atomically), and remove
     the generated profile that planned it and the machine's shared one, so the next start detects the machine again
     (their measured facts are measured again: facts of a machine whose plan changes)."""
-    from neurobrix.core.prism import autodetect
+    from neurobrix.pytorch.prism import autodetect
     versions = _versions()
     if versions is None:
         raise RuntimeError("ZERO FALLBACK: an Intel refusal is recorded under its Level Zero driver's version, and the "
@@ -197,7 +197,7 @@ def announce() -> None:
 def doctor_lines() -> List[str]:
     """What `neurobrix doctor` says of Intel GPUs: the experimental label when a generated profile of this machine
     plans one, and every chip refused at run time with its record (read from the files: Level Zero is not asked)."""
-    from neurobrix.core.prism.autodetect import HARDWARE_DIR
+    from neurobrix.pytorch.prism.autodetect import HARDWARE_DIR
     out = []
     planned = [d for p in sorted(Path(HARDWARE_DIR).glob("default*.yml")) for d in planned_devices(p.stem)]
     if planned:

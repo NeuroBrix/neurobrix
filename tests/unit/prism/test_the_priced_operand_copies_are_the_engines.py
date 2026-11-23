@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
+from neurobrix.pytorch.prism.runtime_widths import conservative_contract, runtime_dtypes
 
 torch = pytest.importorskip("torch")
 NONE = conservative_contract("test: no contract")

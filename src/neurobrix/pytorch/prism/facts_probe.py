@@ -249,7 +249,7 @@ def card_facts_in_a_child(index: int) -> dict:
     import subprocess
     import sys
     from nbxtensor.backend.install_help import one_device_env
-    code = ("import json; from neurobrix.core.prism import autodetect as A; "
+    code = ("import json; from neurobrix.pytorch.prism import autodetect as A; "
             "print('CARD_FACTS ' + json.dumps(A.runtime_card_facts(0)))")
     env = dict(one_device_env(int(index)), PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300, env=env)
@@ -263,7 +263,7 @@ def card_facts_reader(devices):
     opens its context there whatever the plan names, so the read costs no child and no second context — else `card_facts_in_a_child`, one short
     process per card model that sees that card alone (no context on a card the plan may not name)."""
     from nbxtensor import device as _dev
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     try:
         one = _dev.count() == 1 and len(devices) == 1
     except _dev.NoGpuRuntime:   # no runtime here: the child answers {} as before, the shadow refuses by name

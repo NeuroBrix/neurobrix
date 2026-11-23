@@ -3,7 +3,7 @@ starts (the kernels' modules and their local memory, outside every allocator): t
 `memory.<engine>_runtime_growth_mb`, taken off the budget and stated in its note; unmeasured, nothing is taken and the
 note says so. Lot gate 2026-10-28 on V100-16GB: Wan2.2-I2V-A14B and Sana 4K triton held 1.0-1.2 GB outside the allocator
 for a 306-312 MB context and their pieces, cut to the card less the context alone, ran out of memory. No card."""
-from neurobrix.core.prism import PrismSolver
+from neurobrix.pytorch.prism import PrismSolver
 from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, pin_host, profile
 from tests.unit.prism._pinned_machine import no_door
 

@@ -20,7 +20,7 @@ answer overwriting a rack-scoped file.
 
 import pytest
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 
 def _profile(n_devices):

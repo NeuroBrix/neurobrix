@@ -13,8 +13,8 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import facts_probe as P
 
 CALLS = []
 C16 = {"brand": "nvidia", "model": "Card-16", "architecture": "unknownarch", "supports_dtypes": ["float16"],

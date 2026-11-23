@@ -57,7 +57,7 @@ def test_the_reader_is_handed_a_file_that_exists_from_any_directory(tmp_path, mo
 
 
 def test_the_kept_width_is_read_on_a_generated_profile_without_raising(tmp_path, monkeypatch):
-    from neurobrix.core.prism import autodetect as A, kept_launch_facts as K
+    from neurobrix.pytorch.prism import autodetect as A, kept_launch_facts as K
     box = _container(tmp_path)
     (tmp_path / "hw").mkdir()
     (tmp_path / "hw" / "default-one.yml").write_text("devices: []\n")

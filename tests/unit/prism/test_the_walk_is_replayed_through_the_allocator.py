@@ -7,7 +7,7 @@ the allocator held 1 213 MB — the queue, not a factor; replayed, 1 407 MB.
 What each cell would do if the code were wrong: a queue that frees at once (the held peak would be the live peak: red),
 a queue that never drains (the held peak would be every byte allocated: red), no replay under the compiled engine's
 rules (a figure where none is: red)."""
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 from tests.unit.prism.test_layer_partition import _chain
 
 MB = 1024 * 1024

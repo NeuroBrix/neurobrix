@@ -76,7 +76,7 @@ def test_prism_prices_the_accumulator_at_the_engine_s_width():
     and its replacement in float32 (4 bytes each) plus the partial cast to float32."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism"))
     import test_a_stretch_over_the_rung_runs_in_slices_of_its_token_axis as S
-    from neurobrix.core.prism.layer_partition import LayerPartitioner
+    from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
     sm = {"s0": S.B, "s1": 4096}
     p = LayerPartitioner(S._half_graph_of(S._graph, "float16"), {w: S.D * 2 for w in S.WEIGHTS},
                          symbol_map=sm, compute_dtype_bytes=2)

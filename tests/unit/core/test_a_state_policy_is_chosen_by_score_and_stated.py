@@ -42,7 +42,7 @@ def test_nothing_fits_is_refused_by_name_with_the_figures():
 def test_the_plan_records_its_state_policy_and_says_it(monkeypatch):
     """A plan whose whole decode cache fits records `pages` and prints it in the selection reason (the record and the
     explain line of step 5): a plan that decodes without naming its state policy cannot be audited."""
-    from neurobrix.core.prism import InputConfig, PrismSolver
+    from neurobrix.pytorch.prism import InputConfig, PrismSolver
     from neurobrix.nbx import NBXContainer
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, no_door, pin_host, profile
     no_door(monkeypatch)
@@ -58,7 +58,7 @@ def test_offload_is_a_candidate_only_on_a_discrete_device_whose_host_holds_the_c
     """A cache that does not fit the card's room is offloaded (exact: one layer's positions on the device at a time,
     double-buffered) on a discrete card whose host holds it; never on unified memory, where the host is the same pool,
     nor when the host cannot hold it — then the rung still refuses, naming what it considered."""
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     from neurobrix.core.state.policy import StatePolicyRefused
     s = PrismSolver.__new__(PrismSolver)
     s._kv_min_bytes = lambda c, d: 32 << 20

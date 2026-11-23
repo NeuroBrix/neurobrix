@@ -33,8 +33,8 @@ def _head_of(root):
 
 
 def test_the_plan_reserves_the_weights_of_a_streamed_head(monkeypatch):
-    from neurobrix.core.prism import InputConfig, PrismSolver
-    from neurobrix.core.prism.solver import _graph_constant_bytes
+    from neurobrix.pytorch.prism import InputConfig, PrismSolver
+    from neurobrix.pytorch.prism.solver import _graph_constant_bytes
     from neurobrix.nbx import NBXContainer
     pin_host(monkeypatch, 24576, 17667, "the Mac's reading, 2026-10-08 10:18")
     impose_rung(monkeypatch, 4096)

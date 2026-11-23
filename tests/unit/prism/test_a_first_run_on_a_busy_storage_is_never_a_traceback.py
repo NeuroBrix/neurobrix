@@ -27,7 +27,7 @@ def no_trials(monkeypatch):
 
 def test_a_profile_s_completion_measures_no_read_rate_and_keeps_no_count(no_trials, tmp_path, monkeypatch):
     import yaml
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     monkeypatch.setattr(A, "_measure_runtime_base_mb", lambda: {"triton": 1})
     p = tmp_path / "default-x.yml"
     p.write_text(yaml.safe_dump({"cpu": {"model": "m", "runtime_base_mb": {"triton": 1}}}))
@@ -36,7 +36,7 @@ def test_a_profile_s_completion_measures_no_read_rate_and_keeps_no_count(no_tria
 
 
 def test_the_detector_holds_no_read_rate_trial():
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     src = inspect.getsource(A)
     assert not hasattr(A, "_measure_io_workers")
     assert "workers_for" not in src and "io_workers" not in src

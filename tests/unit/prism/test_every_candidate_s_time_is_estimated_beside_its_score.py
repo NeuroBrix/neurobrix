@@ -9,8 +9,8 @@ without its step count passes where the third expects the refusal's name.
 import json
 from types import SimpleNamespace as NS
 
-from neurobrix.core.prism.profiler import InputConfig
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.profiler import InputConfig
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 DAG = {"tensors": {"x": {"shape": [1, 64, 32], "dtype": "float16"},
                    "w": {"shape": [32, 32], "dtype": "float16", "is_parameter": True},
@@ -70,7 +70,7 @@ def test_a_generating_flow_counts_the_package_s_declared_tokens_when_the_request
 
 
 def test_the_plan_carries_its_estimates(tmp_path):
-    from neurobrix.core.prism.solver import ExecutionPlan, plan_record, explain_plan
+    from neurobrix.pytorch.prism.solver import ExecutionPlan, plan_record, explain_plan
     plan = ExecutionPlan(components={}, target_dtype="float16", total_memory_mb=1.0, strategy="single_gpu",
                          component_memory={}, estimated_s=2.5, time_estimates={"single_gpu": 2.5, "zero3": 9.0})
     rec = plan_record(plan)

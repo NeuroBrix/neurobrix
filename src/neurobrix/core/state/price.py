@@ -169,7 +169,7 @@ def session_prefill_rows(defaults: Mapping[str, Any]) -> int:
 
 def session_chunk_attention_bytes(rows: int, keys: int, kv_dtype: str, engine: str) -> int:
     """The ONE reserve a serving session's prefill chunk has for its attention over the cached keys, read by Prism
-    (which prices it into the decoder's activations, core/prism/served_prefill.py) and by both engines' KV wrappers
+    (which prices it into the decoder's activations, pytorch/prism/served_prefill.py) and by both engines' KV wrappers
     (which spend it): rows x keys at the item size of the chunk's dense additive mask — the cache's dtype on the
     compiled engine (`engine` "compiled"), float32 on the Triton engine. A plain chunk holds that mask; a chunk over
     positions spilled to host memory holds no such mask and cuts its query rows so its scores fit the same bytes.

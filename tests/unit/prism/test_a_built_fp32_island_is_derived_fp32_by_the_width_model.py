@@ -9,7 +9,7 @@ the conv derived at the compute dtype, its operands cast to it.
 """
 from __future__ import annotations
 
-from neurobrix.core.prism.runtime_widths import runtime_dtypes, runtime_widths, conservative_contract
+from neurobrix.pytorch.prism.runtime_widths import runtime_dtypes, runtime_widths, conservative_contract
 
 NONE = conservative_contract("test: no contract")
 

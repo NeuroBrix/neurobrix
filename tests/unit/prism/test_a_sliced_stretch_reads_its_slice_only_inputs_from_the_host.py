@@ -11,7 +11,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
-from neurobrix.core.prism.chunked_region import ChunkPass, RegionPlan, sliced_reads
+from neurobrix.pytorch.prism.chunked_region import ChunkPass, RegionPlan, sliced_reads
 from neurobrix.core.strategies import value_parking as VP
 from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
 

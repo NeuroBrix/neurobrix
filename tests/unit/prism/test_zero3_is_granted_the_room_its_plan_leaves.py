@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from neurobrix.core.prism.solver import ComponentAllocation, ComponentMemory, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentAllocation, ComponentMemory, PrismSolver
 
 MB = 1024 * 1024
 

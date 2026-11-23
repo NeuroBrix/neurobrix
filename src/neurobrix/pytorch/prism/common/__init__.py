@@ -1,4 +1,4 @@
-# core/prism/common/__init__.py
+# pytorch/prism/common/__init__.py
 """
 Prism Common Utilities
 

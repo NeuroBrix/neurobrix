@@ -83,7 +83,7 @@ def test_no_literal_default_for_a_runtime_dimension():
 
 
 def test_input_config_declares_no_literal_defaults():
-    from neurobrix.core.prism.profiler import InputConfig
+    from neurobrix.pytorch.prism.profiler import InputConfig
     import dataclasses
     for f in dataclasses.fields(InputConfig):
         if f.name in ("batch_size", "height", "width", "dtype", "vae_scale",

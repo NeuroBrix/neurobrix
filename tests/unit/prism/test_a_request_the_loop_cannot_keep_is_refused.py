@@ -1,4 +1,4 @@
-"""A request the denoising loop cannot keep is refused by name before anything runs (core/prism/loop_state.py).
+"""A request the denoising loop cannot keep is refused by name before anything runs (pytorch/prism/loop_state.py).
 
 The Mac, 2026-10-15 05:30: Allegro at 360x640 (latent height 45) ran its first step and died in the scheduler, "the
 size of tensor a (45) must match the size of tensor b (44)": the transformer patchifies with a stride-2 convolution,
@@ -48,13 +48,13 @@ def _graph(out_h):
 
 
 def test_a_loop_that_keeps_every_size_is_never_refused():
-    from neurobrix.core.prism.loop_state import mismatches
+    from neurobrix.pytorch.prism.loop_state import mismatches
     g = _graph(S("h"))
     assert all(mismatches(g, "x", {"h": v}) == [] for v in range(1, 200))
 
 
 def test_an_output_that_loses_a_row_is_named():
-    from neurobrix.core.prism.loop_state import kept_neighbours, mismatches
+    from neurobrix.pytorch.prism.loop_state import kept_neighbours, mismatches
     g = _graph({"type": "mul", "left": {"type": "floordiv", "left": S("h"), "right": 3}, "right": 3})
     assert mismatches(g, "x", {"h": 10}) == [(2, "h", 10, 9)]
     assert kept_neighbours(g, "x", {"h": 10}, "h") == (9, 12)

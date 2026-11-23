@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.profiler import InputConfig
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.profiler import InputConfig
+from neurobrix.pytorch.prism.solver import PrismSolver
 from neurobrix.nbx.container import NBXContainer
 from tests.unit.prism._pinned_machine import (V100_16GB, container_root, impose_rung,
                                               pin_dedicated_card, profile)
@@ -79,8 +79,8 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
     calibration record, the silu that follows keeps its input's width); no card has run this
     request under the compiled engine. That measurement is owed."""
     import math
-    from neurobrix.core.prism.profiler import ActivationProfiler
-    from neurobrix.core.prism.runtime_widths import plan_time_contract, runtime_widths
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism.runtime_widths import plan_time_contract, runtime_widths
     pin_dedicated_card(monkeypatch, 32501, 267, "the rack's card 2, 2026-09-25")
     impose_rung(monkeypatch, 32768)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
@@ -121,5 +121,5 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
 
 
 def test_the_factor_is_the_cards_measured_fact():
-    from neurobrix.core.prism.attention_scratch import vendor_memory_of
+    from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
     assert 1.0 < float(vendor_memory_of("nvidia", "volta")["triton_arena_activation_factor"]) <= 2.0

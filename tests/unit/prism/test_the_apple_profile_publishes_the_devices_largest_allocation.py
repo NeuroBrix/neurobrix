@@ -35,13 +35,13 @@ def _metal_device_or_skip():
 
 
 def test_the_detection_asks_the_device():
-    from neurobrix.core.prism import autodetect
+    from neurobrix.pytorch.prism import autodetect
     device = _metal_device_or_skip()
     assert autodetect._detect_apple_max_allocation_mb() == int(device.maxBufferLength()) // (1024 * 1024)
 
 
 def test_the_detected_apple_device_carries_it():
-    from neurobrix.core.prism import autodetect
+    from neurobrix.pytorch.prism import autodetect
     device = _metal_device_or_skip()
     apple = [d for d in autodetect._parse_system_profiler() if d.get("brand") == "apple"]
     assert apple, "system_profiler listed no Apple GPU on a host with a Metal device"

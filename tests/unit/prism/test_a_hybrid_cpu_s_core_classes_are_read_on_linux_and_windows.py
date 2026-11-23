@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import struct
 
-from neurobrix.core.prism import autodetect as A
+from neurobrix.pytorch.prism import autodetect as A
 
 
 def _sysfs(root, core_cpus, atom_cpus, topology):

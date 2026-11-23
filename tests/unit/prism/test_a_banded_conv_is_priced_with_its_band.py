@@ -12,8 +12,8 @@ Injections (seen red): the band term dropped from the walk -> red; `op_extra` ig
 from __future__ import annotations
 
 from nbxtensor.ops import tiling_sizes as TS
-from neurobrix.core.prism.layer_partition import LayerPartitioner
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 
 MiB = 2 ** 20
 

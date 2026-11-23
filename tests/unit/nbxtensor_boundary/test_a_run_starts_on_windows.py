@@ -66,7 +66,7 @@ def test_a_run_on_windows_owes_no_read_rate_measure(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delattr(os, "posix_fadvise", raising=False)
     from neurobrix.core import workspace as W
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     monkeypatch.setattr(W, "_LOAD_CEILING", 2)
     monkeypatch.setattr(W, "_READER", None)
     assert not hasattr(A, "_measure_io_workers")
@@ -75,7 +75,7 @@ def test_a_run_on_windows_owes_no_read_rate_measure(monkeypatch):
 
 def test_the_resident_term_is_the_working_set_on_windows(monkeypatch):
     import ctypes
-    from neurobrix.core.prism import host_footprint as H
+    from neurobrix.pytorch.prism import host_footprint as H
 
     class Psapi:
         def GetProcessMemoryInfo(self, process, counters, cb):

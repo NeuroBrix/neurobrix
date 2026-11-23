@@ -6,7 +6,7 @@ them as they were, forever: every plan on them priced no engine base (2026-10-10
 """
 import yaml
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 
 def _stale(tmp_path, monkeypatch, cpu):

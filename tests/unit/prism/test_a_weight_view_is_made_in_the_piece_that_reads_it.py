@@ -6,7 +6,7 @@ addmm, the view crossed the seam, and the next piece read it at an address its o
 Injection (seen red, then restored green, 2026-10-22): `weight_views` returning {} -> every assertion's case red."""
 from __future__ import annotations
 
-from neurobrix.core.prism.layer_partition import LayerPartitioner, Segment, build_segment_graph
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner, Segment, build_segment_graph
 
 
 def _graph():

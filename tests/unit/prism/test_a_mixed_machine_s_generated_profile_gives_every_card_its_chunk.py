@@ -11,10 +11,10 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import facts_probe as P
 from nbxtensor.backend import host_measure as H
-from neurobrix.core.prism.kept_launch_facts import card_key
+from neurobrix.pytorch.prism.kept_launch_facts import card_key
 
 SMALL = {"brand": "nvidia", "model": "Tesla V100-SXM2-16GB", "architecture": "volta", "compute_capability": "7.0",
          "memory_mb": 16384, "supports_dtypes": ["float16", "float32"], "runtime_context_mb": 300}

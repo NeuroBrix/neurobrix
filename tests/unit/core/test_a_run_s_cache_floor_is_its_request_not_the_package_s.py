@@ -31,7 +31,7 @@ def test_the_request_does_not_cap_the_cache_below_the_package_bound():
 
 
 def _solver(asked, serve):
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     s = PrismSolver.__new__(PrismSolver)
     s._input_config = SimpleNamespace(max_tokens=asked)
     s._serve_requested = serve

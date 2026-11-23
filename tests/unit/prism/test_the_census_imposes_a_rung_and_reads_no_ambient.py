@@ -9,7 +9,7 @@ forbids that: the census enumerates every rung of the ladder and plans each,
 never the ambient, so the same model at the same rung yields the same plan and
 the same keys.
 
-The mechanism is the ONE door `NBX_PRISM_BUDGET_MB` (core/prism/memory_budget.py,
+The mechanism is the ONE door `NBX_PRISM_BUDGET_MB` (pytorch/prism/memory_budget.py,
 the Dell's f5a88bff) — this session's earlier NBX_CENSUS_RUNG_MB knob was a
 second mechanism for the same function and was removed. `budget_mb` at the law
 level is pinned by test_the_memory_budget_is_one_law...; here it is pinned END
@@ -21,8 +21,8 @@ from __future__ import annotations
 import pytest
 
 from nbxtensor.backend.host_memory import MemoryState
-from neurobrix.core.prism import solver as _solver_mod
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism import solver as _solver_mod
+from neurobrix.pytorch.prism.solver import PrismSolver
 from tests.unit.prism._pinned_machine import V100_16GB, profile as pinned_profile
 
 

@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 
 # ─────────────────────────────────────────────────────────────────────

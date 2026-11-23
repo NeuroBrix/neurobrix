@@ -217,7 +217,7 @@ class TensorResolver:
         _is_op_output = _meta_align.get("producer_op_uid") is not None
         # A SEAM tensor looks like a leaf (no producer inside the piece) but is an op output of the
         # previous piece: exactly the intermediate this guard exists to leave alone.
-        from neurobrix.core.prism.layer_partition import is_seam_tensor
+        from neurobrix.pytorch.prism.layer_partition import is_seam_tensor
         if tensor.is_floating_point() and not _is_op_output and not is_seam_tensor(_meta_align):
             prism_dtype = self._ctx.dtype
             if prism_dtype is not None:
@@ -367,7 +367,7 @@ class TensorResolver:
                 # A seam tensor (a streamed piece's input) arrives in the dtype its producing op
                 # gave it, as inside the whole graph; casting it to the compute dtype narrowed an
                 # fp32 island (R30 mirror of TritonDtypeEngine._target_dtype_for_input).
-                from neurobrix.core.prism.layer_partition import is_seam_tensor
+                from neurobrix.pytorch.prism.layer_partition import is_seam_tensor
                 if is_seam_tensor(tensor_info):
                     return None
                 dtype_str = tensor_info.get("dtype")

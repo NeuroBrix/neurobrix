@@ -45,7 +45,7 @@ HARDWARE = "v100-32g"
 @pytest.fixture
 def census_hardware(monkeypatch):
     """Bind HARDWARE as `derived_census.derive_keys` does; every global it sets is restored after."""
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     from neurobrix.kernels import census as _census
     from nbxtensor.backend import launcher as _launcher
     from nbxtensor import tensor as T

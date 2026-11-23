@@ -20,8 +20,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory
 
 GB = 1024 ** 3
 RUNG_MB = 16384
@@ -90,7 +90,7 @@ def _encoder_graph(mid_op=None):
     ("attention", True), ("group_norm", True), ("spatial_softmax", True),
     ("channel_norm", False), (None, False)])
 def test_the_coupling_is_read_from_the_graph(mid_op, coupled):
-    from neurobrix.core.prism.profiler import spatial_coupling
+    from neurobrix.pytorch.prism.profiler import spatial_coupling
     found = spatial_coupling(_encoder_graph(mid_op))
     assert (found is not None) == coupled, (mid_op, found)
     if coupled:
@@ -98,7 +98,7 @@ def test_the_coupling_is_read_from_the_graph(mid_op, coupled):
 
 
 def test_a_graph_whose_spatial_extent_is_frozen_cannot_be_read():
-    from neurobrix.core.prism.profiler import spatial_coupling
+    from neurobrix.pytorch.prism.profiler import spatial_coupling
     g = _encoder_graph(None)
     g["tensors"]["x"]["symbolic_shape"]["dims"][-1] = W_IN       # width frozen at its build value
     uid, why = spatial_coupling(g)
@@ -169,7 +169,7 @@ def test_a_vendor_whose_reference_tiles_declares_it_and_keeps_its_tile(tmp_path,
     decl["clip_graph_sha256"] = "0" * 64
     (comp / "vendor_tiling.json").write_text(json.dumps(decl))
     s, mem = _solver()
-    from neurobrix.core.prism.temporal_stream import StreamDeclarationError
+    from neurobrix.pytorch.prism.temporal_stream import StreamDeclarationError
     with pytest.raises(StreamDeclarationError, match="re-derive"):
         s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path), "enc", mem, RUNG_MB)
 

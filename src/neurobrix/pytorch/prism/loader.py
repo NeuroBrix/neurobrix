@@ -10,7 +10,7 @@ import yaml
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from neurobrix.core.prism.structure import (
+from neurobrix.pytorch.prism.structure import (
     PrismProfile,
     ClusterNode,
     NodeLink,
@@ -22,7 +22,7 @@ from neurobrix.core.prism.structure import (
     InterconnectTech,
     InterconnectType,
 )
-from neurobrix.core.prism.cpu_config import CPUConfig
+from neurobrix.pytorch.prism.cpu_config import CPUConfig
 
 # Project Root Resolution
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -283,8 +283,8 @@ def launch_profile(hardware_id: str, mode: str, container_dir=None) -> PrismProf
     that planned it), the first-launch measurements asked for the engine `mode` runs on (`ensure_measured_facts`: a
     generated profile's card gets its runtime total and context there), then the profile read. A first serve on a fresh
     home planned on a profile without them and was refused (gate cell L3, 18/11/2026)."""
-    from neurobrix.core.prism import autodetect
-    from neurobrix.core.prism.host_footprint import engine_of
+    from neurobrix.pytorch.prism import autodetect
+    from neurobrix.pytorch.prism.host_footprint import engine_of
     autodetect.ACTIVE_HARDWARE_ID = hardware_id
     autodetect.ensure_measured_facts(hardware_id, engine_of(mode), container_dir=container_dir)
     return load_profile(hardware_id)

@@ -45,7 +45,7 @@ def test_an_idle_v100_16gb_plans_cogvideox_i2v_with_the_vendor_cuts(monkeypatch)
     a lazy plan holds) and the execution door refused a machine with nothing else on it. RED on 4651eedd."""
     from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
@@ -62,7 +62,7 @@ def test_the_door_reads_a_tiled_component_at_its_tile(monkeypatch):
     RED on 4651eedd."""
     from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
@@ -78,7 +78,7 @@ def test_an_idle_v100_32gb_runs_mochi_triton_past_the_door(monkeypatch):
     import copy
     from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     v32 = copy.deepcopy(V100_16GB); v32["id"] = "scenario-v100-32gb"
     v32["devices"][0].update(model="Tesla V100-SXM2-32GB", memory_mb=32768)
     no_door(monkeypatch)
@@ -97,7 +97,7 @@ def test_a_lazy_plan_fits_its_dearest_phase_on_a_dedicated_card(monkeypatch):
     described). RED on 4651eedd."""
     from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
@@ -118,7 +118,7 @@ def test_a_lazy_plan_that_fits_its_phases_stays_lazy(monkeypatch):
     single-component usable part (12 670) and sent it to zero3, 3.7x slower (final gate 16g). It stays lazy."""
     from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "an idle V100-16GB")
@@ -134,7 +134,7 @@ def test_weight_sharding_never_divides_activations(monkeypatch):
     import copy
     from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, profile
     from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     four = copy.deepcopy(V100_16GB); four["id"] = "scenario-4xv100-16gb"
     four["devices"] = [dict(V100_16GB["devices"][0], index=i) for i in range(4)]
     no_door(monkeypatch)

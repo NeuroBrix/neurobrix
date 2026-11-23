@@ -42,9 +42,9 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism.profiler import InputConfig
-from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
-from neurobrix.core.prism.memory_budget import rung_down_mb
+from neurobrix.pytorch.prism.profiler import InputConfig
+from neurobrix.pytorch.prism.solver import ComponentMemory, PrismSolver
+from neurobrix.pytorch.prism.memory_budget import rung_down_mb
 
 MB = 1024 * 1024
 # The engine's own door, not a literal: this file carried the Dell's absolute

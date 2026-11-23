@@ -13,8 +13,8 @@ reason case.
 """
 from __future__ import annotations
 
-from neurobrix.core.prism.profiler import InputConfig
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.profiler import InputConfig
+from neurobrix.pytorch.prism.solver import PrismSolver
 from neurobrix.nbx.container import NBXContainer
 from tests.unit.prism._pinned_machine import (V100_16GB, container_root, impose_rung,
                                               pin_dedicated_card, profile)
@@ -105,7 +105,7 @@ def test_the_compiled_engine_is_not_sized_on_the_card():
 def test_a_unified_card_counts_the_weights_it_shares(monkeypatch):
     """On unified memory the host IS the card: a component's weights share the pool its activations
     use, so the whole figure is the component's (review 2026-09-29, R23)."""
-    from neurobrix.core.prism import solver as S
+    from neurobrix.pytorch.prism import solver as S
     s, card = _stub()
     monkeypatch.setattr(S, "_device_is_unified", lambda dev, profile: True)
     comps = [("text_encoder", _m(9_000, 6_000.0))]           # activations fit 14 000, weights + activations do not
@@ -120,7 +120,7 @@ def test_a_component_placement_never_puts_under_triton_on_the_host_what_the_card
     recorded for the refusal; the compiled engine keeps it on the host. Wan2.1-VACE 720x1280 fell to
     lazy_sequential with its transformer there once the host rungs declined (2026-09-29)."""
     from types import SimpleNamespace
-    from neurobrix.core.prism import solver as S
+    from neurobrix.pytorch.prism import solver as S
     s, card = _stub()
     card.get_cost_multiplier = lambda dt: 1.0
     card.free_mb = 16000

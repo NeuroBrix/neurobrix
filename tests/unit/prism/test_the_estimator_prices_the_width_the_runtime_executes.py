@@ -5,7 +5,7 @@
 AMP_FP32 op without a precision contract keeps an fp32 output, a binary op takes
 the wider operand, a fused upsample+conv writes at its pre-input's width. Sana
 4Kpx's VAE (no calibration record) planned 6 144 MB at 3072x4096 and died holding
-15 360 MB of activations. `core/prism/runtime_widths.py` walks the graph with the
+15 360 MB of activations. `pytorch/prism/runtime_widths.py` walks the graph with the
 engine's rules; the estimate sizes each activation at the width it returns.
 
 Every test below was run against a deliberately wrong rule and SEEN RED
@@ -54,8 +54,8 @@ import sys
 
 import pytest
 
-from neurobrix.core.prism.profiler import ActivationProfiler
-from neurobrix.core.prism.runtime_widths import (
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.runtime_widths import (
     PrecisionContract, TilingView, conservative_contract, plan_time_contract,
     runtime_dtypes, runtime_widths)
 
@@ -348,7 +348,7 @@ def test_the_mirrored_aten_tables_are_the_engine_s():
     by THIS test only."""
     pytest.importorskip("torch")
     from neurobrix.core.dtype import engine as E
-    from neurobrix.core.prism import runtime_widths as R
+    from neurobrix.pytorch.prism import runtime_widths as R
     assert R.ATEN_AMP_FP32_OPS == E.AMP_FP32_OPS
     assert R.ATEN_AMP_FP16_OPS == E.AMP_FP16_OPS
     assert R.ATEN_FP16_NEED_FP32 == E._FP16_NEED_FP32
@@ -359,7 +359,7 @@ def test_the_mirrored_aten_tables_are_the_engine_s():
 
 
 def test_the_pass_imports_no_torch():
-    code = ("import sys, neurobrix.core.prism.runtime_widths, neurobrix.core.prism.solver; "
+    code = ("import sys, neurobrix.pytorch.prism.runtime_widths, neurobrix.pytorch.prism.solver; "
             "sys.exit(1 if 'torch' in sys.modules else 0)")
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-2000:]
@@ -388,7 +388,7 @@ def test_an_nbx_dtype_is_named_by_its_member_not_its_string(monkeypatch):
     """IntEnum.__str__ is int.__str__ on Python 3.11+ (the Mac's): str(NBXDtype.bfloat16) == "1" there,
     and the pass refused Sana-4K's text encoder at plan time ("unknown dtype name '1'", 2026-09-28 12:16).
     The name is read from the member. RED on 43b307ad: this test forces the 3.11 str() on 3.10."""
-    from neurobrix.core.prism import runtime_widths as RW
+    from neurobrix.pytorch.prism import runtime_widths as RW
     from nbxtensor.dtype.nbx_dtype import NBXDtype
     monkeypatch.setattr(NBXDtype, "__str__", lambda self: str(int(self)))
     assert str(NBXDtype.bfloat16) == "1"
@@ -657,7 +657,7 @@ def test_a_profile_with_no_device_prices_agreeing_operands_and_refuses_disagreei
     priced unchanged; operands that disagree are refused by name, as the compiled DtypeEngine
     refuses with no hardware — never aligned by a guess."""
     import pytest as _pt
-    from neurobrix.core.prism import load_profile
+    from neurobrix.pytorch.prism import load_profile
     from nbxtensor.ops.launch_keys import sdpa_operand_dtypes
     from nbxtensor.dtype.nbx_dtype import NBXDtype as D
     word = load_profile("cpu-only-x86").attention_operands

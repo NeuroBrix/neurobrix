@@ -27,7 +27,7 @@ def test_the_wrapper_no_longer_reads_the_drivers_free_bytes():
 
 
 def test_the_plan_lists_exactly_the_conv3d_over_its_budget():
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
 
     class _Prof:
         def build_symbol_map(self, ic):

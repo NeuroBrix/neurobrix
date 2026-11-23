@@ -11,7 +11,7 @@ instead of 10.41 GiB, and the plan fell from lazy_sequential to cpu_streaming (2
 Injection, seen RED: the floor back on time/height/width -> the swap and the fewer-frames cases.
 The `seq_len` case is the floor's own reason and stays floored.
 """
-from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.pytorch.prism.profiler import ActivationProfiler, InputConfig
 
 GRAPH = {
     "execution_order": [], "ops": {}, "tensors": {},
@@ -66,7 +66,7 @@ def test_an_image_encoder_is_priced_at_the_view_the_run_feeds_it():
     run feeds it the CLIP view of the build's own processor (224x224), whatever the request. Bound by
     name, the unfloored map priced the request's latent grid (60x104 at 480x832) — a guess the old
     per-axis floor only covered by coincidence (review 2026-09-29). The flow binds the view."""
-    from neurobrix.core.prism.flow_bindings import FlowBindings
+    from neurobrix.pytorch.prism.flow_bindings import FlowBindings
     from tests.unit.prism._pinned_machine import container_root
     import json
     root = container_root("Wan2.1-I2V-14B-480P-Diffusers")

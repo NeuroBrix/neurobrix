@@ -199,7 +199,7 @@ def test_the_triton_engine_stores_every_enum_member_the_table_carries(stores_fp6
 
 @pytest.mark.parametrize("stores_fp64", [True, False])
 def test_every_triton_site_asks_its_engine(stores_fp64):
-    from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
+    from neurobrix.pytorch.prism.runtime_widths import conservative_contract, runtime_dtypes
     from nbxtensor.dtype.operands import constant_load_dtype
     from neurobrix.triton.sequence import TritonSequence
     from neurobrix.triton.sequential import TritonSequentialDispatcher
@@ -235,7 +235,7 @@ def test_a_device_less_profile_answers_the_host_s_own_and_no_profile_is_refused(
     host compute backend), and the solver routes that profile by name (next test). Red on c4fd00d6:
     the compiled reader refused it, and every component's plan with it (Dell re-review 22:13)."""
     from neurobrix.core.dtype.config import architecture_supports_dtype, profile_device_supports_fp64
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     from neurobrix.triton.dtype import profile_triton_has_fp64, profile_triton_stores_fp64
     cpu_only = load_profile("cpu-only-x86")
     assert not cpu_only.devices
@@ -270,8 +270,8 @@ def test_the_solver_prices_a_cpu_only_profile_in_every_mode(mode):
     CPU-only cascade) on the device-less profile: priced at the host's answer, never refused; and a
     missing profile is refused, not priced wide by a branch of its own."""
     from neurobrix.core.dtype.config import architecture_supports_dtype
-    from neurobrix.core.prism.loader import load_profile
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.loader import load_profile
+    from neurobrix.pytorch.prism.solver import PrismSolver
     solver = PrismSolver()
     solver._mode = mode
     comp = types.SimpleNamespace(name="c", graph=_ONE_CAST)
@@ -301,7 +301,7 @@ def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch)
     """The ATen rules narrow through the one dtype table's storage rule (`nbxtensor.dtype.itemsize.storage_dtype`) at
     the compiled branch's own float64 fact (`stores_fp64`): the branches differ by the fact they pass, not by a reader
     of their own (the engine's twin reader left 2026-10-29: the engine imports nbxtensor, no duplication)."""
-    from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
+    from neurobrix.pytorch.prism.runtime_widths import conservative_contract, runtime_dtypes
     kw = dict(attention_operands="narrowest", has_native_bf16=False,
               contract=conservative_contract("test: no contract"), stores_fp64=False)
     # An embedded fp64 constant in a half graph: the vendor's own precision, which the compiled

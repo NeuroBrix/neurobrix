@@ -19,8 +19,8 @@ from types import SimpleNamespace
 import pytest
 
 from nbxtensor.ops import tiling_sizes as TS
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory
 from nbxtensor.ops import launch_keys as LK
 
 MB = 1024 ** 2
@@ -167,8 +167,8 @@ def _op_level_graph():
 
 
 def _op_level_plan(monkeypatch, card_mb, resident_mb, chain_bytes_fp32):
-    import neurobrix.core.prism.profiler as P
-    import neurobrix.core.prism.memory_estimator as ME
+    import neurobrix.pytorch.prism.profiler as P
+    import neurobrix.pytorch.prism.memory_estimator as ME
     seen = {}
 
     class _Profiler:

@@ -1,5 +1,5 @@
 """The estimated time of a candidate plan for a request (docs/design/prism-time-score.md §3), from the work each
-component does (`core/prism/work.py`), how many times the request runs it, and the hardware's MEASURED facts
+component does (`pytorch/prism/work.py`), how many times the request runs it, and the hardware's MEASURED facts
 (`tools/profile_facts.py`, recorded on the hardware profile with their source).
 
   compute    per use, on the device the plan places the component on: a roofline,
@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
-from neurobrix.core.prism.work import Work
+from neurobrix.pytorch.prism.work import Work
 
 #: strategies whose weights cross the host link at every use of a component
 STREAM_EVERY_USE = frozenset({"zero3", "layer_streaming"})
@@ -44,7 +44,7 @@ class DeviceFacts:
     #: "F32", "F16"): {"device"|"host": {"cold": GB/s, "warm": GB/s}}}} — read + decode + convert + land; None: not measured
     load_rates: Optional[Mapping[str, Any]] = None
     #: the weight bandwidth a decode step's matrix-vector product reaches on each ENGINE (`gemv_gbps`,
-    #: core/prism/facts_probe.py): {engine: {dtype: GB/s}}; None: not measured
+    #: pytorch/prism/facts_probe.py): {engine: {dtype: GB/s}}; None: not measured
     gemv_rates: Optional[Mapping[str, Any]] = None
     #: the Triton expert store's miss copy, bytes/s — a kernel reading page-locked host memory over the link, measured at
     #: the first Triton launch (`measured.expert_copy.gbps`, `moe_device_residency.measure_miss_copy`); the compiled

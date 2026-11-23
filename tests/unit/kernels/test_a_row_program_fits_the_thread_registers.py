@@ -5,7 +5,7 @@ compiled for over 30 minutes and stalled the certification. What this test would
 import pytest
 
 pytestmark = pytest.mark.needs_gpu_runtime
-from neurobrix.core.prism.loader import load_profile
+from neurobrix.pytorch.prism.loader import load_profile
 from nbxtensor.ops import wrappers as W
 from nbxtensor.ops import softmax as S
 from nbxtensor.ops import _configs as C

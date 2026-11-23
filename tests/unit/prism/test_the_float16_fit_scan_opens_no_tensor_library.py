@@ -36,7 +36,7 @@ def _container(tmp: Path, peak: float) -> Path:
 
 def _fits(root: Path) -> str:
     code = ("import sys; from types import SimpleNamespace as N; from pathlib import Path; "
-            "from neurobrix.core.prism.solver import PrismSolver; "
+            "from neurobrix.pytorch.prism.solver import PrismSolver; "
             f"r = PrismSolver()._container_fits_float16(N(cache_path=Path({str(root)!r}))); "
             "print(r, 'torch' in sys.modules)")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=300,

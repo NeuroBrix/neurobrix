@@ -7,7 +7,7 @@
 #   beside it; nothing is estimated from a neighbouring architecture's file. No kernel has run on this
 #   architecture, no autotune key is certified for it, its speed is unknown. Written 2026-11-17 for
 #   GitHub issue 6 (an Ada card refused with "No hardware profile for nvidia/ada").
-#   The detector names every capability of major 10 `blackwell` (core/prism/autodetect.py `_NVIDIA_ARCH_MAP`).
+#   The detector names every capability of major 10 `blackwell` (pytorch/prism/autodetect.py `_NVIDIA_ARCH_MAP`).
 #   Table 34 lists 10.0 and 10.3 at 227 KB of shared memory per block, and 10.7 at 327 KB: a 10.7 device
 #   resolved here is given the SMALLER budget (fewer autotune tiles, never a tile it cannot hold).
 #
@@ -15,11 +15,11 @@
 #   * The Triton branch's tuning values (block_sizes, sdpa_thresholds, autotune buckets and screen,
 #     tiling.extent_lattice, pipelining.max_num_stages) and its dead-tensor queue
 #     (memory.deferred_drain_*): no vendor document gives them; they are measured on a card. Absent,
-#     a --triton plan on this architecture is refused by name (core/prism/memory_budget.py
+#     a --triton plan on this architecture is refused by name (pytorch/prism/memory_budget.py
 #     `deferred_drain_policy_of`: "declares no deferred_drain_cliff_bytes"). The default branch where
 #     PyTorch is installed (--compiled) reads none of them.
 #   * memory.compiled_conv3d_workspace_*: absent, a compiled plan holding a 3-D convolution is refused by
-#     name (core/prism/op_workspace.conv3d_workspace_bytes).
+#     name (pytorch/prism/op_workspace.conv3d_workspace_bytes).
 #   * the autotune bucket ladders (autotune.buckets): absent, a Triton launch key on this profile is refused by
 #     name (nbxtensor ops/autotune_bucket.ladder_for).
 #   * measured: (bandwidths, rates): measured at a machine's first launch, never written here.
@@ -37,7 +37,7 @@ memory:
   # operations are executed in the order they are enqueued into the stream."
   async_release: false
   # NOT MEASURED on this architecture: the value that says so. The Triton arena's hold over the walked
-  # activations (core/prism/solver.py `_live_activation_mb`) and a stream chunk's driver overhead.
+  # activations (pytorch/prism/solver.py `_live_activation_mb`) and a stream chunk's driver overhead.
   triton_arena_activation_factor: null
   compiled_stream_driver_over_price: null
   # THE COMPILED ENGINE'S TORCH CACHING ALLOCATOR (core/runtime/torch_allocator.py), a PyTorch setting, not an NVIDIA
@@ -56,7 +56,7 @@ memory:
   # PyTorch's CUDA caching allocator reuses a freed block for any request that fits (the same allocator on every
   # CUDA card; nvidia/volta.yml holds the measured case): no retention beyond the live set.
   compiled_allocator_retention: null
-  # What the compiled engine's other ops hold beyond their price: none stated for CUDA (core/prism/op_workspace.py).
+  # What the compiled engine's other ops hold beyond their price: none stated for CUDA (pytorch/prism/op_workspace.py).
   compiled_op_workspace: {}
 
 precision:

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from neurobrix.nbx import NBXContainer
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 from tests.unit.prism._pinned_machine import pin_host, pin_dedicated_card, profile, V100_16GB, container_root
 from tests.unit.prism._pinned_machine import no_door
 
@@ -76,7 +76,7 @@ def test_a_walked_live_set_carries_no_added_buffer(monkeypatch):
 def test_the_arena_factor_is_the_planned_devices_measured_fact(monkeypatch):
     """The M4 Pro's factor from the Apple family's declaration (1.477, measured on the M4 Pro; a value its profile carries
     is not read since 2026-11-07 — first launches wrote 1.4 to 28 there), the V100's from its own vendor file (1.35)."""
-    from neurobrix.core.prism.attention_scratch import vendor_memory_of
+    from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO
     # the vendor file serves no arena factor: the engine measures it into each machine's profile (2026-11-03)
     assert vendor_memory_of("apple", "apple_m4_pro")["triton_arena_activation_factor"] is None
@@ -91,7 +91,7 @@ def test_the_arena_factor_is_the_planned_devices_measured_fact(monkeypatch):
 
 
 def test_a_device_whose_file_declares_none_reads_its_family(monkeypatch):
-    from neurobrix.core.prism.solver import PlanNotComputable
+    from neurobrix.pytorch.prism.solver import PlanNotComputable
     import neurobrix.core.config.loader as L
     real = L.vendor_config_for_device
 

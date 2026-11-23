@@ -41,9 +41,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism.flow_bindings import FlowBindings
-from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism.flow_bindings import FlowBindings
+from neurobrix.pytorch.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (V100_16GB, container_root, impose_rung,
                                               pin_dedicated_card, pin_host, profile)

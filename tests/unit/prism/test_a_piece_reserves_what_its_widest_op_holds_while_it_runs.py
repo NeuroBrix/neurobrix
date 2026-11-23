@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from tests.unit.prism._graph import as_graph
 
-from neurobrix.core.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 
 MB = 1024 * 1024
 
@@ -114,7 +114,7 @@ def test_the_placement_estimate_and_the_partitioner_hold_one_figure_for_a_graph(
     Injections (seen red, then restored green — STATE.md of the op_tiler campaign, 2026-10-05):
       A. the profiler's peak back to `current_bytes` at a view -> the two figures differ;
       B. the overflow scan counting a view's output -> the view is flagged."""
-    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
     g = _peak_at_a_view()
     lp = LayerPartitioner(as_graph(g))
     figure = max(lp.op_peak_curve())

@@ -8,7 +8,7 @@ import copy
 import pytest
 
 from nbxtensor.backend.host_memory import MemoryState
-from neurobrix.core.prism import solver as S
+from neurobrix.pytorch.prism import solver as S
 from tests.unit.prism._pinned_machine import V100_16GB, profile
 
 

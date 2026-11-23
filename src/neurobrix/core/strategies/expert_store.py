@@ -186,7 +186,7 @@ def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any
     seq._expert_cards = executor._expert_cards = None
     if not cards:
         return []
-    from neurobrix.core.prism.expert_topology import _block_of
+    from neurobrix.pytorch.prism.expert_topology import _block_of
     from neurobrix.core.device_utils import _parse_device
     tensors = (getattr(executor, '_dag', None) or {}).get('tensors') or {}
     owner: Dict[int, str] = {}

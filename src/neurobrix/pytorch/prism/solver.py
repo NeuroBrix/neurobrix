@@ -25,16 +25,16 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
-from neurobrix.core.prism.host_footprint import engine_of, streamed_loads
-from neurobrix.core.prism import owed_facts as OF
-from neurobrix.core.prism import load_ceiling
-from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
-from neurobrix.core.prism.structure import names_accelerator
+from neurobrix.pytorch.prism.host_footprint import engine_of, streamed_loads
+from neurobrix.pytorch.prism import owed_facts as OF
+from neurobrix.pytorch.prism import load_ceiling
+from neurobrix.pytorch.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
+from neurobrix.pytorch.prism.structure import names_accelerator
 from nbxtensor.backend.host_memory import MemoryState, memory_state
-from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
+from neurobrix.pytorch.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
                                                 rung_down_mb, describe as _describe_budget, read_device_sharing,
                                                 host_budget_mb as _host_budget_mb_read)
-from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.pytorch.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.runtime_values import MissingRuntimeValue
 _log = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class PlanNotComputable(RuntimeError):
     """
 
 
-from neurobrix.core.prism.memory_estimator import compute_dtype_factor
+from neurobrix.pytorch.prism.memory_estimator import compute_dtype_factor
 from neurobrix.core.config import get_prism_defaults
 from nbxtensor.dtype import itemsize as _itemsize
 from neurobrix.core.config.system import PRISM_DEFAULTS
@@ -348,10 +348,10 @@ class KVCachePlan:
     # this many rows, a multiple of the cache page, the last chunk completed with masked rows the next chunk or the
     # decode overwrites — so every chunk meets the same kernel keys and a turn served from a session's cache gives the
     # bytes of the same turns prefilled together. Chosen by Prism from the certified times of each candidate's census
-    # keys (core/prism/prefill_chunk.py), never a constant; None: one chunk of the turn's own rows, the reason stated.
+    # keys (pytorch/prism/prefill_chunk.py), never a constant; None: one chunk of the turn's own rows, the reason stated.
     # A serving session's turns read it; a one-shot request prefills in one pass.
     prefill_chunk: Optional[int] = None
-    # Why prefill_chunk is what it is (core/prism/prefill_chunk.py): the candidates' certified costs, or why none was
+    # Why prefill_chunk is what it is (pytorch/prism/prefill_chunk.py): the candidates' certified costs, or why none was
     # eligible — stated, never silent.
     prefill_chunk_reason: str = ""
 
@@ -398,7 +398,7 @@ class DeviceState:
     #: The moment's free reading of this pool when a live one was taken (None under the census shadow or
     #: when the device could not be read): the EXECUTION DOOR (`memory_budget.execution_door`), never the budget.
     live_free_mb: Optional[float] = None
-    #: The law's answer for this pool (core/prism/memory_budget.py), computed once at
+    #: The law's answer for this pool (pytorch/prism/memory_budget.py), computed once at
     #: `_prepare_devices` from the reading: what a plan is budgeted against, and the rung a
     #: tiled component sizes its tile from. 0 = no reading was taken (a cell's hand-built
     #: state): the door then derives both from the state itself.
@@ -498,7 +498,7 @@ class ExecutionPlan:
     # pieces are built, so the base graph at the cut is not yet fused.
     layer_stream_moe: Dict[str, bool] = field(default_factory=dict)
     # component -> the stretches of it run in slices of a token axis, each one of its segments
-    # (`LayerPartitioner._chunk_regions`, core/prism/chunked_region.py): [{"first_op", "last_op",
+    # (`LayerPartitioner._chunk_regions`, pytorch/prism/chunked_region.py): [{"first_op", "last_op",
     # "symbol", "slice", "count", "passes", "peak_bytes"}, ...]. The streaming strategy runs each
     # such segment slice by slice at the planned `slice`; empty for every other plan.
     layer_stream_chunks: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
@@ -556,7 +556,7 @@ class ExecutionPlan:
     #: whose entry is not exact is never tiled (owner, 2026-10-16: Prism chooses only exact cuts, read from the graph).
     tiling_exactness: Dict = field(default_factory=dict)
     #: The components run in TEMPORAL CHUNKS through the stream the container builder derived from their graph
-    #: (`core/prism/temporal_stream.py`): {component: {"schedule": [first, next...] input frames, "frames": the
+    #: (`pytorch/prism/temporal_stream.py`): {component: {"schedule": [first, next...] input frames, "frames": the
     #: request's, "reference": "clip" (chunked = the clip graph, no op global over time) | "vendor" (the vendor's own
     #: chunked function, declared with its source), "activation_bytes", "states"}}. The runtime runs the first chunk
     #: graph, then the next one carrying the states (`core/module/temporal_stream_runner.py`), both engines.
@@ -783,7 +783,7 @@ def _capped_budget_mb(reading, capacity: float) -> float:
 
     So: the door is honoured exactly; only the DERIVED budget is capped.
     """
-    from neurobrix.core.prism.memory_budget import budget_mb as _bmb
+    from neurobrix.pytorch.prism.memory_budget import budget_mb as _bmb
     value = float(_bmb(reading))
     if os.environ.get("NBX_PRISM_BUDGET_MB"):
         return value
@@ -1246,7 +1246,7 @@ class PrismSolver:
         stated in the plan, never a silent profile default. Compiled plans and host devices: None."""
         if engine_of(getattr(self, "_mode", "compiled")) != "triton":
             return
-        from neurobrix.core.prism.memory_budget import planned_drain_cliff_bytes
+        from neurobrix.pytorch.prism.memory_budget import planned_drain_cliff_bytes
         mib = 1024 * 1024
         by_name = {d.device_string: d for d in (devices or [])}
         streamed = set(plan.layer_stream_plan or {})
@@ -1445,7 +1445,7 @@ class PrismSolver:
         # fact of the model, `expert_topology.routing_reuse`): the home holds the number of blocks that least expert
         # bytes cross its host link per token. Without the curve it holds none — the Dell's 4 V100 decode went 381 ->
         # 468 ms when blocks were held there unpriced (2026-10-28 05:56).
-        from neurobrix.core.prism.expert_topology import routing_reuse, hit_rate
+        from neurobrix.pytorch.prism.expert_topology import routing_reuse, hit_rate
         curve = routing_reuse(getattr(container, "cache_path", None), name) if container is not None else None
         floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
         mb, k_best = 0.0, 0
@@ -1483,7 +1483,7 @@ class PrismSolver:
         activation inputs and outputs, and its own intermediates — every routed token's gate and up projections
         (2 x intermediate) and its down product (hidden) at the compute width — the largest over `layers`. None when
         the request's sizing or the op's shapes are not known (the caller then reserves the component's live peak)."""
-        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
         graph = (self.__dict__.get("_executed_graphs") or {}).get(name)
         sizing = (self.__dict__.get("_request_sizing") or {}).get(name)
         if graph is None or sizing is None:
@@ -1617,13 +1617,13 @@ class PrismSolver:
 
     def _attention_budget(self, profile):
         """(vendor memory, the bytes of scores one chunk of an attention may write) on this profile, or None where the
-        compiled attention writes none (core/prism/attention_scratch.py, the vendor's `memory.compiled_sdpa_full_scores`).
+        compiled attention writes none (pytorch/prism/attention_scratch.py, the vendor's `memory.compiled_sdpa_full_scores`).
         ONE figure for the whole plan: the smallest device's — every attention is priced at it and every component
         placed on such a device carries it (`_assign_attention_budgets`), so the engine cuts what Prism priced. The
         Triton engine runs its own attention kernels: None."""
         if engine_of(getattr(self, "_mode", "compiled")) != "compiled" or profile is None or not profile.devices:
             return None
-        from neurobrix.core.prism.attention_scratch import vendor_memory, scores_budget, writes_full_scores
+        from neurobrix.pytorch.prism.attention_scratch import vendor_memory, scores_budget, writes_full_scores
         dev = min(profile.devices, key=lambda d: d.memory_mb)
         memory = vendor_memory(dev)
         if not writes_full_scores(memory):
@@ -1648,14 +1648,14 @@ class PrismSolver:
         found = self._attention_budget(profile)
         if found is None:
             return None
-        from neurobrix.core.prism.attention_scratch import scratch_bytes
+        from neurobrix.pytorch.prism.attention_scratch import scratch_bytes
         memory, budget = found
         return lambda b, h, tq, tk, **_: scratch_bytes(memory, budget, b, h, tq, tk)
 
     def _triton_attention_scratch(self, profile, dtype: str):
         if profile is None or not profile.devices:
             return None
-        from neurobrix.core.prism.attention_scratch import vendor_memory
+        from neurobrix.pytorch.prism.attention_scratch import vendor_memory
         from nbxtensor.ops import tiling_sizes as _ts
         from nbxtensor.ops import launch_keys as _lk
         from nbxtensor.dtype.nbx_dtype import NBXDtype
@@ -1711,15 +1711,15 @@ class PrismSolver:
     def _op_workspace(self, profile):
         """(op_type, x_shape, x_width, out_width) -> the bytes the compiled engine's implementation of an op holds beside
         its input and output while it runs, as the device's vendor file states it per op type
-        (core/prism/op_workspace.py `compiled_op_workspace`, read at the first op priced; an op the table does not name
+        (pytorch/prism/op_workspace.py `compiled_op_workspace`, read at the first op priced; an op the table does not name
         holds nothing; a `null` entry refuses the plan by name). None for the Triton engines — their ops are the kernels'
         wrappers, whose transients the price carries themselves (the pad, the conv3d folds) — and with no device."""
         if profile is None or not profile.devices:
             return None
         if engine_of(getattr(self, "_mode", "compiled")) == "triton":
             return None
-        from neurobrix.core.prism.attention_scratch import vendor_memory
-        from neurobrix.core.prism.op_workspace import op_workspace_fraction, op_workspace_fractions
+        from neurobrix.pytorch.prism.attention_scratch import vendor_memory
+        from neurobrix.pytorch.prism.op_workspace import op_workspace_fraction, op_workspace_fractions
         device = min(profile.devices, key=lambda d: d.memory_mb)
         table = op_workspace_fractions(vendor_memory(device))
         name = f"{getattr(device, 'brand', '?')}/{device.architecture}"
@@ -1732,7 +1732,7 @@ class PrismSolver:
     def _conv3d_workspace(self, profile, dtype: Optional[str] = None):
         """(x_shape, w_shape, attrs, x_width, out_width) -> the bytes a 3-D convolution holds beside its input and
         output while it runs, by the engine this plan is for: the compiled engine's cuDNN workspace as the vendor file
-        states it (core/prism/op_workspace.py, read at the first conv3d priced); the Triton engines' declared cost
+        states it (pytorch/prism/op_workspace.py, read at the first conv3d priced); the Triton engines' declared cost
         (`nbxtensor.ops.conv_wrappers.conv3d_cost`, the wrapper's own path: the temporal pad, each tap and its conv2d on
         each card's matrix unit, the bias), its peak less the result the walk already counts, at the dearest card the
         plan may run on. `dtype`: the component's run dtype, the name a 2-byte width stands for. None with no device.
@@ -1765,8 +1765,8 @@ class PrismSolver:
                     worst = max(worst, cost.peak_bytes - sum(b.nbytes for b in cost.outputs))
                 return worst
             return triton_declared
-        from neurobrix.core.prism.attention_scratch import vendor_memory
-        from neurobrix.core.prism.op_workspace import conv3d_workspace_bytes
+        from neurobrix.pytorch.prism.attention_scratch import vendor_memory
+        from neurobrix.pytorch.prism.op_workspace import conv3d_workspace_bytes
         memory = vendor_memory(min(profile.devices, key=lambda d: d.memory_mb))
 
         def cudnn(x_shape, w_shape, attrs, x_width, out_width):
@@ -1920,14 +1920,14 @@ class PrismSolver:
         0 under the compiled engine (torch frees at the kill point; there is no queue) and on a host
         device (its queue is host memory, priced by the host ledger). A card whose profile states no
         cliff is refused by name: an unstated queue is not an empty one."""
-        from neurobrix.core.prism.memory_budget import deferred_drain_retained_bytes
+        from neurobrix.pytorch.prism.memory_budget import deferred_drain_retained_bytes
         return self._read_drain(dev, deferred_drain_retained_bytes)
 
     def _deferred_drain_floor_mb(self, dev: "DeviceState") -> float:
         """The smallest queue the plan may leave the Triton hot loop on `dev`, in MB: the profile's
         `deferred_drain_floor_bytes` (`memory_budget.planned_drain_floor_bytes`; the door pins it to
         its cliff). 0 under compiled and on a host, as the drain itself."""
-        from neurobrix.core.prism.memory_budget import planned_drain_floor_bytes
+        from neurobrix.pytorch.prism.memory_budget import planned_drain_floor_bytes
         return self._read_drain(dev, planned_drain_floor_bytes)
 
     def _drain_profile_memory(self, dev: "DeviceState") -> Optional[dict]:
@@ -2171,7 +2171,7 @@ class PrismSolver:
         spec = min(profile.devices, key=lambda d: d.memory_mb)
         memory = (get_vendor_config(*_vendor_arch(spec)).get("memory", {}) or {})
         total_mb = float(spec.memory_mb)
-        from neurobrix.core.prism.memory_budget import DEFERRED_DRAIN_COUNT, door_mb, deferred_drain_retained_bytes
+        from neurobrix.pytorch.prism.memory_budget import DEFERRED_DRAIN_COUNT, door_mb, deferred_drain_retained_bytes
         door = door_mb()
         if door is not None:
             total_mb = min(total_mb, float(door))
@@ -2231,8 +2231,8 @@ class PrismSolver:
         """The bytes of a component's graph outputs at this request (`work.component_work`'s `output_bytes`)."""
         cache = self.__dict__.setdefault("_output_bytes_cache", {})
         if name not in cache:
-            from neurobrix.core.prism.profiler import ActivationProfiler
-            from neurobrix.core.prism.work import component_work
+            from neurobrix.pytorch.prism.profiler import ActivationProfiler
+            from neurobrix.pytorch.prism.work import component_work
             comp = next((c for c in (getattr(self, "_neural_components", None) or []) if c.name == name), None)
             ic = getattr(self, "_input_config", None)
             if comp is None or ic is None:
@@ -2394,7 +2394,7 @@ class PrismSolver:
         (the engine never refuses — the owner, 2026-10-03 22:35); a lower rung no strategy fits keeps
         the rung above, said. Behind the census door the rung is imposed and this is not done.
         """
-        from neurobrix.core.prism.memory_budget import memory_ladder_mb
+        from neurobrix.pytorch.prism.memory_budget import memory_ladder_mb
         self._unified_rung_cap_mb = None
         self._host_declined = set()      # strategies whose host side overshot the reading at this rung
         host = memory_state()
@@ -2528,7 +2528,7 @@ class PrismSolver:
         _cp = getattr(container, "cache_path", None)
         self._growth_model = _rmn(_cp) if _cp else None
         # what the Triton loader's copies in flight hold of a UNIFIED pool beside the device plan (`_rung_part_mb`)
-        from neurobrix.core.prism.host_footprint import triton_load_copies_bytes
+        from neurobrix.pytorch.prism.host_footprint import triton_load_copies_bytes
         self._load_copies_mb = triton_load_copies_bytes(self._weight_sizes_by_component(container)) / (1024 * 1024)
         # THE PROFILE THE PLAN IS FOR — what every hardware-dependent price reads (the tile
         # lattice), never the planning process's active profile (stage B P3).
@@ -3399,7 +3399,7 @@ class PrismSolver:
         # THE EXECUTION DOOR (the owner, 2026-10-25 15:16): the plan was sized by each pool's declared fact; what is
         # free NOW decides only whether it runs. A pool holding less than the plan places on it refuses by name — what
         # holds the memory is said — and the plan is never traded for a slower one.
-        from neurobrix.core.prism.memory_budget import execution_door as _door, DeviceReading as _DR
+        from neurobrix.pytorch.prism.memory_budget import execution_door as _door, DeviceReading as _DR
         def _on_demand_peak_mb(_d) -> float:
             """A plan that loads on demand holds ONE component at a time on `_d`: the dearest of them as it holds it
             — a `zero3:` component its resident part and its activations (its blocks stream), an expert store its
@@ -3531,8 +3531,8 @@ class PrismSolver:
         topologies = getattr(self, "_expert_topology", None) or {}
         if not topologies:
             return None
-        from neurobrix.core.prism.expert_topology import price_working_set
-        from neurobrix.core.prism.memory_budget import DeviceReading, tile_rung_mb
+        from neurobrix.pytorch.prism.expert_topology import price_working_set
+        from neurobrix.pytorch.prism.memory_budget import DeviceReading, tile_rung_mb
         cards = [d for d in (getattr(profile, "devices", None) or []) if getattr(d, "memory_mb", None)]
         if cards:
             card = min(cards, key=lambda d: d.memory_mb)
@@ -3568,7 +3568,7 @@ class PrismSolver:
     def _price_host_footprint(self, plan, profile, container, devices) -> None:
         """Step 7.9 of `_solve_at_rung`: the plan's host footprint on its engine, and the weight reader's ceiling it was
         priced at (`plan.load_ceiling`, declared to the loaders)."""
-        from neurobrix.core.prism.host_footprint import host_footprint, process_footprint_now
+        from neurobrix.pytorch.prism.host_footprint import host_footprint, process_footprint_now
         from neurobrix.triton.weight_loader import is_block_key   # torch-free
         _engine = engine_of(self._mode)
         _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
@@ -3625,8 +3625,8 @@ class PrismSolver:
         component needs op-level tiling.
         """
         from neurobrix.core.module.tiling_engine import OpLevelTilingPlan
-        from neurobrix.core.prism.profiler import ActivationProfiler
-        from neurobrix.core.prism.memory_estimator import (
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism.memory_estimator import (
             estimate_op_workspace_bytes,
         )
 
@@ -3920,7 +3920,7 @@ class PrismSolver:
         merge add fell under the in-place threshold for a 3072x4096 decode)."""
         if input_config is None:
             return None
-        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
         profiler = ActivationProfiler(graph)
         smap = profiler.build_symbol_map(input_config, placement_floor=True)
         tensors = graph.get("tensors", {})
@@ -4232,7 +4232,7 @@ class PrismSolver:
         Mismatch → estimator and runtime disagree about which upsamples
         are "free" → estimate says "fits" but runtime won't fuse.
         """
-        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
         if comp_vram_bytes <= 0:
             return set()
         profiler = ActivationProfiler(graph)
@@ -4386,7 +4386,7 @@ class PrismSolver:
             # The routed experts inside those bytes (expert_topology.py): read from the same graph as
             # executed, in the same units, stated by the plan — never read to place.
             if isinstance(getattr(_executed, "graph", None), dict):
-                from neurobrix.core.prism.expert_topology import read_expert_topology
+                from neurobrix.pytorch.prism.expert_topology import read_expert_topology
                 _lm = self._read_lm_config(container)
                 _topo = read_expert_topology(
                     comp.name, _executed.graph,
@@ -4403,7 +4403,7 @@ class PrismSolver:
             # The arena the Triton loader allocates for it whole, and for an expert store's dense part: the library's
             # layout at the loader's held dtypes (COST.md section 2), never the weights times a multiplier.
             arena_bytes = dense_arena_bytes = None
-            from neurobrix.core.prism.host_footprint import engine_of as _engine_of
+            from neurobrix.pytorch.prism.host_footprint import engine_of as _engine_of
             if _engine_of(getattr(self, "_mode", "compiled")) == "triton":
                 from nbxtensor.memory.layout import arena_layout
                 _held = _held_weight_sizes(_executed, comp_dtype_str)
@@ -4449,7 +4449,7 @@ class PrismSolver:
                     # 6 144 MB for a 3072x4096 decode that held 15 360 MB of
                     # activations when it ran out of memory (2026-09-28). The
                     # widths come from the engine's own rules
-                    # (core/prism/runtime_widths).
+                    # (pytorch/prism/runtime_widths).
                     widths = self._activation_widths(
                         comp, container, profiler, input_config, comp_dtype_str, profile)
                     # The Triton engines read a transposed weight in place; the compiled engine's
@@ -4724,7 +4724,7 @@ class PrismSolver:
     def _activation_widths(self, comp, container, profiler, input_config,
                            compute_dtype: str, profile, seams=None, tiling=None) -> Dict[str, int]:
         """{tensor_id: bytes per element} this component's activations are EXECUTED at,
-        under the engine this plan is for (`self._mode`) — core/prism/runtime_widths.
+        under the engine this plan is for (`self._mode`) — pytorch/prism/runtime_widths.
 
         What the pass needs and where it comes from here:
           * the compute dtype: the component's plan dtype;
@@ -4742,7 +4742,7 @@ class PrismSolver:
             fused / tiled op is priced at the wider of its tiled and untiled width;
           * the request's shapes, for the matmul store's M <= 4 rule: the profiler's own
             resolution under the placement-floored symbol map this estimate uses."""
-        from neurobrix.core.prism.runtime_widths import (
+        from neurobrix.pytorch.prism.runtime_widths import (
             conservative_contract, plan_time_contract, runtime_widths)
         cache_path = getattr(container, "cache_path", None)
         if cache_path:
@@ -4755,7 +4755,7 @@ class PrismSolver:
         # no profile. A profile with no device places every component on the host
         # (`cpu_execution`) and Triton has no host compute backend
         # (`strategies/triton/cpu_execution.py`): the host's own answer is priced, on either branch.
-        from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
+        from neurobrix.pytorch.prism.runtime_widths import TRITON_ENGINES
         if self._mode in TRITON_ENGINES and profile is not None and profile.devices:
             from neurobrix.triton.dtype import profile_triton_stores_fp64
             stores_fp64 = profile_triton_stores_fp64(profile)
@@ -4993,7 +4993,7 @@ class PrismSolver:
 
         bound_to_request = set()
         try:
-            from neurobrix.core.prism.profiler import ActivationProfiler as _AP
+            from neurobrix.pytorch.prism.profiler import ActivationProfiler as _AP
             _map = _AP(graph).build_symbol_map(input_config)
             for _sid, _spec in syms.items():
                 if not isinstance(_spec, dict) or _sid not in used_by_tensors:
@@ -5236,17 +5236,17 @@ class PrismSolver:
         return plan
 
     def _prefill_chunk(self, container, kv: "KVCachePlan", defaults, profile, kv_devices) -> Tuple[Optional[int], str]:
-        """A serving session's prefill chunk C and its reason (core/prism/prefill_chunk.py): the candidates
+        """A serving session's prefill chunk C and its reason (pytorch/prism/prefill_chunk.py): the candidates
         (`price.prefill_chunk_candidates`, whole pages of the session cache up to the prefill rows the plan prices a
         session at), each priced from the certified times of its derived census keys on the decoder's card class."""
-        from neurobrix.core.prism import prefill_chunk as PC
-        from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
+        from neurobrix.pytorch.prism import prefill_chunk as PC
+        from neurobrix.pytorch.prism.runtime_widths import TRITON_ENGINES
         from neurobrix.core.state import price as P
         from neurobrix.core.config.loader import get_vendor_config
         if kv.session_reach is None:
             return None, "no serving session is planned (no session reach): one chunk per request"
         # the phrase `served_prefill` reads a chunk chosen without certified times by: its constant, never restated
-        from neurobrix.core.prism.served_prefill import UNTIMED
+        from neurobrix.pytorch.prism.served_prefill import UNTIMED
         untimed = self._mode not in TRITON_ENGINES
         if untimed and not getattr(self, "_serve_requested", False):
             # a run prices its prefill at its own request's rows (`InputConfig.seq_len`): its one pass is priced
@@ -5497,7 +5497,7 @@ class PrismSolver:
         """Host RAM through the same law: the free reading rounded down onto the ladder; without a
         reading, the installed figure rounded down (never the raw figure, never a fraction of it)."""
         installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
-        from neurobrix.core.prism.memory_budget import budget_mb, host_reading
+        from neurobrix.pytorch.prism.memory_budget import budget_mb, host_reading
         # THE DOOR, first. `NBX_PRISM_BUDGET_MB` imposes a rung on every pool, and the device
         # reading already honours it through `budget_mb`. This path did not, so a census
         # enumerating rungs left the HOST budget at the machine's real free RAM: the rungs
@@ -6495,7 +6495,7 @@ class PrismSolver:
     def _stream_declaration(self, container, comp_name: str):
         """The component's temporal stream declaration with its two graphs (`temporal_stream.load`), read once per
         solve; None when the container carries none."""
-        from neurobrix.core.prism import temporal_stream as _ts
+        from neurobrix.pytorch.prism import temporal_stream as _ts
         cache_path = getattr(container, "_cache_path", None)
         if cache_path is None:
             return None
@@ -6516,8 +6516,8 @@ class PrismSolver:
         import dataclasses
         import json as _json
         from types import SimpleNamespace
-        from neurobrix.core.prism import temporal_stream as _ts
-        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism import temporal_stream as _ts
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
         decl = self._stream_declaration(container, comp_name)
         if decl is None:
             return None
@@ -6662,7 +6662,7 @@ class PrismSolver:
 
     def _vendor_tiling_declaration(self, comp_name: str):
         """The component's vendor tiling declaration (`temporal_stream.load_vendor_tiling`), read once per solve."""
-        from neurobrix.core.prism import temporal_stream as _ts
+        from neurobrix.pytorch.prism import temporal_stream as _ts
         container = getattr(self, "_container_for_cuts", None)
         cache_path = getattr(container, "_cache_path", None) if container is not None else None
         if cache_path is None:
@@ -6681,8 +6681,8 @@ class PrismSolver:
         import dataclasses
         import json as _json
         from types import SimpleNamespace
-        from neurobrix.core.prism import temporal_stream as _ts
-        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism import temporal_stream as _ts
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
         from neurobrix.core.runtime import symexpr as _symexpr
         decl = self._vendor_tiling_declaration(comp_name)
         ic = self._input_config
@@ -6771,7 +6771,7 @@ class PrismSolver:
         one chunk's, before any rung prices it."""
         self._profile = profile
         self._container_for_cuts = container
-        from neurobrix.core.prism.served_prefill import price_chunk_mask   # a session's chunk mask over the cached keys
+        from neurobrix.pytorch.prism.served_prefill import price_chunk_mask   # a session's chunk mask over the cached keys
         price_chunk_mask(component_memory, self._kv_declared(container), getattr(self, "_input_config", None),
                          self._mode, self._overhead_bytes)
         for name, mem in component_memory.items():
@@ -6808,7 +6808,7 @@ class PrismSolver:
         The record goes into the plan (`ExecutionPlan.tiling_exactness`). A coupled component is never tiled: Prism
         descends the ladder of EXACT strategies for it (Hocine Benkelaya, 2026-10-16 18:42) and refuses only at its bottom
         (`machine_cannot_run`)."""
-        from neurobrix.core.prism.profiler import spatial_coupling
+        from neurobrix.pytorch.prism.profiler import spatial_coupling
         declared = self._vendor_tiling_declaration(comp_name)
         if declared:
             # The vendor's reference itself tiles: the declaration, with its source, written by the container builder from the
@@ -7192,7 +7192,7 @@ class PrismSolver:
           class (the causal class carries the whole clip in every tile).
         """
         import math
-        from neurobrix.core.prism.profiler import (temporal_causal_downscale_ratio, temporal_downscale_ratio,
+        from neurobrix.pytorch.prism.profiler import (temporal_causal_downscale_ratio, temporal_downscale_ratio,
                                                    temporal_map_unread)
 
         ic = getattr(self, "_input_config", None)
@@ -7512,7 +7512,7 @@ class PrismSolver:
         # The live reading itself: the rung inside rounds it ONCE (the law
         # forbids a second rounding of an already-quantised figure).
         # Strategy 3.4: a temporal stream — the component in exact time chunks carrying its causal states
-        # (derived by the container builder from its graph, `core/prism/temporal_stream.py`). Above spatial tiling: every chunk
+        # (derived by the container builder from its graph, `pytorch/prism/temporal_stream.py`). Above spatial tiling: every chunk
         # is the clip's function exactly (or the vendor's own), and the card keeps the whole component.
         streams = self.__dict__.setdefault("_component_stream", {})
         if comp_name not in streams and self._stream_declaration(container, comp_name):
@@ -7895,7 +7895,7 @@ class PrismSolver:
         with, or None to keep the plan as it is.
 
         A sliced stretch is exact: its ops are per token or additive over the axis
-        (core/prism/chunked_region.py), and its later passes RECOMPUTE the per-token tensors they read
+        (pytorch/prism/chunked_region.py), and its later passes RECOMPUTE the per-token tensors they read
         rather than hold them whole — the one cost the cuts before it do not pay, so it is the last
         cut tried on the accelerator, and the host rungs, slower still, come after it. SANA-Video at
         its derived request on the 16 GB V100 at the 8 192 rung, one guidance branch: the
@@ -8020,11 +8020,11 @@ class PrismSolver:
                         store_cache_mb: Optional[Dict[str, float]] = None,
                         component_memory: Optional[Dict[str, Any]] = None, devices=None) -> Dict[str, Any]:
         """{strategy: estimated seconds for the request, or why it cannot be estimated} for every ranked candidate
-        (`core/prism/time_estimate.py`); {} when no device of the profile carries measured facts. `held_blocks`:
+        (`pytorch/prism/time_estimate.py`); {} when no device of the profile carries measured facts. `held_blocks`:
         {routed component: the blocks whose experts a card holds whole} (`_spread_experts`) — those blocks' experts
         cross no host link (the hidden state's seam to that card is a few KB per token, under the link terms' noise)."""
-        from neurobrix.core.prism import time_estimate as TE
-        from neurobrix.core.prism.work import component_work
+        from neurobrix.pytorch.prism import time_estimate as TE
+        from neurobrix.pytorch.prism.work import component_work
         if not any(getattr(d, "measured", None) for d in profile.devices):
             return {}
         plan_devices = devices          # the planner's device objects (the residency's), before the facts below
@@ -8070,7 +8070,7 @@ class PrismSolver:
                 if comp.name in (store_cache_mb or {}) and _left:
                     # the home cache's misses, at the routing's measured reuse (`expert_topology.routing_reuse`): the
                     # experts a token routes cross the host link only when the cache does not hold them
-                    from neurobrix.core.prism.expert_topology import routing_reuse, hit_rate
+                    from neurobrix.pytorch.prism.expert_topology import routing_reuse, hit_rate
                     _curve = routing_reuse(getattr(container, "cache_path", None), comp.name)
                     if not _curve:
                         return {name: f"not estimated: {comp.name}'s expert cache misses need the routing's reuse curve "
@@ -8155,10 +8155,10 @@ class PrismSolver:
         host's measured slab rate (`host_slab_gbps`) — refused by name without it. Measured on mochi-1-preview's VAE at an
         8 GB rung on the M4 Pro (the Mac, 2026-10-28, results/s6_price_2026_10_28/MEASURE.md): the halo +2.7 s, the two
         host-read stretches +3.3 / +3.6 s of cuts and assembly; MPS convolutions on slabs run as fast as whole."""
-        from neurobrix.core.prism import time_estimate as TE
-        from neurobrix.core.prism.chunked_region import slice_reads
-        from neurobrix.core.prism.profiler import ActivationProfiler
-        from neurobrix.core.prism.work import component_work
+        from neurobrix.pytorch.prism import time_estimate as TE
+        from neurobrix.pytorch.prism.chunked_region import slice_reads
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism.work import component_work
         total_s = 0.0
         comps = {c.name: c for c in (getattr(self, "_neural_components", None) or [])}
         for comp_name, part in (getattr(self, "_layer_stream_partitions", None) or {}).items():
@@ -8786,8 +8786,8 @@ class PrismSolver:
         their bands, the TilingEngine's residual chains streamed and the adds it runs in place — the figures the
         runtime holds (`_compute_memory` keeps the same profile for the plan's memory) — under the widths the
         plan's own tiling view gives. Returns (bytes, the op the peak sits at)."""
-        from neurobrix.core.prism.profiler import ActivationProfiler
-        from neurobrix.core.prism.runtime_widths import TilingView
+        from neurobrix.pytorch.prism.profiler import ActivationProfiler
+        from neurobrix.pytorch.prism.runtime_widths import TilingView
         comp = next(c for c in (getattr(self, "_neural_components", None) or []) if c.name == comp_name)
         comp_dtype = (getattr(self, "_component_dtypes", None) or {}).get(comp_name) or self._target_dtype_str
         dtype_bytes = _itemsize.itemsize(comp_dtype)
@@ -8871,7 +8871,7 @@ class PrismSolver:
         refusal stands, with the partitioner's own arithmetic available to say
         why.
         """
-        from neurobrix.core.prism.layer_partition import LayerPartitioner
+        from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 
         # WHY this rung declined, in numbers, for the refusal to print. It returned None at eight
         # places and said nothing: 62 of the Mac's 242 refusals (4a3658d7) listed every strategy
@@ -9096,7 +9096,7 @@ class PrismSolver:
             # `inputs_embeds`, or it is the VLM's `head_component`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
             # holding their non-block weights (most of a VAE: `mid_block.resnets.N` is not a block
             # key) would pin the component the rung exists to stream (SANA-Video's VAE, 4 663 MB).
-            from neurobrix.core.prism.layer_partition import flow_reads_by_name
+            from neurobrix.pytorch.prism.layer_partition import flow_reads_by_name
             from neurobrix.triton.weight_loader import is_block_key   # torch-free
             _topology = self._flow_topology(container)
             _read = [name for name in streamed
@@ -9224,7 +9224,7 @@ class PrismSolver:
                 # piece's op peak as the activation profile prices it
                 _scr = self._attention_scratch(profile, self._run_dtype(comp_name))
                 if _scr is not None:
-                    from neurobrix.core.prism.profiler import ActivationProfiler, _is_attention
+                    from neurobrix.pytorch.prism.profiler import ActivationProfiler, _is_attention
                     _ap = ActivationProfiler(graph)
                     for _uid, _op in (graph.get("ops") or {}).items():
                         if _is_attention(_op.get("op_type")):
@@ -9371,7 +9371,7 @@ class PrismSolver:
         entered its VAE with 1.2 GB more driver memory than the plain cut, and the VAE's stream ran out of memory (the
         Mac, 2026-10-27 23:47) — the per-piece cost is not measured, so the plain cut stays where the gain is a few
         steps. Empty when the flow cannot say (a generation with no token count)."""
-        from neurobrix.core.prism import time_estimate as TE
+        from neurobrix.pytorch.prism import time_estimate as TE
         ic = getattr(self, "_input_config", None)
         tokens = getattr(ic, "max_tokens", None) or (self._read_defaults(container) or {}).get("max_tokens")
         try:
@@ -10216,7 +10216,7 @@ class PrismSolver:
         # swing that would move any band count divided straight out of it.
         _reshape_block = ""
         try:
-            from neurobrix.core.prism import plan_advice as _pa
+            from neurobrix.pytorch.prism import plan_advice as _pa
             _largest = max((d.capacity_mb for d in devices), default=0.0) * 1024 * 1024
             _verdicts = [
                 _pa.assess(_n, _m.weight_bytes, _m.activation_bytes,
@@ -10412,7 +10412,7 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     lines.append(f"planned memory  {plan.total_memory_mb:.0f} MB on the cards"
                  + (f", {plan.cpu_ram_mb} MB of host RAM budget" if plan.cpu_ram_mb else ""))
     if plan.host_footprint:
-        from neurobrix.core.prism.host_footprint import summary as _host_summary
+        from neurobrix.pytorch.prism.host_footprint import summary as _host_summary
         lines.append(f"host memory     {_host_summary(plan.host_footprint)}")
     for name, alloc in plan.components.items():
         mem = plan.component_memory.get(name)

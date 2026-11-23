@@ -1,4 +1,4 @@
-"""A candidate plan's estimated time (core/prism/time_estimate.py): each component's uses at its device's roofline,
+"""A candidate plan's estimated time (pytorch/prism/time_estimate.py): each component's uses at its device's roofline,
 plus the weights each strategy moves over the host link, from MEASURED facts — a missing fact refused by name.
 
 What these tests would do if the code were wrong: a roofline taking the sum instead of the max fails the first case;
@@ -7,8 +7,8 @@ answered by a default passes where the third expects a refusal.
 """
 import pytest
 
-from neurobrix.core.prism import time_estimate as T
-from neurobrix.core.prism.work import Work
+from neurobrix.pytorch.prism import time_estimate as T
+from neurobrix.pytorch.prism.work import Work
 
 #: the engine's loader measured at the copy rate here, so a load costs what the host link moves (12 GB/s)
 LOADER = {"BF16": {"device": {"cold": 12.0, "warm": 12.0}, "host": {"cold": 12.0, "warm": 12.0}}}

@@ -25,8 +25,8 @@ from neurobrix.core.runtime import liveness as _liveness
 
 
 def _is_attention(op_type) -> bool:
-    """An attention op, by the canonical op names the runtime widths read (core/prism/runtime_widths._SDPA)."""
-    from neurobrix.core.prism.runtime_widths import _SDPA
+    """An attention op, by the canonical op names the runtime widths read (pytorch/prism/runtime_widths._SDPA)."""
+    from neurobrix.pytorch.prism.runtime_widths import _SDPA
     return str(op_type or "").split("::")[-1].split(".")[0] in _SDPA
 
 
@@ -58,7 +58,7 @@ class InputConfig:
     # None: not stated, the package's max_tokens.
     decode_tokens: Optional[int] = None
     # The request's denoising steps (`--steps`, else the container's `num_inference_steps`): how many times a flow's
-    # loop runs its components, read by Prism's time estimate (core/prism/time_estimate.py). None: not stated.
+    # loop runs its components, read by Prism's time estimate (pytorch/prism/time_estimate.py). None: not stated.
     steps: Optional[int] = None
     dtype: Optional[str] = None
     vae_scale: Optional[int] = None
@@ -67,16 +67,16 @@ class InputConfig:
     # VAE convention); temporal_compression comes from the model's
     # defaults.json (`temporal_compression_ratio`), data-driven.
     num_frames: Optional[int] = None
-    # One chunk of a temporal stream (`core/prism/temporal_stream.py`): the time extent, in the component's own input
+    # One chunk of a temporal stream (`pytorch/prism/temporal_stream.py`): the time extent, in the component's own input
     # frames, of the chunk a stream graph is priced at — its time symbol binds to it, whatever the request's frames.
     # None: the component runs its clip whole.
     chunk_frames: Optional[int] = None
-    # One tile of a VENDOR tiling (`core/prism/temporal_stream.vendor_tile_extent`): {symbol name ("time", "height",
+    # One tile of a VENDOR tiling (`pytorch/prism/temporal_stream.vendor_tile_extent`): {symbol name ("time", "height",
     # "width"): the tile's extent in the component's own input units} — each named symbol binds to it, whatever the
     # request. None: the component runs at the request's extents.
     cut_extents: Optional[Dict[str, int]] = None
     temporal_compression: Optional[int] = None
-    # The request's flow (`core.prism.flow_bindings.FlowBindings`, set by `run.request_input_config`):
+    # The request's flow (`pytorch.prism.flow_bindings.FlowBindings`, set by `run.request_input_config`):
     # the per-component bindings no symbol name carries — the CFG batch of the loop denoiser, a
     # diffusion encoder's tokenized length, the denoiser's finalized text axis, a FLUX denoiser's
     # packed inputs. None: the name-driven map alone.
@@ -85,7 +85,7 @@ class InputConfig:
     # the last one (`FlowBindings.head_rows`).
     scoring: bool = False
     # The cached keys a serving session's prefill chunk attends beside its own rows: the session cache's reach on the
-    # card (`core/prism/served_prefill.py` states it once the cache is sized). None: a run, whose one pass attends
+    # card (`pytorch/prism/served_prefill.py` states it once the cache is sized). None: a run, whose one pass attends
     # its own rows only.
     prefill_keys: Optional[int] = None
     # The dtype those cached keys are stored in (`KVCachePlan.dtype`), stated with them.
@@ -931,7 +931,7 @@ class ActivationProfiler:
         buffer (`weight_transposes_read_in_place`): every component on the Triton engines; on the compiled engine the
         one its flow runs with AMP off — the text generation head (`FlowBindings.head_runs_without_amp`; measured on
         a V100, 2026-11-10: torch.mm(x, W.t()) holds 8.4 MB above a 594 MB weight)."""
-        from neurobrix.core.prism.host_footprint import engine_of
+        from neurobrix.pytorch.prism.host_footprint import engine_of
         flow = getattr(input_config, "flow", None)
         return engine_of(mode) == "triton" or (flow is not None and flow.head_runs_without_amp(comp_name))
 
@@ -975,7 +975,7 @@ class ActivationProfiler:
 
         `conv3d_workspace(x_shape, w_shape, attrs, x_width, out_width) -> bytes`: what the engine's 3-D convolution
         holds BESIDE its input and its output while it runs — cuDNN's workspace as the vendor file states it
-        (core/prism/op_workspace.py), or the Triton engines' own folds (`tiling_sizes.conv3d_one_shot_peak`) — asked
+        (pytorch/prism/op_workspace.py), or the Triton engines' own folds (`tiling_sizes.conv3d_one_shot_peak`) — asked
         at every 5-D convolution; None: none priced.
 
         `handed_inputs`: the graph's `input::` tensors are its run's (`GraphExecutor._consumed_input_tids`), live
@@ -986,7 +986,7 @@ class ActivationProfiler:
         `temporal_stream_runner.park_state`): on the card while that op runs, gone after it.
 
         `attention_scratch(batch, heads, Tq, Tk) -> bytes`: the scores an attention op writes WHILE it runs on a device
-        whose compiled attention writes them (core/prism/attention_scratch.py; None elsewhere — the memory-efficient
+        whose compiled attention writes them (pytorch/prism/attention_scratch.py; None elsewhere — the memory-efficient
         kernels write none), added to that op's in-op figure.
 
         Args:
@@ -996,7 +996,7 @@ class ActivationProfiler:
                 is the TilingEngine's op budget (`tiling_sizes.op_budget_fraction()`), the
                 figure the op-level tiling detector uses.
             widths: {tensor_id: bytes per element} the runtime EXECUTES each tensor at
-                (`core.prism.runtime_widths.runtime_widths`). When given, every op output
+                (`pytorch.prism.runtime_widths.runtime_widths`). When given, every op output
                 the simulation allocates is sized at its runtime width — a tensor the
                 engine keeps in fp32 under a half compute dtype is priced at 4 bytes, not
                 at the compute dtype's 2 — and an in-place add whose reused input is
@@ -1191,7 +1191,7 @@ class ActivationProfiler:
         live_before_op: Dict[str, int] = {}
         # the engine's operand copies come with its widths (`ExecutedWidths`); a plain {tid: width} — a levelled
         # figure a caller builds — states none
-        from neurobrix.core.prism.runtime_widths import ExecutedWidths
+        from neurobrix.pytorch.prism.runtime_widths import ExecutedWidths
         op_casts = widths.casts if isinstance(widths, ExecutedWidths) else {}
 
         deferred_at: Dict[str, List[str]] = {}
@@ -1347,7 +1347,7 @@ class ActivationProfiler:
                     in_op += int(conv3d_workspace(x_shape, w_shape, _attrs, x_width, out_width))
             # what the engine's implementation of this op holds beside its input and output while it runs, as the
             # vendor file states it per op type (`op_workspace(op_type, x_shape, x_width, out_width) -> bytes`,
-            # core/prism/op_workspace.py `compiled_op_workspace`): MPS's vector norm, its full-size intermediates
+            # pytorch/prism/op_workspace.py `compiled_op_workspace`): MPS's vector norm, its full-size intermediates
             if (op_workspace is not None and not op_is_zero_alloc and op.get("input_tensor_ids")
                     and op.get("op_type") != "aten::convolution"):
                 x_tid = op["input_tensor_ids"][0]
@@ -1431,7 +1431,7 @@ class ActivationProfiler:
         # Scan per-op output + workspace to flag overflows for op-level tiling
         overflow_ops = []
         if vram_per_gpu_bytes is not None and vram_per_gpu_bytes > 0:
-            from neurobrix.core.prism.memory_estimator import estimate_op_workspace_bytes
+            from neurobrix.pytorch.prism.memory_estimator import estimate_op_workspace_bytes
             # WHAT THE FOOTPRINT IS MEASURED AGAINST.
             #
             # `vram_per_gpu_bytes * safety` is a fraction of an EMPTY card, and the
@@ -1692,7 +1692,7 @@ class ActivationProfiler:
         width.
 
         The width a tensor is EXECUTED at is another question, answered by
-        `core.prism.runtime_widths` and passed to `estimate_peak_memory` as
+        `pytorch.prism.runtime_widths` and passed to `estimate_peak_memory` as
         `widths`. A flag that levelled every float to the compute dtype stood
         here (`force_compute_dtype_for_fp`); it priced the fp32 tensors the
         engines keep under a half compute dtype at half their size — Sana

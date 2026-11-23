@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.structure import DeviceBrand, names_accelerator
+from neurobrix.pytorch.prism.structure import DeviceBrand, names_accelerator
 
 
 def test_the_prefix_set_is_derived_from_the_brands():

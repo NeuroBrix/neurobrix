@@ -23,7 +23,7 @@ import inspect
 
 import pytest
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 _MB = 1024 * 1024
 

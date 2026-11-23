@@ -5,7 +5,7 @@ Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_the_plan_is_sized_on_
 """
 from types import SimpleNamespace
 
-from neurobrix.core.prism import solver as S
+from neurobrix.pytorch.prism import solver as S
 
 
 def _solver(lm):

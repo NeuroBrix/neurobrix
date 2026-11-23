@@ -16,7 +16,7 @@ Contract.
   `price.session_chunk_attention_bytes`, which both engines' wrappers read from the plan's own chunk, reach and dtype
   — is in the price (`chunk_mask_bytes`); the plan the raise holds is the first one priced so.
 - Unchanged, the first plan and the caller's config, when the plan has no KV cache, no chunk, or a chunk chosen from
-  certified times (core/prism/prefill_chunk.py): that choice is not this module's.
+  certified times (pytorch/prism/prefill_chunk.py): that choice is not this module's.
 - Refuses nothing: a size no plan fits (the solve's RuntimeError) or that moves a resident ends the raise at the size
   before it.
 """
@@ -51,7 +51,7 @@ def chunk_mask_bytes(input_config, mode: str) -> int:
     keys and their dtype (`InputConfig.seq_len`, `prefill_keys`, `prefill_key_dtype`). 0 for a request that states no
     cached keys: a run's one pass attends its own rows, which the walk prices."""
     rows, keys = (int(getattr(input_config, f, 0) or 0) for f in ("seq_len", "prefill_keys"))
-    from neurobrix.core.prism.host_footprint import engine_of
+    from neurobrix.pytorch.prism.host_footprint import engine_of
     from neurobrix.core.state.price import session_chunk_attention_bytes
     return (session_chunk_attention_bytes(rows, keys, input_config.prefill_key_dtype, engine_of(mode))
             if rows and keys else 0)
@@ -71,7 +71,7 @@ def price_chunk_mask(component_memory, declared, input_config, mode: str, overhe
 def solve_served(container, profile, input_config, mode: str = "compiled") -> Tuple[Any, Any]:
     """(plan, input config) of a serving session — what the daemon calls: Prism's served plan, the prefill chunk
     raised while the plan holds."""
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     solver = PrismSolver()
     # every solve of the raise reads one fused copy of a MoE graph: each copied and fused it again, Qwen3-Coder-30B-A3B
     # served --compiled spent 10+ minutes of one core before its card was touched (py-spy, 2026-11-13)

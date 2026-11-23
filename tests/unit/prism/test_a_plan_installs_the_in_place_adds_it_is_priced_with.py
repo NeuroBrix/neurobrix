@@ -22,8 +22,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from neurobrix.core.prism.solver import PrismSolver
-from neurobrix.core.prism.profiler import InputConfig
+from neurobrix.pytorch.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.profiler import InputConfig
 
 GiB = 1024 ** 3
 

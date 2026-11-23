@@ -1,7 +1,7 @@
 """A streamed piece run in slices of a token axis — the runtime of `Partition.chunks`.
 
 Prism plans a stretch of a streamed component in slices of a token axis when its activations alone
-are over the rung (`LayerPartitioner._chunk_regions`, core/prism/chunked_region.py). The stretch is
+are over the rung (`LayerPartitioner._chunk_regions`, pytorch/prism/chunked_region.py). The stretch is
 one piece of the plan; this object stands where that piece's executor stood in
 `LayerStreamingStrategy`, with the same surface (`_dag`, `protect_tensor_id`, `load_weights`, `run`,
 `tensors_of_last_run`, `unload_weights`, `register_triton_interceptors`), so the strategy's loop
@@ -26,9 +26,9 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from nbxtensor.ops.axis_slices import accumulate, own, put_slice, store, take_slice, take_slice_cyclic, whole_shape
-from neurobrix.core.prism.chunked_region import (
+from neurobrix.pytorch.prism.chunked_region import (
     TokenAxis, dim_source, slice_reads, plan_region, region_carriers, sliced_reads)
-from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
+from neurobrix.pytorch.prism.layer_partition import Segment, build_segment_graph
 from neurobrix.core.strategies.value_parking import to_device
 from neurobrix.core.strategies.tiled_norm import group_norm_apply, norm_statistics
 from neurobrix.core.runtime.graph_executor import output_key

@@ -374,7 +374,7 @@ def _clip_sizes(pc: dict):
 
 def clip_view_shape(preprocessor_config: dict) -> tuple:
     """The shape of the CLIP view `clip_centercrop_np` produces, [1, 3, cs, cs] — the plan binds the
-    image encoder's input to it (`core/prism/flow_bindings.FlowBindings.pixel_view`)."""
+    image encoder's input to it (`pytorch/prism/flow_bindings.FlowBindings.pixel_view`)."""
     cs = _clip_sizes(preprocessor_config)[1]
     return (1, 3, cs, cs)
 
@@ -499,7 +499,7 @@ def minicpm_adaptive_slice_np(image_path: str, preprocessing_cfg: dict) -> dict:
 
 #: The clips the VACE control encoder encodes in one pass, stacked on its batch axis in this order
 #: (vendor WanVACEPipeline.prepare_video_latents): the part kept, the part to generate. The plan
-#: sizes the encoder at this batch (core/prism/flow_bindings).
+#: sizes the encoder at this batch (pytorch/prism/flow_bindings).
 VACE_CONTROL_CLIPS = ("inactive", "reactive")
 
 

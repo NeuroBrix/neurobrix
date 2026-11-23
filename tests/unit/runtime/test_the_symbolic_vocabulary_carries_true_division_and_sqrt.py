@@ -266,7 +266,7 @@ def test_an_unbound_symbol_inside_a_real_refuses_by_name():
 # ───────────────────────── Prism and the census derivation ─────────────────────────
 
 def test_prisms_profiler_declines_a_real_dim():
-    from neurobrix.core.prism.profiler import _eval_symbolic_expr, ActivationProfiler
+    from neurobrix.pytorch.prism.profiler import _eval_symbolic_expr, ActivationProfiler
     assert _eval_symbolic_expr(REAL_SIZE, "s2", 26) is None
     assert _eval_symbolic_expr(H_STEPS, "s2", 90) == 46
     p = ActivationProfiler.__new__(ActivationProfiler)

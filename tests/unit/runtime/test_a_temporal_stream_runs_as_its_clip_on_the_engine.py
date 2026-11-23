@@ -26,7 +26,7 @@ import pytest
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
 from neurobrix.core.module.temporal_stream_runner import run_stream
 from neurobrix.core.paths import cache_dir
-from neurobrix.core.prism import temporal_stream as ts
+from neurobrix.pytorch.prism import temporal_stream as ts
 from neurobrix.core.runtime.graph_executor import GraphExecutor
 from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
 
@@ -45,8 +45,8 @@ BOUND = 1e-4      # float32 convolutions over different time extents: the engine
 def _machine_profile():
     """The machine's hardware profile in force, as the CLI declares it before a request: the Triton hot loop reads its
     vendor file, and refuses without it."""
-    from neurobrix.core.prism import load_profile
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism import load_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.triton.dtype import declare_hardware_profile
     prof = load_profile(get_or_create_default_profile())
     if getattr(prof, "devices", None):        # a host with no card has no device to declare: its cases are the CPU's

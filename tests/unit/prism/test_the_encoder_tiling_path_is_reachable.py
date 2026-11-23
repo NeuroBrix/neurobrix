@@ -39,8 +39,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory
 from tests.unit.prism._pinned_machine import container_root
 RUNG_MB = 16384
 GB = 1024 ** 3

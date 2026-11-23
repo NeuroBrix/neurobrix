@@ -84,7 +84,7 @@ def weight_reader(source=None):
     ceiling = load_ceiling()
     if _READER is None or _READER[0] != os.getpid() or _READER[2].ceiling != ceiling:
         from nbxtensor.io.reader import Reader
-        from neurobrix.core.prism import autodetect as _ad, kept_launch_facts as _kept
+        from neurobrix.pytorch.prism import autodetect as _ad, kept_launch_facts as _kept
         if _READER is not None and _READER[:2] == (os.getpid(), threading.get_ident()):
             # the reader a new ceiling replaces ends its threads when this thread made it: a load of another thread
             # (a daemon holding two models) may still read through it, and its pool is not shut under it; a forked

@@ -277,7 +277,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     manifest's dtype — in that order (`_rt`). One implementation: `cmd_run` plans with it, and the
     derived census (tools/derived_census.py) binds a component's symbols from it without running
     anything."""
-    from neurobrix.core.prism import InputConfig
+    from neurobrix.pytorch.prism import InputConfig
     defaults_path = cache_path / "runtime" / "defaults.json"
     cached_defaults = json.loads(defaults_path.read_text()) if defaults_path.exists() else {}
 
@@ -374,7 +374,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     _single = 1 if (getattr(args, 'input_image', None)
                     or getattr(args, 'audio', None)
                     or getattr(args, 'prompt', None)) else None
-    from neurobrix.core.prism.request_config import request_batch_and_dtype
+    from neurobrix.pytorch.prism.request_config import request_batch_and_dtype
     batch_size, guidance_passes, dtype = request_batch_and_dtype(args, cached_defaults, _fam_defaults, manifest, _single)
 
     # The text's length where the flow's own preprocessing makes it without a tokenizer:
@@ -404,9 +404,9 @@ def request_input_config(args, manifest: dict, family, cache_path):
         seq_len = run_prompt_tokens(cache_path, _prompt, cached_defaults, getattr(args, "max_tokens", None))
 
     # The flow's per-component bindings (CFG batch, a diffusion encoder's length, the denoiser's
-    # text axis, a FLUX denoiser's packed inputs) — `core.prism.flow_bindings`, one for the plan
+    # text axis, a FLUX denoiser's packed inputs) — `pytorch.prism.flow_bindings`, one for the plan
     # and the derived census.
-    from neurobrix.core.prism.flow_bindings import FlowBindings
+    from neurobrix.pytorch.prism.flow_bindings import FlowBindings
     _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"),
                           image_path=getattr(args, "input_image", None))
              if _topo_path.exists() else None)
@@ -438,9 +438,9 @@ def request_input_config(args, manifest: dict, family, cache_path):
     )
 
     # The loop must keep its state's shape at THIS request, read from its graph — refused by name before anything
-    # loads (core/prism/loop_state.py: Allegro at 360x640 ran a step and died in the scheduler, 45 vs 44).
+    # loads (pytorch/prism/loop_state.py: Allegro at 360x640 ran a step and died in the scheduler, 45 vs 44).
     if _flow is not None:
-        from neurobrix.core.prism.loop_state import refuse_a_state_the_loop_cannot_keep
+        from neurobrix.pytorch.prism.loop_state import refuse_a_state_the_loop_cannot_keep
         refuse_a_state_the_loop_cannot_keep(_flow.topology, _flow.graph, input_config, manifest.get("model_name"))
 
     return input_config
@@ -498,7 +498,7 @@ def compiled_sampler(execution_mode):
 def arm_replan(executor, execution_mode, container, hw_profile, input_config, cache_path, sampler, growth) -> None:
     """The run's recovery from a device out-of-memory at a component (core/runtime/replan.py) with its engine's facts: its
     OOM (compiled: torch's OutOfMemoryError or the vendor file's untyped message; triton: DeviceOOMError), its growth."""
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     from neurobrix.core.runtime.replan import Replan, UNTYPED_OOM_KEY, in_chain
     if execution_mode in ("compiled", "sequential"):
         import torch
@@ -523,9 +523,9 @@ def arm_replan(executor, execution_mode, container, hw_profile, input_config, ca
 
 def run_command(args):
     """`neurobrix run` as the command line enters it. An Intel GPU's refusal at run time (the experimental Level Zero
-    backend) is said by name, recorded, and the request started again once on the CPU (core/prism/intel_refusal.py);
+    backend) is said by name, recorded, and the request started again once on the CPU (pytorch/prism/intel_refusal.py);
     anything else is the run's own."""
-    from neurobrix.core.prism import autodetect, intel_refusal
+    from neurobrix.pytorch.prism import autodetect, intel_refusal
     intel_refusal.announce()
     autodetect.ACTIVE_HARDWARE_ID = None       # this run's: set once its profile is chosen (cmd_run)
     try:
@@ -550,8 +550,8 @@ def _execute(executor, inputs, args):
 def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
-    from neurobrix.core.prism import PrismSolver, InputConfig
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism import PrismSolver, InputConfig
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.core.config import get_output_processing
@@ -702,7 +702,7 @@ def cmd_run(args):
     hardware_id = args.hardware or get_or_create_default_profile()
     # A generated profile measures, once, the device and host facts Prism's time estimate reads and neither it nor its
     # vendor file states; the loader's rate is measured by the loader itself at its first real load (S2, 2026-10-27)
-    from neurobrix.core.prism.loader import launch_profile
+    from neurobrix.pytorch.prism.loader import launch_profile
     hw_profile = launch_profile(hardware_id, execution_mode, container_dir=cache_path)
     log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
@@ -725,7 +725,7 @@ def cmd_run(args):
 
     # Apply CPU optimizations from hardware profile
     if hw_profile.cpu:
-        from neurobrix.core.prism.cpu_config import apply_cpu_config
+        from neurobrix.pytorch.prism.cpu_config import apply_cpu_config
         apply_cpu_config(
             cpu=hw_profile.cpu,
             strategy=execution_plan.strategy,
@@ -748,7 +748,7 @@ def cmd_run(args):
         log.debug(f"   Devices:  {', '.join(_cards)}"
                   f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
     if getattr(execution_plan, "host_footprint", None):
-        from neurobrix.core.prism.host_footprint import summary as _host_summary
+        from neurobrix.pytorch.prism.host_footprint import summary as _host_summary
         log.debug(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
     for comp_name, alloc in execution_plan.components.items():
         log.debug(f"   {comp_name} → {alloc.device}")
@@ -757,7 +757,7 @@ def cmd_run(args):
         # The plan, and nothing after it: no weights load, no card is touched
         # beyond what the hardware profile read. What is printed is the plan
         # object the runtime would have received.
-        from neurobrix.core.prism.solver import explain_plan, plan_record
+        from neurobrix.pytorch.prism.solver import explain_plan, plan_record
         log.debug("[plan] --explain-plan: the placement decision, read from the plan the runtime would receive")
         if getattr(args, "json", False):
             from neurobrix.cli.json_out import emit

@@ -24,7 +24,7 @@ MODEL = "GLM-4.1V-9B-Thinking"
 
 
 def test_a_streamed_load_is_priced_by_its_dearest_piece(monkeypatch):
-    from neurobrix.core.prism import InputConfig, PrismSolver
+    from neurobrix.pytorch.prism import InputConfig, PrismSolver
     from neurobrix.nbx import NBXContainer
     pin_host(monkeypatch, 24576, 17667, "the Mac's reading, 2026-10-08 10:18")
     impose_rung(monkeypatch, 4096)

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory, PrismSolver
 from tests.conftest import installed_container
 
 MB = 1024 * 1024
@@ -34,7 +34,7 @@ def _spec(monkeypatch, lattice):
     monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32", raising=False)
     monkeypatch.setattr(s, "_run_dtype", lambda n: "float32", raising=False)   # the dtype the cut runs at
     monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None, raising=False)   # the stub has no profile
-    from neurobrix.core.prism.profiler import InputConfig
+    from neurobrix.pytorch.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=2, height=352, width=720, num_frames=49, vae_scale=8,
                                   temporal_compression=4)
     mem = ComponentMemory("vae", 471 * MB, 121275 * MB, 6087 * MB)       # the live plan's own figures

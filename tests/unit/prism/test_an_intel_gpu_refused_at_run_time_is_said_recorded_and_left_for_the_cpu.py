@@ -1,4 +1,4 @@
-"""The experimental Intel backend's policy (core/prism/intel_refusal.py; the owner 2026-11-10 13:09, the Dell's review
+"""The experimental Intel backend's policy (pytorch/prism/intel_refusal.py; the owner 2026-11-10 13:09, the Dell's review
 16:0x): a chip whose Level Zero driver is present is tried; a Level Zero result that says the chip cannot do it is SAID
 by name with its cause and the experimental label, RECORDED for THAT device under the driver and nbxtensor versions,
 and `neurobrix run` starts again ONCE in a fresh process that plans without it. Never said falsely: no restart with a
@@ -15,7 +15,7 @@ import subprocess
 import pytest
 
 from nbxtensor.backend.level_zero import IntelDeviceError
-from neurobrix.core.prism import autodetect, intel_refusal as R
+from neurobrix.pytorch.prism import autodetect, intel_refusal as R
 
 BUILD, LOST, ARG = 0x70000004, 0x70000001, 0x78000004
 PROFILE = ("devices:\n- {index: 0, brand: intel, model: Iris Xe, pci_id: '8086:9a49'}\n"

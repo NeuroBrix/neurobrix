@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import PrismSolver
+from neurobrix.pytorch.prism import PrismSolver
 from neurobrix.core.state.price import DEFAULT_PROMPT_MARGIN, kv_min_tokens
 from tests.unit.prism._pinned_machine import (V100_16GB, container_root, no_door, pin_dedicated_card, pin_no_calibration,
                                               profile)

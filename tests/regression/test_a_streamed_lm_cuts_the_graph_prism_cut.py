@@ -85,7 +85,7 @@ def _need_card():
 
 
 def _plan(model, mode, rung):
-    from neurobrix.core.prism import InputConfig, PrismSolver
+    from neurobrix.pytorch.prism import InputConfig, PrismSolver
     from neurobrix.nbx import NBXContainer
     from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung,
                                                   pin_host, profile)
@@ -112,7 +112,7 @@ def _plan(model, mode, rung):
 def test_every_plan_boundary_is_in_the_graph_the_strategy_cuts(model, comp, mode, rung):
     _need_card()
     from types import SimpleNamespace
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     from neurobrix.core.runtime.graph_executor import GraphExecutor
     from neurobrix.core.strategies.base import StrategyContext
     from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy

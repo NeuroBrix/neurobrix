@@ -23,7 +23,7 @@ Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_the_tiling_rung_s_rea
 """
 from __future__ import annotations
 
-from neurobrix.core.prism.solver import (
+from neurobrix.pytorch.prism.solver import (
     ComponentAllocation, ComponentMemory, ExecutionPlan, explain_plan,
 )
 
@@ -67,7 +67,7 @@ def test_solve_copies_the_reason_onto_the_plan():
     through the real copy line rather than by setting the field directly --
     setting it directly would test the dataclass, not the wiring.
     """
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
 
     solver = PrismSolver.__new__(PrismSolver)       # no __init__: no hardware read
     solver._op_tiling_declined = REASON
@@ -87,7 +87,7 @@ def test_the_solver_still_spells_the_attribute_the_way_solve_reads_it():
     NAME against the source, which is the only thing that separates the two.
     """
     import inspect
-    from neurobrix.core.prism import solver as solver_mod
+    from neurobrix.pytorch.prism import solver as solver_mod
 
     src = inspect.getsource(solver_mod)
     assigns = src.count("self._op_tiling_declined = ")

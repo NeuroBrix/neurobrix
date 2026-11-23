@@ -46,7 +46,7 @@ memory:
   compiled_allocator_settings: "expandable_segments:True"
   # THE COMPILED ENGINE'S ATTENTION: PyTorch dispatches scaled_dot_product_attention on this device to its flash or
   # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
-  # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.
+  # the memory-efficient workspace, pytorch/prism/memory_estimator.py). Nothing to chunk.
   compiled_sdpa_full_scores: false
   # Allocator pool: the most a smallest-fit hit may hand out beyond its request (fraction of the request,
   # kernels/nbx_tensor.DeviceAllocator._pool_fit_slack): the surplus is held unpriced while the tensor lives.

@@ -1,4 +1,4 @@
-"""`core.prism.flow_bindings.FlowBindings` — the per-component bindings no symbol NAME carries, which
+"""`pytorch.prism.flow_bindings.FlowBindings` — the per-component bindings no symbol NAME carries, which
 the plan prices with and the derived census keys with (one map for both):
 
 * the loop denoiser runs the CFG batch (2 under guidance), nothing else does — unless it embeds the
@@ -12,8 +12,8 @@ priced at 31 tokens while it runs 512. Injections: the CFG block removed from `o
 case RED; the name-based text rebinding restored -> the image-token case RED."""
 import json
 
-from neurobrix.core.prism.flow_bindings import FlowBindings
-from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.pytorch.prism.flow_bindings import FlowBindings
+from neurobrix.pytorch.prism.profiler import ActivationProfiler, InputConfig
 
 
 def _graph(name, syms):

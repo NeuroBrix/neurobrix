@@ -38,7 +38,7 @@ def test_the_engine_started_under_a_rung_holds_the_allocator_to_it():
 
 def test_the_applier_follows_the_variable(monkeypatch):
     from nbxtensor.memory.allocator import DeviceAllocator as D
-    from neurobrix.core.prism.memory_budget import apply_imposed_rung
+    from neurobrix.pytorch.prism.memory_budget import apply_imposed_rung
     monkeypatch.setattr(D, "_limit_bytes", {})
     monkeypatch.setattr(D, "_rung_limit_bytes", {})
     monkeypatch.setattr(D, "_pool_cap_bytes", {})

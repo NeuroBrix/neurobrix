@@ -1,6 +1,6 @@
 """The vendorless layer must not branch on one vendor's device prefix.
 
-`core/prism/structure.py` states the rule at the top of the file: *VENDORLESS:
+`pytorch/prism/structure.py` states the rule at the top of the file: *VENDORLESS:
 nvidia/amd/intel -> cuda/hip/xpu device strings*. Device strings therefore
 appear in `core/` legitimately — but they are supposed to arrive from the
 brand, not from a literal comparison against one vendor.
@@ -84,7 +84,7 @@ ALLOWED: dict[str, tuple[str, str]] = {
          "batch sync after non-blocking DMA. Only the CUDA/HIP path issues "
          "non-blocking transfers; the MPS path uses a blocking .to(), so there "
          "is nothing outstanding to synchronise."),
-    'neurobrix/core/prism/solver.py::total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))':
+    'neurobrix/pytorch/prism/solver.py::total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))':
         ("prism",
          "unreachable: it is the `else` of a chain over _EAGER_VALUES and "
          "_LAZY_VALUES, whose union is every AllocationStrategy value. Latent."),
@@ -122,7 +122,7 @@ ALLOWED: dict[str, tuple[str, str]] = {
          "the same torch branch: `torch.cuda.set_device` before a block's "
          "upload. A unified expert store's device has one queue and no current "
          "device to set, so skipping it there is the correct path."),
-    'neurobrix/core/prism/host_footprint.py::return str(plan.components[name].device).startswith(("cuda", "hip"))':
+    'neurobrix/pytorch/prism/host_footprint.py::return str(plan.components[name].device).startswith(("cuda", "hip"))':
         ("prism",
          "prices the pinned staging copy the loader makes, and mirrors the "
          "loader's own test word for word (`is_cuda` in weight_loader.py, "

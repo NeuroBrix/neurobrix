@@ -16,7 +16,7 @@ import types
 import pytest
 from pathlib import Path
 
-from neurobrix.core.prism import solver as S
+from neurobrix.pytorch.prism import solver as S
 
 
 def _dev(measured=None):
@@ -72,7 +72,7 @@ def _runs(hold_walk):
 
 
 def test_the_probe_keeps_the_largest_request_that_fits():
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     GB = 1 << 30
     run, calls = _runs({1: (1.0 * GB, 0.29 * GB), 2: (2.7 * GB, 1.14 * GB), 4: (6.7 * GB, 4.55 * GB)})
     factor, runs = A.factor_on_card(15 * GB, 0, run, 3, 0.05)
@@ -80,7 +80,7 @@ def test_the_probe_keeps_the_largest_request_that_fits():
 
 
 def test_disagreeing_runs_write_nothing():
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     GB = 1 << 30
     seq = iter([(1.0 * GB, 1.0 * GB), (1.2 * GB, 1.0 * GB), (1.5 * GB, 1.0 * GB)])
     factor, _ = A.factor_on_card(3 * GB, 0, lambda k: dict(zip(("hold_bytes", "walked_bytes"), next(seq))), 3, 0.05)
@@ -89,8 +89,8 @@ def test_disagreeing_runs_write_nothing():
 
 def test_a_first_launch_never_probes_the_arena(monkeypatch, tmp_path):
     # 0.6.1: no probe at a user's first run, declared or not (the bounded probe on census shapes is 0.6.2's)
-    from neurobrix.core.prism import autodetect as AD
-    from neurobrix.core.prism import facts_probe as P
+    from neurobrix.pytorch.prism import autodetect as AD
+    from neurobrix.pytorch.prism import facts_probe as P
     import yaml
     spec = {"id": "default-x", "devices": [{"index": 0, "brand": "nvidia", "architecture": "volta", "model": "V100",
                                             "measured": {"source": "s", "vmm_chunk_bytes": 1, "gemv_gbps": {"triton": {}},
@@ -113,7 +113,7 @@ def test_a_first_launch_never_probes_the_arena(monkeypatch, tmp_path):
 def test_the_probe_sizes_a_unified_device_by_its_memory_and_a_card_by_its_runtime(monkeypatch, tmp_path):
     # a unified device (Apple) carries no CUDA runtime total / context: the planner reads its memory_mb (the census
     # shadow's capacity), and so does the probe — it was refused by name on every Apple machine (03/11)
-    from neurobrix.core.prism import autodetect as AD, arena_probe as A
+    from neurobrix.pytorch.prism import autodetect as AD, arena_probe as A
     (tmp_path / "components" / "c").mkdir(parents=True)
     (tmp_path / "components" / "c" / "graph.json").write_text('{"symbolic_context": {"symbols": {}}}')
     monkeypatch.setattr(A, "smallest_container", lambda cache: (tmp_path, "c"))
@@ -129,7 +129,7 @@ def test_the_probe_sizes_a_unified_device_by_its_memory_and_a_card_by_its_runtim
 def test_a_probe_the_device_cannot_hold_bounds_the_measure(monkeypatch):
     # a fresh Mac home (2026-11-07): the 4x prediction let x32 run, the child ran out of memory and the first
     # `neurobrix run` ended in a Traceback — the device's refusal is the measure's bound: the runs stay at x16
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     GB = 1 << 30
     calls = []
 
@@ -143,7 +143,7 @@ def test_a_probe_the_device_cannot_hold_bounds_the_measure(monkeypatch):
 
 
 def test_the_child_says_its_own_error(monkeypatch, tmp_path):
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     import json
     import subprocess
 
@@ -169,7 +169,7 @@ def _graph(inputs, symbols):
 def test_the_probe_scales_only_what_the_priced_request_scales():
     # a fresh Mac home measured whisper-large-v3-turbo's decoder at 28.27 (the lab: 1.477): every input's two last axes
     # were scaled — the batch and the hidden width — while the request Prism priced kept them at x1
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     dec = _graph({"input::input_ids": {"shape": [1, 7], "symbolic_shape": {"dims": [{"type": "symbol", "id": "s0"},
                                                                                      {"type": "symbol", "id": "s1"}]}},
                   "input::encoder_hidden_states": {"shape": [1, 1500, 1280], "symbolic_shape": {"dims": [
@@ -193,7 +193,7 @@ def test_the_probe_scales_only_what_the_priced_request_scales():
 
 
 def test_a_graph_with_nothing_to_scale_is_probed_at_its_built_extents():
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     calls = []
 
     def run(k):
@@ -205,7 +205,7 @@ def test_a_graph_with_nothing_to_scale_is_probed_at_its_built_extents():
 
 def test_the_probe_is_taken_on_a_spatial_component_else_on_a_models_whole_walk(monkeypatch, tmp_path):
     import json
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     from neurobrix.nbx import container as NC
 
     def model(name, comps):     # comps: {component: (weight bytes, graph)}
@@ -232,7 +232,7 @@ def test_the_probe_is_taken_on_a_spatial_component_else_on_a_models_whole_walk(m
 def test_the_probe_never_sweeps_a_missing_key_bounds_it(monkeypatch, tmp_path):
     # 0.6.2: a probe that swept took a fresh Mac's first run to 42 minutes (148 uncertified keys, 2026-11-07): the child
     # runs certified-only, and a key it cannot be served bounds the measure like the device's own refusal
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     import json
     import subprocess
     envs = []

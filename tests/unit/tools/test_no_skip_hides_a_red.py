@@ -132,7 +132,7 @@ import pytest
 
 class TestSuite:
     try:
-        from neurobrix.core.prism.solver import PrismSolver
+        from neurobrix.pytorch.prism.solver import PrismSolver
     except Exception:
         PrismSolver = None
 '''

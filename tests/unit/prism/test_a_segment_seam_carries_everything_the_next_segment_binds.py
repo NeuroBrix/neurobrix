@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
+from neurobrix.pytorch.prism.layer_partition import Segment, build_segment_graph
 
 
 def _graph():
@@ -209,7 +209,7 @@ def test_a_source_form_the_partitioner_cannot_carry_is_refused_at_partition_time
 def test_a_seam_tensor_keeps_its_dtype_at_every_engines_entry(seg1):
     """The seam rule where the engines apply it (register 105): the triton entry cast returns no
     target for a seam tensor, and a component input of the same dtype string IS cast."""
-    from neurobrix.core.prism.layer_partition import is_seam_tensor
+    from neurobrix.pytorch.prism.layer_partition import is_seam_tensor
     from neurobrix.triton.dtype import TritonDtypeEngine
     seam = seg1["tensors"][_alias(seg1)]
     assert is_seam_tensor(seam) and not is_seam_tensor(seg1["tensors"]["input::input_ids"])
@@ -231,7 +231,7 @@ def test_the_one_walk_aliases_every_form_an_argument_takes():
     own walk handled a single `tensor_id` and missed a `tensor_tuple` — Flex.1-alpha's joint
     attention `aten.cat::19` kept its seam's raw id, and triton-sequential concatenated the
     text queries with nothing (df2588e7)."""
-    from neurobrix.core.prism.layer_partition import rewire_arg
+    from neurobrix.pytorch.prism.layer_partition import rewire_arg
     alias = {"h": "input::h"}
     assert rewire_arg({"type": "tensor", "tensor_id": "h"}, alias)["tensor_id"] == "input::h"
     assert rewire_arg({"tensor_id": "h"}, alias)["tensor_id"] == "input::h"

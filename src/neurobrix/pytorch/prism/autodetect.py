@@ -23,7 +23,7 @@ Supports:
   Hygon DCU  — rocm-smi (DTK fork)
   Cambricon  — cnmon
 
-Called when --hardware is omitted. Creates ~/.neurobrix/hardware/default.yml once (core/prism/loader.GENERATED_DIR).
+Called when --hardware is omitted. Creates ~/.neurobrix/hardware/default.yml once (pytorch/prism/loader.GENERATED_DIR).
 """
 
 import functools
@@ -41,8 +41,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # CONSTANTS
 # ============================================================================
 
-from neurobrix.core.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
-from neurobrix.core.prism import kept_launch_facts as kept, launch_lines, other_card_models
+from neurobrix.pytorch.prism.loader import GENERATED_DIR as HARDWARE_DIR   # the generated profiles' one place per machine
+from neurobrix.pytorch.prism import kept_launch_facts as kept, launch_lines, other_card_models
 import logging
 from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
@@ -349,7 +349,7 @@ def get_or_create_default_profile() -> str:
 
     hardware_id = f"default-{tag}"
     path = HARDWARE_DIR / f"{hardware_id}.yml"
-    from neurobrix.core.prism import intel_refusal
+    from neurobrix.pytorch.prism import intel_refusal
     if path.exists() and intel_refusal.stale():       # an Intel refusal recorded under another driver / nbxtensor
         path.unlink()                                  # version: the machine is detected again, the chip tried again
     if path.exists():
@@ -381,7 +381,7 @@ def load_default_profile():
     then loads it through the standard load_profile() path.
     """
     hardware_id = get_or_create_default_profile()
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     return load_profile(hardware_id)
 
 
@@ -409,7 +409,7 @@ _MB_OF = ("import resource, sys\n"
           "        return next(int(l.split()[1]) for l in open('/proc/self/status') if l.startswith(key)) // 1024\n"
           "    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1 << 20)\n")
 _PLANNING_STATE = (_MB_OF +
-                   "import neurobrix.cli.commands.run, neurobrix.nbx.container, neurobrix.core.prism.solver\n"
+                   "import neurobrix.cli.commands.run, neurobrix.nbx.container, neurobrix.pytorch.prism.solver\n"
                    "print(_mb('now'))\n")
 _BASE_PROBES = {
     "compiled": (
@@ -511,7 +511,7 @@ def detect_hardware() -> Dict[str, Any]:
     # --- Profile ID ---
     if devices:
         model_short = _shorten_gpu_name(devices[0].get("model", "gpu"))
-        from neurobrix.core.prism.structure import single_card_profile_id, rig_profile_id
+        from neurobrix.pytorch.prism.structure import single_card_profile_id, rig_profile_id
         if num_gpus == 1:
             profile_id = single_card_profile_id(model_short, devices[0]["memory_mb"])
         else:
@@ -1284,7 +1284,7 @@ def _parse_xpu() -> List[Dict[str, Any]]:
                                      "installed for it) — `neurobrix doctor` names the packages"))
             continue
         taken.add(index)
-        from neurobrix.core.prism import intel_refusal
+        from neurobrix.pytorch.prism import intel_refusal
         why = intel_refusal.recorded(f"{gpu['vendor_id']:04x}:{gpu['device_id']:04x}")
         if why:                              # refused at run time under these versions: planned without, said
             out.append(_refused(gpu, why))
@@ -2415,7 +2415,7 @@ def runtime_card_facts(index: int) -> dict:
 def device_sharing(index: int):
     """The sharing facts of one card, from the driver's own tool: whether it drives a display,
     how much memory OTHER processes hold on it, and this process's own context. Vendor seam of
-    `core/prism/memory_budget.py`; `None` when no tool answers here (the budget then treats the
+    `pytorch/prism/memory_budget.py`; `None` when no tool answers here (the budget then treats the
     card as shared, the safe side). `index` is the device as this process numbers it — the same
     index the allocator's free figure is read at; the board nvidia-smi is asked about is mapped
     from it through `CUDA_VISIBLE_DEVICES` (`_board_of`)."""
@@ -2518,8 +2518,8 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     path = generated_profile(hardware_id)
     if path is None:
         return {}
-    from neurobrix.core.prism.loader import vendor_block
-    from neurobrix.core.prism import facts_probe as P
+    from neurobrix.pytorch.prism.loader import vendor_block
+    from neurobrix.pytorch.prism import facts_probe as P
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
@@ -2615,7 +2615,7 @@ def _measure_arena_factor(hardware_id: str, device: dict) -> float:
     """The arena factor of `device` (the generated profile's card 0), measured on the cache's smallest container
     (`arena_probe`); refused by name when the runs disagree — never a value carried from another card."""
     from neurobrix.core.paths import cache_dir
-    from neurobrix.core.prism import arena_probe as A
+    from neurobrix.pytorch.prism import arena_probe as A
     total, ctx = device.get("runtime_total_mb"), device.get("runtime_context_mb")
     unified = device.get("memory_mb") if device.get("unified_memory") else None   # the card as the planner reads it
     if unified is None and (total is None or ctx is None):
@@ -2655,7 +2655,7 @@ def note_reload_rate(hardware_id: Optional[str], engine: str, stored: str, reloa
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if not path.exists():
         return False
-    from neurobrix.core.prism.loader import vendor_block
+    from neurobrix.pytorch.prism.loader import vendor_block
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []
@@ -2690,7 +2690,7 @@ def note_loader_rate(hardware_id: Optional[str], engine: str, stored: str, where
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if not path.exists():
         return False
-    from neurobrix.core.prism.loader import vendor_block
+    from neurobrix.pytorch.prism.loader import vendor_block
     import time as _time
     data = yaml.safe_load(path.read_text()) or {}
     devices = data.get("devices") or []

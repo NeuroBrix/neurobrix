@@ -40,9 +40,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism.solver import _graph_constant_bytes
-from neurobrix.core.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism.solver import _graph_constant_bytes
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, container_root, no_door, pin_dedicated_card, pin_host, profile
 from tests.unit.prism.test_layer_partition import _chain

@@ -53,7 +53,7 @@ def test_the_fused_graphs_end_with_the_planning():
     host memory for the whole run. solve_smart lets every one go, whether its plan came back or was refused."""
     from types import SimpleNamespace
 
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
 
     s = PrismSolver.__new__(PrismSolver)
 

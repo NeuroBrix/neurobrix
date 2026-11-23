@@ -6,9 +6,9 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import facts_probe as P
-from neurobrix.core.prism import other_card_models as O
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import facts_probe as P
+from neurobrix.pytorch.prism import other_card_models as O
 
 CARD = {"brand": "apple", "model": "Card", "architecture": "anyarch", "supports_dtypes": ["float16"], "memory_mb": 16384,
         "index": 0}
@@ -17,7 +17,7 @@ CARD = {"brand": "apple", "model": "Card", "architecture": "anyarch", "supports_
 @pytest.fixture
 def hw(tmp_path, monkeypatch):
     import nbxtensor
-    from neurobrix.core.prism import loader
+    from neurobrix.pytorch.prism import loader
     monkeypatch.setattr(A, "HARDWARE_DIR", tmp_path)
     monkeypatch.setattr(P, "matmul_tflops", lambda t, *a, **k: {"best": 10.0})
     monkeypatch.setattr(P, "copies", lambda *a, **k:

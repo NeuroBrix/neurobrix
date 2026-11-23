@@ -3,8 +3,8 @@
 Dtype Configuration - Single Source of Truth
 
 Consolidates dtype constants previously duplicated across:
-- core/prism/common/dtype_resolver.py
-- core/prism/common/allocation.py
+- pytorch/prism/common/dtype_resolver.py
+- pytorch/prism/common/allocation.py
 - core/runtime/weight_loader.py
 
 ZERO HARDCODE: All dtype-related constants defined here.

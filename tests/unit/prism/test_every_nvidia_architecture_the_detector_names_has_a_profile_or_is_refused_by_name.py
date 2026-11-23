@@ -1,7 +1,7 @@
 """Every NVIDIA architecture the detector names has a hardware profile, or is refused BY NAME (GitHub issue 6).
 
 On 0.6.16 an RTX 4070 (Ada, compute capability 8.9) was detected as `nvidia/ada` and `neurobrix serve` refused with
-"No hardware profile for nvidia/ada": the detector (core/prism/autodetect.py `_NVIDIA_ARCH_MAP`, `_NVIDIA_ARCH_REFINE`)
+"No hardware profile for nvidia/ada": the detector (pytorch/prism/autodetect.py `_NVIDIA_ARCH_MAP`, `_NVIDIA_ARCH_REFINE`)
 named architectures no file in config/vendors/nvidia described — turing (T4, RTX 20xx), ampere_consumer (A10, A40,
 RTX 30xx), ada (L4, L40S, RTX 40xx), blackwell (B200, B300). turing, ada and blackwell now have a profile whose
 hardware values are read from NVIDIA's documentation (documentation-sourced and unmeasured, the sources written in the
@@ -17,9 +17,9 @@ import subprocess
 import pytest
 
 from neurobrix.core.config.loader import CONFIG_ROOT, UnsupportedArchitectureError, get_vendor_config
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism import autodetect
-from neurobrix.core.prism.solver import PlanNotComputable
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism import autodetect
+from neurobrix.pytorch.prism.solver import PlanNotComputable
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (V100_16GB, container_root, pin_dedicated_card, pin_host,
                                               pin_no_calibration, profile)

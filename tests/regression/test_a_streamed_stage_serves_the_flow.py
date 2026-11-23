@@ -108,8 +108,8 @@ def test_the_base_holds_the_flow_reads_and_a_piece_borrows_them(tmp_path):
         pytest.fail("this cell loads weights on a card: set CUDA_VISIBLE_DEVICES=<n>.", pytrace=False)
     import json
     from types import SimpleNamespace
-    from neurobrix.core.prism import InputConfig, PrismSolver
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism import InputConfig, PrismSolver
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     from neurobrix.core.runtime.graph_executor import GraphExecutor
     from neurobrix.core.strategies.base import StrategyContext
     from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy

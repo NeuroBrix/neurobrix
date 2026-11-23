@@ -54,7 +54,7 @@ def test_janus_triton_where_the_lazy_load_fits_runs_lazy_not_streamed(monkeypatc
 def test_a_component_run_once_keeps_the_plain_cut(monkeypatch):
     """A piece held between runs buys nothing for a component run once (an encoder, a decoder): its cut is the one
     it had, so no streamed plan moves where nothing is gained."""
-    from neurobrix.core.prism.layer_partition import LayerPartitioner
+    from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
     assert hasattr(LayerPartitioner, "hybrid")
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 16732, "the Mac with 677 MB taken by other applications")

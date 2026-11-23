@@ -12,7 +12,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from neurobrix.core.prism import host_footprint as H
+from neurobrix.pytorch.prism import host_footprint as H
 
 MB = 1 << 20
 DT = {"float16": 2, "bfloat16": 2, "float32": 4}

@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import load_ceiling
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism import load_ceiling
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 GB = 1 << 30
 

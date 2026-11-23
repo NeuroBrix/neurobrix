@@ -5,8 +5,8 @@ dropped at the end of every `solve_smart`: Qwen3-Coder-30B-A3B served --compiled
 its card was touched (py-spy, 2026-11-13)."""
 from types import SimpleNamespace
 
-from neurobrix.core.prism import served_prefill
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism import served_prefill
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 
 def test_the_served_solver_keeps_its_fused_graphs_across_the_raise(monkeypatch):

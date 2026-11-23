@@ -21,9 +21,9 @@ on `hip:0` and an integrated `xpu:0` are answered by the same line.
 
 from __future__ import annotations
 
-from neurobrix.core.prism.loader import load_profile
-from neurobrix.core.prism.solver import _device_is_unified
-from neurobrix.core.prism.structure import DeviceSpec, DeviceBrand
+from neurobrix.pytorch.prism.loader import load_profile
+from neurobrix.pytorch.prism.solver import _device_is_unified
+from neurobrix.pytorch.prism.structure import DeviceSpec, DeviceBrand
 
 
 def test_unified_is_read_from_the_device_not_the_brand():
@@ -69,7 +69,7 @@ def test_the_live_profile_answers_from_its_own_device_and_a_discrete_one_is_not(
     # THE MACHINE'S OWN profile through the door every run uses (autodetect), never the
     # literal "default": on the Dell the file is default-<hash>.yml and load_profile("default")
     # raised FileNotFoundError (2026-09-21) — a cell that reads the host must ask the host.
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     live = load_profile(get_or_create_default_profile())
     if not live.devices:
         import pytest

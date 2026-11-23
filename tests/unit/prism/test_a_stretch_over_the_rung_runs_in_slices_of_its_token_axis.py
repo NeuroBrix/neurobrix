@@ -5,7 +5,7 @@ The case: SANA-Video_2B_720p's transformer on the 16 GB V100 profile, triton and
 triton-sequential, at the 4 096 / 6 144 / 8 192 rungs — refused after the guidance split ("activations
 alone peak at ... This needs a smaller batch or context"), its linear-attention blocks holding the
 whole video's tokens at once. Prism now plans such a stretch in PASSES along the axis
-(core/prism/chunked_region.py `plan_region`): a contraction over the axis (the linear attention's
+(pytorch/prism/chunked_region.py `plan_region`): a contraction over the axis (the linear attention's
 K^T V) is summed over the slices and fed whole to the next pass, every other S-carrying tensor is
 computed one slice at a time. The plan records each stretch (`Partition.chunks`,
 `Plan.layer_stream_chunks`); the strategy runs it as one piece (`ChunkedPiece`).
@@ -35,8 +35,8 @@ import torch
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
 from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_for_branch
-from neurobrix.core.prism.chunked_region import TokenAxis, plan_region
-from neurobrix.core.prism.layer_partition import LayerPartitioner
+from neurobrix.pytorch.prism.chunked_region import TokenAxis, plan_region
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner
 from neurobrix.core.runtime.graph_executor import GraphExecutor
 from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
 

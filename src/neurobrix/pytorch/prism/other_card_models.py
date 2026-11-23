@@ -9,11 +9,11 @@ def measured_of_others(devices, measured_of, added, q, chunks=None) -> Dict[Any,
     that block states none. A mixed machine's 32 GB cards were left without a chunk and every run placed there was
     refused (2026-11-17). `chunks`: {model: its sweep's (chunk, spread)} already swept side by side (`autodetect.
     _sweep_chunks`); a model not in it is swept here. An unconcluded sweep's spread is kept beside its chunk."""
-    from neurobrix.core.prism import facts_probe as P
+    from neurobrix.pytorch.prism import facts_probe as P
     others: Dict[Any, dict] = {}
     for d in (d for d in devices if d.get("model") != devices[0].get("model")):
         own = others.setdefault(d.get("model"), measured_of(d))
-        from neurobrix.core.prism.kept_launch_facts import chunk_owed
+        from neurobrix.pytorch.prism.kept_launch_facts import chunk_owed
         if chunk_owed(d, own, devices.index(d)):
             if "index" not in d:
                 raise ValueError(f"profile {d.get('model')!r}: a device of this card model has no 'index' fact, so its "
@@ -22,7 +22,7 @@ def measured_of_others(devices, measured_of, added, q, chunks=None) -> Dict[Any,
             chunk, spread = chunks[d.get("model")] if chunks and d.get("model") in chunks else \
                 P.sweep_chunk(int(d["index"]), q["vmm_reps"], q["vmm_ks"])
             own["vmm_chunk_bytes"] = added.setdefault("vmm_chunk_bytes_of", {})[int(d["index"])] = int(chunk or 0)
-            from neurobrix.core.prism.kept_launch_facts import card_key
+            from neurobrix.pytorch.prism.kept_launch_facts import card_key
             own["vmm_chunk_under"] = card_key()
             if spread is not None:
                 own["vmm_chunk_spread"] = dict(spread)
@@ -149,7 +149,7 @@ def from_siblings(path, data, devices) -> dict:
     such facts are dropped first, for the launch to measure again. Returns {"class_facts_from": [what came from where],
     "stale_dropped": [what was dropped]}, each only when not empty."""
     from pathlib import Path
-    from neurobrix.core.prism.kept_launch_facts import drop_stale
+    from neurobrix.pytorch.prism.kept_launch_facts import drop_stale
     stale = drop_stale(data)             # this profile's facts of another driver or library: measured again
     siblings, _skipped = sibling_profiles(Path(path).parent, exclude=path)
     for _p, s in siblings:
@@ -181,7 +181,7 @@ def shipped_or_sibling_base(device: dict, path, engine: str) -> Optional[int]:
     vendor file's shipped `measured.runtime_base_mb.<engine>` for this card model (config/vendors/<vendor>/<arch>.yml,
     with its source line), else a sibling profile's measure on this machine (`other_card_models.base_from_siblings`).
     None: no figure anywhere — the one case the caller measures it once, says it, keeps it."""
-    from neurobrix.core.prism.loader import vendor_block
+    from neurobrix.pytorch.prism.loader import vendor_block
     import nbxtensor
     block = vendor_block(device, "measured") or {}
     shipped = (block.get("runtime_base_mb") or {}).get(engine)

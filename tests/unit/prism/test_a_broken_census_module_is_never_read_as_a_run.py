@@ -9,7 +9,7 @@ import sys
 import pytest
 
 import neurobrix.kernels as K
-from neurobrix.core.prism import autodetect as A
+from neurobrix.pytorch.prism import autodetect as A
 from neurobrix.kernels import census
 
 

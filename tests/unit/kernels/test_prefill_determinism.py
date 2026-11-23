@@ -337,7 +337,7 @@ def _stash_real_profile():
     prev_prof = W.get_hardware_profile()
     prev_flag = W.has_native_bf16()
     if prev_prof is None:
-        from neurobrix.core.prism.autodetect import load_default_profile
+        from neurobrix.pytorch.prism.autodetect import load_default_profile
         W.set_hardware_profile(load_default_profile())
 
     def _restore():

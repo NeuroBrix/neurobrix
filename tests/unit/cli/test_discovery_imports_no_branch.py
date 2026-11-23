@@ -1,5 +1,5 @@
 """`neurobrix info` is the call NeuroBrix Studio makes at start-up (studio-engine-requests.md, request 4):
-it answers from the engine's own torch-free detection (core/prism/autodetect.py), never from a branch.
+it answers from the engine's own torch-free detection (pytorch/prism/autodetect.py), never from a branch.
 
 Measured on the M4 Pro (2026-10-11): `info --json` took 0.62 s, 0.46 s of it importing torch at
 cli/commands/info.py, and reported `gpus: []` on a machine with one Apple GPU — torch-CUDA was its only probe.
@@ -26,7 +26,7 @@ class _NoBranch:
             raise RuntimeError("discovery imported torch")
         return None
 sys.meta_path.insert(0, _NoBranch())
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 DEVICE = {"index": 0, "brand": "acme", "model": "Acme X1", "memory_mb": 8192, "architecture": "acme_arch",
           "unified_memory": False}
 autodetect.detect_devices = lambda: ([dict(DEVICE)], "acme")

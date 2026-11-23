@@ -28,7 +28,7 @@ def main() -> int:
     gen_kwargs = spec["gen_kwargs"]
     verify = spec["verify"]
 
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.serving.engine import InferenceEngine
 
     # Optional pinned form: mask + MATCHING single-GPU hardware profile

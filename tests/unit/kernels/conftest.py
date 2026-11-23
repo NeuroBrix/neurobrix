@@ -39,7 +39,7 @@ def one_store_route(monkeypatch):
 def host_backend_fp64(monkeypatch):
     """nbx_tensor's float64 capability declared as a run declares it (`set_hardware_profile`): from
     this host's hardware profile (`precision.kernels_carry_fp64.triton`), restored after the cell."""
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     from nbxtensor import tensor as T
     import nbxtensor.backend.capabilities as _nbx_capabilities
     from neurobrix.triton.dtype import profile_triton_has_fp64

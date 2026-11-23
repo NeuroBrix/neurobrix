@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.layer_partition import (
+from neurobrix.pytorch.prism.layer_partition import (
     LayerPartitioner, Partition, tensor_bytes)
 
 
@@ -124,7 +124,7 @@ def test_an_empty_graph_is_a_partition_with_nothing_in_it():
 # The segments, as executable graphs
 # ---------------------------------------------------------------------------
 
-from neurobrix.core.prism.layer_partition import build_segment_graph
+from neurobrix.pytorch.prism.layer_partition import build_segment_graph
 
 
 def test_segments_reassemble_the_component_exactly():
@@ -218,7 +218,7 @@ def test_the_rung_scores_below_every_whole_component_strategy():
     import re
     from pathlib import Path
 
-    src = Path("src/neurobrix/core/prism/solver.py").read_text()
+    src = Path("src/neurobrix/pytorch/prism/solver.py").read_text()
     scores = dict(re.findall(r'"([a-z0-9_]+)":\s*(\d+)(?:\.\d+)?,', src))
     assert "layer_streaming" in scores, "the rung must carry a score"
     layer = int(scores["layer_streaming"])

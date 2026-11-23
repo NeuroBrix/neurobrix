@@ -9,8 +9,8 @@ exists: these fail.
 """
 from types import SimpleNamespace as NS
 
-from neurobrix.core.prism import host_footprint as H
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism import host_footprint as H
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 from neurobrix.core.runtime.output_dispatch import host_bytes_per_output_element
 
 MB = 1 << 20

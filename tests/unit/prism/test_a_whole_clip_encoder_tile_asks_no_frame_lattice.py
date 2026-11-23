@@ -25,9 +25,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.profiler import temporal_causal_downscale_ratio, temporal_downscale_ratio
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.profiler import temporal_causal_downscale_ratio, temporal_downscale_ratio
+from neurobrix.pytorch.prism.solver import ComponentMemory
 
 MB = 1024 ** 2
 ACTIVATION = 319_500 * MB          # the planner's figure for Allegro-TI2V's encoder at 88x720x1280
@@ -131,7 +131,7 @@ def test_a_refusal_prints_each_rungs_own_tiling_reason():
     """The doctrine review of 2ba2c40e: the per-component reason is overwritten by the next rung's
     attempt, so a refusal printed one rung's overflow beside another rung's reason. Each overflowing
     rung keeps the reasons standing when it recorded."""
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
     s = PrismSolver()
     s._tiling_decline("vae", "rung A's reason")
     s._snapshot_tiling_declines("rung A", {"vae": 100.0})

@@ -8,9 +8,9 @@ from __future__ import annotations
 import inspect
 from types import SimpleNamespace as NS
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import owed_facts as OF
-from neurobrix.core.prism.solver import STRATEGY_RANK, PrismSolver, order_candidates
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import owed_facts as OF
+from neurobrix.pytorch.prism.solver import STRATEGY_RANK, PrismSolver, order_candidates
 
 PROFILE = NS(host_measured=None, devices=[NS(measured={"memory_gbps": 900.0})])
 CANDIDATES = [(9.0, "single_gpu", {"lm": "cuda:0"}, None), (5.0, "zero3", {"lm": "zero3:cuda:0"}, None),
@@ -24,7 +24,7 @@ def _select(monkeypatch, turned_down):
     monkeypatch.setattr(A, "ACTIVE_HARDWARE_ID", "default-abc")
     monkeypatch.setattr(OF, "measure_reload_rates", lambda hw, e, c: probes.append(e) or ["BF16"])
     monkeypatch.setattr(OF, "measure_host_facts", lambda hw: [])
-    monkeypatch.setattr("neurobrix.core.prism.loader.load_profile", lambda hw: NS(host_measured={"measured": True}))
+    monkeypatch.setattr("neurobrix.pytorch.prism.loader.load_profile", lambda hw: NS(host_measured={"measured": True}))
     measured = {"layer_streaming": 2.0, "zero3": 3.0}    # what the streamed rank's times are once its rate is measured
 
     def _priced(group):

@@ -21,7 +21,7 @@ import types
 import pytest
 import torch
 
-from neurobrix.core.prism.flow_bindings import FlowBindings
+from neurobrix.pytorch.prism.flow_bindings import FlowBindings
 
 PAIR = {"condition_component": "vae_encoder", "vace_layers": 15, "mask_channels": 64, "z_dim": 16}
 
@@ -105,8 +105,8 @@ def test_the_join_is_the_run_s_own_tensor_kind():
 def test_the_plan_records_the_split_and_prices_the_encoder_per_pass(monkeypatch):
     """VACE on the Mac's pinned profile: with the declaration the encoder's chunk price is one item's and the plan says
     so; the same request without it prices the pair."""
-    from neurobrix.core.prism import PrismSolver
-    from neurobrix.core.prism.solver import plan_record, explain_plan
+    from neurobrix.pytorch.prism import PrismSolver
+    from neurobrix.pytorch.prism.solver import plan_record, explain_plan
     from neurobrix.nbx.container import NBXContainer
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, impose_rung, pin_host, profile
     import json

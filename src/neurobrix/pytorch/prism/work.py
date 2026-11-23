@@ -10,7 +10,7 @@ prism-time-score.md §2), read from its graph with the request's shapes — the 
                    (`_VIEWS`) moves nothing
 
 The figures are the inputs of a roofline (`max(flops / throughput, bytes / bandwidth)`); the widths a component is
-EXECUTED at (`core.prism.runtime_widths`) replace the built ones where the caller has them.
+EXECUTED at (`pytorch.prism.runtime_widths`) replace the built ones where the caller has them.
 """
 from __future__ import annotations
 

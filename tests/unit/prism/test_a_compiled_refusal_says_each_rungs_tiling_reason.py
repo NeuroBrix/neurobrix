@@ -19,8 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import ComponentMemory
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism.solver import ComponentMemory
 from neurobrix.nbx.container import NBXContainer
 from tests.unit.prism._pinned_machine import (V100_16GB, container_root, impose_rung,
                                               pin_dedicated_card, pin_host, profile)

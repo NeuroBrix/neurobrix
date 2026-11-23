@@ -9,7 +9,7 @@ What this test does if the code is wrong: a card without the facts keeps none (r
 a card that states them is measured again, a unified-memory device is asked for a card's context, or a runtime that
 cannot answer writes something — red. No card: the runtime's answer is a stub.
 """
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import facts_probe as P
 
 
 def test_only_the_cards_that_state_none_are_completed():
@@ -35,7 +35,7 @@ def test_a_runtime_that_cannot_answer_writes_nothing():
 def test_a_launch_on_a_generated_profile_calls_the_completion():
     """`ensure_measured_facts` (generated profiles only) is where the completion is asked, with autodetect's reading."""
     import inspect
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     src = inspect.getsource(A.ensure_measured_facts)
     # asked once on either branch: in process before any measure, in a child after the chunk (qa 1235-1; the order
     # is test_the_in_process_card_read_comes_before_any_measure.py's)
@@ -50,7 +50,7 @@ def test_a_card_is_read_in_its_own_process(monkeypatch):
     import subprocess
     import sys
     from types import SimpleNamespace as NS
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     from nbxtensor.backend import runtime as RT
     monkeypatch.setattr(A, "runtime_card_facts", lambda index: (_ for _ in ()).throw(AssertionError("read in-process")))
     monkeypatch.setattr(RT, "backend_table", lambda: {"visible_env": ("CUDA_VISIBLE_DEVICES",)})
@@ -73,7 +73,7 @@ def test_detection_initialises_no_card_and_generation_reads_them_in_a_child(monk
     not ask the runtime about a card — that puts this process on every visible card (seen through the entry point,
     2026-11-11: a one-card plan under two visible cards held both). The cards are read once, in a child process, by
     the completion of the generated profile."""
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     monkeypatch.setattr(A, "runtime_card_facts", lambda index: (_ for _ in ()).throw(AssertionError("detection asked the runtime")))
     import inspect
     for fn in (A._parse_nvidia_smi, A.detect_hardware, A.detect_devices, A._visible_set_tag):

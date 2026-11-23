@@ -32,7 +32,7 @@ def test_the_precision_contract_is_computed_once_per_component(monkeypatch):
     extents; an extent probe recomputed it over the whole graph each time (openaudio: 490 s with it
     computed once, against a 2 400 s timeout before)."""
     calls = []
-    from neurobrix.core.prism import runtime_widths as RW
+    from neurobrix.pytorch.prism import runtime_widths as RW
     monkeypatch.setattr(RW, "plan_time_contract", lambda *a, **k: calls.append(a) or object())
     monkeypatch.setattr(D, "_CONTRACTS", {})
     g = {}

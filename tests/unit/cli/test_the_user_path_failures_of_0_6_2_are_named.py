@@ -128,9 +128,9 @@ def test_the_compiler_condition_is_read_where_triton_raises_it(monkeypatch):
 def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_path, monkeypatch, caplog):
     import logging
     import yaml
-    from neurobrix.core.prism import autodetect as A
-    from neurobrix.core.prism import owed_facts as OF
-    from neurobrix.core.prism import arena_probe
+    from neurobrix.pytorch.prism import autodetect as A
+    from neurobrix.pytorch.prism import owed_facts as OF
+    from neurobrix.pytorch.prism import arena_probe
 
     def container(name, comps):
         root = tmp_path / "cache" / name
@@ -154,7 +154,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
         "devices": [{"memory_mb": 16000, "supports_dtypes": ["float16"], "measured": measured}],
         "host_measured": {"host_matmul_gflops": 1, "host_memory_gbps": 1}}))
     monkeypatch.setattr(A, "HARDWARE_DIR", hw)
-    from neurobrix.core.prism import facts_probe as P
+    from neurobrix.pytorch.prism import facts_probe as P
     handed = []
     # the chunk probe's first replay, measured ahead: 1.0 s replayed, 2.0 s for its whole child here
     monkeypatch.setattr(P, "vmm_first_replay", lambda dev: (1.0, 2.0))
@@ -164,7 +164,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     probed = []
     monkeypatch.setattr(arena_probe, "child", lambda d, c, h, e: probed.append(Path(d).name) or
                         {"container": Path(d).name, "component": c, "draws": [(1, 1.0)]})
-    from neurobrix.core.prism import launch_lines
+    from neurobrix.pytorch.prism import launch_lines
     launch_lines.SAID.clear()
     with caplog.at_level(logging.INFO, logger="neurobrix"):
         A.ensure_measured_facts("default-t", "triton", container_dir=asked)
@@ -197,7 +197,7 @@ def test_a_first_launch_measures_the_requested_models_stored_dtypes_only(tmp_pat
     # and a launch that owes nothing says nothing
     data = yaml.safe_load((hw / "default-t.yml").read_text())
     data["host_measured"]["weight_reload_gbps"] = {"triton": {"BF16": 2.0}}
-    from neurobrix.core.prism.kept_launch_facts import card_key
+    from neurobrix.pytorch.prism.kept_launch_facts import card_key
     data["host_measured"]["weight_reload_under"] = card_key()   # a rate kept is of this driver and library (drop_stale)
     (hw / "default-t.yml").write_text(yaml.safe_dump(data))
     launch_lines.SAID.clear()
@@ -300,7 +300,7 @@ def test_a_probe_child_reads_without_a_count_from_its_launch(monkeypatch):
     those loads (the launch-time cure, 2026-11-19), and the parent hands it nothing about reads."""
     import types
     from neurobrix.core import workspace as W
-    from neurobrix.core.prism import arena_probe as AP
+    from neurobrix.pytorch.prism import arena_probe as AP
     seen = {}
     monkeypatch.setattr(AP.subprocess, "run", lambda cmd, **k: seen.update(env=k["env"]) or
                         types.SimpleNamespace(returncode=0, stdout=AP.MARK + "{}", stderr=""))

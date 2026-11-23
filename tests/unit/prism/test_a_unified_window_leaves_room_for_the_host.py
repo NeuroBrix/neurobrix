@@ -19,8 +19,8 @@ import sys
 from types import SimpleNamespace
 
 
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism import host_footprint as HF
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism import host_footprint as HF
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, container_root, no_door, pin_host, profile
 

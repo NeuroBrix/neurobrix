@@ -445,7 +445,7 @@ class TritonDtypeEngine:
         (777 → 776; Allegro's halo, 2026-10-18). Non-floating graph dtype → preserved.
         Unknown / missing → None (no cast). The compiled branch's rule is the same sentence
         (`core/runtime/graph/tensor_resolver.get_input_dtype`), and Prism prices the seed alike
-        (`core/prism/runtime_widths`).
+        (`pytorch/prism/runtime_widths`).
         """
         meta = graph_tensors.get(tid) or {}
         # A SEAM tensor (a streamed piece's input, `layer_partition.build_segment_graph`) is not a
@@ -455,7 +455,7 @@ class TritonDtypeEngine:
         # run's own seam values, diverged 0.15-0.25 % from the same ops run whole, and the first
         # op to differ read an fp32 seam tensor the piece had narrowed to bf16. It enters as it
         # arrived, exactly as it would have flowed inside the whole graph.
-        from neurobrix.core.prism.layer_partition import is_seam_tensor
+        from neurobrix.pytorch.prism.layer_partition import is_seam_tensor
         if is_seam_tensor(meta):
             return None
         dtype_str = meta.get("dtype")

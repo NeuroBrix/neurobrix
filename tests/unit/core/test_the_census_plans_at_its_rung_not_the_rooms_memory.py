@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import solver as S
+from neurobrix.pytorch.prism import solver as S
 
 
 @pytest.fixture

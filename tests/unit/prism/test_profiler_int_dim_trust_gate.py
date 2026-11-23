@@ -10,7 +10,7 @@ activation at 19.2 GB, Prism planned 20 GB for an 82M model, every 16 GB card
 placed the decoder on the host, and both ATen engines died on the host path.
 """
 
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 
 
 def _profiler():

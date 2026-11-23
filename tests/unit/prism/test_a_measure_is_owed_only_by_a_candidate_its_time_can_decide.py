@@ -14,9 +14,9 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import owed_facts as OF
-from neurobrix.core.prism.solver import STRATEGY_RANK
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import owed_facts as OF
+from neurobrix.pytorch.prism.solver import STRATEGY_RANK
 
 
 @pytest.fixture

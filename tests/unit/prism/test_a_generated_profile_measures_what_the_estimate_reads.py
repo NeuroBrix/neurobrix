@@ -14,11 +14,11 @@ import json
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import owed_facts as OF
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import owed_facts as OF
+from neurobrix.pytorch.prism import facts_probe as P
 from nbxtensor.backend import host_measure as H
-from neurobrix.core.prism.kept_launch_facts import card_key
+from neurobrix.pytorch.prism.kept_launch_facts import card_key
 
 CALLS = []
 
@@ -105,7 +105,7 @@ def test_the_engine_measures_its_per_token_reload_once_on_a_generated_profile(hw
     GENERATED profile's host_measured; a committed profile is never written, a reload too small to time is not kept.
     What this test would do if the code were wrong: a second measure overwriting the first, a committed profile written,
     or the rate filed under another key than the estimator reads (time_estimate.reload_bps) — RED."""
-    from neurobrix.core.prism import time_estimate as T
+    from neurobrix.pytorch.prism import time_estimate as T
     _profile(hw, "default-abc", DEV)
     A.ensure_measured_facts("default-abc")
     assert not A.note_reload_rate("default-abc", "compiled", "bfloat16", 1 << 20, 0.01, "m:c"), "too small"
@@ -160,8 +160,8 @@ def _decide(reload_gbps):
     """The faster of two plans for one generating component, as Prism ranks them (`time_estimate.plan_seconds`): it
     streamed (a quarter of it reloaded at the second use, at `reload_gbps`) or loaded on demand by each of the three
     phases that use it (lazy: 4 GB cold, then twice warm)."""
-    from neurobrix.core.prism import time_estimate as T
-    from neurobrix.core.prism.work import Work
+    from neurobrix.pytorch.prism import time_estimate as T
+    from neurobrix.pytorch.prism.work import Work
     gb = 10 ** 9
     dev = T.DeviceFacts(matmul_flops={"float16": 100e12}, memory_bps=800 * gb, h2d_bps=10 * gb,
                         load_rates={"compiled": {"BF16": {"device": {"cold": 1.0, "warm": 2.0}}}})
@@ -188,7 +188,7 @@ def test_a_profile_s_host_facts_lie_over_its_vendor_s_key_by_key():
     """The Dell's 1.12 rule (2026-11-03 22:54): the vendor's host_measured (the architecture's) under the profile's (this
     machine's, measured by the engine), key by key into its tables. What this would do if the profile's block replaced the
     vendor's (the rule before): the vendor's host_slab_gbps and its triton reload rate lost — RED."""
-    from neurobrix.core.prism.loader import _over
+    from neurobrix.pytorch.prism.loader import _over
     vendor = {"host_slab_gbps": 3.0, "host_matmul_gflops": 100, "weight_reload_gbps": {"triton": {"BF16": 2.1}}}
     prof = {"host_matmul_gflops": 300, "weight_reload_gbps": {"compiled": {"BF16": 1.0}, "triton": {"F32": 0.5}}}
     assert _over(vendor, prof) == {"host_slab_gbps": 3.0, "host_matmul_gflops": 300,
@@ -213,7 +213,7 @@ def test_a_streamed_pricing_reloads_the_smallest_component_of_each_unstated_stor
     — before, only a streamed run measured it and Prism refused to plan one without it. What this would do if the code
     were wrong: no probe (the fact never measured), a component under the floor or not the smallest, or a stated rate
     measured again — RED."""
-    from neurobrix.core.prism import arena_probe as AP
+    from neurobrix.pytorch.prism import arena_probe as AP
     import neurobrix.core.paths as paths
     cache = tmp_path / "cache"
     floor = A.LOADER_RATE_MIN_BYTES
@@ -272,7 +272,7 @@ def test_a_probe_in_a_child_reads_the_facts_measured_before_it(hw, monkeypatch, 
     name a fact the profile lacks: on a clean machine (the stable's install test, 2026-11-05) the first child's Triton
     pool refused the vmm_chunk_bytes measured in the parent and not yet written. Red if a child is started before the
     in-process facts are on disk."""
-    from neurobrix.core.prism import arena_probe as AP
+    from neurobrix.pytorch.prism import arena_probe as AP
     from neurobrix.core import paths
     cache = tmp_path / "cache"
     comp = cache / "M" / "components" / "c"

@@ -98,7 +98,7 @@ def _device_count(hardware: str) -> int:
     """The profile's device count — the shadow's `device_count()` answer. A profile that does
     not load, or declares no device, refuses here: a one-card census taken in silence for a
     four-card profile would be wrong at every placement."""
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     n = len(load_profile(hardware).devices)
     if n < 1:
         raise SystemExit(f"profile {hardware!r} declares no device; the census needs the machine's cards")
@@ -175,8 +175,8 @@ def rungs_for(hardware: str) -> list:
     no rung of the ladder — Wan2.2-I2V-A14B on the 32 GB V100 at the gate's request kept its guidance
     batch with the door at 32 768 MB (cross-attention softmax rows 393 216) where the card itself
     splits it (196 608 rows), and the W1 replay missed that key (2026-10-22)."""
-    from neurobrix.core.prism.loader import load_profile
-    from neurobrix.core.prism.memory_budget import memory_ladder_mb
+    from neurobrix.pytorch.prism.loader import load_profile
+    from neurobrix.pytorch.prism.memory_budget import memory_ladder_mb
     cap = max(int(d.memory_mb) for d in load_profile(hardware).devices)
     rungs = [r for r in memory_ladder_mb() if r <= cap]
     if cap not in rungs:
@@ -466,8 +466,8 @@ def table_rows(model: str, container: str, mode: str, rung: int, keys: list, op_
 def census_memory_class(hardware: str) -> int:
     """The memory class (GB) the census is taken for: its profile's cards, one class. A census is
     per (profile, memory class) — a profile mixing classes has no single answer and is refused."""
-    from neurobrix.core.prism.loader import load_profile
-    from neurobrix.core.prism.structure import memory_class_gb
+    from neurobrix.pytorch.prism.loader import load_profile
+    from neurobrix.pytorch.prism.structure import memory_class_gb
     classes = {memory_class_gb(d.memory_mb) for d in load_profile(hardware).devices}
     if len(classes) != 1 or None in classes:
         raise SystemExit(f"profile {hardware!r} spans memory classes {sorted(map(str, classes))}: "

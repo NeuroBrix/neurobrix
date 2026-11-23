@@ -5,8 +5,8 @@ child that sees one card alone stays (2026-11-11: a one-card plan under two visi
 Red on main a025add: `card_facts_reader` does not exist and the launch always starts the child."""
 import pytest
 
-from neurobrix.core.prism import autodetect as A
-from neurobrix.core.prism import facts_probe as P
+from neurobrix.pytorch.prism import autodetect as A
+from neurobrix.pytorch.prism import facts_probe as P
 
 
 @pytest.mark.parametrize("seen, reader", [(1, "runtime_card_facts"), (2, "card_facts_in_a_child"), (4, "card_facts_in_a_child")])

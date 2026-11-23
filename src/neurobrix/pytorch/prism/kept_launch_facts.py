@@ -38,7 +38,7 @@ def chunk_owed(device: dict, own: dict, position: int) -> bool:
     """Whether the card at `position` of the profile's devices owes a chunk sweep: its block states no chunk AND the
     library's rule answers none for its memory class (`facts_probe.ruled_chunk`, the card's own index, card 0 for the
     first). A class the rule answers is READ by the allocator and never swept (first-launch fact page line 1)."""
-    from neurobrix.core.prism import facts_probe as P
+    from neurobrix.pytorch.prism import facts_probe as P
     if "vmm_chunk_bytes" in own:
         return False
     return P.ruled_chunk(0 if position == 0 else int(device.get("index", position)), device.get("memory_mb")) is None
@@ -66,7 +66,7 @@ def sweep_chunks(devices, first, measured_of, q, replay) -> Dict[Any, Any]:
     identical cards answer once. The rack's fresh 4-card home ran its 48 replay children one after another: 1024 s of
     its 1236 s to ready (py-spy, 2026-11-19)."""
     from concurrent.futures import ThreadPoolExecutor
-    from neurobrix.core.prism import facts_probe as P
+    from neurobrix.pytorch.prism import facts_probe as P
     todo = _models_to_sweep(devices, first, measured_of)
     if not todo:
         return {}
@@ -190,7 +190,7 @@ def drop_stale(data: dict) -> list:
 def _profile_path(hardware_id: Optional[str]) -> Optional[Path]:
     """The generated profile's file of `hardware_id`, or None for a hardware that is not a generated profile or has no
     file: the only profiles the engine keeps measured facts on."""
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     if not hardware_id or not str(hardware_id).startswith("default"):
         return None
     path = A.HARDWARE_DIR / f"{hardware_id}.yml"
@@ -228,7 +228,7 @@ def note_read_width(hardware_id: Optional[str], measured: Optional[dict], source
     path = _profile_path(hardware_id)
     if path is None or source is None or not measured or measured.get("workers") is None:
         return False
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     width = int(measured["workers"])
     at = (measured.get("draws") or {}).get(width) or []
     data = yaml.safe_load(path.read_text()) or {}
@@ -248,7 +248,7 @@ def note_weight_load(engine: str, nbx_path, component: str, where: str, landed: 
     """What a weight load of a component measured, handed to the active generated profile: the loader's own rate
     (`autodetect.note_loader_rate`, S2: Prism's estimate reads it from the next plan on) and the width the weight reader
     reached (`note_read_width`, row 167: the next launch's reader starts there)."""
-    from neurobrix.core.prism import autodetect as A
+    from neurobrix.pytorch.prism import autodetect as A
     from neurobrix.core.workspace import weight_reader_measured
     stored = A.stored_major(nbx_path, component)
     if stored is not None:

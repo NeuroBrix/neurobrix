@@ -21,7 +21,7 @@ def _the_machine_s_profile(monkeypatch):
     """The machine's profile loaded as a run loads it, and the loader's reads through the process's weight reader
     (`core.workspace.weight_reader`, its ceiling the processors when no plan priced one), a fresh one per cell."""
     from neurobrix.core import workspace
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     monkeypatch.setattr(workspace, "_LOAD_CEILING", None)
     monkeypatch.setattr(workspace, "_READER", None)
     load_default_profile()

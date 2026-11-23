@@ -9,8 +9,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from neurobrix.core.prism.chunked_region import plan_region, region_carriers
-from neurobrix.core.prism.layer_partition import LayerPartitioner, _Region
+from neurobrix.pytorch.prism.chunked_region import plan_region, region_carriers
+from neurobrix.pytorch.prism.layer_partition import LayerPartitioner, _Region
 
 _spec = importlib.util.spec_from_file_location(
     "stretch_case", Path(__file__).with_name("test_a_stretch_over_the_rung_runs_in_slices_of_its_token_axis.py"))

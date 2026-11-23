@@ -26,7 +26,7 @@ REQUEST = ["--prompt", "a red apple rolling slowly across a wooden table", "--se
 def test_every_phase_of_a_streamed_plan_is_inside_its_unified_device_price(monkeypatch):
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     from neurobrix.nbx import NBXContainer
     pin_host(monkeypatch, 24576, 16981, "the CogVideoX-2b native run's reading, 2026-10-08")
     # The streamed plan is this file's subject, so it is asked for by name. Prism chose it by itself until

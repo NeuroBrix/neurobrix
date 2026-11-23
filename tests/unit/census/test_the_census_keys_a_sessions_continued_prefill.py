@@ -45,7 +45,7 @@ def _derive(monkeypatch, chunk=_UNPLANNED):
     if not (D.CACHE / MODEL / "manifest.json").exists():
         pytest.skip(f"{MODEL} is not in the engine cache")
     try:
-        from neurobrix.core.prism.loader import load_profile
+        from neurobrix.pytorch.prism.loader import load_profile
         load_profile(HW)
     except Exception as e:                  # a machine without this rack's profile
         pytest.skip(f"profile {HW}: {e}")

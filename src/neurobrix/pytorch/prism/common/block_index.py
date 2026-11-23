@@ -1,4 +1,4 @@
-# core/prism/common/block_index.py
+# pytorch/prism/common/block_index.py
 """
 Block Index Extractor for Prism
 

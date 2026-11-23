@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(not _device(), reason="the allocator's peak need
 @pytest.fixture(autouse=True)
 def _this_machine(monkeypatch):
     """The kernels read their launch facts from the run's hardware profile (`set_hardware_profile`): this host's."""
-    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.pytorch.prism.autodetect import load_default_profile
     from nbxtensor.ops import wrappers as W
     previous = W.get_hardware_profile()
     W.set_hardware_profile(load_default_profile())

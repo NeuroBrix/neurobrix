@@ -6,8 +6,8 @@ to it, and the plan re-timed with the held blocks' experts crossing no host link
 No card."""
 import pytest
 
-from neurobrix.core.prism import PrismSolver
-from neurobrix.core.prism.loader import load_profile
+from neurobrix.pytorch.prism import PrismSolver
+from neurobrix.pytorch.prism.loader import load_profile
 from tests.unit.prism._pinned_machine import V100_16GB, pin_dedicated_card, pin_host, pin_no_calibration, profile
 from tests.unit.prism.test_a_component_over_the_rung_streams_inside_itself import _input_config, no_door
 
@@ -19,7 +19,7 @@ def _solve(monkeypatch, prof, mode):
     no_door(monkeypatch)
     # the routing's reuse curve the Dell measured (2026-10-28): the store is timed with it (without it, the plan says
     # it is not timed — test_an_expert_cache_is_priced_by_the_routing_reuse)
-    import neurobrix.core.prism.expert_topology as ET
+    import neurobrix.pytorch.prism.expert_topology as ET
     monkeypatch.setattr(ET, "routing_reuse", lambda cache_path, comp: [(8.0, 0.30), (16.0, 0.53), (32.0, 0.74),
                                                                          (64.0, 0.93), (96.0, 0.96)])
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
@@ -67,7 +67,7 @@ def test_one_card_keeps_one_store(monkeypatch):
 
 
 def test_the_cards_travel_with_the_plan(tmp_path):
-    from neurobrix.core.prism.solver import ComponentAllocation, ExecutionPlan
+    from neurobrix.pytorch.prism.solver import ComponentAllocation, ExecutionPlan
     cards = {"cuda:1": {"blocks": [40, 47], "cache_mb": 9000.0, "experts": 1024}}
     alloc = ComponentAllocation(name="model", devices=["cuda:0"], dtype="float16", memory_mb=1.0, architecture="volta",
                                 vendor="nvidia", strategy="expert_store", expert_cards=cards)
@@ -81,8 +81,8 @@ def test_a_card_with_no_room_for_one_block_takes_none(monkeypatch):
     """Card 3 read with 1 000 MB free NOW, under one block's experts (1 152 MB at fp16) (another process holds the rest): the facts' plan puts blocks there, the
     execution door sees it (an expert card is not one of the plan's devices) and the busy re-plan — on what is free
     now — gives card 3 no block while the others still hold theirs (at 1 500 MB free it takes one block, 1 152 MB)."""
-    import neurobrix.core.prism.solver as solver_mod
-    from neurobrix.core.prism.memory_budget import DeviceReading
+    import neurobrix.pytorch.prism.solver as solver_mod
+    from neurobrix.pytorch.prism.memory_budget import DeviceReading
     from nbxtensor.memory.allocator import DeviceAllocator
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")

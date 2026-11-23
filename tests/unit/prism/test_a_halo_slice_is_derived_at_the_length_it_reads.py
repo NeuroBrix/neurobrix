@@ -4,7 +4,7 @@ runtime forms them — never at the slice's own length, which no launch of a hal
 import sys
 from pathlib import Path
 
-from neurobrix.core.prism.chunked_region import chunk_extents, slice_reads
+from neurobrix.pytorch.prism.chunked_region import chunk_extents, slice_reads
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 

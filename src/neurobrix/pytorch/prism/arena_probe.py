@@ -2,7 +2,7 @@
 the cache's smallest container, its first component run whole twice through the Triton executor on zero inputs at its
 built extents (no flow, no prompt), the first run seating what runs once (sweeps, recordings), every free byte then
 given back, the allocator's peak window around the second; hold = the window's peak - its start, divided by the walk
-Prism prices (`ComponentMemory`, the KV cache apart). `python -m neurobrix.core.prism.arena_probe <dir> <component>
+Prism prices (`ComponentMemory`, the KV cache apart). `python -m neurobrix.pytorch.prism.arena_probe <dir> <component>
 <hardware id> [scale]` runs one probe in its own process and prints `NBX-ARENA-PROBE {json}`. Triton branch: no torch."""
 from __future__ import annotations
 
@@ -106,9 +106,9 @@ def measure(container_dir: str, component: str, hardware_id: str, scale: int = 1
     """One probe: the component's hold and its priced walk, in bytes. The request = the graph's own built extents,
     named by its symbols, scaled like the inputs: Prism prices the binding the run makes."""
     from neurobrix.nbx.container import NBXContainer
-    from neurobrix.core.prism.loader import load_profile
-    from neurobrix.core.prism.profiler import InputConfig
-    from neurobrix.core.prism.solver import PrismSolver, ComponentAllocation
+    from neurobrix.pytorch.prism.loader import load_profile
+    from neurobrix.pytorch.prism.profiler import InputConfig
+    from neurobrix.pytorch.prism.solver import PrismSolver, ComponentAllocation
     from neurobrix.core.runtime.factory import ExecutorFactory
     from neurobrix.triton.dtype import declare_hardware_profile
     container, profile = NBXContainer.load(container_dir), load_profile(hardware_id)
@@ -148,9 +148,9 @@ def reloads(container_dir: str, component: str, hardware_id: str, engine: str, n
     after its first load, each handed to that run's own writer (`_note_reload`: three steady reloads, their median)."""
     import time
     from neurobrix.nbx.container import NBXContainer
-    from neurobrix.core.prism import autodetect as AD
-    from neurobrix.core.prism.loader import load_profile
-    from neurobrix.core.prism.solver import PrismSolver, ComponentAllocation
+    from neurobrix.pytorch.prism import autodetect as AD
+    from neurobrix.pytorch.prism.loader import load_profile
+    from neurobrix.pytorch.prism.solver import PrismSolver, ComponentAllocation
     from neurobrix.core.runtime.factory import ExecutorFactory
     from neurobrix.core.strategies import layer_streaming as LS
     container, profile, AD.ACTIVE_HARDWARE_ID = NBXContainer.load(container_dir), load_profile(hardware_id), hardware_id

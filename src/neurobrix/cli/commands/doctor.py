@@ -57,7 +57,7 @@ def _torch_wheels() -> dict:
 def _torch_install_hint(cap: str | None) -> str:
     """The command that installs the torch build measured on this GPU's architecture (the wheel table); an
     architecture the table does not list is sent to PyTorch's selector, never given a build nobody ran on it."""
-    from neurobrix.core.prism.autodetect import _nvidia_cc_to_arch
+    from neurobrix.pytorch.prism.autodetect import _nvidia_cc_to_arch
     table = _torch_wheels()
     index_url = table["index_url"]
     arch = _nvidia_cc_to_arch(cap) if cap else None
@@ -141,7 +141,7 @@ def check_compute_environment() -> list[str]:
     else:
         from nbxtensor.backend.install_help import report
         log.debug("  GPU drivers:    " + report().replace("\n", "\n                  "))
-    from neurobrix.core.prism import intel_refusal
+    from neurobrix.pytorch.prism import intel_refusal
     for line in intel_refusal.doctor_lines():        # the experimental Intel backend: its label, its run-time refusals
         print(f"  {line}")
 

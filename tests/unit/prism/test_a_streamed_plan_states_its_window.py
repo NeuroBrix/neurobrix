@@ -56,7 +56,7 @@ def test_a_streamed_plan_states_a_window_inside_its_rung():
 
 
 def test_the_unified_reservation_takes_the_window_of_a_streamed_plan():
-    from neurobrix.core.prism.solver import unified_device_bytes
+    from neurobrix.pytorch.prism.solver import unified_device_bytes
     unified = NS(devices=[NS(has_unified_memory=True)])
     assert unified_device_bytes(NS(total_memory_mb=18085.0, device_window_mb=9000.0), unified) == 9000 << 20
     assert unified_device_bytes(NS(total_memory_mb=18085.0, device_window_mb=None), unified) == 18085 << 20

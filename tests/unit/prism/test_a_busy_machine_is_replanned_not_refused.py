@@ -4,7 +4,7 @@ held part of the pool, even though a slower plan fitted. Both profiles: a V100-1
 the Mac with a browser open. What this test would do if the code were wrong: the plan comes back with its door set and
 no re-plan (busy_replan None) — RED; and a machine with no room for any plan must still refuse, naming the shortfall."""
 import pytest
-from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.pytorch.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door, pin_host,
                                               pin_shared_card, profile)

@@ -12,7 +12,7 @@ of 588 — red; a walk that forgets the kept copy of the invariant input prices 
 from __future__ import annotations
 
 from neurobrix.core.optim.passes.invariant import DAG_KEY, plan_for_dag
-from neurobrix.core.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
 
 
 def _T(tid):

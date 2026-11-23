@@ -33,7 +33,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 
 import derived_census as D  # noqa: E402
-from neurobrix.core.prism import runtime_widths as RW  # noqa: E402
+from neurobrix.pytorch.prism import runtime_widths as RW  # noqa: E402
 from neurobrix.kernels import census as _census  # noqa: E402
 
 MODEL, COMP = "synthetic-value-axis", "predictor"
@@ -118,7 +118,7 @@ def graph():
 def _Contract():
     """The plan-time contract empty, as the engine's own object says it (a stand-in class drifted: it lacked `safe`,
     which the key path reads since 2026-10-26, and the whole file stood red)."""
-    from neurobrix.core.prism.runtime_widths import conservative_contract
+    from neurobrix.pytorch.prism.runtime_widths import conservative_contract
     return conservative_contract("the synthetic graph: no contract")
 
 
@@ -127,7 +127,7 @@ def synthetic(monkeypatch):
     """The synthetic graph served as the component's runtime graph; the plan-time contract empty
     and every tensor at its built dtype (fp32 throughout) — what is under test is the axis."""
     _census._bind_target("c4140-4xv100-16GB-nvlink", None)     # a committed V100 profile: its ladders
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     from nbxtensor.ops import wrappers as W
     monkeypatch.setattr(W, "_NBX_HW_PROFILE", load_profile("c4140-4xv100-16GB-nvlink"))  # as the census binds it
 

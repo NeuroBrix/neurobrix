@@ -1,7 +1,7 @@
 """On Windows the detection honours CUDA_VISIBLE_DEVICES, as it does on Linux (GitHub issue 6 asked for a documented
 way to run on the CPU of a machine that has an NVIDIA card).
 
-The Linux cascade filters and re-indexes the nvidia-smi devices by the variable (core/prism/autodetect.py
+The Linux cascade filters and re-indexes the nvidia-smi devices by the variable (pytorch/prism/autodetect.py
 `_apply_visible_filter`); the Windows cascade returned nvidia-smi's whole list, so `CUDA_VISIBLE_DEVICES=-1` (the
 spelling cmd.exe and PowerShell can set: both delete a variable set to an empty value) planned on cuda:0 while the
 CUDA runtime saw no device. What these tests would do without the filter: the card is still detected — RED."""
@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 SMI = ("0, NVIDIA GeForce RTX 4070, 12282, 8.9, 00000000:01:00.0\n"
        "1, NVIDIA GeForce RTX 3060, 12288, 8.6, 00000000:02:00.0\n")

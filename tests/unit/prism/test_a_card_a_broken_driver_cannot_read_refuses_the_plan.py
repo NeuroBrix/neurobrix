@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism import solver as solver_mod
+from neurobrix.pytorch.prism import solver as solver_mod
 
 PROFILE = "c4140-4xv100-16GB-nvlink"
 
 
 def _card():
-    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.pytorch.prism.loader import load_profile
     prof = load_profile(PROFILE)
     return prof, prof.devices[1]
 

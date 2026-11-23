@@ -37,8 +37,8 @@ def main() -> int:
 
     sys.path.insert(0, "src")
     from neurobrix.nbx import NBXContainer
-    from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism import PrismSolver, load_profile, InputConfig
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.core.config import get_family_defaults
 
     prof = load_profile(get_or_create_default_profile())

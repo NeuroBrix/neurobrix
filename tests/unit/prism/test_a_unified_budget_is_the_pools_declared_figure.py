@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from nbxtensor.backend import host_memory as HM
-from neurobrix.core.prism import solver as S
+from neurobrix.pytorch.prism import solver as S
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile
 
 

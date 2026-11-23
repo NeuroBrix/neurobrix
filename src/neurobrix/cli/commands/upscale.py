@@ -68,9 +68,9 @@ def _load_and_preprocess_image(image_path: str, cache_path: Path):
 def cmd_upscale(args):
     """Image super-resolution via an upscaler container."""
     from neurobrix.nbx import NBXContainer
-    from neurobrix.core.prism import PrismSolver, InputConfig
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
-    from neurobrix.core.prism.loader import launch_profile
+    from neurobrix.pytorch.prism import PrismSolver, InputConfig
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism.loader import launch_profile
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.core.runtime.output_dispatch import save_image
@@ -143,7 +143,7 @@ def cmd_upscale(args):
         log.debug(f"   Devices:  {', '.join(_cards)}"
                   f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
     if getattr(execution_plan, "host_footprint", None):
-        from neurobrix.core.prism.host_footprint import summary as _host_summary
+        from neurobrix.pytorch.prism.host_footprint import summary as _host_summary
         log.debug(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
 
     loader = NBXRuntimeLoader()

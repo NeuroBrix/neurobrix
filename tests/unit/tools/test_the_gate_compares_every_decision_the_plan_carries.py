@@ -2,7 +2,7 @@
 
 2026-10-16: the state engine's step 1 (e83b3d1e2) moved whisper's KV cache plan from 576 to 448 positions; its gate
 scoped 0 cells and it landed without one, because tools/gate_scope.yml `plan_fields` named no `kv_cache` (nor
-`deferred_drain_cliffs`, `layer_stream_chunks`, `expert_working_set`, `cpu_ram_mb`). Every key core/prism/solver.
+`deferred_drain_cliffs`, `layer_stream_chunks`, `expert_working_set`, `cpu_ram_mb`). Every key pytorch/prism/solver.
 plan_record can emit is a compared field or a named explanation; and the plan views the scope caches are keyed by the
 fields they hold, so a change to the list never reuses a view without the new field.
 """
@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from tests.unit.workshop_configuration import the_workshop_configuration  # noqa: E402
 with the_workshop_configuration():
     import gate_scope as GS  # noqa: E402
-from neurobrix.core.prism.solver import plan_record  # noqa: E402
+from neurobrix.pytorch.prism.solver import plan_record  # noqa: E402
 
 
 def _every_field_plan():

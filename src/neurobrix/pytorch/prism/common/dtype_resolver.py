@@ -1,4 +1,4 @@
-# core/prism/common/dtype_resolver.py
+# pytorch/prism/common/dtype_resolver.py
 """
 Dtype Resolver for Prism
 
@@ -11,7 +11,7 @@ bf16→fp16 is safe when Prism's _container_fits_float16() verifies weights.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from neurobrix.core.prism.structure import PrismProfile
+    from neurobrix.pytorch.prism.structure import PrismProfile
 
 from neurobrix.core.dtype import calculate_dtype_multiplier
 

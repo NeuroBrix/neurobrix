@@ -32,7 +32,7 @@ import pytest
 
 
 def test_scaling_is_derived_from_the_graph_and_the_request():
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
 
     class _Comp:
         graph = {"symbolic_context": {"symbols": {
@@ -55,7 +55,7 @@ def test_scaling_is_derived_from_the_graph_and_the_request():
 
 def test_a_request_at_or_below_the_build_is_not_shrunk():
     """A smaller request does not get a smaller promise than the profiler made."""
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
 
     class _Comp:
         graph = {"symbolic_context": {"symbols": {
@@ -74,7 +74,7 @@ def test_a_request_at_or_below_the_build_is_not_shrunk():
     {"symbolic_context": {"symbols": {"s1": {"name": "height"}}}},   # no trace_value
 ])
 def test_a_graph_that_declares_nothing_is_left_alone(graph):
-    from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.pytorch.prism.solver import PrismSolver
 
     class _Comp:
         pass

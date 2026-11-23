@@ -32,9 +32,9 @@ with the_workshop_configuration():
 
 
 def _profile(monkeypatch, memory_mb):
-    import neurobrix.core.prism.loader as L
+    import neurobrix.pytorch.prism.loader as L
     monkeypatch.setattr(L, "load_profile", lambda hw: SimpleNamespace(devices=[SimpleNamespace(memory_mb=memory_mb)]))
-    import neurobrix.core.prism.memory_budget as MB
+    import neurobrix.pytorch.prism.memory_budget as MB
     monkeypatch.setattr(MB, "memory_ladder_mb", lambda: [4096, 6144, 8192, 11264, 12288, 16384, 24576, 32768])
 
 

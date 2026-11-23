@@ -24,12 +24,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism.expert_topology import ExpertTopology, RoutedLayer
-from neurobrix.core.prism.loader import load_profile
-from neurobrix.core.prism.solver import (
+from neurobrix.pytorch.prism.expert_topology import ExpertTopology, RoutedLayer
+from neurobrix.pytorch.prism.loader import load_profile
+from neurobrix.pytorch.prism.solver import (
     ComponentMemory, DeviceState, PrismSolver, _device_is_unified,
 )
-from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
+from neurobrix.pytorch.prism.structure import DeviceBrand, DeviceSpec
 
 MB = 1024 * 1024
 
@@ -222,7 +222,7 @@ def test_a_component_that_fits_whole_is_held_whole():
 
 
 def test_the_topology_names_the_expert_weights_a_store_reads_from_its_files():
-    from neurobrix.core.prism.expert_topology import read_expert_topology
+    from neurobrix.pytorch.prism.expert_topology import read_expert_topology
     names = [f"block.0.ffn.expert.{i}.{p}.weight" for p in ("ffn_gate", "up", "down") for i in range(4)]
     graph = {"tensors": {f"param::{n}": {"is_parameter": True, "shape": [4, 8], "dtype": "bfloat16",
                                          "weight_name": n} for n in names},
@@ -240,7 +240,7 @@ def test_the_compiled_load_of_a_unified_store_passes_only_its_dense_part_through
     tensor per worker). A unified expert store's routed experts are mapped from
     the container's files, never loaded — Qwen3-30B-A3B on the M4 priced 115 288 MB of loading for a
     15 073 MB plan. Was priced read + pinned, whole (400 / 200 MB) until 2026-10-12: the CUDA rule."""
-    from neurobrix.core.prism.host_footprint import host_footprint
+    from neurobrix.pytorch.prism.host_footprint import host_footprint
     alloc = SimpleNamespace(device="mps:0", shard_map={"s0": "mps:0"}, dtype="bfloat16", strategy="expert_store")
     plan = SimpleNamespace(components={"model": alloc}, component_memory={"model": _model_mem()},
                            loading_mode="lazy")

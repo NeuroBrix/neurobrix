@@ -46,7 +46,7 @@ import json
 
 import pytest
 
-from neurobrix.core.prism.solver import _graph_constant_bytes
+from neurobrix.pytorch.prism.solver import _graph_constant_bytes
 from tests.conftest import installed_container
 
 MODEL = "DeepSeek-Coder-V2-Lite-Instruct"

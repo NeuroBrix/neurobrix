@@ -159,7 +159,7 @@ def _warm(argv):
     ap.add_argument("--triton", action="store_true")
     ap.add_argument("--output", default=None)
     a = ap.parse_args(argv)
-    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.pytorch.prism.autodetect import get_or_create_default_profile
     from neurobrix.serving.engine import InferenceEngine
     engine = InferenceEngine(a.model, get_or_create_default_profile(), "triton" if a.triton else "compiled")
     engine.load()

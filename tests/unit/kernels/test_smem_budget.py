@@ -204,7 +204,7 @@ _MAY_OMIT.update({
         "compute units, stated where those units are counted on a card (AMD CDNA4/RDNA, Intel: owed at first light)",
     "memory.triton_runtime_growth_mb":
         "a MEASURED fact of a device (the runtime's growth during a run, outside every allocator): optional by contract "
-        "(core/prism/solver._runtime_growth_fact — unmeasured, not priced, and the plan says so); a device states it once "
+        "(pytorch/prism/solver._runtime_growth_fact — unmeasured, not priced, and the plan says so); a device states it once "
         "measured there, never borrowed",
     "memory.compiled_runtime_growth_mb": "same contract, the compiled engine's growth",
     "memory.state_page_granule_bytes":
@@ -213,7 +213,7 @@ _MAY_OMIT.update({
     "memory.async_release": "same contract, read with the page granule (core/state/price.py)",
     "memory.compiled_conv3d_workspace_input_fraction":
         "the compiled engine's 3-D convolution workspace, measured per convolution library (cuDNN on NVIDIA, MPS on "
-        "Apple): optional by contract — core/prism/op_workspace.conv3d_workspace_bytes refuses by name a plan that "
+        "Apple): optional by contract — pytorch/prism/op_workspace.conv3d_workspace_bytes refuses by name a plan that "
         "prices a compiled conv3d on a device that states none (AMD's MIOpen: not measured, so refused, never borrowed)",
     "memory.compiled_conv3d_workspace_floor_bytes": "the same workspace's floor, the same contract (op_workspace.conv3d_workspace_bytes)",
     "autotune.buckets.M":
@@ -234,8 +234,8 @@ _MAY_OMIT.update({
 #: Whole sections a profile may omit, by prefix, each with the reason.
 _MAY_OMIT_PREFIX = {
     "measured.":
-        "a machine's MEASURED facts (bandwidths, matmul and GEMV rates, the loaders' rates; core/prism/facts_probe, "
-        "tools/profile_facts.py), measured at a machine's first launch: optional by contract — core/prism/time_estimate "
+        "a machine's MEASURED facts (bandwidths, matmul and GEMV rates, the loaders' rates; pytorch/prism/facts_probe, "
+        "tools/profile_facts.py), measured at a machine's first launch: optional by contract — pytorch/prism/time_estimate "
         "ranks plans without a time estimate until then and the explanation says so; never borrowed from another chip",
 }
 _MAY_OMIT.update({f"matrix_unit.{k}": (
@@ -270,7 +270,7 @@ def _flatten(d, prefix=""):
 #: document gives these; each is MEASURED on a card (tiles, thresholds, ladders, screens, the dead-tensor queue, the
 #: pool) and the owner's rule of 2026-11-17 forbids copying them from a neighbouring architecture. All belong to the
 #: Triton branch, and such a profile states no `memory.deferred_drain_cliff_bytes`, so a Triton plan on it is refused
-#: by name (core/prism/memory_budget.deferred_drain_policy_of; held by
+#: by name (pytorch/prism/memory_budget.deferred_drain_policy_of; held by
 #: tests/unit/prism/test_every_nvidia_architecture_the_detector_names_has_a_profile_or_is_refused_by_name.py). The
 #: compiled engine reads none of them. A key outside this list is still required of such a profile.
 _UNMEASURED_MAY_OMIT_PREFIX = ("autotune.", "autotune_screen_rtol.", "block_sizes.", "pipelining.")

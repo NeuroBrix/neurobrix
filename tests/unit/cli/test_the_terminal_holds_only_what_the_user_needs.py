@@ -342,7 +342,7 @@ def test_serve_chat_and_stop_say_one_line_each(tmp_path):
         pytest.skip("no generated hardware profile to serve with")
     # the profile of the visible card, generated beside the user's engine home (no first-launch measurement here)
     sys.path.insert(0, str(REPO / "src"))
-    from neurobrix.core.prism.autodetect import _visible_set_tag
+    from neurobrix.pytorch.prism.autodetect import _visible_set_tag
     hw = f"default-{_visible_set_tag()}"
     if not (engine_home() / "hardware" / f"{hw}.yml").exists():
         pytest.skip(f"no profile {hw} for this card")

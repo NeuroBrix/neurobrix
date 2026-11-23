@@ -15,7 +15,7 @@ import types
 
 import pytest
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 
 class _TorchMustNotBeRead(types.ModuleType):

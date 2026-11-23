@@ -44,7 +44,7 @@ def test_a_long_row_reduction_reserves_no_local_memory():
     code = textwrap.dedent("""
         import ctypes
         import neurobrix  # the application: nbxtensor's host services
-        from neurobrix.core.prism.autodetect import load_default_profile
+        from neurobrix.pytorch.prism.autodetect import load_default_profile
         from neurobrix.triton.dtype import declare_hardware_profile
         declare_hardware_profile(load_default_profile())   # as a run declares it: the row tile's register bound is the profile's
         import nbxtensor.ops.reduction_wrappers as _nbx_reduction_wrappers

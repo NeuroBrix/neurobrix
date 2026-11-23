@@ -33,7 +33,7 @@ import subprocess
 import pytest
 import yaml
 
-from neurobrix.core.prism import autodetect
+from neurobrix.pytorch.prism import autodetect
 
 TIGER_LAKE_DG1 = ("0000:00:02.0 VGA compatible controller [0300]: Intel Corporation TigerLake-LP GT2 [Iris Xe Graphics] "
                   "[8086:9a49] (rev 01)\n"
@@ -106,7 +106,7 @@ def _profile(monkeypatch, os_type="Linux", ram_mb=32 * 1024):
 
 
 def _loaded(monkeypatch, tmp_path, data):
-    from neurobrix.core.prism import loader
+    from neurobrix.pytorch.prism import loader
     monkeypatch.setattr(loader, "GENERATED_DIR", tmp_path)
     (tmp_path / "default-igpu.yml").write_text(yaml.safe_dump(data, sort_keys=False))
     return loader.load_profile("default-igpu")
@@ -136,7 +136,7 @@ def test_a_tiger_lake_laptop_is_refused_by_name_and_plans_on_its_cpu(monkeypatch
 
 
 def test_the_plan_of_a_machine_whose_gpu_is_refused_says_it_and_its_cpu_threads(monkeypatch, tmp_path):
-    from neurobrix.core.prism.solver import ExecutionPlan, PrismSolver, explain_plan, plan_record
+    from neurobrix.pytorch.prism.solver import ExecutionPlan, PrismSolver, explain_plan, plan_record
     _machine(monkeypatch, tmp_path, lspci=TIGER_LAKE_DG1)
     hw = _loaded(monkeypatch, tmp_path, _profile(monkeypatch))
     why = PrismSolver()._explain_choice("cpu_execution", 100.0, [(100.0, "cpu_execution", None, None)], hw)

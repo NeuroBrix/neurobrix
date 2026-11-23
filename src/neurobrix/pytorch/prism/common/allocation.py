@@ -1,4 +1,4 @@
-# core/prism/common/allocation.py
+# pytorch/prism/common/allocation.py
 """
 Allocation Utilities for Prism
 

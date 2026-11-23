@@ -13,7 +13,7 @@ torch = pytest.importorskip("torch")
 
 from neurobrix.core import device_utils as DU  # noqa: E402
 from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence  # noqa: E402
-from neurobrix.core.prism.attention_scratch import vendor_memory_of  # noqa: E402
+from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of  # noqa: E402
 
 
 def _seq(release_from):

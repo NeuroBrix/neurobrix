@@ -19,8 +19,8 @@ built 2 bytes (red).
 """
 from __future__ import annotations
 
-from neurobrix.core.prism.profiler import ActivationProfiler
-from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_widths
+from neurobrix.pytorch.prism.profiler import ActivationProfiler
+from neurobrix.pytorch.prism.runtime_widths import conservative_contract, runtime_widths
 
 NONE = conservative_contract("test: no contract")
 
@@ -137,7 +137,7 @@ def test_the_triton_conv3d_is_priced_with_its_folds():
     replaced `tiling_sizes.conv3d_one_shot_peak`, which counted the result twice and missed the matrix unit's copies
     (M3, bdbdeb8c) — this test still pinned that formula, and stood red from bdbdeb8c to its correction.
     Red if the profile adds anything else than the declared figure."""
-    from neurobrix.core.prism import PrismSolver
+    from neurobrix.pytorch.prism import PrismSolver
     from neurobrix.core.config.loader import vendor_config_for_device
     from nbxtensor.ops import conv_wrappers as _cw
     from nbxtensor.ops._configs import matrix_unit
@@ -166,8 +166,8 @@ def test_the_triton_conv3d_is_priced_with_its_folds():
 
 def test_a_vendor_that_states_no_conv3d_workspace_is_refused_by_name():
     import pytest
-    from neurobrix.core.prism.attention_scratch import vendor_memory_of
-    from neurobrix.core.prism.op_workspace import conv3d_workspace_bytes
+    from neurobrix.pytorch.prism.attention_scratch import vendor_memory_of
+    from neurobrix.pytorch.prism.op_workspace import conv3d_workspace_bytes
     big = 10 << 30                                                       # above the M4 Pro's floor: the fraction decides
     assert conv3d_workspace_bytes(vendor_memory_of("nvidia", "volta"), big) == 0
     assert conv3d_workspace_bytes(vendor_memory_of("apple", "apple_m4_pro"), big) == int(big * 1.6)     # re-measured 2026-11-05 (run 37b)

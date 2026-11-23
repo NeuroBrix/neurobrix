@@ -89,7 +89,7 @@ def kept_neighbours(graph: Dict[str, Any], state_input: str, env: Dict[str, int]
 def refuse_a_state_the_loop_cannot_keep(topology: Dict[str, Any], graphs, input_config, model: str = "") -> None:
     """Raise, naming the request sizes the loop keeps, when the loop component's output does not return its state's
     shape at the request's binding. `graphs(comp)` reads a component's graph; the binding is the plan's own."""
-    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
     flow = (topology or {}).get("flow") or {}
     loop = flow.get("loop") or {}
     state_input = loop.get("state_input")

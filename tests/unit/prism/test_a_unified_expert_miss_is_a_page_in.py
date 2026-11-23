@@ -15,7 +15,7 @@ Run: python -m pytest tests/unit/prism/test_a_unified_expert_miss_is_a_page_in.p
 """
 import pytest
 
-from neurobrix.core.prism import time_estimate as T
+from neurobrix.pytorch.prism import time_estimate as T
 
 RATES = {"triton": {"BF16": {"device": {"cold": 2.38, "warm": 12.28}, "host": {"cold": 1.55, "warm": 3.0}}}}
 

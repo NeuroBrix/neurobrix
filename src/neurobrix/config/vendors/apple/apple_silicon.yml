@@ -46,7 +46,7 @@ memory:
   # memory-efficient kernel on MPS (pytorch/pytorch#179294, maintainer, 2026-04). It writes the full [B, H, Tq, Tk]
   # scores: Allegro native at 720x1280 (79 200 tokens) added ~13 GB in the transformer's first second on an M4 Pro
   # (the Mac, 2026-10-15). Prism prices those scores and the compiled engine runs such an attention in query chunks
-  # (core/prism/attention_scratch.py): each chunk's fp32 scores within this fraction of the device's memory, its rows
+  # (pytorch/prism/attention_scratch.py): each chunk's fp32 scores within this fraction of the device's memory, its rows
   # a multiple of this file's sdpa_math_min_chunk_rows.
   compiled_sdpa_full_scores: true
   # THE COMPILED ENGINE'S CONV3D WORKSPACE, beside its input and output, as a fraction of its input's bytes: MPS's
@@ -60,7 +60,7 @@ memory:
   # carried from the M4 Pro's measure (the same MPS runtime), as the fraction above is.
   compiled_conv3d_workspace_floor_bytes: 1073741824
   # What the compiled engine's other ops hold beside input, output and operand copies while they run, per op type, as a
-  # fraction of the op's first input's bytes (core/prism/op_workspace.py). MPS decomposes aten::linalg_vector_norm into
+  # fraction of the op's first input's bytes (pytorch/prism/op_workspace.py). MPS decomposes aten::linalg_vector_norm into
   # full-size intermediates before the fp32 copy the wrapper makes: VACE's 52-frame encoder chunk held 9.95 GiB at that op
   # where the price said 3.2 GB live (the Mac, 2026-10-18 08:10). `null` = declared, not measured: a plan holding the op is
   # refused by name on this device until the Mac's ceiling bisection of the op alone (T = 4, 8, 16) writes the value.
@@ -89,7 +89,7 @@ memory:
   # stream completes in the full run (0.5 still overran, the default 1.4 let the cache reach 31 GB).
   compiled_allocator_low_watermark_ratio: 0.2
   # MEASURED 2026-10-18 on the M4 Pro: MPS's "other allocations" (outside torch's) at the OOM of five VACE runs: 3.08-3.77
-  # GiB; the maximum, rounded up: memory a compiled plan never prices, taken off the unified room (core/prism/solver.py).
+  # GiB; the maximum, rounded up: memory a compiled plan never prices, taken off the unified room (pytorch/prism/solver.py).
   compiled_private_reserve_mb: 3900
   # State pages (state engine step 2, core/state/price.paged_cache_params). The compiled engine resolves this file
   # (apple / apple_silicon) on the M4 Pro, so the keys stated in apple_m4_pro.yml are stated here too, with the same source.

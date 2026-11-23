@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.core.paths import cache_dir
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 from neurobrix.core.runtime.resolution.container_size import vae_scale_factor
 
 CACHE = cache_dir()

@@ -5,7 +5,7 @@ that carries its own keeps them; a vendor file without the block gives None — 
 What this test would do if the code were wrong: a loader that reads the profile only leaves `measured` None for the
 test profile and the first assertion fails. Injection seen red on 2026-10-25, restored green.
 """
-from neurobrix.core.prism import loader as L
+from neurobrix.pytorch.prism import loader as L
 
 V = {"measured": {"source": "test", "matmul_tflops": {"float16": 1.0, "float32": 0.5}, "memory_gbps": 10.0, "h2d_gbps": 1.0},
      "host_measured": {"source": "test", "host_matmul_gflops": 100.0, "host_memory_gbps": 20.0}}
@@ -41,7 +41,7 @@ def test_the_chip_file_is_read_before_the_family_file(tmp_path, monkeypatch):
     (root / "apple_m4_pro.yml").write_text(yaml.safe_dump({
         "measured": {"source": "test", "matmul_tflops": {"float16": 6.0}, "memory_gbps": 224, "h2d_gbps": 58}}))
     monkeypatch.setattr(CL, "CONFIG_ROOT", tmp_path)
-    from neurobrix.core.prism.loader import vendor_block
+    from neurobrix.pytorch.prism.loader import vendor_block
     dev = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "apple-m4-pro"}
     assert (vendor_block(dev, "measured") or {}).get("memory_gbps") == 224
     family = {"brand": "apple", "architecture": "apple_silicon", "compute_capability": "apple-m9"}

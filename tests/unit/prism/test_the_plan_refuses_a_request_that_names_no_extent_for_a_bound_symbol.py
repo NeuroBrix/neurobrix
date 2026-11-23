@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.pytorch.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.runtime_values import MissingRuntimeValue
 
 DAG = {

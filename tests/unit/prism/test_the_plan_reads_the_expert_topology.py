@@ -4,7 +4,7 @@ The plan priced a 30B-A3B model on a 32 GB card as 57 GB dense and streamed it w
 although each routed layer reads 8 of its 128 experts. Sparsity is a dimension of the plan: the
 topology (experts, top_k, shared experts, bytes per expert) is read from the graph as the engines
 execute it — the declared-MoE fusion's `custom::moe_fused` ops — and the routed working set is
-stated beside the plan's figures, never read to place (`core/prism/expert_topology.py`).
+stated beside the plan's figures, never read to place (`pytorch/prism/expert_topology.py`).
 
 Two parts:
 
@@ -23,10 +23,10 @@ from types import SimpleNamespace
 import pytest
 
 from neurobrix.core.paths import cache_dir
-from neurobrix.core.prism.expert_topology import (
+from neurobrix.pytorch.prism.expert_topology import (
     ExpertTopology, RoutedLayer, price_working_set, read_expert_topology,
 )
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.pytorch.prism.solver import PrismSolver
 
 MB = 1024 * 1024
 SNAPSHOTS = Path.home() / "hf_snapshots"
@@ -166,7 +166,7 @@ def test_a_graph_that_disagrees_with_its_declaration_is_refused():
 
 
 def test_a_plan_states_the_working_set_in_its_record():
-    from neurobrix.core.prism.solver import ExecutionPlan, explain_plan, plan_record
+    from neurobrix.pytorch.prism.solver import ExecutionPlan, explain_plan, plan_record
     t = ExpertTopology("lm", [_layer(128, 8, 9 * MB) for _ in range(2)], shared_experts=0)
     ews = price_working_set({"lm": t}, {"lm": t.routed_bytes + MB}, 32768, 0, "a rung")
     plan = ExecutionPlan(components={}, target_dtype="float16", total_memory_mb=0.0, strategy="zero3", component_memory={},

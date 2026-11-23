@@ -58,7 +58,7 @@ def test_an_arch_that_measured_the_kernel_correct_takes_no_detour(monkeypatch):
 def _empty_contract():
     """No fp16 contract, as the engine's own object says it (the derivation reads `contract.safe` since 2026-10-26;
     a None here stood red)."""
-    from neurobrix.core.prism.runtime_widths import conservative_contract
+    from neurobrix.pytorch.prism.runtime_widths import conservative_contract
     return conservative_contract("the detour cells: no contract")
 
 

@@ -224,7 +224,7 @@ def chunks_path(path: Path) -> Path:
     session prefill chunk forms at every candidate size (`core/state/price.prefill_chunk_candidates`) — its graph at
     the chunk's rows and its attention over the cache at every whole-page key length — each with the certified file
     dtype it is served from and its op count. Derived by tools/derived_census.py; Prism prices the candidates from it
-    (`core/prism/prefill_chunk.py`)."""
+    (`pytorch/prism/prefill_chunk.py`)."""
     return path.with_name(path.name[:-len(".jsonl")] + ".chunks.jsonl")
 
 

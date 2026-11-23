@@ -30,8 +30,8 @@ def _load(tmp_path, monkeypatch, defaults):
     import neurobrix.cli.utils as U
     import neurobrix.nbx as N
     import neurobrix.processors as PR
-    import neurobrix.core.prism.loader as L
-    import neurobrix.core.prism.served_prefill as SP
+    import neurobrix.pytorch.prism.loader as L
+    import neurobrix.pytorch.prism.served_prefill as SP
     monkeypatch.setattr(U, "find_model", lambda name: tmp_path)
     monkeypatch.setattr(N.NBXContainer, "load", staticmethod(lambda p: NS(
         _cache_path=tmp_path, get_manifest=lambda: {"family": "video", "model_name": "a video model"},
@@ -59,7 +59,7 @@ def test_a_served_video_model_is_planned_with_its_container_s_frame_count(tmp_pa
 
 
 def test_a_container_without_a_frame_count_is_refused_by_name_not_given_one(tmp_path, monkeypatch):
-    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.pytorch.prism.profiler import ActivationProfiler
     from neurobrix.core.runtime_values import MissingRuntimeValue
     ic = _load(tmp_path, monkeypatch, {"height": 480, "width": 832, "vae_scale_factor": 8, "dtype": "float16"})
     assert ic.num_frames is None

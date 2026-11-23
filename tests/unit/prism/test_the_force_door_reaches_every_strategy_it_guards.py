@@ -34,7 +34,7 @@ from __future__ import annotations
 import ast
 import inspect
 
-from neurobrix.core.prism import solver as _solver
+from neurobrix.pytorch.prism import solver as _solver
 from neurobrix.core.strategies import STRATEGY_REGISTRY
 
 
