@@ -29,5 +29,7 @@ def test_no_reader_keeps_an_engine_default_for_chat_mode():
     offenders = [f"{p.relative_to(SRC)}:{i}" for p in SRC.rglob("*.py")
                  for i, line in enumerate(p.read_text().splitlines(), 1)
                  if p.name != "prompt_length.py"
-                 and ('get("chat_mode",' in line or "get('chat_mode'," in line or '["chat_mode"]' in line)]
+                 # a container read with an engine default; a request's own flag passed on (kwargs["chat_mode"]) is not
+                 and ('get("chat_mode",' in line or "get('chat_mode'," in line
+                      or ('["chat_mode"]' in line and "default" in line))]
     assert offenders == []
