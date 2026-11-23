@@ -74,7 +74,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
         The DAG (same reference, possibly mutated)
     """
     if os.environ.get("NBX_DISABLE_MOE_FUSION"):
-        return dag
+        return _unfused(dag, family, declared)
     if family != "llm" and not declared:
         return dag
 
@@ -2176,3 +2176,17 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
         ops.pop(u, None)
     execution_order[:] = new_order
     return (len(interior), fused_uid, fused_op, 0)
+
+
+def _unfused(dag: dict, family: str, declared: bool) -> dict:
+    """NBX_DISABLE_MOE_FUSION on a graph that HAS a routed MoE: refused by name. The recorded MoE chain carries the
+    build-time routing as constants (per-expert token counts, split sizes, index lengths): it runs only the prompt it
+    was built with, on either branch (granite on the Mac, 23/11: a split that sums to the build-time count, a
+    broadcast of the build-time rows). A graph with no routed MoE is returned as it is."""
+    if (family == "llm" or declared) and _wide_topks(dag.get("ops", {}), dag.get("execution_order", [])):
+        raise RuntimeError(
+            "ZERO FALLBACK: NBX_DISABLE_MOE_FUSION asks for the recorded MoE chain, and that chain carries the "
+            "build-time routing as constants (per-expert token counts, split sizes): it runs only the prompt it was "
+            "built with. The fused routing is the only runnable form of this graph; its reference is the per-token "
+            "oracle (nbxtensor tests/test_the_moe_route_prefill_on_a_device_is_each_token_routed_alone.py)")
+    return dag
