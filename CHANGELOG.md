@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The PyTorch branch runs the torch it is validated with: torch 2.14.0 exactly.** `pip install "neurobrix[pytorch]"`
+  asks for `torch==2.14.0` (a CUDA build such as 2.14.0+cu126 qualifies; install it from the PyTorch index first), and
+  the PyTorch engine refuses an older or a newer torch by name before any weight loads. The Triton engine needs no torch.
+
 ## [0.6.17] - 2026-11-17
 
 With nbxtensor 0.1.11: 0.6.17 is the engine that runs Devstral for text on the PyTorch branch. A vision-language container answers a text

@@ -81,12 +81,13 @@ dependencies = [
 [project.optional-dependencies]
 # The PyTorch branch (--compiled, the default when no mode flag is given and torch is installed, and --sequential): torch + the
 # cuDNN/cuBLAS/cuFFT it bridges. The Triton branch (--triton, --triton-sequential) runs without it.
-# torch 2.12.0 is the first release with every torch API the compiled engine calls on an NVIDIA or AMD GPU
-# (core/runtime/torch_allocator.py COMPILED_TORCH_APIS); an older torch is refused there by name, naming the line of
-# this extra whose marker holds, read back from the package metadata. macOS has no such GPU (detection drives the
-# Apple GPU through MPS, or plans on the CPU) and PyPI has no torch 2.12 for an Intel Mac or a macOS older than 14:
-# there the extra asks what 0.6.16 asked.
-pytorch = ["torch>=2.12.0; sys_platform != 'darwin'", "torch>=2.1.0; sys_platform == 'darwin'"]
+# The PyTorch branch is frozen on the torch it is validated with: 2.14.0 exactly (pytorch/torch_version.py
+# VALIDATED_TORCH, the one place the version is written; a test reads this pin against it). Any other torch is refused
+# there by name before any weight loads. A bare == matches a local label, so a CUDA build (2.14.0+cu126) satisfies it,
+# but pip cannot select that build from PyPI: install it from the PyTorch index first, as the README gives:
+# pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cu126, then pip install "neurobrix[pytorch]".
+# The macOS wheel of 2.14.0 comes from PyPI (Apple silicon, macOS 14 or newer).
+pytorch = ["torch==2.14.0"]
 # psutil: the gate harness (tools/regression_matrix.py) reads a cell's process tree with it, and its tests
 # need it; the runtime engine does not import it (the host is read by core/host_memory.memory_state).
 # imageio: the harness's judge reads a video's size and frames with it (tools/judge_artefact.video_degeneracy);

@@ -95,10 +95,9 @@ def metadata(monkeypatch):
 
 
 #: (sys.platform, platform.system(), platform.machine()) of the four platforms PyPI's torch ships for, and the torch
-#: the pytorch extra asks there: 2.12.0 where the compiled engine reaches the GPU calls, 0.6.16's 2.1.0 on macOS (no
-#: torch 2.12 wheel for an Intel Mac or a macOS older than 14, and no GPU there that reaches those calls).
-PLATFORMS = [("darwin", "Darwin", "x86_64", ">=2.1.0"), ("darwin", "Darwin", "arm64", ">=2.1.0"),
-             ("linux", "Linux", "x86_64", ">=2.12.0"), ("win32", "Windows", "AMD64", ">=2.12.0")]
+#: the pytorch extra asks there: 2.14.0 exactly, on every platform (the validated release).
+PLATFORMS = [("darwin", "Darwin", "x86_64", "==2.14.0"), ("darwin", "Darwin", "arm64", "==2.14.0"),
+             ("linux", "Linux", "x86_64", "==2.14.0"), ("win32", "Windows", "AMD64", "==2.14.0")]
 
 
 def _on(monkeypatch, sys_platform, system, machine):
@@ -136,8 +135,8 @@ def test_on_macos_a_torch_meeting_the_extra_that_reaches_the_gpu_calls_is_refuse
                                                                                                      setter, metadata):
     # only another machine's --hardware profile puts a cuda/hip device in a Mac's plan: the extra's torch is met there
     _on(monkeypatch, "darwin", "Darwin", "x86_64")
-    _torch_at(monkeypatch, "2.2.2", setter=False, host_cache=False)
-    with pytest.raises(RuntimeError, match=r"2\.2\.2 lacks; neurobrix's pytorch extra asks for torch>=2\.1\.0 on "
+    _torch_at(monkeypatch, "2.14.0", setter=False, host_cache=False)
+    with pytest.raises(RuntimeError, match=r"2\.14\.0 lacks; neurobrix's pytorch extra asks for torch==2\.14\.0 on "
                        r"darwin, which it meets: .*another machine's --hardware") as exc:
         TA.configure_torch_allocator(_plan(V100))
     assert "upgrade" not in str(exc.value) and setter == []
@@ -159,7 +158,7 @@ def test_a_torch_without_the_setter_is_refused_naming_the_release_it_needs_and_t
     _torch_at(monkeypatch, "2.5.1", setter=False, host_cache=False)
     with pytest.raises(RuntimeError, match=r"calls torch\._C\._accelerator_setAllocatorSettings, torch\.accelerator\."
                        r"empty_host_cache, which the installed torch 2\.5\.1 lacks; neurobrix's pytorch extra asks for "
-                       r"torch>=2\.12\.0: upgrade it, pip install --upgrade \"torch>=2\.12\.0\""):
+                       r"torch==2\.14\.0: upgrade it, pip install --upgrade \"torch==2\.14\.0\""):
         TA.configure_torch_allocator(_plan(V100))
     assert TA._applied is None and not any(os.environ.get(k) for k in TA.OPERATOR_ENV) and setter == []
 
@@ -168,7 +167,7 @@ def test_a_torch_with_the_setter_and_no_host_cache_release_is_refused_before_the
     # torch 2.11 passed 0.6.17's first refusal (the setter is there) and died in an AttributeError at the first GPU load
     _torch_at(monkeypatch, "2.11.0", host_cache=False)
     with pytest.raises(RuntimeError, match=r"calls torch\.accelerator\.empty_host_cache, which the installed torch "
-                       r"2\.11\.0 lacks; neurobrix's pytorch extra asks for torch>=2\.12\.0"):
+                       r"2\.11\.0 lacks; neurobrix's pytorch extra asks for torch==2\.14\.0"):
         TA.configure_torch_allocator(_plan(V100))
     assert setter == [] and TA._applied is None
 
@@ -210,7 +209,7 @@ def test_a_torch_without_the_host_cache_release_is_refused_before_any_weight_loa
     loaded = []
     ld = _loader(monkeypatch, tmp_path, loaded, ext)
     _torch_at(monkeypatch, "2.11.0", host_cache=False)
-    with pytest.raises(RuntimeError, match=r"empty_host_cache, which the installed torch 2\.11\.0 lacks; .*torch>=2\.12\.0"):
+    with pytest.raises(RuntimeError, match=r"empty_host_cache, which the installed torch 2\.11\.0 lacks; .*torch==2\.14\.0"):
         _load(ld, via, "cuda:0")
     assert loaded == [] and setter == []
 
@@ -219,7 +218,7 @@ def test_a_torch_without_the_host_cache_release_is_refused_before_any_weight_loa
 def test_a_torch_with_both_apis_loads_onto_a_gpu_and_releases_its_host_cache(monkeypatch, tmp_path, setter, via, ext):
     loaded = []
     ld = _loader(monkeypatch, tmp_path, loaded, ext)
-    _torch_at(monkeypatch, "2.12.0")
+    _torch_at(monkeypatch, "2.14.0")
     assert _load(ld, via, "cuda:0") == {"w": "cuda:0"}
     assert loaded == [(str(tmp_path / ld.file), "cuda:0")] and setter == ["empty_host_cache"]
 
@@ -243,7 +242,7 @@ def test_without_package_metadata_the_refusal_names_what_is_missing_never_a_gues
 
 
 def test_a_torch_with_both_apis_applies_the_declared_setting(monkeypatch, setter):
-    _torch_at(monkeypatch, "2.12.0")
+    _torch_at(monkeypatch, "2.14.0")
     assert TA.configure_torch_allocator(_plan(V100)) == "expandable_segments:True"
     assert setter == ["expandable_segments:True"]
 

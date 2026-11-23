@@ -132,8 +132,8 @@ neurobrix doctor
 ```
 
 **NVIDIA V100 (Volta).** Current CUDA 13 builds of PyTorch no longer support Volta. Use a
-`cu126` build. On `main` the PyTorch engine on an NVIDIA or AMD GPU needs torch 2.12.0
-or newer and refuses an older one by name before any weight loads; 0.6.16 accepts torch 2.1.0 or newer.
+`cu126` build. On `main` the PyTorch engine needs torch 2.14.0 exactly (the release it is validated
+with) and refuses any other by name before any weight loads; 0.6.16 accepts torch 2.1.0 or newer.
 
 **Apple Silicon (macOS).** The Triton engine runs on the Apple GPU through Metal. PyPI publishes
 no Triton for macOS: `install-metal` installs NeuroBrix's Triton build for Apple GPUs
@@ -304,13 +304,10 @@ component needed, re-plans it and goes on, once, keeping the components already 
 
 - On an Intel Mac the integrated GPU is named from system_profiler without its platform; it is not driven, and the
   engine runs on the CPU.
-- On `main`, `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer on Linux and Windows (0.6.16 asks
-  for torch 2.1.0 or newer everywhere): there the default engine on
-  an NVIDIA or AMD GPU calls PyTorch's allocator setter (first in torch 2.10.0) and its pinned host-cache release
-  (first in torch 2.12.0), and refuses an older torch by name before any weight loads. On macOS it asks for torch 2.1.0
-  or newer, as 0.6.16 did: a Mac reaches neither call (the Apple GPU runs through MPS, an Intel Mac on its CPU), and
-  PyPI's newest torch for an Intel Mac is 2.2.2, for an Apple-silicon Mac on macOS 11 to 13 2.11.0; pip installs the newest one your
-  Mac has.
+- On `main`, `pip install "neurobrix[pytorch]"` asks for torch 2.14.0 exactly, on every platform (0.6.16 asks
+  for torch 2.1.0 or newer): it is the release the PyTorch engine is validated with, and the engine refuses any other
+  torch by name before any weight loads. PyPI's torch 2.14.0 wheel for macOS needs an Apple-silicon Mac on macOS 14 or newer;
+  the Triton engine needs no torch.
 - Constrained decoding needs the grammar engine, the `nbxgrammar` package, which `pip install neurobrix` installs on
   Linux x86_64 and aarch64, macOS arm64 and x86_64 and Windows x86_64; on any other platform no wheel of it exists and a
   constrained request is refused by name (`501 constrained_decoding_not_installed`). It enforces a subset of JSON Schema (a

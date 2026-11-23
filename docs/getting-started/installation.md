@@ -40,8 +40,9 @@ pip install "neurobrix[pytorch]"
 neurobrix doctor
 ```
 
-On `main`, the PyTorch engine on an NVIDIA or AMD GPU needs torch 2.12.0 or newer and refuses
-an older one by name before any weight loads. 0.6.16 accepts torch 2.1.0 or newer.
+On `main`, the PyTorch engine needs torch 2.14.0 exactly (the release it is validated with; a CUDA build
+such as 2.14.0+cu126 qualifies) and refuses any other, older or newer, by name before any weight loads.
+0.6.16 accepts torch 2.1.0 or newer.
 
 ### NVIDIA V100 (Volta)
 
