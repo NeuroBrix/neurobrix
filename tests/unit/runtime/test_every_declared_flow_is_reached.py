@@ -63,7 +63,10 @@ def _executions(flow_type):
 
 
 def _dispatch_src():
-    return (ROOT / "core" / "runtime" / "executor.py").read_text()
+    """The dispatcher's own source (`_create_flow_handler`), not the whole module: a `flow_type ==` test elsewhere in
+    the executor (the generation-type mapping) is no dispatch branch."""
+    src = (ROOT / "core" / "runtime" / "executor.py").read_text()
+    return src[src.index("def _create_flow_handler"):]
 
 
 def _modules(flow_type):
