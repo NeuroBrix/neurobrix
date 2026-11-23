@@ -1,14 +1,22 @@
 """The size an image-conditioned video run generates at, and the fit of its conditioning image: one reader.
 
-The container declares both (the project lead's ruling of 2026-11-23 11:13); the engine reads, it never supplies:
+The container declares both; the engine reads, it never supplies (rulings of 2026-11-23: 11:13, revised by the owner
+13:48 and the project lead 13:51):
 
   runtime/defaults.json `size_policy`
-      "fixed"       `height` and `width` declared: the run's size whatever the image.
+      "default"     `height` and `width` declared: the run's size when the request names none, whatever the image.
       "from_image"  `max_area` (the product, an integer) and `size_multiple` declared, no height/width: the size
                     follows the conditioning image's aspect (`from_image_size`, the diffusers form).
-      Absent, unknown, or both forms at once: refused by name.
-  An explicit request size wins: for "from_image" when each side is a multiple of `size_multiple` (else refused,
-  the multiple named); for "fixed" any value, as before.
+      An unknown policy ("fixed" included: none ships with it) or both forms at once ("default" with max_area,
+      "from_image" with height/width): refused by name.
+  The user's size is a value. A request naming BOTH height and width runs at them, with or without a declared
+  policy: the one check is what the graph needs, the declared `size_multiple` where one is declared (refused, the
+  multiple named). The refusal by name with its remedy stays only where no size comes from anywhere; a request
+  naming one side to a container with no policy is refused naming the missing side.
+
+  The vendor's statement is HELP, never a gate: `size_note` (one sentence), `size_static` (true where the vendor
+  documents one size), `size_range` ({min, max, multiple}) are read and shown (`size_notice`) when the request's size
+  is not the declared default; nothing is refused on them.
 
   topology.json extracted_values.vae_encoder.condition_image_fit
       `crop` (none|center) and `resample` (lanczos|bicubic|linear), in the vendor's order of operations (the
@@ -22,8 +30,10 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Optional, Tuple
 
-POLICIES = ("fixed", "from_image")
-_FORMS = {"fixed": ("height", "width"), "from_image": ("max_area", "size_multiple")}
+POLICIES = ("default", "from_image")
+_FORMS = {"default": ("height", "width"), "from_image": ("max_area", "size_multiple")}
+#: the keys that mark the OTHER form: a container declaring them beside its policy declares both forms
+_OTHER_FORM = {"default": ("max_area",), "from_image": ("height", "width")}
 FIT_KEYS = ("crop", "resample")
 DEFAULTS_FILE = "runtime/defaults.json"
 FIT_SITE = "topology.json extracted_values.vae_encoder.condition_image_fit"
@@ -44,19 +54,17 @@ def _outdated(message: str) -> None:
     _refuse(message + REMEDY)
 
 
-def _policy(defaults: Mapping[str, Any], where: str) -> str:
-    """The declared policy, refused by name when absent, unknown, or declared beside the other form's keys."""
+def _policy(defaults: Mapping[str, Any], where: str) -> Optional[str]:
+    """The declared policy, None when undeclared; refused by name when unknown or beside the other form's keys."""
     policy = defaults.get("size_policy")
     if policy is None:
-        _outdated(f"size_policy is not declared in {where}: a run with a conditioning image generates at the size its "
-                f"container declares, \"fixed\" (height, width) or \"from_image\" (max_area, size_multiple)")
+        return None
     if policy not in POLICIES:
-        _outdated(f"size_policy = {policy!r} in {where} is not a size policy: \"fixed\" or \"from_image\"")
-    other = "from_image" if policy == "fixed" else "fixed"
-    stray = [k for k in _FORMS[other] if k in defaults]
+        _outdated(f"size_policy = {policy!r} in {where} is not a size policy: \"default\" or \"from_image\"")
+    stray = [k for k in _OTHER_FORM[policy] if k in defaults]
     if stray:
-        _outdated(f"{where} declares size_policy = {policy!r} and also {stray} of the {other!r} form: one form, "
-                f"not both")
+        _outdated(f"{where} declares size_policy = {policy!r} and also {stray} of the other form: one form, "
+                  f"not both")
     return policy
 
 
@@ -67,6 +75,28 @@ def _positive_int(defaults: Mapping[str, Any], key: str, policy: str, where: str
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         _outdated(f"{key} = {value!r} in {where} is not a positive integer")
     return value
+
+
+def _check_multiple(defaults: Mapping[str, Any], asked_h, asked_w, where: str) -> None:
+    """The one check on a requested size: the declared `size_multiple`, where one is declared."""
+    if defaults.get("size_multiple") is None:
+        return
+    multiple = _positive_int(defaults, "size_multiple", str(defaults.get("size_policy")), where)
+    for side, asked in (("height", asked_h), ("width", asked_w)):
+        if asked is not None and int(asked) % multiple:
+            _refuse(f"the requested {side} {asked} is not a multiple of size_multiple = {multiple} (declared in "
+                    f"{where}): ask a multiple of {multiple}")
+
+
+def _no_size(asked_h, asked_w, where: str) -> None:
+    """No declared policy and the request does not name both sides: the size comes from nowhere."""
+    if asked_h is None and asked_w is None:
+        _outdated(f"size_policy is not declared in {where} and the request names no size: a run with a "
+                  f"conditioning image generates at --height/--width, else at the size its container declares, "
+                  f"\"default\" (height, width) or \"from_image\" (max_area, size_multiple)")
+    given, missing = ("height", "width") if asked_h is not None else ("width", "height")
+    _refuse(f"the request names its {given} but not its {missing}, and {where} declares no size_policy to give "
+            f"it: pass --{missing} too")
 
 
 def from_image_size(max_area: int, size_multiple: int, image_hw: Tuple[int, int]) -> Tuple[int, int]:
@@ -92,12 +122,6 @@ def from_image_size(max_area: int, size_multiple: int, image_hw: Tuple[int, int]
 def _from_image(defaults, image_hw, asked_h, asked_w, where) -> Tuple[int, int]:
     max_area = _positive_int(defaults, "max_area", "from_image", where)
     multiple = _positive_int(defaults, "size_multiple", "from_image", where)
-    for side, asked in (("height", asked_h), ("width", asked_w)):
-        if asked is not None and int(asked) % multiple:
-            _refuse(f"the requested {side} {asked} is not a multiple of size_multiple = {multiple} (declared in "
-                    f"{where}): ask a multiple of {multiple}")
-    if asked_h is not None and asked_w is not None:
-        return int(asked_h), int(asked_w)
     if not image_hw or not all(isinstance(v, int) and v > 0 for v in image_hw):
         _refuse(f"size_policy = 'from_image' in {where} sizes the run from its conditioning image, and this call "
                 f"gave no image size ({image_hw!r})")
@@ -127,13 +151,47 @@ def resolve_size(defaults: Optional[Mapping[str, Any]], image_hw: Optional[Tuple
 
     `defaults` is the container's runtime/defaults.json, `image_hw` the conditioning image's own (height, width),
     `asked_h`/`asked_w` the request's (None when it names none: each side is taken on its own), `where` the file
-    named in a refusal."""
+    named in a refusal. A request naming both sides runs at them, policy or none, checked only against a declared
+    `size_multiple`."""
     defaults = defaults or {}
-    if _policy(defaults, where) == "from_image":
+    policy = _policy(defaults, where)
+    _check_multiple(defaults, asked_h, asked_w, where)
+    if asked_h is not None and asked_w is not None:
+        return int(asked_h), int(asked_w)
+    if policy is None:
+        _no_size(asked_h, asked_w, where)
+    if policy == "from_image":
         return _from_image(defaults, image_hw, asked_h, asked_w, where)
-    h = _positive_int(defaults, "height", "fixed", where)
-    w = _positive_int(defaults, "width", "fixed", where)
+    h = _positive_int(defaults, "height", "default", where)
+    w = _positive_int(defaults, "width", "default", where)
     return (int(asked_h) if asked_h is not None else h, int(asked_w) if asked_w is not None else w)
+
+
+def _vendor_bounds(defaults: Mapping[str, Any]) -> str:
+    """What the vendor documents of the size, as read (`size_static`, `size_range`): words, never a check."""
+    out = ""
+    if defaults.get("size_static") is True:
+        out += f" The vendor documents one size: {defaults.get('height')}x{defaults.get('width')}."
+    rng = defaults.get("size_range")
+    if isinstance(rng, Mapping):
+        out += (f" The vendor documents {rng.get('min')} to {rng.get('max')}"
+                + (f", a multiple of {rng['multiple']}." if rng.get("multiple") is not None else "."))
+    return out
+
+
+def size_notice(defaults: Optional[Mapping[str, Any]], asked_h: Optional[int],
+                asked_w: Optional[int]) -> Optional[str]:
+    """The one line shown when a request names a size other than the declared default and the container declares a
+    `size_note`, else None. Help, not a gate: it never refuses (a "from_image" container declares no default, so any
+    size a request names is shown the note)."""
+    defaults = defaults or {}
+    note = defaults.get("size_note")
+    if not note or (asked_h is None and asked_w is None):
+        return None
+    declared = (defaults.get("height"), defaults.get("width"))
+    if all(a is None or (d is not None and int(a) == int(d)) for a, d in zip((asked_h, asked_w), declared)):
+        return None
+    return f"[size] {note}{_vendor_bounds(defaults)}"
 
 
 def image_fit(fit: Optional[Mapping[str, Any]], container: str = "the container") -> Tuple[str, str]:

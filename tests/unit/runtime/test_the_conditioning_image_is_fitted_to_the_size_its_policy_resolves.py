@@ -6,9 +6,9 @@ test (18a3b1bcb), whose last case kept the image's own size when the container d
 The five rulings of 23/11 11:13, each on a container built here (runtime/defaults.json + the vae_encoder flag):
   Wan2.1-I2V-14B-480P  from_image 399360 / 16, bicubic, no crop
   Wan2.2-I2V-A14B      from_image 921600 / 16, bicubic, no crop
-  CogVideoX-5b-I2V     fixed 480x720, lanczos, no crop
-  Allegro-TI2V         fixed 720x1280, centre crop THEN antialiased linear
-  Wan2.1-VACE-1.3B     fixed 480x832, the resample its container declares (lanczos or bicubic, both run here)
+  CogVideoX-5b-I2V     default 480x720, lanczos, no crop
+  Allegro-TI2V         default 720x1280, centre crop THEN antialiased linear
+  Wan2.1-VACE-1.3B     default 480x832, the resample its container declares (lanczos or bicubic, both run here)
 
 What would turn it red: the clip at the image's own size or at the request's raw size instead of the resolved one,
 the resolved size not handed on (the executor then generates at another), the resample not the declared PIL filter,
@@ -27,9 +27,9 @@ RULINGS = {
                             {"crop": "none", "resample": "bicubic"}),
     "Wan2.2-I2V-A14B": ({"size_policy": "from_image", "max_area": 921600, "size_multiple": 16},
                         {"crop": "none", "resample": "bicubic"}),
-    "CogVideoX-5b-I2V": ({"size_policy": "fixed", "height": 480, "width": 720}, {"crop": "none", "resample": "lanczos"}),
-    "Allegro-TI2V": ({"size_policy": "fixed", "height": 720, "width": 1280}, LINEAR),
-    "Wan2.1-VACE-1.3B": ({"size_policy": "fixed", "height": 480, "width": 832}, {"crop": "none", "resample": "lanczos"}),
+    "CogVideoX-5b-I2V": ({"size_policy": "default", "height": 480, "width": 720}, {"crop": "none", "resample": "lanczos"}),
+    "Allegro-TI2V": ({"size_policy": "default", "height": 720, "width": 1280}, LINEAR),
+    "Wan2.1-VACE-1.3B": ({"size_policy": "default", "height": 480, "width": 832}, {"crop": "none", "resample": "lanczos"}),
 }
 
 

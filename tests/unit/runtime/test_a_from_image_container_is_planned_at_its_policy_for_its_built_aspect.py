@@ -21,5 +21,5 @@ def test_a_container_built_at_its_vendor_default_is_planned_at_it():
 
 
 def test_a_container_of_another_policy_keeps_its_declared_or_built_size():
-    assert plan_size({"size_policy": "fixed", "height": 480, "width": 720}, (480, 720)) is None
+    assert plan_size({"size_policy": "default", "height": 480, "width": 720}, (480, 720)) is None
     assert plan_size({}, (96, 160)) is None

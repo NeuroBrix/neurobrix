@@ -7,7 +7,7 @@ conditioning image the path is unchanged: the container's declared size, else it
 Replaces test_the_conditioning_image_sets_the_resolution.py, which asserted the withdrawn order (a 448x448 image
 outranking the built latent and setting the run at 448x448).
 
-What would turn it red: a 512x512 image run at 512x512 under a fixed 480x720 policy, an image accepted from a container
+What would turn it red: a 512x512 image run at 512x512 under a default 480x720 policy, an image accepted from a container
 declaring no size_policy, the processor's size overridden, or a run without an image newly refused for lack of a policy
 (the VACE all-generate pair carries its size and no conditioning image)."""
 from __future__ import annotations
@@ -34,8 +34,8 @@ def _hw(merged):
     return merged["height"], merged["width"]
 
 
-def test_a_fixed_policy_is_the_run_size_not_the_images():
-    ex = _ex({"size_policy": "fixed", "height": 480, "width": 720})
+def test_a_default_policy_is_the_run_size_not_the_images():
+    ex = _ex({"size_policy": "default", "height": 480, "width": 720})
     assert _hw(ex._prepare_defaults({"global.image": np.zeros((1, 3, 1, 512, 512), dtype=np.float32)})) == (480, 720)
 
 

@@ -306,6 +306,21 @@ def _request_image_hw(args, cache_path):
         ) from _e
 
 
+def container_defaults(cache_path) -> dict:
+    """The container's runtime/defaults.json, {} when it carries none."""
+    defaults_path = Path(cache_path) / "runtime" / "defaults.json"
+    return json.load(open(defaults_path)) if defaults_path.exists() else {}
+
+
+def note_the_size(cached_defaults: dict, args) -> None:
+    """Show, on the user's INFO line, the container's `size_note` when the request names a size other than the
+    declared default (`size_policy.size_notice`): the vendor's statement is help, never a gate."""
+    from neurobrix.core.runtime.size_policy import size_notice
+    line = size_notice(cached_defaults, getattr(args, "height", None), getattr(args, "width", None))
+    if line:
+        log.info(line)
+
+
 def request_input_config(args, manifest: dict, family, cache_path):
     """The InputConfig Prism plans a request with: the request's own facts (--height, --width,
     the input image's size, the prompt as a batch of one, guidance doubling the batch), then the
@@ -724,8 +739,8 @@ def cmd_run(args):
     log.debug(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
     # Build InputConfig for activation profiling (cache_path: the container's, read and asserted above)
-    defaults_path = cache_path / "runtime" / "defaults.json"
-    cached_defaults = json.load(open(defaults_path)) if defaults_path.exists() else {}
+    cached_defaults = container_defaults(cache_path)
+    note_the_size(cached_defaults, args)              # the vendor size note, when the request names another size
     input_config = request_input_config(args, manifest, family, cache_path)
     # The resolved request the inputs below are built from — the same values Prism plans with.
     height, width, num_frames = input_config.height, input_config.width, input_config.num_frames
