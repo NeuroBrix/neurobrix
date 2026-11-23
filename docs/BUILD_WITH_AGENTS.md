@@ -7,7 +7,8 @@ surface an application should use to put NeuroBrix models inside a product, and 
 
 The application surface of NeuroBrix is its **command line**: one command per task, the same for every model family, the
 result written to a file. An application calls it as a subprocess and reads the file. There is no per-model pipeline to
-write, no PyTorch to install, and no CUDA or framework version to match.
+write. On Linux with an NVIDIA GPU and on Apple Silicon no PyTorch is needed: the engine runs on its own Triton branch. On Windows the
+engine runs on its PyTorch branch: install `neurobrix[pytorch]`.
 
 Since 0.6.3, a model kept loaded by `neurobrix serve --http` also answers the **OpenAI API** over HTTP (below), so an
 application already written against an OpenAI client can point it at the local daemon. An in-process Python API is on the
@@ -16,7 +17,7 @@ roadmap; until it exists, use the commands and the HTTP API below; they are the 
 ## Setup (once per machine)
 
 ```bash
-pip install neurobrix
+pip install neurobrix                  # Windows: pip install "neurobrix[pytorch]"
 python -m nbxtensor install-metal      # macOS on Apple Silicon only: NeuroBrix's Triton build for Apple GPUs
 neurobrix doctor --json                # {"ok": true, "problems": []} when the engine can run
 ```
@@ -126,7 +127,8 @@ Every endpoint and setting: [Serving and chat](serving.md#openai-compatible-http
    Name a model by its hub name (`<org>/<name>`) everywhere.
 4. **Read results from `--output`.** Use a temporary directory per call, and check the exit code.
 5. **The first `import` downloads gigabytes.** Tell the user before calling it, and do it once (setup), not per request.
-6. **Same code on Linux, Windows and macOS.** The commands are the same everywhere; only `install-metal` is macOS-specific.
+6. **Same code on Linux, Windows and macOS.** The commands are the same everywhere; only the install line differs
+   (`install-metal` on macOS, the `pytorch` extra on Windows).
 
 ## Example: dictate (voice recording → transcript → summary)
 

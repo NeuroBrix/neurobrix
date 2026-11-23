@@ -5,6 +5,8 @@ extrapolated or rounded in our favour. Where the Triton engine is slower than th
 
 **Register:** `benchmarks/results/showcase_2026-11-08_v0.6.2.tsv` — measured 2026-11-07/08, NeuroBrix **0.6.2** (commit `99d17b0`), 18 models x 2 engines x 2 cards, medians of 3 runs.
 
+These figures are those of NeuroBrix 0.6.2, measured 2026-11-07/08. This page has not been measured again on a later version.
+
 **What "run" means here.** Every time compared on this page is the *run* time: the end-to-end time of the command
 minus the engine's own weight-load time — start-up, planning, generation and writing the output, the part the two
 engines execute differently. Loading reads the same weight files for both engines (each through its own loader); its
@@ -23,8 +25,7 @@ time is set mostly by the storage the files come from, so it is given apart, in 
   A first pass ran the four cards at once (each run alone on its card); the shared host (CPU, memory, PCIe, storage)
   spread repeated runs by up to 2x, most of all for the 30B models whose weights stream from host memory, so it was
   replaced by this one. The spread column gives the fastest and slowest of the three runs of each cell.
-- **3 runs per cell, the median kept.** The three outputs of every cell are byte-identical (deterministic), and identical
-  to the outputs judged by eye (text read, image and video looked at, audio transcribed) at the 0.6.0 release gate.
+- **3 runs per cell, the median kept.** The three outputs of every cell are byte-identical (deterministic).
 - **Short requests** — the release gate's: 32 new tokens for language models, 8 steps at the sizes given for images, 2-4
   steps for video. They measure the engine at the floor of a request; a longer request moves every number.
 - **Measured**: *run* = the time after the weights are loaded (the command's end-to-end time minus the engine's own load
@@ -34,8 +35,7 @@ time is set mostly by the storage the files come from, so it is given apart, in 
 
 ## Hardware
 
-- 4 x NVIDIA Tesla V100-SXM2 (2017, sm_70): two 32 GB, two 16 GB; application clocks locked at 1290 MHz (SM) / 877 MHz
-  (memory); driver 535.
+- 4 x NVIDIA Tesla V100-SXM2 (2017, sm_70): two 32 GB, two 16 GB.
 - Host: 2 x Intel Xeon Gold 6230 (80 threads). Models are read from an NVMe cache over NFS/RDMA.
 - A 30B mixture-of-experts model does not fit whole in a V100: its weights are held in host memory and streamed to the
   card as each layer runs (the plan NeuroBrix's planner chooses). Those rows measure that path, not a whole-card run.
@@ -198,8 +198,9 @@ Loading, given apart: the Triton engine loads slower than the PyTorch engine (by
 
 ## The commands
 
-Each cell ran exactly this command (the PyTorch engine; the Triton cell adds `--triton`), from the repository root;
-`--hardware` named the card's profile, the one NeuroBrix generates at a first run, and `--certified-only` refuses any
+Each cell ran this command (the PyTorch engine; the Triton cell adds `--triton`), from the repository root. The register
+records each model by its 0.6.2 directory name; today a model is named by its hub name, as below;
+`--hardware` named the card's profile, the one NeuroBrix creates once on the first launch on a machine, and `--certified-only` refuses any
 kernel setting the certified directory does not serve (no tuning during a measured run):
 
 ```

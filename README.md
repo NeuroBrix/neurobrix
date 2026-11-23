@@ -22,18 +22,18 @@
 </p>
 
 ```bash
-pip install neurobrix                      # the Triton engine: no PyTorch (about 1.8 GB installed)
+pip install neurobrix                      # the Triton engine: no PyTorch
 neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
 neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Write a Python function that reverses a string."
 ```
 
 ## Why NeuroBrix
 
-- **Your hardware, not a rented API.** NeuroBrix plans where each part of a model runs from the GPUs and memory it
-  finds: one GPU, several GPUs, streamed through GPU memory, or offloaded to the host. A request that does not fit is
-  refused with the figures, never silently degraded.
+- **Your hardware, not a rented API.** NeuroBrix plans where each part of a model runs from your machine's hardware
+  profile and the model's container: one GPU, several GPUs, streamed through GPU memory, or offloaded to the host. A
+  request that does not fit is refused with the figures, never silently degraded.
 - **One engine for every family.** A mixture-of-experts language model, a speech recognizer and a video diffusion model
-  run through the same engine from the same `.nbx` container: 49 models ready on the
+  run through the same engine from the same `.nbx` container: 49 models on the
   [hub](https://neurobrix.org/models), no pipeline per model.
 - **No PyTorch underneath, if you want.** The Triton engine runs on [nbxtensor](https://github.com/NeuroBrix/nbxtensor),
   our tensor library, with kernel settings certified per GPU class against a float64 reference. The PyTorch engine runs
@@ -43,7 +43,8 @@ neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Write a Pytho
 
 | Hardware | Status |
 |---|---|
-| NVIDIA GPUs on Linux and Windows | Released. Linux: both engines. Windows: the PyTorch engine; `--triton` is refused by name (PyPI publishes no triton for Windows). Our own test machines are V100s. |
+| NVIDIA GPUs on Linux | Released. Both engines. Our own test machines are V100s. See [Hardware](#hardware) for the card generations that have a profile. |
+| NVIDIA GPUs on Windows | Support is on main and comes with the next release. |
 | Mac GPUs (Metal) | Released; both engines (`python -m nbxtensor install-metal`). |
 | CPU (x86-64) | Released (PyTorch engine). |
 | Other GPUs | Experimental, not yet validated on hardware by our lab; reports welcome: [open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
@@ -55,7 +56,6 @@ neurobrix run --model hexgrad/Kokoro-82M --prompt "Hello from my own GPU." --spe
 neurobrix run --model openai/whisper-large-v3-turbo --audio recording.wav                                          # speech to text
 neurobrix run --model ostris/Flex.1-alpha --prompt "a lighthouse at dusk" --output lighthouse.png                  # text to image
 ```
-<!-- Commands and flags from "## Usage by family" below (checked against 0.6.11, 2026-11-12). -->
 
 If NeuroBrix runs a model for you, a ⭐ helps other people find it.
 
@@ -64,7 +64,7 @@ If NeuroBrix runs a model for you, a ⭐ helps other people find it.
   <a href="https://docs.neurobrix.org">Documentation</a> &nbsp;|&nbsp;
   <a href="https://github.com/NeuroBrix/neurobrix/releases">Releases</a> &nbsp;|&nbsp;
   <a href="https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIBUTING.md">Contributing</a> &nbsp;|&nbsp;
-  <a href="https://gitlab.com/neurobrix/neurobrix">GitLab mirror</a>
+  <a href="https://gitlab.com/neurobrix/Neurobrix">GitLab mirror</a>
 </p>
 
 ---
@@ -83,24 +83,24 @@ If NeuroBrix runs a model for you, a ⭐ helps other people find it.
   (`--triton`) runs the same graph through nbxtensor, NeuroBrix's tensor library (its Triton kernels
   and its tensor type), instead of PyTorch's operator library. The branches share the container and the
   placement plan, not compute code, so one can be checked against the other.
-- **Placement is computed, not configured.** NeuroBrix detects the machine's devices and
-  memory and plans where each component runs: on one GPU, across several GPUs, streamed
+- **Placement is computed, not configured.** NeuroBrix reads the machine's devices and
+  memory from its hardware profile and plans where each component runs: on one GPU, across several GPUs, streamed
   through GPU memory, or offloaded to host memory. `neurobrix run --explain-plan` prints the
   chosen plan and the alternatives it rejected, without loading the model.
 - **A request that does not fit is refused with figures.** When the plan cannot hold a
   request on your hardware, NeuroBrix stops with an error that names what was needed and
   what was available, rather than silently degrading the output.
 
-`.nbx` containers are produced from the original published weights by the project's build
-toolchain. You do not need that toolchain to run models: `neurobrix import` downloads
-ready-made containers from the hub.
+`.nbx` containers are built from the original published weights. To run a model you need only
+NeuroBrix: `neurobrix import` downloads ready-made containers from the hub.
 
 ---
 
 ## Install and first run
 
-NeuroBrix needs Python 3.10 or newer. The current release is
-**0.6.17** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.17)).
+NeuroBrix needs Python 3.10 or newer. The current release on PyPI is
+**0.6.16** ([release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.16)).
+This README describes `main`, which is ahead of that release; where `main` differs, the text says so.
 
 It has two engines. The **Triton engine** (`--triton`) runs on
 [nbxtensor](https://github.com/NeuroBrix/nbxtensor) and Triton and needs no PyTorch. The
@@ -132,21 +132,15 @@ neurobrix doctor
 ```
 
 **NVIDIA V100 (Volta).** Current CUDA 13 builds of PyTorch no longer support Volta. Use a
-`cu126` build. `torch 2.10.0+cu126`, `torch 2.14.0+cu126` and `torch 2.14.1+cu126` were checked
-on the project's V100 machines. The default PyPI `torch` and the cu128, cu129, cu130 and cu132
-builds were not usable there.
-
-**Installed size**, measured on a clean `python:3.10-slim` container on 2026-11-06 (the space
-the packages take in `site-packages`): `pip install neurobrix`, the Triton engine alone, 1.48 GiB
-(nbxtensor, Triton, NumPy and the engine); with the PyTorch engine (`torch 2.14.1+cu126` from the
-PyTorch index, then `neurobrix[pytorch]`) 6.82 GiB.
+`cu126` build. On `main` the PyTorch engine on an NVIDIA or AMD GPU needs torch 2.12.0
+or newer and refuses an older one by name before any weight loads; 0.6.16 accepts torch 2.1.0 or newer.
 
 **Apple Silicon (macOS).** The Triton engine runs on the Apple GPU through Metal. PyPI publishes
 no Triton for macOS: `install-metal` installs NeuroBrix's Triton build for Apple GPUs
 ([NeuroBrix/triton-ext](https://github.com/NeuroBrix/triton-ext); upstream:
 [triton-lang/triton-ext#126](https://github.com/triton-lang/triton-ext/pull/126)), each wheel
-checked against the sha256 written in nbxtensor (in 0.6.3: macOS 15 and CPython 3.12; macOS 14 and
-CPython 3.10-3.13 by hand, see the known limits below):
+checked against the sha256 written in nbxtensor. Wheels exist for Apple silicon on macOS 14 or newer,
+CPython 3.10 to 3.13; `install-metal` picks the one for your macOS and Python:
 
 ```bash
 pip install neurobrix
@@ -154,7 +148,7 @@ python -m nbxtensor install-metal
 neurobrix doctor
 ```
 
-Xcode's Metal toolchain is the other requirement (`neurobrix doctor` says when it is missing).
+Xcode's Metal toolchain is the other requirement.
 The PyTorch engine also runs on the Apple GPU, through MPS: `pip install torch "neurobrix[pytorch]"`.
 
 **CPU only** (the PyTorch engine).
@@ -177,7 +171,8 @@ set CUDA_VISIBLE_DEVICES=-1
 neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
-In PowerShell: `$env:CUDA_VISIBLE_DEVICES = "-1"`, then the same command. Windows reads the variable from 0.6.17.
+In PowerShell: `$env:CUDA_VISIBLE_DEVICES = "-1"`, then the same command. Windows support, this variable included, is on
+main and comes with the next release.
 
 `neurobrix doctor` checks that the `neurobrix` command is on your PATH, whether the Triton
 engine can run (nbxtensor, Triton and a GPU runtime), which PyTorch build is installed if any,
@@ -191,7 +186,7 @@ run.
 neurobrix hub --category LLM
 neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
 
-# Run it once (hardware is detected automatically)
+# Run it once (no --hardware needed: the machine's profile is used)
 neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
     --prompt "Write a Python function that reverses a string." --max-tokens 256
 ```
@@ -203,10 +198,10 @@ directory name until `neurobrix import <org>/<name>` is run once for it (nothing
 every use say so in one line.
 
 A run prints its result on stdout (the generated text, the transcript, or `SAVED: <path>` for a file) and a few
-status lines on stderr: the engine in use and the run time, and on the very first run a line saying the machine is
-being measured once for its hardware profile, with the time it expects. `-v` adds the engine's developer lines — the
-plan, the loaders, the kernel directory, the timings — `-vv` the traceback of an error, and `NBX_LOG=debug` in the
-environment both.
+status lines on stderr: the engine in use and the run time. On the first launch on a machine that has no hardware
+profile, NeuroBrix creates that profile once; every later launch reads it. A profile given with `--hardware` is read
+as it is. `-v` adds the engine's developer lines — the plan, the loaders, the kernel directory, the timings — `-vv`
+the full Python error detail of an error, and `NBX_LOG=debug` in the environment both.
 
 ### Serve and chat
 
@@ -221,13 +216,12 @@ neurobrix stop                                # stop the daemon and free GPU mem
 ```
 
 Whether the weights stay on the device between requests (warm) depends on the plan Prism chooses for the machine;
-`serve` says which. Details: [Serving and chat](docs/serving.md).
+`neurobrix serve -v` says which. Details: [Serving and chat](docs/serving.md).
 
 ### The conversation cache
 
 The KV cache belongs to the chat session, on both engines. Each turn matches the conversation's token IDs against what
-the cache already holds and prefills only the new ones (TinyLlama, a 421-token second turn: 158 positions prefilled
-instead of 421). Prism chooses the session's prefill chunk from the certified kernel times (`--explain-plan` says
+the cache already holds and prefills only the new ones. Prism chooses the session's prefill chunk from the certified kernel times (`--explain-plan` says
 which, or why none); with that chunk, a turn served from the cache gives the same bytes as the same conversation
 prefilled together.
 
@@ -260,8 +254,7 @@ is refused without `--api-key-file <file>`, and every request then sends `Author
 served are those the loaded model's family has: `/v1/models`, `/v1/chat/completions` (streamed as Server-Sent Events,
 tool calls parsed from the format the model's chat template declares, a thinking model's reasoning in
 `reasoning_content`), `/v1/completions`, `/v1/images/generations`, `/v1/audio/speech` and
-`/v1/audio/transcriptions`, and `/v1/embeddings` for an embedding family (none in the catalogue yet: refused by
-name). The `model` field is the model's one name.
+`/v1/audio/transcriptions`, and `/v1/embeddings` for an embedding family. The `model` field is the model's one name.
 
 ```bash
 curl -s http://127.0.0.1:8765/v1/chat/completions -H 'Content-Type: application/json' -d '{
@@ -294,24 +287,25 @@ in the OpenAI error object, never ignored. Every endpoint, parameter and setting
 
 | Hardware | Status |
 |---|---|
-| NVIDIA GPUs, Linux (CUDA) | Released in 0.6.0. Both compute branches. The project's own test machines are V100s. |
+| NVIDIA GPUs, Linux (CUDA) | Released in 0.6.0. Both compute branches. The project's own test machines are V100s. A card plans on the hardware profile of its architecture: 0.6.16 has Volta, Ampere (A100, compute capability 8.0) and Hopper. `main` adds Turing (T4, RTX 20xx), Ada (L4, L40S, RTX 40xx) and Blackwell (B200); these three profiles are read from NVIDIA's documentation, not yet measured on a card, and run the PyTorch engine (`--triton` is refused by name on them). A card whose architecture has no profile is refused by name, and `--hardware` reads a profile you give. |
 | CPU (x86-64) | Released in 0.6.0 (the PyTorch engine). |
 | Apple Silicon (Metal) | In 0.6.0. Both engines: the Triton engine through Metal (NeuroBrix's Triton build for Apple GPUs, installed by `python -m nbxtensor install-metal`), the PyTorch engine on MPS. Install: [Install and first run](#install-and-first-run), Apple Silicon. |
 | Intel GPUs | **Experimental, not yet validated on hardware by the NeuroBrix lab — reports welcome.** An Intel GPU whose Level Zero runtime is installed (Arc, Core Ultra, and Gen12: Tiger, Alder, Raptor Lake) is tried by the Triton engine, with Intel's Triton build (`neurobrix doctor` gives the install commands). If the driver says the chip cannot do what was asked (a kernel it will not build, an unsupported feature), the run says which call failed and why, runs again without that chip (on the CPU when it was the only device), and remembers it until the driver or nbxtensor changes; any other error is the run's own, named. Please tell us what happened: [Intel GPU report](https://github.com/NeuroBrix/neurobrix/issues/new?template=intel_gpu_report.yml). |
 | AMD GPUs | A target, not yet validated on a card: the Triton engine reaches them through nbxtensor's HIP driver, with the vendor's runtime and its Triton build (`neurobrix doctor` gives the vendor's install commands). Tried it on your card? [Open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
 | Integrated GPUs | In 0.6.3. An integrated GPU is described in the machine's profile as one memory pool with the host and named with its platform. Apple Silicon is driven (Metal); an Intel integrated GPU with its Level Zero runtime is tried (experimental, the row above); AMD integrated GPUs and Intel chips older than Gen12 are not driven — they are named, with the reason, and the model runs on the CPU with every core of the machine's profile. |
-| Windows | In 0.6.1. The PyTorch engine: `--compiled` (the default where PyTorch is installed) and `--sequential`. PyPI publishes no triton for Windows: neurobrix asks for triton only on Linux x86_64 and aarch64, and `--triton` (or `--triton-sequential`) is refused by name: the error says PyPI publishes no triton for the platform and gives the PyTorch engine's install. Found a bug on Windows? [Open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
+| Windows | Support is on main and comes with the next release. On main it runs the PyTorch engine: `--compiled` (the default where PyTorch is installed) and `--sequential`. PyPI publishes no triton for Windows: on `main` neurobrix asks for triton only on Linux x86_64 and aarch64, and `--triton` (or `--triton-sequential`) is refused by name: the error says PyPI publishes no triton for the platform and gives the PyTorch engine's install. Found a bug on Windows? [Open an issue](https://github.com/NeuroBrix/neurobrix/issues). |
 
 Several GPUs in one machine are used automatically when a model does not fit on one. The first launch names each GPU
 from what the operating system ships (the PCI bus on Linux, Win32_VideoController on Windows), with its platform and
-whether it is integrated. When a run meets a device out-of-memory in one of its components, it re-plans that
-component with the memory it measured and goes on, once, keeping the components already finished.
+whether it is integrated. When a run meets a device out-of-memory in one of its components, it records what that
+component needed, re-plans it and goes on, once, keeping the components already finished.
 
-**Known limits of 0.6.5:**
+**Platform notes:**
 
 - On an Intel Mac the integrated GPU is named from system_profiler without its platform; it is not driven, and the
   engine runs on the CPU.
-- `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer on Linux and Windows: there the default engine on
+- On `main`, `pip install "neurobrix[pytorch]"` asks for torch 2.12.0 or newer on Linux and Windows (0.6.16 asks
+  for torch 2.1.0 or newer everywhere): there the default engine on
   an NVIDIA or AMD GPU calls PyTorch's allocator setter (first in torch 2.10.0) and its pinned host-cache release
   (first in torch 2.12.0), and refuses an older torch by name before any weight loads. On macOS it asks for torch 2.1.0
   or newer, as 0.6.16 did: a Mac reaches neither call (the Apple GPU runs through MPS, an Intel Mac on its CPU), and
@@ -322,23 +316,21 @@ component with the memory it measured and goes on, once, keeping the components 
   constrained request is refused by name (`501 constrained_decoding_not_installed`). It enforces a subset of JSON Schema (a
   constraining keyword outside it is refused by name) and writes tool calls in the format the model's template
   declares.
-- No embedding model is in the catalogue yet: `/v1/embeddings` refuses every catalogue model by name.
-- A very long single prompt on the compiled engine is prefilled in chunks of the rows the plan prices (128 for
-  Qwen3-Coder-30B-A3B): it is answered, slowly — 79 931 tokens took 39 minutes on two V100-32GB.
+- A very long single prompt on the compiled engine is prefilled in chunks of the rows the plan prices.
 - A daemon holds one model; a conversation past the card's cache spills to host memory one sequence at a time
   (batch 1).
 - The macOS 14 Metal wheels (CPython 3.10-3.13) are published at
   [apple-v0.1.0+triton3.8.0-macos14](https://github.com/NeuroBrix/triton-ext/releases/tag/apple-v0.1.0%2Btriton3.8.0-macos14)
   and `python -m nbxtensor install-metal` selects them (since nbxtensor 0.0.9).
 
-The full list is in the [release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.5). Read them
+The [release notes](https://github.com/NeuroBrix/neurobrix/releases/tag/v0.6.16) say more. Read them
 before filing a bug.
 
 ### Models on the hub
 
-The hub listed 45 public models in 10 categories on 2026-10-12. The hub itself is the live
-list (`neurobrix hub`, or [neurobrix.org/models](https://neurobrix.org/models)). Each
-identifier below is what you pass to `neurobrix import`, and then to `--model`.
+The hub lists 49 models. It is the live list (`neurobrix hub`, or
+[neurobrix.org/models](https://neurobrix.org/models)). Each identifier below is what you pass to `neurobrix import`,
+and then to `--model`.
 
 | Category | Models |
 |---|---|
@@ -349,9 +341,9 @@ identifier below is what you pass to `neurobrix import`, and then to `--model`.
 | Speech-to-text (`STT`) | `openai/whisper-large`, `openai/whisper-large-v3-turbo`, `nvidia/parakeet-tdt-1.1b` |
 | Speech understanding (`AUDIO_LLM`) | `mistralai/Voxtral-Mini-3B-2507`, `nvidia/canary-qwen-2.5b`, `ibm-granite/granite-speech-3.3-8b` |
 | Text-to-speech (`TTS`) | `hexgrad/Kokoro-82M`, `ResembleAI/chatterbox`, `microsoft/VibeVoice-1.5B`, `canopylabs/orpheus-3b-0.1-ft`, `fishaudio/s1-mini` |
-| Image generation (`IMAGE`) | `ostris/Flex.1-alpha`, `PixArt-alpha/PixArt-XL-2-1024-MS` |
-| Video generation (`VIDEO`) | `zai-org/CogVideoX-2b`, `zai-org/CogVideoX-5b-I2V`, `genmo/mochi-1-preview`, `hpcai-tech/Open-Sora-v2`, `rhymes-ai/Allegro`, `rhymes-ai/Allegro-TI2V`, `Efficient-Large-Model/SANA-Video_2B_720p_diffusers`, `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`, `Wan-AI/Wan2.1-VACE-1.3B-diffusers`, `Wan-AI/Wan2.1-I2V-14B-480P`, `Wan-AI/Wan2.2-I2V-A14B` |
-| Upscaling (`UPSCALER`) | Real-ESRGAN (x2, x4plus, x8), SwinIR (classical x2, x4), Swin2SR (classical x2, x4, real-world x4), HAT-L x4 |
+| Image generation (`IMAGE`) | `ostris/Flex.1-alpha`, `PixArt-alpha/PixArt-XL-2-1024-MS`, `PixArt-alpha/PixArt-Sigma-XL-2-1024-MS`, `Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers`, `Efficient-Large-Model/Sana_1600M_4Kpx_BF16_diffusers` |
+| Video generation (`VIDEO`) | `zai-org/CogVideoX-2b`, `zai-org/CogVideoX-5b-I2V`, `genmo/mochi-1-preview`, `hpcai-tech/Open-Sora-v2`, `rhymes-ai/Allegro`, `rhymes-ai/Allegro-TI2V`, `Efficient-Large-Model/SANA-Video_2B_720p_diffusers`, `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`, `Wan-AI/Wan2.1-VACE-1.3B-diffusers`, `Wan-AI/Wan2.1-I2V-14B-480P-Diffusers`, `Wan-AI/Wan2.2-I2V-A14B-Diffusers` |
+| Upscaling (`UPSCALER`) | Real-ESRGAN (x2, x4plus, x8), SwinIR (classical x2, x4), Swin2SR (classical x2, x4, real-world x4), HAT (L x4, S x4) |
 
 A model being on the hub means its container can be downloaded. It does not mean every model
 works on every hardware and in every execution mode; the release notes say which do not.
@@ -406,8 +398,9 @@ neurobrix upscale --model xinntao/Real-ESRGAN-RealESRGAN_x4plus --input photo.pn
 | `--sequential` | PyTorch, one operation at a time | Debugging. |
 | `--triton-sequential` | Triton, one operation at a time | Debugging. |
 
-The same flags apply to `neurobrix serve`. `neurobrix upscale` takes them as
-`--mode compiled|sequential|triton|triton-sequential`.
+The same flags apply to `neurobrix serve` and `neurobrix upscale`; `upscale` also takes them as
+`--mode compiled|sequential|triton|triton-sequential`. With no flag, each command takes the PyTorch engine where
+PyTorch is installed and the Triton engine where it is not.
 
 ### Managing models
 
@@ -423,9 +416,15 @@ neurobrix validate <model.nbx>                        # check a container's inte
 ```
 
 Downloaded archives are kept in `~/.neurobrix/store/` and extracted models in
-`~/.neurobrix/cache/`. `--no-keep` deletes the archive once it is extracted. Read commands
+`~/.neurobrix/cache/`. `--no-keep` deletes the archive once it is extracted. `import --container FILE.nbx`
+installs from a container already on the machine, checked against the sha256 the hub serves. Read commands
 (`info`, `list`, `hub`, `inspect`, `doctor`, `run --explain-plan`) accept `--json` for
-scripting.
+scripting; so do `import` (one event per phase) and `remove`.
+
+A model may declare sub-components (a text front end, for one). They are downloaded once, at its first run, and
+checked against the checksum its container states. `neurobrix processor fetch <model> [--to FOLDER]`,
+`neurobrix processor install <file> [--for <model>]` and `neurobrix processor list` do it ahead of time, for
+example to carry them to an offline machine. This is on `main`, not in 0.6.16.
 
 ### Certify your GPU and share it
 
@@ -456,7 +455,8 @@ again.
 A container is a directory archive with a manifest, a topology describing how components
 connect, runtime defaults, and one directory per component (text encoder, transformer, VAE,
 language-model head, and so on), each with its computation graph and its weights in
-safetensors format. Tokenizers and other non-neural modules travel in the same archive.
+safetensors format. Tokenizers and other non-neural modules travel in the same archive; on `main` a model may also declare
+sub-components that are downloaded once and checked against the container's checksum (see Managing models).
 The format is described in [docs/architecture/nbx-format.md](./docs/architecture/nbx-format.md).
 
 ---
@@ -470,7 +470,7 @@ runtime) and the review process. Security issues follow [SECURITY.md](./SECURITY
 not filed as public issues.
 
 - Issues and pull requests: [GitHub](https://github.com/NeuroBrix/neurobrix/issues), mirrored on
-  [GitLab](https://gitlab.com/neurobrix/neurobrix)
+  [GitLab](https://gitlab.com/neurobrix/Neurobrix)
 - Model hub: [neurobrix.org/models](https://neurobrix.org/models)
 - Documentation: [docs.neurobrix.org](https://docs.neurobrix.org) and the [docs/](./docs) directory
 - The tensor library (nbxtensor) and its own documentation: [github.com/NeuroBrix/nbxtensor/tree/main/docs](https://github.com/NeuroBrix/nbxtensor/tree/main/docs)

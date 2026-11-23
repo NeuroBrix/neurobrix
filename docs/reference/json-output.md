@@ -2,10 +2,9 @@
 
 Every read command of the CLI accepts `--json`. It then prints **exactly one
 JSON object on stdout and nothing else there**; every human line the same
-command would have printed goes to **stderr**. A client — the TUI, NeuroBrix
-Studio — reads the record and never parses prose, never guesses a version,
-never re-implements an engine decision (Studio requests 1, 5 and 7 in
-`studio-engine-requests.md`).
+command would have printed goes to **stderr**. A client (a TUI, NeuroBrix
+Studio, a script) reads the record and never parses prose, never guesses a
+version, never re-implements an engine decision.
 
 Each record carries two keys before its own:
 
@@ -30,10 +29,10 @@ parse or lacks its schema (seen red on an injected stray print).
 | `doctor --json` | `ok`, `problems[]` — the diagnosis itself stays on stderr |
 | `autotune status --json` | `profile`, `directory`, `enabled`, `files`, `shapes`, `served_by_memory_class_gb{"16":n,"32":n}`, `proven_on_unknown_card`, `this_card_class_gb`, `would_be_served_here` |
 | `autotune check --json` | `directory`, `files[{path,ok,shapes?,problems?}]`, `refused` |
-| `run --model M … --explain-plan --json` | `model`, `strategy`, `loading_mode`, `dtype`, `why`, `candidates[{strategy,score}]`, `refused[{strategy,score,why}]`, `planned_memory_mb`, `cpu_ram_mb`, `components[{name,devices[],dtype,sharded,weight_bytes,activation_bytes,overhead_bytes,peak_op_uid,activation_profiled}]`, `op_level_tiling[]`, `component_tiling{}`, `kv_cache{max_cache_len,memory_bytes,dtype}?` — read from the plan, never recomputed: what is printed is what will run |
+| `run --model M … --explain-plan --json` | `model`, `strategy`, `loading_mode`, `dtype`, `why`, `candidates[{strategy,score}]`, `refused[{strategy,score,why}]`, `planned_memory_mb`, `cpu_ram_mb`, `components[{name,devices[],dtype,sharded,weight_bytes,activation_bytes,overhead_bytes,peak_op_uid,activation_profiled}]`, `op_level_tiling[]`, `component_tiling{}`, `kv_cache{max_cache_len,memory_bytes,dtype}?` (among further keys) — read from the plan, never recomputed: what is printed is what will run |
 | `validate … --json` | the validation results (pre-existing) |
 
-### `neurobrix.info/2` (contract break, 2026-10-11)
+### `neurobrix.info/2` (contract break)
 
 Version 1 read the accelerators from PyTorch: importing it cost a start-up
 call several seconds, and it saw only what the installed torch build saw
@@ -72,9 +71,6 @@ listed.
 
 `remove --json` prints one record: `model`, `found`, `removed[{kind ∈ cache/store, path, bytes}]`.
 
-## What is not here yet
+## Not covered by `--json`
 
-`clean` keeps its prompt; the daemon does not refuse a client outside a
-declared protocol range (Studio request 7, with the dispatcher work of
-requests 3 and 4). Each lands as a row of `studio-engine-requests.md` when it
-does.
+`clean` keeps its prompt and prints no record.

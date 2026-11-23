@@ -5,56 +5,43 @@ required and optional flags per family are declared in
 `src/neurobrix/config/families/<family>.yml` and validated at runtime —
 the CLI itself stays small.
 
-This page lists canonical invocations per family with reference
-open-source models. Run `neurobrix run --help` for the full flag list.
+This page lists canonical invocations per family with models from the
+hub. Run `neurobrix run --help` for the full flag list, or read the
+[CLI reference](reference/cli.md).
 
 ## Common flags
 
 | Flag | Purpose |
 |------|---------|
-| `--model <name>` | Model directory name in `~/.neurobrix/cache/` |
+| `--model <name>` | The model's hub name, `<org>/<name>`, as `neurobrix import` recorded it (`neurobrix list` shows it). Can be omitted while a `serve` daemon is running |
 | `--hardware <id>` | Hardware profile (auto-detect if omitted) |
 | `--output <path>` | Save destination. Auto-extension if extension omitted; strict mismatch error otherwise |
-| `--seed <int>` | Seeds the sampler and any random initialisation. **Greedy decoding (`--temperature 0`) is reproducible; seeded *sampling* is not yet reproducible on the Triton engine for models with a head dimension of 128** — see the note below |
-| `--triton` / `--triton-sequential` / `--sequential` | Execution backend (default: compiled native) |
+| `--seed <int>` | Seeds the sampler and any random initialisation |
+| `--compiled` / `--sequential` / `--triton` / `--triton-sequential` | Execution mode. No flag: `--compiled` where PyTorch is installed, `--triton` where it is not; the launch line says which |
 | `--explain-plan` | Print the placement plan — strategy, why it won and what it beat, every component with its device and memory — and exit without loading anything |
-
-> **Reproducibility, precisely.** `--temperature 0` (greedy decoding) is
-> reproducible run to run: measured stable over sixteen runs across five
-> configurations, including a 4,164-token context.
->
-> Seeded **sampling** is a weaker guarantee today. The Triton attention
-> kernel is non-deterministic when the model's head dimension is 128 —
-> reproduced in isolation at a single head and a 256-token sequence, so
-> it is not a long-context or large-model effect. The perturbation is
-> small; greedy absorbs it because an argmax has a margin, while a
-> sampling draw near a tie can flip. In practice two runs at the same
-> seed usually agree and occasionally do not.
->
-> This is tracked as P-NONDET-LONG-ROW with a minimal reproducer. The
-> guarantee stated here is the one that currently holds, not the one we
-> intend to ship.
 
 ## Execution modes — two branches, four modes
 
 Every family runs through two independent compute branches, each in a
-sequential (op-by-op) and a compiled (fused hot-loop) variant. No flag =
-`--compiled`.
+sequential (op-by-op) and a compiled (fused hot-loop) variant. With no
+flag, a run takes `--compiled` where PyTorch is installed and `--triton`
+where it is not.
 
 | Flag | Branch | Substrate | Role |
 |------|--------|-----------|------|
-| `--compiled` *(default)* | PyTorch | `torch` + cuDNN/cuBLAS | production path |
+| `--compiled` *(default with PyTorch)* | PyTorch | `torch` + cuDNN/cuBLAS | production path |
 | `--sequential` | PyTorch | `torch` ATen, op-by-op | op-by-op reference / debug path |
-| `--triton` | Triton | NeuroBrix `@triton.jit` + `NBXTensor`, no `torch.*`/cuDNN | vendor-agnostic production |
+| `--triton` *(default without PyTorch)* | Triton | NeuroBrix Triton kernels + `NBXTensor` (nbxtensor), no `torch`/cuDNN | production path without PyTorch |
 | `--triton-sequential` | Triton | NeuroBrix kernels, op-by-op | op-by-op debug path |
 
-Use the default to just run a model, `--triton` for a vendor-agnostic path,
-and the two `*-sequential` modes op-by-op to debug a numerical discrepancy.
-The flags are also accepted by `neurobrix serve` and `neurobrix upscale`.
+Use the default to just run a model, `--triton` for the path without
+PyTorch, and the two `*-sequential` modes op-by-op to debug a numerical
+discrepancy. Only one mode flag can be passed at a time. The flags are
+also accepted by `neurobrix serve` and `neurobrix upscale`.
 
 ## llm — Text Generation
 
-References: TinyLlama, DeepSeek-MoE, Qwen3 (Alibaba), Llama, Mistral.
+Examples on the hub: TinyLlama, DeepSeek-MoE, Granite (IBM), Qwen3 (Alibaba).
 
 ```bash
 # Basic completion
@@ -66,23 +53,27 @@ neurobrix run --model Qwen/Qwen3-30B-A3B-Thinking-2507 \
     --system "You are a careful math tutor." \
     --prompt "Explain 7×8 to a child" \
     --max-tokens 200 --chat
+
+# Several turns as one session (a JSON list of user messages)
+neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+    --turns turns.json --max-tokens 64
 ```
 
 | Flag | Required | Notes |
 |------|----------|-------|
-| `--prompt` | yes | Input text |
+| `--prompt` or `--turns` | one of them | Input text, or a JSON file of user messages played as one chat session |
 | `--system` | no | System message (chat mode) |
 | `--chat` / `--no-chat` | no | Force chat template on/off |
 | `--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`, `--max-tokens` | no | Sampling params (order and defaults: [Sampling](#sampling)) |
 
-Output: `.txt` (or `.json` if `--output result.json`).
+Output: `.txt`.
 
 ## vlm — Vision-Language Models
 
-Reference: Qwen3-VL (Alibaba), LLaVA, InternVL.
+Example on the hub: GLM-4.1V (Zhipu AI).
 
 ```bash
-neurobrix run --model Qwen/Qwen3-VL-30B-A3B-Thinking \
+neurobrix run --model zai-org/GLM-4.1V-9B-Thinking \
     --input-image cat.jpg \
     --prompt "What animal is in this image?" \
     --max-tokens 100
@@ -91,47 +82,44 @@ neurobrix run --model Qwen/Qwen3-VL-30B-A3B-Thinking \
 | Flag | Required | Notes |
 |------|----------|-------|
 | `--prompt` | yes | Question / instruction |
-| `--input-image` | yes | Image file path |
+| `--input-image`, `--input-video`, `--audio` | no | Media for the model to read; with none, the language model answers the prompt alone |
 | `--system`, `--chat` | no | Chat-style framing |
 
 Output: `.txt`.
 
-## multimodal — Unified Models (text OR image output)
+## multimodal — Unified Models (text, image or audio output)
 
 Reference: DeepSeek Janus-Pro (`multimodal_understanding` ↔ `generate`).
 **`--mode` is mandatory** because the .nbx is built for one head.
 
 ```bash
-# Image generation (requires a Janus container built for image AR)
+# Image generation (requires a Janus container built for image)
 neurobrix run --model deepseek-ai/Janus-Pro-7B \
     --mode image --prompt "a red cat sitting on a couch"
 
-# Text understanding (requires a Janus container built for text AR)
+# Text understanding (requires a Janus container built for text)
 neurobrix run --model deepseek-ai/Janus-Pro-7B \
     --mode text --input-image cat.jpg --prompt "describe this image"
 
-# Omni understanding builds (Qwen3-Omni, MiniCPM-o, Ming-Lite-Omni,
-# Qwen3-VL): --mode text over any mix of image / audio / video inputs
-neurobrix run --model inclusionAI/Ming-Lite-Omni-1.5 \
-    --mode text --input-image photo.png --prompt "What fruit is shown?"
-neurobrix run --model Qwen/Qwen3-Omni-30B-A3B-Instruct \
-    --mode text --audio clip.wav --prompt "What is said in this audio?"
+# Omni understanding builds: --mode text over image / audio / video inputs
+neurobrix run --model openbmb/MiniCPM-o-4_5 \
+    --mode text --input-image fruit.png --prompt "What fruit is this, and what colour is it?"
 ```
 
-A `.nbx` built for one mode rejects the other with a clear error:
+A `.nbx` built for one mode refuses the other by name:
 
 ```
-ERROR: This 'Janus-Pro-7B' build supports only --mode image
-       (its build generation_type is 'autoregressive_image').
+this build serves only --mode image (its generation type is 'autoregressive_image');
+a container built for --mode text serves that mode
 ```
 
 | Flag | Required | Notes |
 |------|----------|-------|
 | `--prompt` | yes | Always |
-| `--mode {text,image}` | yes | Multimodal-strict — no auto-deduction |
+| `--mode {text,image,audio}` | yes | Multimodal-strict — no auto-deduction |
 | `--input-image` | only `--mode text` | Image to describe |
 
-Output: `.txt` (text mode) or `.png` (image mode).
+Output: `.txt` (text mode), `.png` (image mode) or `.wav` (audio mode).
 
 ## tts — Text-to-Speech
 
@@ -141,24 +129,25 @@ References: Chatterbox, Orpheus, OpenAudio-S1, Kokoro, VibeVoice.
 # Basic
 neurobrix run --model ResembleAI/chatterbox --prompt "Hello world"
 
-# With voice clone reference
-neurobrix run --model ResembleAI/chatterbox \
-    --reference-audio my_voice.wav \
-    --prompt "Hello world" \
+# With a speaker preset
+neurobrix run --model hexgrad/Kokoro-82M \
+    --prompt "Hello world" --speaker af_heart \
     --output greeting.wav
 ```
 
 | Flag | Required | Notes |
 |------|----------|-------|
 | `--prompt` | yes | Text to speak |
-| `--reference-audio` | no | Voice clone source |
 | `--speaker` | no | Speaker preset id (model-specific) |
+
+`--reference-audio` (cloning a voice from a recording) is not wired in
+this version: it is refused by name.
 
 Output: `.wav` (24 kHz mono unless model overrides).
 
 ## stt — Speech-to-Text
 
-References: Whisper (OpenAI), Canary-Qwen (NVIDIA), Parakeet RNN-T.
+References: Whisper (OpenAI), Parakeet TDT (NVIDIA).
 
 ```bash
 neurobrix run --model openai/whisper-large-v3-turbo \
@@ -175,7 +164,7 @@ Output: `.txt`.
 
 ## audio_llm — Audio-Conditioned Language Models
 
-References: Voxtral (Mistral), Qwen2-Audio, Qwen3-Omni (Alibaba) audio mode.
+References: Voxtral (Mistral), Canary-Qwen (NVIDIA), Granite Speech (IBM).
 
 ```bash
 neurobrix run --model mistralai/Voxtral-Mini-3B-2507 \
@@ -194,24 +183,14 @@ Output: `.txt`.
 
 ## image — Image Generation
 
-References: PixArt-XL, PixArt-Sigma, Sana (NVlabs), Flux, SDXL.
-Supports `t2i` (default), `img2img`, `inpainting` — auto-deduced from
-inputs.
+References: PixArt-XL, PixArt-Sigma, Sana (NVlabs), Flex.1.
+The family declares `t2i` (default), `img2img` and `inpainting`, chosen
+from the inputs.
 
 ```bash
 # Text-to-image (default)
 neurobrix run --model PixArt-alpha/PixArt-XL-2-1024-MS \
     --prompt "a red apple on a white plate" --steps 20
-
-# Image-to-image (auto: --input-image present)
-neurobrix run --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers \
-    --input-image base.png \
-    --prompt "make it stylized cyberpunk"
-
-# Inpainting (auto: --input-image + --mask-image present)
-neurobrix run --model PixArt-alpha/PixArt-XL-2-1024-MS \
-    --input-image scene.png --mask-image mask.png \
-    --prompt "replace the sky with aurora"
 ```
 
 | Flag | Required | Notes |
@@ -219,15 +198,17 @@ neurobrix run --model PixArt-alpha/PixArt-XL-2-1024-MS \
 | `--prompt` | yes | Text prompt |
 | `--input-image` | no | Triggers `img2img` mode |
 | `--mask-image` | no | Requires `--input-image`, triggers `inpainting` |
-| `--reference-image` | no | Style reference (model-specific) |
 | `--steps`, `--cfg`, `--height`, `--width` | no | Diffusion params |
+
+`--reference-image` (a style reference) is not wired in this version:
+it is refused by name.
 
 Output: `.png`.
 
 ## upscaler — Image Super-Resolution
 
 References: Swin2SR (classical = clean images, realworld = degraded
-photos), Real-ESRGAN, BSRGAN.
+photos), Real-ESRGAN, SwinIR, HAT.
 
 Dedicated subcommand:
 
@@ -242,14 +223,13 @@ neurobrix upscale \
 | Flag | Required | Notes |
 |------|----------|-------|
 | `--model` | yes | Upscaler model name |
-| `--input` | yes | Source image (PNG/JPEG) |
+| `--input` (alias `--input-image`) | yes | Source image (PNG/JPEG) |
 | `--output` | yes | Destination image path (PNG) |
-| `--mode` | no | `compiled` (default) / `sequential` / `triton` / `triton-sequential` |
+| `--mode` | no | `compiled` / `sequential` / `triton` / `triton-sequential`, the same choice as the engine flags (`--mode triton` = `--triton`). No mode: the same default as `run` |
 | `--hardware` | no | Hardware profile id (auto-detected if omitted) |
 
 Output: `.png` at `input × upscale_factor` (the factor is
-intrinsic to each model, e.g. x2 / x4). All four execution modes
-produce numerically equivalent results.
+intrinsic to each model, e.g. x2 / x4).
 
 Model guide:
 
@@ -263,7 +243,7 @@ Model guide:
 
 References: Wan2.1/Wan2.2 (Alibaba), CogVideoX (Zhipu AI), Mochi (Genmo),
 Open-Sora, Allegro (Rhymes AI), SANA-Video (NVIDIA).
-Supports `t2v` (default), `i2v`, `v2v` — auto-deduced.
+The family declares `t2v` (default), `i2v` and `v2v`, chosen from the inputs.
 
 ```bash
 # Text-to-video
@@ -274,10 +254,6 @@ neurobrix run --model Efficient-Large-Model/SANA-Video_2B_720p_diffusers \
 neurobrix run --model Wan-AI/Wan2.2-I2V-A14B-Diffusers \
     --input-image first_frame.png \
     --prompt "camera pans left" --num-frames 32
-
-# Video-to-video (auto: --video present)
-neurobrix run --model Wan-AI/Wan2.1-VACE-1.3B-diffusers \
-    --video source.mp4 --prompt "same scene at night"
 ```
 
 | Flag | Required | Notes |
@@ -287,6 +263,12 @@ neurobrix run --model Wan-AI/Wan2.1-VACE-1.3B-diffusers \
 | `--video` | no | Triggers `v2v` mode |
 | `--num-frames`, `--fps` | no | Length / playback rate |
 | `--steps`, `--cfg`, `--height`, `--width` | no | Diffusion params |
+
+A flag left out takes the value the model's container declares: frame
+count, step count, guidance scale and frame rate come from the
+container, never from an engine default. On `main` (not in 0.6.16), when
+neither the request nor the container gives one of them, the run is
+refused by name.
 
 Output: `.mp4` (H.264, yuv420p).
 
@@ -318,8 +300,7 @@ temperature is 0). Each of the four values is taken from the first source that s
 
 1. the request: the flag (`--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`), or the same key in a `serve` request (the warm path forwards all four and
    `--max-tokens`);
-2. the model's container: its `runtime/defaults.json`, the vendor's generation config as the container was built with
-   it;
+2. the model's container: its `runtime/defaults.json`, the vendor's generation config as the container holds it;
 3. the family's documented defaults, in `config/families/<family>.yml` under `defaults:`. For `llm`, `vlm`,
    `audio_llm` and `multimodal`: temperature 0.7, top-k 50, top-p 0.9, repetition penalty 1.0.
 
@@ -331,14 +312,16 @@ generated ones for a text decode, and the generated ones for a decode fed with i
 
 stdout carries the command's result only: the generated text, the transcript, `SAVED: <path>` for a file, a table,
 or — with `--json` — one JSON record on one line. stderr carries a few status lines (the engine in use, the run
-time, a first launch measuring the machine, a warning, an error with its remedy) and stays empty under `--json`
-unless something is wrong.
+time, a warning, an error with its remedy) and stays empty under `--json` unless something is wrong.
+
+On the first launch on a machine that has no hardware profile, NeuroBrix creates that profile once; every later
+launch reads it. A profile given with `--hardware` is read as it is.
 
 | Option / variable | Effect |
 |----------|--------|
-| `-v`, `--verbose` (before or after the command) | Adds the engine's developer lines on stderr — the plan (strategy, devices, memory), the loaders, the replay, the kernel directory, the `[Timings]` / `[Peak]` lines; `neurobrix --help -v` also lists the developer commands (`calibrate`, `autotune`, `drift`, `coverage`) |
-| `-vv` | The developer lines and the traceback of an error |
-| `NBX_LOG=debug\|info\|warning\|error` | The level from the environment (`debug` = `-vv`): the knob for scripts, daemons and the gate harness, which parse the developer lines. A serving daemon's log (`daemon.log` in the engine's home) always holds every line. Every `NBX_*` diagnostic variable below logs at the debug level |
+| `-v`, `--verbose` (before or after the command) | Adds the engine's developer lines on stderr — the plan (strategy, devices, memory), the loaders, the replay, the kernel directory, the `[Timings]` / `[Peak]` lines |
+| `-vv` | The developer lines and the full Python error detail of an error |
+| `NBX_LOG=debug\|info\|warning\|error` | The level from the environment (`debug` = `-vv`): the knob for scripts and daemons that parse the developer lines. A serving daemon's log (`daemon.log` in the engine's home) always holds every line. Every `NBX_*` diagnostic variable below logs at the debug level |
 
 ## Storage layout
 
@@ -350,7 +333,9 @@ unless something is wrong.
     └── model-name/
         ├── manifest.json
         ├── topology.json
-        ├── defaults.json
+        ├── name.json          the hub name `neurobrix import` recorded
+        ├── runtime/
+        │   └── defaults.json
         └── ...
 ```
 
@@ -361,7 +346,7 @@ Once a day, in a short separate process the command never waits for, the engine 
 next command prints one notice on stderr with the command that updates it for the way it was installed (pip, uv,
 pipx, or a source checkout). The installed `nbxtensor` is also checked against the version this `neurobrix` requires,
 locally, without the network. The check never refuses a command, says nothing when the network does not answer, and
-prints nothing under `--json`.
+prints nothing under `--json`. The update check is on `main`, not in 0.6.16.
 
 | Variable | Effect |
 |----------|--------|
@@ -372,10 +357,8 @@ prints nothing under `--json`.
 
 | Variable | Effect |
 |----------|--------|
-| `NBX_DEBUG=1` | Expensive per-op statistics (forces GPU sync, ~2x slower), shown with `-v` / `NBX_LOG=debug` |
-| `NBX_TRACE_ZEROS=1` | Find first op producing all-zeros from non-zero input |
-| `NBX_TRACE_NAN=1` | Find NaN/Inf in first few ops |
-| `NBX_NAN_GUARD=1` | Replace NaN with 0 in every op (expensive) |
+| `NBX_DEBUG=1` | Computes debug statistics, shown with `-v` / `NBX_LOG=debug`; slower, as it forces a GPU sync |
+| `NBX_NAN_GUARD=1` | PyTorch compiled mode: find NaN/Inf after every op and replace it (expensive, debugging only) |
 
 ## Adding a new family
 

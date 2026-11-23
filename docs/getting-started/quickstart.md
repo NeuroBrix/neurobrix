@@ -15,8 +15,9 @@ Import one by its hub identifier (`<org>/<name>`):
 neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0 --accept-license
 ```
 
-This downloads the `.nbx` container from the NeuroBrix Hub and extracts it to
-`~/.neurobrix/cache/TinyLlama-1.1B-Chat-v1.0`. The `<name>` part is what `--model` takes.
+This downloads the `.nbx` container from the NeuroBrix Hub and extracts it under
+`~/.neurobrix/cache/`. The model keeps its hub name: `--model` takes the same
+`TinyLlama/TinyLlama-1.1B-Chat-v1.0`.
 
 ## 2. Single-shot run
 
@@ -24,8 +25,8 @@ This downloads the `.nbx` container from the NeuroBrix Hub and extracts it to
 neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --max-tokens 256
 ```
 
-Hardware is detected automatically. To see where each component will run without loading
-anything:
+No `--hardware` is needed: the run uses the machine's hardware profile. To see where each
+component will run without loading anything:
 
 ```bash
 neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --explain-plan
@@ -37,7 +38,8 @@ neurobrix run --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recur
 
 ## 3. Serve mode
 
-Serve mode loads the weights once and keeps them resident:
+Serve mode keeps the model loaded in a background daemon between requests (whether the weights
+stay on the device depends on the plan; `neurobrix serve -v` says which):
 
 ```bash
 neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
@@ -71,6 +73,6 @@ neurobrix upscale --model xinntao/Real-ESRGAN-RealESRGAN_x4plus --input photo.pn
 
 1. `neurobrix import` downloaded a `.nbx` container: a self-contained archive with the model's
    graph, weights and topology.
-2. `neurobrix run` or `neurobrix serve` detected your hardware and planned where each component
-   runs.
+2. `neurobrix run` or `neurobrix serve` read your machine's hardware profile and planned where
+   each component runs.
 3. The runtime executed the graph read from the container; the engine has no per-model pipeline.

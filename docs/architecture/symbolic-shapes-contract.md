@@ -8,13 +8,13 @@ Every NBX `graph.json` tensor descriptor exposes two shape fields:
 {
   "tensors": {
     "input::z": {
-      "shape": [1, 32, 64, 64],                  // CONCRETE build-time value
+      "shape": [1, 32, 64, 64],                  // CONCRETE value, the size the container was built at
       "symbolic_shape": {
         "dims": [
-          {"type": "symbol", "id": "s0", "trace": 1},
+          {"type": "symbol", "id": "s0", ...},   // SYMBOLIC (also records its built value)
           32,                                     // concrete dim
-          {"type": "symbol", "id": "s1", "trace": 64},   // SYMBOLIC
-          {"type": "symbol", "id": "s2", "trace": 64}    // SYMBOLIC
+          {"type": "symbol", "id": "s1", ...},   // SYMBOLIC
+          {"type": "symbol", "id": "s2", ...}    // SYMBOLIC
         ],
         "concrete": [1, 32, 64, 64]
       }
@@ -23,58 +23,50 @@ Every NBX `graph.json` tensor descriptor exposes two shape fields:
 }
 ```
 
-**Master rule:** any runtime code that inspects an NBX graph shape to draw a
-**decision** (allocation size, kernel selection, dispatch strategy, padding,
-tiling, etc.) MUST consult `symbolic_shape.dims` BEFORE drawing conclusions
-from the concrete `shape` array. The concrete shape is the value that
-**happened to be used during build-time graph capture**; the symbolic markers
-identify the dims that the runtime can rebind to any value via
-CompiledSequence's symbol binding pass.
+**Master rule:** any runtime code that reads a graph shape to make a **decision** (allocation size, kernel
+choice, dispatch strategy, padding, tiling) MUST read `symbolic_shape.dims` BEFORE it draws a conclusion
+from the concrete `shape` array. The concrete shape is only the size the container was built at. The
+symbolic markers name the dims the runtime binds to the real value of each request.
 
 ## Why symbolic shapes exist
 
-Diffusion image VAEs (Sana DC-AE, AutoencoderKL of PixArt, FLUX VAE) and
-text encoders (Gemma, T5, CLIP) are spatial-/sequence-adaptive by
-construction: the same compiled graph runs at any reasonable height/width
-or sequence length. The build-time graph capture records one representative
-size, then marks the runtime-variable dims as symbolic. CompiledSequence's
-symbol binding pass walks every op at runtime and substitutes the actual
-size.
+Image VAEs (Sana DC-AE, PixArt's AutoencoderKL) and text encoders (Gemma, T5, CLIP) adapt to the input
+by construction: the same graph runs at any reasonable height and width, or any sequence length. The
+container records one representative size and marks the dims that vary as symbolic. At run time the engine
+binds each symbol and substitutes the actual size.
 
-Without symbolic shapes, every aspect ratio / resolution / max_token would
-require a separate compiled graph — combinatorial explosion.
+Without symbolic shapes, every aspect ratio, resolution or token count would need its own graph.
 
-With symbolic shapes correctly honored, **one** graph serves the whole
-runtime envelope, and tile-only mechanisms (TilingEngine) only kick in for
-graphs that genuinely cannot adapt (fixed-grid models like Swin2SR).
+With symbolic shapes honoured, **one** graph serves the whole range, and tiling (the TilingEngine) is used only
+for graphs that cannot adapt (fixed-grid models such as Swin2SR).
 
 ## Where symbolic shapes appear
 
 | Component family | Typical symbolic dims | Bound at |
 |---|---|---|
 | Image VAE (decode) | spatial H, W (and possibly batch) | post-loop dispatch |
-| Image transformer (DiT) | batch, spatial seq_len, sometimes channels | per-step dispatch |
-| Text encoder | batch, seq_len | once per request |
-| LLM transformer (autoregressive) | batch, seq_len (KV cache growth) | per token |
+| Image transformer (DiT) | batch, spatial sequence length, sometimes channels | per-step dispatch |
+| Text encoder | batch, sequence length | once per request |
+| LLM transformer (autoregressive) | batch, sequence length (KV cache growth) | per token |
 | Audio encoder/decoder | batch, time | per request |
 
-Any 4D `[B, C, H, W]` or 5D `[B, C, T, H, W]` tensor with a `symbolic_shape`
-where indices ≥ 2 are symbolic is **spatial-adaptive**: never tile, never
-allocate based on build-time concrete size, never make kernel-selection
-decisions on the concrete spatial value alone.
+Any 4D `[B, C, H, W]` or 5D `[B, C, T, H, W]` tensor whose `symbolic_shape` marks indices ≥ 2 as symbolic is
+**spatial-adaptive**: never tile it, never allocate from its built size, never choose a kernel from the
+concrete spatial value alone.
+
+A symbol the runtime cannot bind is refused by name; the engine never falls back to the built size.
 
 ## Where the contract is enforced
 
-- `core/runtime/graph/compiled_sequence.py` — symbol binding pass.
-- `core/runtime/graph_executor.py::_compute_computable_buffers()` —
-  recomputes runtime buffers like `sincos_2d_pos_embed` based on bound
-  symbols.
-- `core/module/tiling_engine.py::from_component_config()` — refuses to
-  instantiate a TilingEngine when any spatial dim is symbolic.
+- `core/runtime/graph/tensor_resolver.py` and `core/runtime/shape_resolver.py`: symbol binding.
+- `core/runtime/graph/compiled_sequence.py`: refuses a symbol left unbound.
+- `core/runtime/graph_executor.py::_compute_computable_buffers()`: recomputes buffers such as
+  `sincos_2d_pos_embed` from the bound symbols.
+- `core/module/tiling_engine.py::from_component_config()`: refuses to build a TilingEngine when a spatial
+  dim is symbolic.
 
 ## Implementation note
 
-The lazy way to consult symbolic_shape is just to walk
-`tensor["symbolic_shape"]["dims"]` and check `isinstance(dim, dict) and
-dim.get("type") == "symbol"` on the dims that matter for your decision. See
+To consult `symbolic_shape`, walk `tensor["symbolic_shape"]["dims"]` and check
+`isinstance(dim, dict) and dim.get("type") == "symbol"` on the dims your decision depends on. See
 `tiling_engine.py:from_component_config` for the canonical pattern.

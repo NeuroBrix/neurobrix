@@ -3,10 +3,8 @@
 Generated from `neurobrix --help` and **pinned against it** by
 `tests/unit/cli/test_documented_commands_match_the_cli.py`.
 
-It exists because the two lists had drifted with nobody comparing them: a user
-reported `neurobrix hub` as undocumented, and the audit found the opposite gap —
-`autotune` and `drift` shipped and were described nowhere. A command the engine
-offers and no page names is a command nobody will use.
+Every command the engine offers is named here. The full options of each are in the
+[CLI reference](cli.md).
 
 | command | what it does |
 |---|---|
@@ -32,14 +30,13 @@ offers and no page names is a command nobody will use.
 
 ## `coverage` — the command that says whether a test can prove anything
 
-A test that exercises nothing is green, and this project has paid for that three
-times in three days. `coverage` answers, before a cell is written, whether a
-model run can reach the code the cell claims to validate.
+`coverage` says which installed containers carry an operation, a symbol or a
+request field, so you know whether a model run can reach the code you want to test.
 
 ```
-neurobrix coverage aten::tril      # 22 of 56 installed containers, named
-neurobrix coverage aten::var       # 0 of 56 — no model run can reach it
-neurobrix coverage --rarest 25     # what the catalogue barely exercises
+neurobrix coverage aten::tril      # the installed containers that carry it, named
+neurobrix coverage aten::var       # 0 means no installed model run can reach it
+neurobrix coverage --rarest 25     # what the installed models barely exercise
 neurobrix coverage --unreached     # what it classifies and never carries
 neurobrix coverage --field temperature
 ```
@@ -47,9 +44,8 @@ neurobrix coverage --field temperature
 It reads the containers, so it answers questions about the **graph**. It cannot
 answer a question about a **runtime decision** — which attention branch ran,
 which autotune config was seated, whether a fallback fired. Those are chosen
-while running and are not nodes in any graph; asking this command about them
-would return a confident wrong answer. That class needs its own instrument, on
-the execution path.
+while running and are not nodes in any graph, so this command cannot answer
+about them.
 
 A count of zero means "no container on THIS machine carries it", never "dead
 code". The hub holds more than one machine does.

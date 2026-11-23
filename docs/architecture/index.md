@@ -6,22 +6,27 @@ Technical deep-dives into how NeuroBrix works.
 
 ```mermaid
 graph LR
-    A[.nbx Container] --> B[Prism Solver]
+    A[.nbx Container] --> B[Prism]
+    E[Hardware Profile] --> B
     B --> C[Execution Engine]
     C --> D[Output]
-
-    B --> E[Hardware Profile]
-    E --> B
+    F[nbxtensor] --> C
 ```
 
 NeuroBrix has three layers:
 
-1. **NBX Container** — Self-contained model archive (graph, weights, topology)
-2. **Prism Solver** — Automatic hardware allocation and strategy selection
-3. **Execution Engine** — Graph runtime with CompiledSequence for zero-overhead execution
+1. **NBX container**: a self-contained model archive (graphs, weights, topology, configs)
+2. **Prism**: the planner. It reads the container and the machine's hardware profile and chooses where each
+   part of the model runs
+3. **Execution engine**: the graph runtime, with two branches. The PyTorch branch computes with PyTorch. The
+   Triton branch computes with [nbxtensor](https://github.com/NeuroBrix/nbxtensor), NeuroBrix's own tensor
+   library, with no PyTorch
+
+All tensor logic lives in nbxtensor, never in the engine.
 
 ## Topics
 
-- **[Runtime Engine](runtime.md)** — CompiledSequence, DtypeEngine, memory management
-- **[NBX Format](nbx-format.md)** — The universal model container
-- **[ZERO Principles](zero-principles.md)** — Core design philosophy
+- **[Runtime Engine](runtime.md)**: execution modes, Prism, flows, mixed precision, serving
+- **[NBX Format](nbx-format.md)**: the model container
+- **[Symbolic Shapes](symbolic-shapes-contract.md)**: how one graph serves many sizes
+- **[ZERO Principles](zero-principles.md)**: the core design rules

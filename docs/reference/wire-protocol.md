@@ -24,7 +24,9 @@ endpoint of the instance the calling environment names, as
 `endpoint: {"kind": "unix", "path": ...}` or
 `{"kind": "tcp", "address": "127.0.0.1", "port": ..., "port_file"?: ...}`.
 
-Nothing listens on a network interface: there is no HTTP, REST or gRPC layer.
+This protocol has no HTTP, REST or gRPC layer. A daemon started with `--http` also serves an
+OpenAI-compatible HTTP API, on loopback (`127.0.0.1:8765`) by default; that API is described in
+[Serving](../serving.md).
 
 ## 2. Framing
 

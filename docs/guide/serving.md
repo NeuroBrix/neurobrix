@@ -1,6 +1,7 @@
 # Serving Models
 
-Serve mode is the **recommended way** to use NeuroBrix. It loads weights into VRAM once and keeps them resident, eliminating the ~30-60 second load time on each inference.
+Serve mode is the **recommended way** to use NeuroBrix for repeated requests. It loads the model once and, on a warm
+plan, keeps its weights on the device between requests, so a request does not pay the load again.
 
 ## Start a Server
 
@@ -8,7 +9,7 @@ Serve mode is the **recommended way** to use NeuroBrix. It loads weights into VR
 neurobrix serve --model <model-name>
 ```
 
-NeuroBrix auto-detects your hardware. To target a specific profile, add `--hardware <profile>`.
+NeuroBrix uses the default hardware profile of your machine. To target a specific profile, add `--hardware <profile>`.
 
 Example:
 
@@ -16,11 +17,12 @@ Example:
 neurobrix serve --model PixArt-alpha/PixArt-Sigma-XL-2-1024-MS
 ```
 
-The daemon starts in the background. Weights are loaded into GPU memory and stay resident.
+The daemon starts in the background. `serve` returns once the model is loaded and says whether the daemon serves
+warm (weights stay on the device) or cold (weights reload per request).
 
 ## Run Inference
 
-Once the server is running:
+Once the server is running, `--model` can be omitted:
 
 ```bash
 # Image generation
@@ -48,6 +50,14 @@ Chat commands:
 | `/status` | Show engine status |
 | `/quit` | Exit chat |
 
+## OpenAI-compatible API
+
+```bash
+neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --http      # http://127.0.0.1:8765/v1
+```
+
+Endpoints, parameters and settings: [Serving and chat](../serving.md#openai-compatible-http-api).
+
 ## Stop the Server
 
 ```bash
@@ -58,12 +68,12 @@ This unloads weights and frees GPU memory.
 
 ## Override Parameters
 
-Use `--set` to override model defaults at serve time:
+`serve` takes no `--set`: a served model plans with its container's own values. Change a value per request with the
+`run` flags the daemon reads (`--steps`, `--cfg`, `--height`, `--width`, `--seed`, ...):
 
 ```bash
-neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers \
-  --set global.num_inference_steps=30 \
-  --set global.guidance_scale=5.0
+neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
+neurobrix run --prompt "a lighthouse at dusk" --steps 30 --cfg 5.0
 ```
 
 ## Targeting Specific Hardware
@@ -84,16 +94,17 @@ See [Hardware Profiles](hardware.md) for available profiles and [Writing Hardwar
 
 ```
 neurobrix serve
-  → Detect hardware (or load --hardware profile)
-  → Load .nbx from ~/.neurobrix/cache/
-  → Prism solver allocates components to GPUs
-  → Weights loaded to VRAM (eager mode)
-  → Unix socket created for IPC
-  → Daemon waits for inference requests
+  → Read the hardware profile (the machine's default, or --hardware)
+  → Load the model from ~/.neurobrix/cache/
+  → Prism plans where each component runs
+  → Warm plan: weights loaded to the device and kept there
+    Cold plan: weights loaded per request
+  → Local socket created (a Unix socket on Linux and macOS, loopback TCP on Windows)
+  → Daemon waits for requests
 
 neurobrix run --prompt "..."
-  → Client connects to daemon socket
-  → Sends inference parameters
-  → Runtime executes graph (weights already in VRAM)
-  → Returns output (saved to disk for images)
+  → Client connects to the daemon socket
+  → Sends the request parameters
+  → Runtime executes the graph on the loaded model
+  → Returns the output (text on stdout; images, audio and video saved to disk)
 ```

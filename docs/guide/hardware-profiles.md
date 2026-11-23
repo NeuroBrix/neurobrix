@@ -4,11 +4,11 @@ Hardware profiles tell NeuroBrix what your machine looks like — GPUs, CPU, mem
 
 ## When Do You Need a Custom Profile?
 
-Most users don't. When you run NeuroBrix without `--hardware`, auto-detection creates a profile for your entire machine:
+Most users don't. On the first launch on a machine that has no hardware profile, NeuroBrix creates that profile once; every later launch reads it. A profile given with `--hardware` is read as it is. The profile it creates describes the whole machine:
 
 ```bash
 neurobrix serve --model Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
-# Auto-detects all GPUs, CPU, interconnects
+# first launch on this machine: creates ~/.neurobrix/hardware/default.yml once (GPUs, CPU, interconnects)
 ```
 
 Write a custom profile when you want to:
@@ -20,15 +20,20 @@ Write a custom profile when you want to:
 
 ## Profile Location
 
-Profiles live in the NeuroBrix config directory:
+Profiles live in two places:
 
 ```
-src/neurobrix/config/hardware/
-├── default.yml          # Auto-generated (your full machine)
-├── v100-32g.yml         # Single V100 32GB
-├── v100-16g.yml         # Single V100 16GB
-└── my-custom.yml        # Your custom profile
+~/.neurobrix/hardware/           # your machine's generated profiles ($NEUROBRIX_HOME/hardware)
+├── default.yml                  # the whole machine
+└── default-<tag>.yml            # a process that sees only some of the cards
+
+neurobrix/config/hardware/       # the committed profiles, inside the installed package
+├── v100-32g.yml                 # Single V100 32GB
+├── v100-16g.yml                 # Single V100 16GB
+└── my-custom.yml                # Your custom profile
 ```
+
+A generated profile (`default`, `default-<tag>`) found inside the package is refused by name: it belongs in `~/.neurobrix/hardware/`. Any other name given to `--hardware` is read from the package's `config/hardware/`, and `--hardware` takes a profile name, not a path. A pip upgrade or reinstall replaces that folder: keep a copy of your own profile outside the package and put it back after an upgrade.
 
 Use the profile name (without `.yml`) as the `--hardware` argument:
 
@@ -84,7 +89,7 @@ cpu:
 # GPU devices (empty list for CPU-only machines)
 devices:
   - index: 0
-    brand: nvidia                      # nvidia, amd, intel, apple, tenstorrent, etc.
+    brand: nvidia                      # nvidia, amd, intel, apple or tenstorrent
     model: Tesla V100-SXM2-32GB
     memory_mb: 32768                   # VRAM in MB
     compute_capability: "7.0"          # NVIDIA-specific
@@ -132,7 +137,7 @@ notes: "2 x Tesla V100-SXM2-32GB, NVLink mesh, Dell C4140"
 |-------|----------|-------------|
 | `id` | Yes | Unique profile identifier, used internally |
 | `vendor` | No | Machine vendor (dell, supermicro, etc.) |
-| `preferred_dtype` | Yes | Default compute dtype. **Always set this.** |
+| `preferred_dtype` | No | The compute dtype the planner takes when every device of the profile supports it |
 | `summary` | Yes | Quick stats for display and solver hints |
 | `cpu` | Yes | CPU information (required even with GPUs) |
 | `devices` | Yes | List of GPU devices (empty `[]` for CPU-only) |
@@ -149,7 +154,8 @@ The `cpu.features` list tells NeuroBrix what accelerated operations are availabl
 | `avx2` | x86_64 | 256-bit SIMD, minimum for reasonable CPU inference |
 | `avx512f` | x86_64 | 512-bit SIMD, significant speedup for matrix ops |
 | `avx512_vnni` | x86_64 | INT8 dot-product acceleration |
-| `amx` | x86_64 (Sapphire Rapids+) | Hardware bf16/int8 matrix multiply |
+| `amx_bf16`, `amx_int8`, `amx_tile` | x86_64 (Sapphire Rapids+) | Hardware bf16/int8 matrix multiply |
+| `avx512_bf16` | x86_64 | bf16 dot products |
 | `neon` | aarch64/arm64 | 128-bit SIMD (ARM) |
 | `fp16` | arm64 (Apple Silicon) | Native half-precision compute |
 | `fma` | x86_64 | Fused multiply-add |
@@ -174,12 +180,12 @@ The `cpu.features` list tells NeuroBrix what accelerated operations are availabl
 | CPU with NEON + FP16 | `float16` | Apple Silicon half-precision |
 | CPU (generic) | `float32` | No half-precision acceleration |
 
-!!! warning "Always set `preferred_dtype`"
-    Without it, Prism may assign fp32 to models whose containers were built in fp32, wasting VRAM and halving throughput. A V100 running Sana in fp32 takes 2.74s/step — in fp16 it takes 1.23s/step (2.2x faster).
+!!! tip "`preferred_dtype`"
+    Prism takes it when every device of the profile supports it (`supports_dtypes`).
 
 ## CPU-Only Profiles
 
-NeuroBrix runs on machines without any GPU. Small models work well on CPU — don't expect GPU speed, but you get functional inference for development, testing, and edge deployment.
+NeuroBrix runs on machines without any GPU. Small models run on the CPU, for development and testing.
 
 ```yaml
 # Hardware Profile: CPU-Only Workstation
@@ -210,7 +216,7 @@ For CPU-only machines:
 - `preferred_dtype` is typically `float32` (or `bfloat16` if the CPU has AMX)
 - Prism allocates everything to CPU memory
 - Models that fit in RAM will run — TinyLlama (1.1B), small diffusion models, etc.
-- Larger models may work with `lazy_sequential` or `zero3` strategies (streaming from disk)
+- A model larger than that is planned with the `cpu_streaming` strategy: one component is loaded at a time, so only the largest component must fit in RAM (slower)
 
 !!! tip "CPU performance"
     CPU inference is slower than GPU, but perfectly usable for small models. TinyLlama-1.1B generates coherent text on a modern CPU. Use `neurobrix serve` to avoid reloading weights on each request.
@@ -265,11 +271,11 @@ devices:
     # ...
 ```
 
-Prism will place larger components on the 32GB GPU and smaller ones on the 16GB GPU.
+Prism plans each GPU with its own memory size, so a component that needs more memory can go to the larger card.
 
 ## Interconnect Configuration
 
-The `interconnect` section defines how GPUs communicate. This affects multi-GPU strategy scoring — NVLink strategies score higher than PCIe because of bandwidth.
+The `interconnect` section defines how GPUs communicate. The link bandwidth enters the time Prism estimates for a multi-GPU plan, so a fast link makes a spread plan cheaper.
 
 ```yaml
 # NVLink mesh (all GPUs can talk directly)
@@ -305,11 +311,7 @@ interconnect:
       bandwidth_gbps: 32
 ```
 
-| Tech | Typical Bandwidth | Use Case |
-|------|-------------------|----------|
-| `nvlink` | 300-900 GB/s | Server GPUs (V100 SXM, A100, H100) |
-| `xgmi` | 200-400 GB/s | AMD Instinct (MI250X, MI300X) |
-| `pcie` | 16-64 GB/s | Consumer GPUs, mixed setups |
+Write the bandwidth of your own links, from your vendor's documentation.
 
 ## Validating a Profile
 
@@ -323,4 +325,4 @@ neurobrix info --hardware
 neurobrix serve --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --hardware my-custom
 ```
 
-If the profile has errors, NeuroBrix will crash with an explicit message (ZERO FALLBACK — no silent defaults).
+A profile NeuroBrix cannot use is refused with a message that names the problem: an unknown GPU brand, a profile name that does not exist (the message lists the profiles it found), or a key the plan needs and the profile lacks.

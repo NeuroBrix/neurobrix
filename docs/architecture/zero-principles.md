@@ -26,13 +26,17 @@ if sample_size is None:
 ```
 
 **Valid data sources:**
-- `topology.json` — Execution flow and connections
-- `components/<name>/runtime.json` — Component attributes
-- `components/<name>/graph.json` — TensorDAG
-- `defaults.json` — User-tunable parameters
-- `hardware/<profile>.yml` — Hardware profile
+- The container: `manifest.json`, `topology.json`, `runtime/defaults.json`, `components/<name>/runtime.json`,
+  `profile.json`, `graph.json`
+- The family config: `config/families/<family>.yml`
+- The hardware profile of the machine, and the vendor file of its architecture:
+  `config/vendors/<vendor>/<architecture>.yml`. The engine's vendor files hold what the planner prices; the library
+  holds what its kernels read.
 
-If a value is needed at runtime, it must come from one of these sources. There are no magic numbers in the engine.
+If a value is needed at run time, it is read from one of these sources. There are no magic numbers in the
+engine. A value that is missing is added at its source (the container, the family file or the hardware
+profile), never as a default in engine code. New hardware support is a new vendor file, not a Python branch
+per architecture.
 
 ---
 
@@ -52,7 +56,7 @@ if value is None:
     raise ValueError(
         f"ZERO FALLBACK: 'key' not found in config.\n"
         f"Expected in: {config_path}\n"
-        f"This value should be populated during the build phase."
+        f"This value belongs in the container, the family config or the hardware profile."
     )
 ```
 
@@ -92,18 +96,12 @@ The runtime executes graphs mechanically. All domain-specific behavior is encode
 
 Beside the three ZERO principles, one boundary.
 
-**nbxtensor is the ecosystem's torch** (owner rule, 2026-11-12). Everything that touches tensors or follows torch's
-logic (tensors, devices, memory, arenas, copies, compute kernels, replay, the tensor side of the experts store) lives in
-nbxtensor, never in the engine. nbxtensor is a library with its own role: it replaces torch, and the engine is one of
-its users, like any other. The engine keeps policy: Prism, model families, flows, the CLI, serving, which expert sits in
-which slot and how many slots Prism grants. Every project of the ecosystem is separate (the engine, nbxtensor,
-NBXGrammar, NBX Code, the container builder, the hub), and a function is filed in the project it belongs to. Engine code
-that does tensor work is a defect as severe as a wrong answer: its fix ships at once, never held back to be grouped into
-a release. The PyTorch engine computes with torch, its own library; that is not a breach.
-
-The brick ratchet (`tools/brick_ratchet.py`, its test
-`tests/unit/brick_ratchet/test_the_brick_ratchet_refuses_what_gets_worse.py`) counts the tensor mechanisms each engine
-file holds; a count only goes down.
+**nbxtensor is NeuroBrix's torch.** Everything that touches tensors (tensors, devices, memory, arenas,
+copies, compute kernels, replay, the tensor side of the expert store) lives in
+[nbxtensor](https://github.com/NeuroBrix/nbxtensor), a separate library, never in the engine. The engine is one
+of its users. The engine keeps policy: Prism, model families, flows, the CLI, serving, and which expert sits in
+which slot. On the Triton branch, where the PyTorch branch calls torch, the engine calls nbxtensor in the same
+place and the same way. The PyTorch branch computes with torch, its own library; that is not a breach.
 
 ---
 
@@ -114,4 +112,4 @@ These constraints produce a runtime that is:
 1. **Universal**: The same engine runs diffusion models, LLMs, MoE, audio, and video without modification
 2. **Debuggable**: When something fails, the error message points to the exact missing data
 3. **Predictable**: No hidden behavior, no silent fallbacks, no model-specific code paths
-4. **Maintainable**: Adding a new model family requires zero changes to the runtime
+4. **Maintainable**: A new model whose flow the engine already knows needs no change to the runtime, only its container

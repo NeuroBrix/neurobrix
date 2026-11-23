@@ -24,42 +24,49 @@ and how the conversation and its KV cache behave today.
 ```bash
 neurobrix serve --model <name> [--hardware <profile>] [--timeout <seconds>] [--foreground]
                 [--compiled | --sequential | --triton | --triton-sequential]
+                [--http [--http-host <address>] [--http-port <port>] [--api-key-file <file>]]
                 [--ready-fd <fd>] [--ready-file <path>]
 ```
 
 | flag | meaning | default |
 |---|---|---|
 | `--model` | the model name (as `neurobrix list` shows it); required | — |
-| `--hardware` | hardware profile ID | the default profile of this machine, created at first use |
+| `--hardware` | hardware profile ID | the machine's hardware profile: created once on the first launch on a machine that has none, read on every later launch |
 | `--timeout` | idle timeout in seconds (see [Lifecycle](#lifecycle)) | 1800 |
 | `--foreground` | serve in this process and block the terminal | off: the daemon goes to the background |
 | `--compiled` | PyTorch engine, fused graph | the default where PyTorch is installed |
 | `--sequential` | PyTorch engine, one operation at a time (debugging) | — |
 | `--triton` | NeuroBrix Triton engine | the default where PyTorch is not installed |
 | `--triton-sequential` | Triton engine, one operation at a time (debugging) | — |
+| `--http` | also serve the [OpenAI-compatible HTTP API](#openai-compatible-http-api) on this daemon | off |
+| `--http-host` | address of the HTTP API (with `--http`); an address other than loopback needs `--api-key-file` | `serving.http_host` (`127.0.0.1`) |
+| `--http-port` | port of the HTTP API (with `--http`) | `serving.http_port` (8765) |
+| `--api-key-file` | a file holding the API key the HTTP API requires (`Authorization: Bearer`) | — |
 | `--ready-fd` | POSIX: an inherited pipe fd; the ready record (one JSON line) is written there once the daemon accepts, then the fd is closed | — |
 | `--ready-file` | a file the ready record is written to, whole, once the daemon accepts | — |
 
 At most one engine flag may be given; two or more are refused. When none is given, `serve` prints which engine it chose.
-Choosing the PyTorch engine where PyTorch is not installed is refused before the daemon starts.
+Choosing an engine whose branch is not installed (the PyTorch engine without PyTorch, a Triton mode without Triton) is
+refused by name before the daemon starts. `--http-host`, `--http-port` or `--api-key-file` without `--http` is refused.
 
 `serve` refuses to start (exit code 1) when a daemon of the same instance is already running.
 
-Without `--foreground`, `serve` starts the daemon in the background, prints its PID and the path of its log file, waits
-until the model is loaded and the socket accepts, then prints one of:
+Without `--foreground`, `serve` starts the daemon in the background, waits until the model is loaded and the socket
+accepts, then prints one of:
 
 ```
-[Serve] Model loaded — <model> (<family>, warm serving)
-[Serve] Model loaded — <model> (<family>, cold serving)
-[Serve] Failed: <error>
+Serving <model> (<family>, warm serving) — neurobrix chat to talk, neurobrix stop to end.
+Serving <model> (<family>, cold serving) — neurobrix chat to talk, neurobrix stop to end.
+Error: the daemon did not start: <error>
 ```
 
-and exits 0 (loaded) or 1 (failed). `warm` and `cold` are explained in [Warm and cold serving](#warm-and-cold-serving).
+(with `--http`, a second line `OpenAI-compatible API: <base_url>`), and exits 0 (loaded) or 1 (failed). With `-v` it
+also prints the daemon's PID and the path of its log file. `warm` and `cold` are explained in [Warm and cold serving](#warm-and-cold-serving).
 On Linux the background daemon is a fork of the `serve` process; on macOS and Windows it is a new process running
 `neurobrix serve ... --foreground` (with the same model, the resolved hardware profile, engine and timeout).
 
-`--ready-fd` and `--ready-file` are for programs that launch the daemon themselves; `serve` also prints the ready record
-on stdout as one line `NBX-READY <json>`. See [Readiness](reference/wire-protocol.md#7-readiness).
+`--ready-fd` and `--ready-file` are for programs that launch the daemon themselves; the daemon also prints the ready
+record on its own stdout as one line `NBX-READY <json>` (the terminal under `--foreground`, the log file otherwise). See [Readiness](reference/wire-protocol.md#7-readiness).
 
 ### `neurobrix chat`
 
@@ -87,8 +94,10 @@ user message, and the full answer is printed when it is complete (chat answers a
 End-of-file or Ctrl-C also leaves chat. A turn past the session's ceiling is refused by name (see
 [When the conversation outgrows the cache](#when-the-conversation-outgrows-the-cache)).
 
-A coding agent that works in a project with tools is not part of the engine: it will be its own project, NBX Code,
-which speaks to `neurobrix serve` through the OpenAI-compatible API (forced tool calls are honoured there).
+A coding agent that works in a project with tools is not part of the engine. NBX Code, a local coding agent, is
+coming soon: it will run against `neurobrix serve`, on your machine.
+
+The chat banner shows the served model's one name (its hub name) and the slash commands.
 
 ### `neurobrix stop`
 
@@ -109,12 +118,14 @@ exits 1.
 ### `neurobrix run` while a daemon is running
 
 - When `--model` is omitted, `run` takes the model of the running daemon.
-- When the daemon serves the same model, `run` sends its request to the daemon (`[Run] Using warm daemon (PID ...)`)
-  with its sampling, size, step, seed, mode, speaker and audio flags. Image, video and audio results are saved by the
+- When the daemon serves the same model, `run` sends its request to the daemon (`Using the running daemon (PID ...)`)
+  with its sampling (`--temperature`, `--top-k`, `--top-p`, `--repetition-penalty`, `--max-tokens`), size, step,
+  guidance, seed, chat, mode, speaker and audio flags. Image, video and audio results are saved by the
   daemon at the `--output` path; text is printed on stdout and not written to `--output`.
-- When the daemon serves another model, or the request to it fails, `run` refuses to load a second copy beside it and
-  tells you to use the daemon or stop it.
-- `run --certified-only` is never answered by a daemon: it is refused while one is running.
+- When the daemon serves another model, `run` refuses to load a second copy beside it and tells you to stop it or
+  serve the model you asked for. When the daemon serving the same model answers with an error, `run` prints
+  `Error: the daemon answered: ...` and exits 1; it does not load the model a second time.
+- `run --certified-only` and `run --turns` are never answered by a daemon: both are refused while one is running.
 
 ### Several daemons
 
@@ -127,9 +138,11 @@ Unset, the default instance is used. See [Where the daemon listens](reference/wi
 ## Lifecycle
 
 1. **Load.** The daemon writes its pid file, then: finds the model, reads its container, loads the hardware profile,
-   solves the Prism plan once **for serving** (see below), applies the profile's CPU settings, loads the runtime package
-   and runs the executor's one-time setup. For a warm plan of the `llm` family it runs one one-token generation
-   (`"warmup"`) so that the weights are on the device before the first request. It prints
+   opens the sub-components the model declares (a daemon that cannot get one never becomes ready), solves the Prism
+   plan once **for serving** (see below), applies the profile's CPU settings, loads the runtime package and runs the
+   executor's one-time setup. For a warm plan of the `llm` family it runs one one-token generation (`"warmup"`) so that
+   the weights are on the device before the first request. A video container is planned with the frame count and
+   temporal compression its container declares. The daemon's log holds the line
    `<model> | <profile> | <strategy> | Ready in <s>s`.
 2. **Listen.** It binds its socket, says it is ready, and accepts connections. Each connection gets its own thread.
 3. **Serve.** A connection may send any number of requests, one after another.
@@ -168,12 +181,18 @@ When the daemon loads, Prism solves the plan with `serve_mode=True`. Each plan c
   stay on the device between requests, with the executor's compiled state. This is **warm** serving.
 - **lazy**: weights are loaded when the flow needs them and released as it goes, as in a single `run`; the executor's
   setup still survives between requests, the weights do not. This is **cold** serving: every request pays the loading
-  again. The daemon prints `Cold serving — weights reload per request, setup/context persists`.
+  again. The daemon's log says `Cold serving — weights reload per request, setup/context persists`.
+
+A lazy plan whose flow holds every one of its components loaded together during a request (a text decode: the
+language model and its head) releases nothing between requests that the next one would not load again, so it is
+served **warm** too.
 
 In serve mode Prism prices `single_gpu` with **every weight resident** at once (the sum of all weights plus the
 largest activation), not one component at a time as for a single `run`. Prism ranks the
 strategies by what they do with the weights and takes the fastest plan that fits within the best rank (lower rank
 first):
+
+In the table, "cold" means cold unless the flow holds every component together (above).
 
 | strategy | rank | loading mode when serving | daemon |
 |---|---|---|---|
@@ -197,8 +216,11 @@ again with the budgets of a single run. The plan it finds then is **lazy whateve
 The result is visible in three places: the `serve` line (`warm serving` / `cold serving`), the ready record's
 `"serving"` field, and the `status` method's `warm_serving` and `strategy` fields.
 
-The plan is solved once, at load. On a machine busy at that moment, Prism re-plans on the memory really free (as it does
-for `run`); it is not re-planned between requests.
+The plan is solved once, at load. The free memory is read from the driver at that moment: on a machine busy then,
+Prism solves the plan again on the memory that is free (as it does for `run`).
+A served request is armed like a `run`: when one of its components meets a device out-of-memory, the request re-plans
+once and goes on from that component, and the daemon then serves under the new plan (its log says the new strategy
+and whether it is warm or cold).
 
 ---
 
@@ -285,12 +307,16 @@ non-positive value is refused by name):
 | `drain_timeout_s` | 30 | how long an exiting daemon waits for replies to be delivered |
 | `ready_poll_s` | 0.5 | Windows: how often the launcher looks for the ready file |
 
+The same section holds `kv_host_tier_mb` (shipped `null`): the cap in MB of the host memory that keeps parked
+conversation pages. `null` takes the budget the hardware profile gives, a number caps it, and `0` turns the tier off.
+
 ---
 
 ## Chat and the KV cache today
 
-This is the state after 0.6.2 (unreleased): the KV cache belongs to the chat session (scope A of
-`docs/design/prism_kv.md`). Host and disk tiers and sharing between sessions are not built.
+The KV cache belongs to the chat session. When the session's positions are about to be dropped, its whole pages are
+parked in host memory (the KV host tier, within `serving.kv_host_tier_mb`) and copied back when a later request
+continues them. There is no disk tier, and the cache is not shared between sessions.
 
 ### One conversation per daemon
 
@@ -322,16 +348,14 @@ are prefilled once.
 
 What that reuse does not promise is the same bytes as a fresh read: a prompt whose beginning is served from the kept
 cache and the same prompt read whole reach the same logits by two different sequences of operations, which do not
-round alike. Where two tokens are nearly tied the answer can part at that token — the same request sent twice in a
-row to one daemon may give two fluent answers that differ from one word on, at `temperature: 0` too (measured
-2026-11-11 on a model streamed layer by layer). Within one daemon it is deterministic: the answer is a function of
+round alike. Where two tokens are nearly tied the answer can part at that token. Within one daemon it is deterministic: the answer is a function of
 the request and of what the cache held when it arrived.
 
-Any other request on the same engine (a `generate`, a warmup) that reuses the cache empties it, and the next turn
-then prefills the whole conversation again. A failed turn leaves the session holding nothing.
+Any other request on the same engine (a `generate`, a warmup) that reuses the cache takes it from the session. The
+session's pages are parked in the KV host tier first, when it has room, and the next turn that continues them copies
+them back; without room, the next turn prefills the whole conversation again. A failed turn leaves the session
+holding nothing.
 
-On the Triton engine under `--certified-only`, a continued prefill needs the kernel settings of attention with fewer
-query rows than keys; the census does not derive them yet, so such a run stops naming the missing setting.
 
 ### The cache Prism plans for serving
 
@@ -504,8 +528,9 @@ In the `serving:` section of `config/system.yml`, read when the door opens (each
 | `http_max_queued` | 8 | HTTP requests allowed to wait at once (both doors' waiting requests counted); one more gets 429 |
 | `http_max_body_mb` | 64 | the largest request body (an upload, a base64 image) |
 
-The in-run re-plan that `neurobrix run` gets on a busy machine is not armed for a served request yet; a request that
-does not fit the memory left answers 500 with the named refusal, and the daemon stays loaded.
+A served request gets the same in-run re-plan as `neurobrix run`: a component that meets a device out-of-memory is
+re-planned once and the request goes on (see [Warm and cold serving](#warm-and-cold-serving)). A request that still
+does not fit answers 500 with the named refusal, and the daemon stays loaded.
 
 ---
 

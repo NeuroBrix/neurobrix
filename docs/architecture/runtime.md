@@ -1,220 +1,242 @@
-# NeuroBrix Architecture
-
-> **Version**: 0.3.0 | **Status**: Production | **Last Update**: July 2026
+# NeuroBrix Runtime
 
 ## Overview
 
-NeuroBrix is a universal deep learning inference engine built on three core layers:
+NeuroBrix is an inference engine built on three layers:
 
 ```
-.nbx Container ──> Prism Solver ──> Execution Engine ──> Output
- (model data)      (hardware)       (graph runtime)
+.nbx container ──> Prism ──> execution engine ──> output
+ (model data)     (plan)     (graph runtime)
 ```
 
-The runtime has **zero domain knowledge**. It does not know what an "image", "token", or "latent" is. It only sees tensors, axes, and execution graphs.
+The runtime has **no domain knowledge**. It does not know what an image, a token or a latent is. It sees
+tensors, axes and execution graphs. The container declares; the engine obeys.
+
+The engine does no tensor logic of its own. On the Triton branch every tensor, memory block and kernel
+comes from the **nbxtensor** library, a separate package the engine depends on. On the PyTorch branch the
+same work is done by PyTorch.
 
 ---
 
-## Execution Modes
+## Execution modes
 
-Two independent compute branches (PyTorch and Triton), each in a sequential
-(op-by-op) and a compiled (fused hot-loop) variant — four modes. The branches
-share the `.nbx` container and the Prism plan but no compute code.
+There are two compute branches, PyTorch and Triton. Each has a compiled variant and an op-by-op variant:
+four modes in all. The branches share the `.nbx` container and the Prism plan.
 
-| Mode | Flag | Branch | Implementation | Use Case |
-|------|------|--------|----------------|----------|
-| **Compiled** | (default) | PyTorch | CompiledSequence + DtypeEngine AMP | Production (80-95% GPU utilization) |
-| **Native** | `--sequential` | PyTorch | Sequential ATen dispatcher | Op-by-op reference / debug |
-| **Triton** | `--triton` | Triton | TritonSequence (zero PyTorch) | Production — zero-torch, vendor-agnostic |
-| **Triton sequential** | `--triton-sequential` | Triton | TritonSequentialDispatcher (op-by-op) | Op-by-op kernel-level debug |
+| Mode | Flag | Branch | Implementation | Use |
+|------|------|--------|----------------|-----|
+| **Compiled** | `--compiled` | PyTorch | CompiledSequence + DtypeEngine | Default when PyTorch is installed |
+| **Sequential** | `--sequential` | PyTorch | ATen op-by-op dispatcher | Op-by-op reference and debugging |
+| **Triton** | `--triton` | Triton | TritonSequence on nbxtensor | No PyTorch; default when PyTorch is not installed |
+| **Triton sequential** | `--triton-sequential` | Triton | TritonSequentialDispatcher (op-by-op) | Op-by-op kernel debugging |
 
-### Compiled Mode (Default)
+When no flag is given, the engine runs the compiled PyTorch mode if PyTorch is installed, and the Triton mode
+if it is not. The launch line says which one it chose. The four flags are mutually exclusive.
 
-The compiled mode pre-compiles the entire execution graph at load time into a **CompiledSequence** — a zero-overhead execution path:
+A Triton mode needs a Triton build for the machine: the `triton` wheel on Linux x86_64 and aarch64, the
+Metal build on Apple Silicon (`python -m nbxtensor install-metal`). Where none is installed, a Triton mode is
+refused by name with the install line. A PyTorch mode without PyTorch is refused the same way.
 
-- **TensorArena**: `__slots__`-based list for O(1) tensor access via integer slots
-- **CompiledOp**: Frozen dataclass with pre-resolved function pointers and slot indices
-- **DtypeEngine**: Implements PyTorch AMP autocast rules for numerical stability
-- **Dead tensor analysis**: Liveness tracking to free memory during execution
-- **Symbolic dimensions**: SymbolArg/ProductArg support for dynamic shapes (batch size, sequence length) resolved at runtime
+### Compiled mode
+
+The compiled mode turns the whole execution graph into a **CompiledSequence** at load time:
+
+- **TensorArena**: tensors are held in integer-indexed slots, so the hot loop does no dictionary lookups
+- **CompiledOp**: each op is a frozen record with its function and slot indices resolved once
+- **DtypeEngine**: mixed-precision rules per op (below)
+- **Liveness**: a tensor is freed after its last use
+- **Symbolic dimensions**: batch size, sequence length and spatial sizes are bound at run time from the
+  container's symbolic shapes (see [Symbolic shapes](symbolic-shapes-contract.md))
+
+### Triton mode (`--triton`)
+
+The Triton mode runs a model with no PyTorch in the process.
+
+- **NBXTensor**: the tensor type of nbxtensor, with its own device memory management
+- **TritonSequence**: the same arena-based compiled loop as CompiledSequence, on NBXTensor
+- **Kernels**: every compute op runs on nbxtensor's Triton kernels (matrix products, attention, norms,
+  convolutions, and more). The engine itself holds no kernel
+- **KV cache**: preallocated buffers, grouped-query attention supported
+- **Weight loading**: safetensors read by nbxtensor straight into NBXTensor buffers, with no PyTorch
+- **Mixed precision**: TritonDtypeEngine applies the same op classes as the compiled branch
+- **Decode replay**: on one card, decode steps are replayed from a recorded launch plan (CUDA graphs on NVIDIA)
+- **Devices**: nbxtensor drives NVIDIA (CUDA), Apple Silicon (Metal) and CPU (triton-cpu) through its own
+  backends. AMD and Intel GPUs, through the same Triton kernels, are targets not yet validated on a card.
 
 ```
-Legacy path: ~15,000 dict lookups per transformer step
-Compiled path: 0 dict lookups (integer-indexed memory arena)
-```
-
-### Triton Mode (`--triton`)
-
-The Triton mode is a **complete zero-PyTorch inference engine**. No `torch.Tensor`, no `torch.cuda`, no PyTorch in the hot path.
-
-- **NBXTensor**: Lightweight tensor descriptor with ctypes GPU memory management (cudaMalloc/cudaMemcpy/cudaFree via driver API)
-- **TritonSequence**: Arena-based compiled execution — same architecture as CompiledSequence but with NBXTensor
-- **Triton kernels**: 136+ pure `@triton.jit` kernels for all compute ops (matmul, attention, layer_norm, etc.)
-- **KV cache**: Pre-allocated NBXTensor buffers with GQA support and SDPA interceptor
-- **Weight loading**: safetensors raw bytes → numpy → cudaMemcpy → NBXTensor (zero torch)
-- **AMP**: TritonDtypeEngine mirrors native DtypeEngine rules, adapted for Triton fp32 accumulators
-- **Decode optimization**: `skip_kills` skips arena cleanup during decode (intermediates reuse same-size slots every step)
-- **Multi-hardware**: DeviceAllocator dispatches to `libcudart.so` (NVIDIA) or `libamdhip64.so` (AMD) — auto-detected
-
-```
-triton/
-  sequence.py      — Compiled hot loop (arena + closures)
-  executor.py      — Full pipeline: load → compile → bind → run
-  kv_cache.py      — KV cache + SDPA interceptor
-  dtype.py         — TritonDtypeEngine (AMP rules)
-  weight_loader.py — safetensors → NBXTensor
-  flow/            — Zero-torch flow handlers (autoregressive, diffusion, audio, etc.)
+src/neurobrix/triton/
+  sequence.py      — compiled hot loop (arena + closures)
+  sequential.py    — op-by-op dispatcher
+  kv_cache.py      — KV cache
+  dtype.py         — TritonDtypeEngine
+  weight_loader.py — safetensors → NBXTensor (through nbxtensor)
+  replay.py        — frozen-plan replay of the hot loop
+  flow/            — flow handlers (autoregressive, diffusion, audio, ...)
 ```
 
 ---
 
-## Prism: Hardware Solver
+## Prism: the planner
 
-Prism analyzes the model's memory footprint against your hardware profile and selects the optimal execution strategy automatically.
+Prism reads the model's memory needs from the container and the machine's facts from its hardware profile,
+then chooses how to place the model.
 
-### Strategy Cascade
+### How a plan is chosen
 
-Prism applies a scoring cascade — if the best strategy doesn't fit, it tries the next:
+Prism tries every strategy and keeps each one that fits. It then ranks them by **what they do with the
+weights**. The best plan of the first non-empty rank wins:
 
-```
-single_gpu (1000)
-  → single_gpu_lifecycle (900)
-    → pipeline_parallel (850)
-      → component_placement (750)
-        → block_scatter (700)
-          → weight_sharding (680)
-            → component_placement_lazy (400)
-              → lazy_sequential (300)
-                → zero3 (100)
-```
+| Rank | Strategies | What it costs |
+|---|---|---|
+| 1. Resident, one device | `single_gpu`, `single_gpu_lifecycle` | nothing moves |
+| 2. Resident, spread over devices | `component_placement`, `block_scatter`, `pipeline_parallel`, `weight_sharding` | activations cross the link |
+| 3. Resident, the overflowing ops cut into tiles | `op_level_tiling` | tile edges and extra launches |
+| 4. Weights moved through the card per use or per phase | `zero3`, `component_placement_lazy`, `lazy_sequential`, `layer_streaming` | bytes over the host link |
+| 5. Host compute | `cpu_execution`, `cpu_streaming` | the host's speed |
 
-Scores are bandwidth-adjusted: interconnect speed (Gbps) and boundary count affect the final score.
+Inside a rank, the estimated time of each candidate decides. The estimate uses the facts the hardware
+profile declares (compute rate, memory bandwidth, link bandwidth). `neurobrix run --explain-plan` prints the
+plan, every candidate and why each one was refused.
 
-### Strategy Descriptions
+### Strategies
 
 | Strategy | Description |
 |----------|-------------|
-| `single_gpu` | All components on one GPU |
-| `single_gpu_lifecycle` | Components loaded/unloaded sequentially on one GPU |
-| `component_placement` | Whole components on different GPUs |
-| `pipeline_parallel` | Per-layer sequential fill across GPUs (like Accelerate) |
-| `block_scatter` | Block-level best-fit distribution across GPUs |
-| `weight_sharding` | Weight-file round-robin across GPUs |
-| `component_placement_lazy` | Component placement with lazy weight swap |
-| `lazy_sequential` | Stream components through limited VRAM |
-| `zero3` | CPU offload with GPU compute |
+| `single_gpu` | All components on one device |
+| `single_gpu_lifecycle` | Components loaded and released in turn on one device |
+| `component_placement` | Whole components on different devices |
+| `pipeline_parallel` | Layers filled in order across devices |
+| `block_scatter` | Blocks distributed across devices by best fit |
+| `weight_sharding` | Weight files spread across devices |
+| `op_level_tiling` | Ops that overflow the device are cut into tiles |
+| `component_placement_lazy` | Component placement with weights swapped in when needed |
+| `lazy_sequential` | Components streamed through limited memory, one per phase |
+| `layer_streaming` | Layers streamed through the device |
+| `zero3` | Weights kept in host memory, blocks streamed to the device for compute |
+| `cpu_execution`, `cpu_streaming` | Compute on the host |
 
-### Memory Estimation
+A mixture-of-experts model can keep its routed experts in an expert store, with only the experts in use on
+the device.
 
-Prism estimates per-component memory from the NBX container:
-- **Weights**: Summed from safetensors headers (no tensor loading)
-- **KV cache** (LLMs): Computed from `defaults.json` — `max_tokens × num_layers × 2 × num_kv_heads × head_dim × dtype_bytes`
-- **Lifecycle**: Components classified as persistent (loaded simultaneously) or transient (loaded on demand)
+### Memory estimation
 
-### Dtype Resolution
+Prism estimates each component's memory from the container:
+- **Weights**: summed from the safetensors headers and `weights_index.json`, with no tensor loaded
+- **KV cache** (language models): from the attention shapes the container declares and the requested length
+- **Lifecycle**: components are persistent (held together) or transient (loaded on demand)
+
+### Dtype
 
 ```
-Hardware profile (supports_dtypes: ["float32", "float16"])
-  → Prism resolves optimal dtype per component
-  → DtypeEngine applies AMP rules per operation
-  → WeightLoader converts weights at load time
+components/<c>/profile.json dtype (the dtype the weights are stored in)
+  → the hardware profile's supported dtypes decide what the device computes in
+  → DtypeEngine applies the op classes per operation
+  → the weight loader converts at load time where needed
 ```
 
-**Single source of truth**: All dtype string parsing, torch.dtype conversion, and Prism bf16↔fp16 remapping lives in `core/dtype/config.py` (`parse_dtype()`, `DTYPE_MAP`). No runtime file has its own dtype mapping.
+All dtype string parsing and conversion for the PyTorch branch lives in `core/dtype/config.py`
+(`parse_dtype()`). See [the dtype per component](../reference/the-dtype-per-component.md).
 
-### Heterogeneous GPU Support
+### Mixed GPUs
 
-Prism supports mixed GPU configurations (e.g., 2x V100-16GB + 2x V100-32GB). Block-level sharding is weighted by available VRAM per device.
+Prism plans on mixed configurations, for example two 16 GB and two 32 GB cards in one machine. Placement
+follows each device's capacity.
 
 ---
 
-## Execution Flows
+## Execution flows
 
-The runtime supports multiple execution flow types, determined by the model's topology. The three main ones:
+The model's topology names its flow. The main ones:
 
-### Iterative Process (Diffusion Models)
+### Iterative process (diffusion models)
 
 ```
 pre_loop:   [text_encoder]
-loop:       [transformer] × N steps (driven by scheduler)
+loop:       [transformer] × N steps (driven by the scheduler)
 post_loop:  [vae]
 ```
 
-Used by: PixArt, Sana, FLUX, CogVideoX
+Used by: PixArt, Sana, Flex.1, CogVideoX, Wan
 
-### Autoregressive (Language Models)
+### Autoregressive (language models)
 
 ```
-prefill:    Process full prompt through language_model
-decode:     Generate tokens one at a time with KV cache
+prefill:    the whole prompt through the language model
+decode:     one token at a time, with the KV cache
 ```
 
-Used by: DeepSeek-MoE, Qwen, TinyLlama
+Used by: DeepSeek, Qwen, TinyLlama, Granite
 
-### Forward Pass (Single-Shot)
+### Forward pass (single shot)
 
 ```
 forward:    [component_1] → [component_2] → output
 ```
 
-Used by: Whisper (audio transcription)
+Used by: upscalers
 
-Additional flow types cover encoder-decoder speech models, RNN-T transducers (Parakeet), audio-conditioned LLMs (Voxtral, Canary-Qwen, Granite-Speech), and text-to-speech pipelines (Kokoro, Orpheus, Chatterbox, VibeVoice, OpenAudio).
+Other flows cover encoder-decoder speech models (Whisper), RNN-T transducers (Parakeet), audio-conditioned
+language models (Voxtral, Canary-Qwen, Granite-Speech), vision-language models, and text-to-speech pipelines
+(Kokoro, Orpheus, Chatterbox, VibeVoice, OpenAudio).
 
 ---
 
-## DtypeEngine: Automatic Mixed Precision
+## DtypeEngine: mixed precision
 
-The DtypeEngine implements PyTorch AMP autocast rules for numerical stability:
+The DtypeEngine applies an op-class policy. The policy file is nbxtensor's (`nbxtensor/dtype/policy.yml`), so
+both branches read the same classes:
 
-| Category | Behavior | Example Ops |
+| Class | Behaviour | Example ops |
 |----------|----------|-------------|
-| **FP32 ops** | Always upcast to fp32 | `pow`, `rsqrt`, `softmax`, `sum`, `mean`, `layer_norm` |
-| **FP16 ops** | Run in compute dtype (fp16) | `mm`, `conv2d`, `linear` |
-| **Promote ops** | Promote to highest input dtype | `add`, `mul`, `cat` |
-| **Overflow protect** | Post-compute clamp for fp16 | `add`, `sub` (residual accumulation) |
+| **float32** | Always computed in float32 | `pow`, `rsqrt`, `softmax`, `sum`, `layer_norm`, `polar`, `view_as_complex` |
+| **lower** | Computed in the policy's compute dtype | `mm`, `bmm`, `addmm`, `conv2d`, `linear` |
+| **promote** | Computed in the widest input dtype | `addcmul`, `addcdiv`, `index_add` |
 
-**Why this matters**: Without AMP, RMSNorm's `pow → mean → rsqrt` chain overflows in fp16 (rsqrt(Inf) = 0 → all zeros). With AMP, pow upcasts to fp32 and the chain stays stable.
+**Why it matters**: without these rules, an RMSNorm's `pow → mean → rsqrt` chain can overflow in float16.
+With them, `pow` runs in float32 and the chain stays finite.
 
-**Special cases**:
-
-- `bmm` is classified as FP32 (not FP16) — intentional deviation from PyTorch for T5-XXL stability
-- `polar` and `view_as_complex` are FP32 — protects RoPE complex number computations (DeepSeek, Llama)
-- Overflow protection on `add`/`sub` clamps fp16 results to ±65504 to prevent Inf → NaN propagation in deep residual chains
+**Hardware-driven protection**: on hardware whose profile has no bfloat16 (a V100, for example), matrix
+products and division are computed in float32 where float16 could overflow. On bfloat16 hardware no such
+upcast is needed. The decision reads the hardware profile, never a model name.
 
 ---
 
-## Serving Architecture
+## Serving
 
-NeuroBrix supports two serving workflows:
-
-### Serve Mode (Recommended)
+### Serve mode
 
 ```bash
-neurobrix serve --model <name> --hardware <profile>
-neurobrix chat [--temperature T]
+neurobrix serve --model <name>
+neurobrix chat
 neurobrix stop
 ```
 
-- Weights loaded once into VRAM, kept warm
-- Background daemon with Unix socket communication
-- Automatic idle timeout (default: 30 min)
-- Session-based KV cache management
+- Weights are loaded once and kept warm when the plan allows it
+- A background daemon, reached over a Unix socket on macOS and Linux and over TCP on loopback on Windows
+- An idle timeout stops the daemon (default 1800 s, `--timeout`)
+- The conversation and its KV cache live in the daemon
+- `--http` also serves an OpenAI-compatible HTTP API on loopback
 
-### Single-Shot Mode
+See [the daemon wire protocol](../reference/wire-protocol.md).
+
+### Single-shot mode
 
 ```bash
-neurobrix run --model <name> --hardware <profile> --prompt <text>
+neurobrix run --model <name> --prompt <text>
 ```
 
-- Loads model, executes, unloads
-- Suitable for batch processing or one-off experiments
+- Loads the model, runs it, exits
+- Suited to batch jobs and one-off runs
+
+`--hardware <profile>` names a hardware profile. Without it, the engine uses the profile it keeps for the
+machine. On the first launch on a machine that has no hardware profile, NeuroBrix creates that profile once; every
+later launch reads it. A profile given with `--hardware` is read as it is.
 
 ---
 
-## Atomic Operations
+## Operations
 
-The runtime operates on ~80 ATen operations that cover all model architectures:
+The runtime executes ATen operations recorded in the container's graphs:
 
 | Category | Operations |
 |----------|-----------|
@@ -224,29 +246,32 @@ The runtime operates on ~80 ATen operations that cover all model architectures:
 | **Control** | reshape, transpose, cat, split, gather, scatter, slice, pad, where |
 | **Special** | scaled_dot_product_attention, interpolate, upsample |
 
-Every neural network is a combination of these primitives. A transformer block = linear + norm + attention + linear. FlashAttention = a single `scaled_dot_product_attention` call.
+Every network is built from such primitives. A transformer block is linear + norm + attention + linear.
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
-neurobrix/
-  cli/                  Command-line interface
-    commands/           run, serve, chat, hub, import, list, ...
-  core/                 Runtime engine (native PyTorch mode)
-    runtime/            Executor, graph engine, CompiledSequence
-    prism/              Hardware solver and execution planning
-    flow/               Execution flows (iterative, autoregressive, forward, audio, tts)
-    dtype/              Automatic mixed precision engine
-    cfg/                Classifier-free guidance engine
-    module/             Tokenizer, scheduler, KV cache, text processor
-    io/                 Weight loading
-  kernels/              Triton GPU kernels + NBXTensor + dispatch table
-  triton/               Zero-torch inference engine (--triton mode)
-    flow/               Zero-torch flow handlers
-    cfg/                Classifier-free guidance (zero-torch)
-  nbx/                  .nbx container format
-  serving/              Daemon server, client, session management
-  config/               Hardware profiles, family configs
+src/neurobrix/
+  cli/                  command-line interface
+    commands/           run, serve, chat, upscale, registry (import, list, hub, remove), ...
+  core/                 runtime engine
+    runtime/            executor, graph engine, CompiledSequence
+    prism/              planner
+    strategies/         placement strategies
+    flow/               execution flows
+    dtype/              mixed-precision engine
+    cfg/                classifier-free guidance
+    module/             tokenizer, scheduler, text and vision processors
+    state/              state kept between steps (KV cache, sessions)
+    io/                 weight loading (PyTorch branch)
+  kernels/              op classification and kernel certification (the kernels are in nbxtensor)
+  triton/               Triton-branch engine (--triton)
+  nbx/                  .nbx container reader
+  serving/              daemon, client, OpenAI-compatible API
+  processors/           sub-components a model declares (fetched on demand)
+  config/               hardware profiles, vendor files, family configs
 ```
+
+The tensor library is its own project: [nbxtensor](https://github.com/NeuroBrix/nbxtensor).
