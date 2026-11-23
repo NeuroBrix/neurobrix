@@ -528,6 +528,8 @@ def run_command(args):
     anything else is the run's own."""
     from neurobrix.cli.engine_choice import asked_mode
     if (mode := asked_mode(args)) is not None:
+        from neurobrix.core.runtime import engines
+        engines.require_engine(mode)           # a PyTorch mode without torch: refused by name before any Prism is read
         _branch_door.choose(mode)              # the hardware is read below, by this branch's Prism
     autodetect, intel_refusal = _branch_door.names("prism", "", "autodetect", "intel_refusal")
     intel_refusal.announce()

@@ -76,3 +76,24 @@ def test_the_door_hands_each_branch_its_own_prism():
     assert solver.__module__ == "neurobrix.triton.prism.solver"
     with pytest.raises(RuntimeError, match="BRANCH ALREADY CHOSEN.*one process runs one branch"):
         branch_door.choose("compiled")
+
+
+def test_an_unknown_mode_is_refused_not_sent_to_a_side():
+    """qa 1278-3: a mode the door does not know is refused by name, never the PyTorch side by default."""
+    from neurobrix import branch_door
+    with pytest.raises(ValueError, match="unknown engine mode 'tritn'"):
+        branch_door.side_of("tritn")
+    with pytest.raises(ValueError):
+        branch_door.choose("")
+
+
+def test_a_branch_this_install_does_not_hold_is_refused_by_name(monkeypatch):
+    """qa 1278-1: with src/neurobrix/pytorch deleted, a PyTorch mode met a bare ModuleNotFoundError at the door."""
+    from neurobrix import branch_door
+
+    def missing(name):
+        raise ModuleNotFoundError(f"No module named {name!r}", name="neurobrix.pytorch")
+    branch_door.choose("compiled")
+    monkeypatch.setattr(branch_door.importlib, "import_module", missing)
+    with pytest.raises(RuntimeError, match="BRANCH NOT INSTALLED: the pytorch branch is not installed here"):
+        branch_door.module("prism", "autodetect")

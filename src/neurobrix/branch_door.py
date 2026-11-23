@@ -24,15 +24,21 @@ from __future__ import annotations
 import importlib
 from typing import Any, Tuple
 
-#: the modes that run the Triton branch; every other mode runs the PyTorch branch
+#: the modes that run the Triton branch, and those that run the PyTorch branch; any other mode is refused by name
 TRITON_MODES = frozenset({"triton", "triton_sequential"})
+PYTORCH_MODES = frozenset({"compiled", "sequential"})
 
 _CHOSEN: list = [None]       # the side this process runs, once a command chose it
 
 
 def side_of(mode: str) -> str:
-    """The branch a mode runs: "triton" for the Triton modes, "pytorch" for the others."""
-    return "triton" if str(mode) in TRITON_MODES else "pytorch"
+    """The branch a mode runs: "triton" for the Triton modes, "pytorch" for the PyTorch modes; an unknown mode is
+    refused by name, never sent to a side by default (qa 1278-3)."""
+    if str(mode) in TRITON_MODES:
+        return "triton"
+    if str(mode) in PYTORCH_MODES:
+        return "pytorch"
+    raise ValueError(f"branch door: unknown engine mode {mode!r}: one of {sorted(TRITON_MODES | PYTORCH_MODES)}")
 
 
 def choose(mode: str) -> str:
@@ -54,8 +60,18 @@ def side() -> str:
 
 
 def module(brick: str, sub: str = "") -> Any:
-    """`neurobrix.<side>.<brick>[.<sub>]` imported, for this process's branch."""
-    return importlib.import_module(f"neurobrix.{side()}.{brick}" + (f".{sub}" if sub else ""))
+    """`neurobrix.<side>.<brick>[.<sub>]` imported, for this process's branch; a branch whose directory this install
+    does not hold is refused by name (qa 1278-1), never a bare ModuleNotFoundError."""
+    where = side()
+    try:
+        return importlib.import_module(f"neurobrix.{where}.{brick}" + (f".{sub}" if sub else ""))
+    except ModuleNotFoundError as exc:
+        if exc.name in (f"neurobrix.{where}", f"neurobrix.{where}.{brick}"):
+            raise RuntimeError(f"BRANCH NOT INSTALLED: the {where} branch is not installed here (no neurobrix/{where}/{brick}): "
+                                     f"run a mode of the other branch "
+                                     f"({'--compiled or --sequential' if where == 'triton' else '--triton or --triton-sequential'}), "
+                                     f"or install the {where} branch") from exc
+        raise
 
 
 def names(brick: str, sub: str, *members: str) -> Tuple[Any, ...]:

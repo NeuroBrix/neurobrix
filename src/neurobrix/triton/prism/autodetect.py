@@ -2204,7 +2204,7 @@ def _detect_apple_memory_mb() -> int:
     """
     from nbxtensor import device as _nbx_device
     try:
-        return _nbx_device.apple_gpu_limits()["working_set_bytes"] // (1024 * 1024)     # asked of the device, by the library
+        return _nbx_device.apple_gpu_limit("working_set_bytes") // (1024 * 1024)     # asked of the device, by the library
     except _nbx_device.MetalUnavailableError:
         return _detect_apple_host_memory_mb()
 
@@ -2227,7 +2227,7 @@ def _detect_apple_max_allocation_mb() -> int:
     """
     from nbxtensor import device as _nbx_device
     try:
-        return _nbx_device.apple_gpu_limits()["max_buffer_bytes"] // (1024 * 1024)      # asked of the device, by the library
+        return _nbx_device.apple_gpu_limit("max_buffer_bytes") // (1024 * 1024)      # asked of the device, by the library
     except _nbx_device.MetalUnavailableError as exc:                # said, never swallowed
         why = str(exc)
     raise RuntimeError(
