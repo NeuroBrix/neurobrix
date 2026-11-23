@@ -40,6 +40,7 @@ from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
+from neurobrix.core.flow.audio_utils import refuses_a_cloned_voice_without_its_clip
 from nbxtensor import device as _nbx_device
 _log = logging.getLogger(__name__)
 
@@ -125,10 +126,9 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
     SEMANTIC_CONN = "model.semantic_connector"
 
     # ─── public entry ──────────────────────────────────────────────────────────
+    @refuses_a_cloned_voice_without_its_clip
     def execute(self) -> Dict[str, Any]:
         defaults = self.ctx.pkg.defaults
-        from neurobrix.core.flow.audio_utils import refuse_without_reference_clip
-        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
         _nbx_device.select(parse_device_idx(self.ctx.primary_device))
 
         # Replay v1 capability gate: this flow's per-token/chunk

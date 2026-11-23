@@ -57,6 +57,9 @@ def test_a_cloned_voice_run_is_refused_by_name_and_a_named_voice_is_not():
 def test_both_engines_flows_of_the_two_models_ask_before_anything_runs(module):
     import importlib
     import inspect
-    src = inspect.getsource(importlib.import_module(module))
-    head = src[src.index("    def execute(self)"):][:600]
-    assert "refuse_without_reference_clip(self.ctx.pkg.defaults)" in head, module
+    mod = importlib.import_module(module)
+    flows = [c for _, c in inspect.getmembers(mod, inspect.isclass) if c.__module__ == mod.__name__ and "execute" in vars(c)]
+    assert flows, module
+    for cls in flows:      # its execute is the audio refusal's wrapper (audio_utils.refuses_a_cloned_voice_without_its_clip)
+        code = cls.execute.__code__
+        assert code.co_filename.endswith("audio_utils.py") and hasattr(cls.execute, "__wrapped__"), (module, cls)

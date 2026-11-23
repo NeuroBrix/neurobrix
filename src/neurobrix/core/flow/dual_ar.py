@@ -21,6 +21,7 @@ from .base import ComponentFlowHandler, register_flow
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
 import logging
+from neurobrix.core.flow.audio_utils import refuses_a_cloned_voice_without_its_clip
 _log = logging.getLogger(__name__)
 
 
@@ -44,10 +45,9 @@ class DualAREngine(ComponentFlowHandler):
             execution: forward
     """
 
+    @refuses_a_cloned_voice_without_its_clip
     def execute(self) -> Dict[str, Any]:
         """Execute DualAR pipeline."""
-        from neurobrix.core.flow.audio_utils import refuse_without_reference_clip
-        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
         flow = self.ctx.pkg.topology.get("flow", {})
         audio_config = flow.get("audio", {})
         stages = audio_config.get("stages", [])

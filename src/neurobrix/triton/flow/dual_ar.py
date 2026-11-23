@@ -22,6 +22,7 @@ from neurobrix.core.runtime_values import require_max_tokens
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 from neurobrix.core.flow.shared_steps import _is_tensor, float32_host   # dual_ar and tts_llm, the same
 import logging
+from neurobrix.core.flow.audio_utils import refuses_a_cloned_voice_without_its_clip
 from nbxtensor import device as _nbx_device
 _log = logging.getLogger(__name__)
 
@@ -45,10 +46,9 @@ class TritonDualAREngine(ComponentFlowHandler):
             execution: forward
     """
 
+    @refuses_a_cloned_voice_without_its_clip
     def execute(self) -> Dict[str, Any]:
         """Execute DualAR pipeline."""
-        from neurobrix.core.flow.audio_utils import refuse_without_reference_clip
-        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
         flow = self.ctx.pkg.topology.get("flow", {})
         audio_config = flow.get("audio", {})
         stages = audio_config.get("stages", [])

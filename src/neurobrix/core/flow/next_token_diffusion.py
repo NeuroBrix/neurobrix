@@ -52,6 +52,7 @@ from neurobrix.core.memory.manager import release_flow_memory
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
 import logging
+from neurobrix.core.flow.audio_utils import refuses_a_cloned_voice_without_its_clip
 _log = logging.getLogger(__name__)
 
 
@@ -79,10 +80,9 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
     ACOUSTIC_CONN = "model.acoustic_connector"
     SEMANTIC_CONN = "model.semantic_connector"
 
+    @refuses_a_cloned_voice_without_its_clip
     def execute(self) -> Dict[str, Any]:
         defaults = self.ctx.pkg.defaults
-        from neurobrix.core.flow.audio_utils import refuse_without_reference_clip
-        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
         device = self.ctx.primary_device
         dtype = self.ctx.compute_dtype()
 

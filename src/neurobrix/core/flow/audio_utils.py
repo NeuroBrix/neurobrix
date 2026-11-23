@@ -492,6 +492,18 @@ def declared_voice(defaults):
                        f'{{"reference_clip_required": true}}, so no voice is read from it')
 
 
+def refuses_a_cloned_voice_without_its_clip(execute):
+    """A flow's `execute`, preceded by `refuse_without_reference_clip` on its container's defaults (one line at each
+    audio flow that can meet such a container: the dual-AR pair and the next-token diffusion)."""
+    import functools
+
+    @functools.wraps(execute)
+    def run(self, *a, **k):
+        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
+        return execute(self, *a, **k)
+    return run
+
+
 def refuse_without_reference_clip(defaults) -> None:
     """The run of a container that declares its voice is cloned from a reference clip, refused by name: this version
     takes no clip (`--reference-audio` is refused at the command line, cli/utils.UNREAD_FLAGS), and the model has no
