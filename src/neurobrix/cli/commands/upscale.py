@@ -85,8 +85,8 @@ def cmd_upscale(args):
         log.error(f"Error: input image not found: {input_path}")
         sys.exit(1)
 
-    # The engine, chosen as `run` chooses it (cli/engine_choice.py): no flag = PyTorch where torch is installed, the
-    # Triton engine where it is not; a Triton mode's backend checked; a PyTorch mode without torch refused by name.
+    # The engine, chosen as `run` chooses it (cli/engine_choice.py): no flag = the Triton engine, torch installed
+    # or not; a Triton mode's backend checked; a PyTorch mode without torch refused by name.
     from neurobrix.cli.engine_choice import choose_engine, declare_for
     if (execution_mode := choose_engine(_mode_as_flag(args), log)) is None:
         sys.exit(1)

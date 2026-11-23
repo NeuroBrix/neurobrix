@@ -468,14 +468,14 @@ Examples:
                               help='A file the ready record (one JSON line) is written to, whole, once '
                                    'the daemon accepts (the Windows launcher reads it there)')
     # Execution modes (mutually exclusive). When no flag is passed the
-    # default is --compiled where torch is installed, --triton where it is
-    # not. Mirror of run_parser.
+    # default is --triton, whether torch is installed or not (orders row 251).
+    # Mirror of run_parser.
     serve_parser.add_argument('--compiled', action='store_true',
-                              help='PyTorch fused graph + cuDNN/cuBLAS (the default where PyTorch is installed)')
+                              help='PyTorch fused graph + cuDNN/cuBLAS (the PyTorch branch; the default engine is --triton)')
     serve_parser.add_argument('--sequential', action='store_true',
                               help='PyTorch eager op-by-op (no fusion, debug)')
     serve_parser.add_argument('--triton', action='store_true',
-                              help='Triton-pure compiled mode (NeuroBrix Triton kernels)')
+                              help='Triton-pure compiled mode (NeuroBrix Triton kernels; the default)')
     serve_parser.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
                               help='Triton-pure eager op-by-op (debug Triton)')
 

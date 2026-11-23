@@ -75,9 +75,9 @@ neurobrix run [options]
 | `--top-k` `TOP_K` | — | Keep only the k highest-probability tokens (0 = disabled) |
 | `--top-p` `TOP_P` | — | Nucleus sampling: keep the smallest set of tokens whose probability sums to p (1.0 = disabled) |
 | `--set` `KEY=VALUE` | — | Set arbitrary runtime variable (e.g., --set global.cfg=7.5) |
-| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. Used when no execution flag is passed and PyTorch is installed (without it, --triton); this flag makes the choice explicit. |
+| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. The PyTorch branch runs only when this flag (or --sequential) asks for it; with no execution flag the Triton engine runs. |
 | `--sequential` | off | PyTorch eager op-by-op (no fusion, ATen dispatcher). Useful for debugging individual ATen ops. Slower than --compiled. |
-| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). Needs the triton package. |
+| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). The default when no execution flag is passed. Needs the triton package. |
 | `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
 | `--certified-only` | off | Confirmation run: every autotuned kernel is served from the certified directory, or the run fails naming the missing key and its census row — never a runtime sweep, never the local replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1). |
 | `--max-tokens` `MAX_TOKENS` | — | Maximum number of tokens to generate (LLM only) |
@@ -318,9 +318,9 @@ neurobrix serve [options]
 | `--http-port` `HTTP_PORT` | — | Port of the HTTP API (with --http) |
 | `--api-key-file` `API_KEY_FILE` | — | A file holding the API key the HTTP API requires (Authorization: Bearer) |
 | `--ready-file` `READY_FILE` | — | A file the ready record (one JSON line) is written to, whole, once the daemon accepts (the Windows launcher reads it there) |
-| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (the default where PyTorch is installed) |
+| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (the PyTorch branch; the default engine is --triton) |
 | `--sequential` | off | PyTorch eager op-by-op (no fusion, debug) |
-| `--triton` | off | Triton-pure compiled mode (NeuroBrix Triton kernels) |
+| `--triton` | off | Triton-pure compiled mode (NeuroBrix Triton kernels; the default) |
 | `--triton-sequential` | off | Triton-pure eager op-by-op (debug Triton) |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
 
@@ -430,9 +430,9 @@ neurobrix upscale [options]
 | `--model` `MODEL` | required | Upscaler model name (e.g. swin2SR-realworld-sr-x4-64-bsrgan-psnr) |
 | `--input`, `--input-image` `INPUT` | required | Input image path (PNG/JPEG). `--input-image` is accepted as an alias. |
 | `--output` `OUTPUT` | required | Output image path (PNG) |
-| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. Used when no execution flag is passed and PyTorch is installed (without it, --triton); this flag makes the choice explicit. |
+| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. The PyTorch branch runs only when this flag (or --sequential) asks for it; with no execution flag the Triton engine runs. |
 | `--sequential` | off | PyTorch eager op-by-op (no fusion, ATen dispatcher). Useful for debugging individual ATen ops. Slower than --compiled. |
-| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). Needs the triton package. |
+| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). The default when no execution flag is passed. Needs the triton package. |
 | `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
 | `--mode` `{compiled,sequential,triton,triton-sequential}` | — | The same choice as the engine flags (--mode triton = --triton) |
 | `--hardware` `HARDWARE` | — | Hardware profile ID (auto-detected if omitted) |
@@ -470,9 +470,9 @@ neurobrix calibrate [options]
 | `--top-k` `TOP_K` | — | Keep only the k highest-probability tokens (0 = disabled) |
 | `--top-p` `TOP_P` | — | Nucleus sampling: keep the smallest set of tokens whose probability sums to p (1.0 = disabled) |
 | `--set` `KEY=VALUE` | — | Set arbitrary runtime variable (e.g., --set global.cfg=7.5) |
-| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. Used when no execution flag is passed and PyTorch is installed (without it, --triton); this flag makes the choice explicit. |
+| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. The PyTorch branch runs only when this flag (or --sequential) asks for it; with no execution flag the Triton engine runs. |
 | `--sequential` | off | PyTorch eager op-by-op (no fusion, ATen dispatcher). Useful for debugging individual ATen ops. Slower than --compiled. |
-| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). Needs the triton package. |
+| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). The default when no execution flag is passed. Needs the triton package. |
 | `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
 | `--certified-only` | off | Confirmation run: every autotuned kernel is served from the certified directory, or the run fails naming the missing key and its census row — never a runtime sweep, never the local replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1). |
 | `--max-tokens` `MAX_TOKENS` | — | Maximum number of tokens to generate (LLM only) |
@@ -601,9 +601,9 @@ neurobrix drift [options]
 | `--top-k` `TOP_K` | — | Keep only the k highest-probability tokens (0 = disabled) |
 | `--top-p` `TOP_P` | — | Nucleus sampling: keep the smallest set of tokens whose probability sums to p (1.0 = disabled) |
 | `--set` `KEY=VALUE` | — | Set arbitrary runtime variable (e.g., --set global.cfg=7.5) |
-| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. Used when no execution flag is passed and PyTorch is installed (without it, --triton); this flag makes the choice explicit. |
+| `--compiled` | off | PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. The PyTorch branch runs only when this flag (or --sequential) asks for it; with no execution flag the Triton engine runs. |
 | `--sequential` | off | PyTorch eager op-by-op (no fusion, ATen dispatcher). Useful for debugging individual ATen ops. Slower than --compiled. |
-| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). Needs the triton package. |
+| `--triton` | off | Triton-pure compiled mode: every op runs on NeuroBrix's own Triton kernels, with no cuDNN or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). The default when no execution flag is passed. Needs the triton package. |
 | `--triton-sequential` | off | Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). Equivalent of --sequential but for the Triton backend. Useful for debugging individual Triton kernels. |
 | `--certified-only` | off | Confirmation run: every autotuned kernel is served from the certified directory, or the run fails naming the missing key and its census row — never a runtime sweep, never the local replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1). |
 | `--max-tokens` `MAX_TOKENS` | — | Maximum number of tokens to generate (LLM only) |

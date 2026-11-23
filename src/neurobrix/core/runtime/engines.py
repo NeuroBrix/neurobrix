@@ -84,13 +84,12 @@ def triton_missing_message(what: str) -> str:
                 f"  Or run the PyTorch engine, which needs no triton: "
                 f"{'--compiled' if importlib.util.find_spec('torch') is not None else install} (or --sequential).")
     return (f"{what} runs on the Triton engine, which needs triton, and PyPI publishes no triton for {here}: the Triton "
-            f"engine does not run on this platform.\n  The PyTorch engine runs here: {install} (or no engine flag).")
+            f"engine does not run on this platform.\n  The PyTorch engine runs here: {install} (or --sequential).")
 
 
 def default_mode() -> tuple:
-    """The mode of a run that names none, and the launch line that says it: `compiled` where torch is installed,
-    `triton` where it is not — the light install (`pip install neurobrix`) runs at its first `neurobrix run` instead of
-    meeting a refusal (the owner via the supervisor, 2026-11-06 22:10). A mode asked for by its flag is never changed."""
-    if importlib.util.find_spec("torch") is not None:
-        return "compiled", "engine: compiled (PyTorch installed; --triton runs the Triton engine)"
-    return "triton", "engine: triton (torch not installed)"
+    """The mode of a run that names none, and the launch line that says it: `triton`, ALWAYS, whether torch is
+    installed or not — the Triton engine is the default, the PyTorch branch is optional and runs only when its flag
+    asks for it (`--compiled`, `--sequential`; the owner via the supervisor, 23/11/2026 16:00, orders row 251; until
+    then the default was `compiled` where torch was installed). A mode asked for by its flag is never changed."""
+    return "triton", "engine: triton (the default; --compiled or --sequential runs the PyTorch branch)"

@@ -72,21 +72,36 @@ def test_with_no_mode_flag_and_no_torch_the_run_takes_the_triton_engine_and_says
     # the light install (`pip install neurobrix`) met a refusal at its first `neurobrix run` (the owner via the
     # supervisor, 2026-11-06 22:10): with no flag and no torch the run goes on, on the Triton engine, said on its line
     text = _run()
-    assert "[Engine] engine: triton (torch not installed)" in text, text[-3000:]
+    assert "[Engine] engine: triton (the default; --compiled or --sequential runs the PyTorch branch)" in text, text[-3000:]
     # the Triton branch's own gates then answer for this card-less child (triton-cpu, else the container load)
     assert "neurobrix[pytorch]" not in text and "Traceback" not in text, text[-3000:]
     assert "REACHED" in text or "triton-cpu" in text, text[-3000:]
 
 
-def test_with_no_mode_flag_and_torch_installed_the_run_takes_the_pytorch_engine_and_says_so(monkeypatch, capsys):
+def test_with_no_mode_flag_the_run_takes_the_triton_engine_whether_torch_is_installed_or_not(monkeypatch):
+    """The default engine is Triton, ALWAYS (owner via the supervisor, 23/11/2026 16:00, orders row 251): torch
+    installed or not, a run that names no mode takes `triton` and says so; the PyTorch branch runs on its flag."""
     from neurobrix.core.runtime import engines
     import importlib.util as U
     real = U.find_spec
+    said = ("triton", "engine: triton (the default; --compiled or --sequential runs the PyTorch branch)")
     monkeypatch.setattr(engines.importlib.util, "find_spec",
                         lambda name, *a: object() if name == "torch" else real(name, *a))
-    assert engines.default_mode() == ("compiled", "engine: compiled (PyTorch installed; --triton runs the Triton engine)")
+    assert engines.default_mode() == said
     monkeypatch.setattr(engines.importlib.util, "find_spec", lambda name, *a: None if name == "torch" else real(name, *a))
-    assert engines.default_mode() == ("triton", "engine: triton (torch not installed)")
+    assert engines.default_mode() == said
+
+
+def test_a_mode_asked_by_its_flag_is_never_changed(monkeypatch):
+    import argparse
+    import logging
+    from neurobrix.cli.engine_choice import choose_engine
+    monkeypatch.setattr("neurobrix.core.runtime.engines.require_engine", lambda mode: None)
+    monkeypatch.setattr("neurobrix.cli.engine_choice._triton_backend_present", lambda log: True)
+    for flag in ("compiled", "sequential", "triton", "triton_sequential"):
+        args = argparse.Namespace(compiled=False, sequential=False, triton=False, triton_sequential=False)
+        setattr(args, flag, True)
+        assert choose_engine(args, logging.getLogger("t")) == flag
 
 
 _MAIN = _DRIVER.replace(

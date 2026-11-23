@@ -5,8 +5,8 @@ declaration made for every mode. On a host with no GPU the declaration refused (
 while `run` answered the same model (2026-11-13). A command does not choose its engine on its own: it calls this.
 
   * the flags: `--compiled`, `--sequential`, `--triton`, `--triton-sequential`, mutually exclusive (`add_engine_flags`);
-  * no flag: the PyTorch engine where torch is installed, the Triton engine where it is not, said on the launch line
-    (`core/runtime/engines.default_mode`);
+  * no flag: the Triton engine, whether torch is installed or not, said on the launch line
+    (`core/runtime/engines.default_mode`); the PyTorch branch runs only on its flag;
   * a Triton mode: the backend for this hardware must be present (Metal, triton-cpu), refused with its install line;
   * a PyTorch mode without torch: refused by name (`core/runtime/engines.require_engine`);
   * the Triton branch's hardware declaration only where a Triton kernel can run (`declare_for`).
@@ -24,15 +24,15 @@ def add_engine_flags(p) -> None:
     """The four mutually exclusive engine flags, with one help, on a command's parser."""
     p.add_argument('--compiled', action='store_true',
                    help='PyTorch fused graph + cuDNN/cuBLAS (CompiledSequence). Production PyTorch performance. '
-                        'Used when no execution flag is passed and PyTorch is installed (without it, --triton); '
-                        'this flag makes the choice explicit.')
+                        'The PyTorch branch runs only when this flag (or --sequential) asks for it; with no '
+                        'execution flag the Triton engine runs.')
     p.add_argument('--sequential', action='store_true',
                    help='PyTorch eager op-by-op (no fusion, ATen dispatcher). Useful for debugging individual ATen '
                         'ops. Slower than --compiled.')
     p.add_argument('--triton', action='store_true',
                    help='Triton-pure compiled mode: every op runs on NeuroBrix\'s own Triton kernels, with no cuDNN '
-                        'or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). Needs '
-                        'the triton package.')
+                        'or cuBLAS, through a preallocated memory arena and fused kernels (TritonSequence). The '
+                        'default when no execution flag is passed. Needs the triton package.')
     p.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
                    help='Triton-pure eager mode: Triton kernels op-by-op (no fusion, TritonSequentialDispatcher). '
                         'Equivalent of --sequential but for the Triton backend. Useful for debugging individual '

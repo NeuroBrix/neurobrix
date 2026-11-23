@@ -31,7 +31,7 @@ def cmd_serve(args):
         sys.exit(1)
 
     # Determine execution mode (mutually exclusive flags;
-    # default = compiled; see CLAUDE.md "Execution Modes").
+    # default = triton, `core/runtime/engines.default_mode`).
     _mode_flags = [
         getattr(args, 'compiled', False),
         getattr(args, 'sequential', False),
