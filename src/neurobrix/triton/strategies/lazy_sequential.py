@@ -10,11 +10,11 @@ no-op here — unlike the torch path which pins via torch.Tensor.pin_memory().
 import logging
 from typing import Dict, Optional, Any, Set
 
-from neurobrix.pytorch.strategies.base import StrategyContext
+from .base import StrategyContext
 from nbxtensor.backend.device_names import ACCELERATOR_PREFIXES
 
 from .base import TritonStrategy
-from neurobrix.pytorch.strategies.shared_steps import LazySequentialSteps   # the steps both branches share
+from .shared_steps import LazySequentialSteps   # the Triton twin of the PyTorch steps
 from nbxtensor import memory as _nbx_memory
 
 
@@ -115,7 +115,7 @@ class LazySequentialStrategy(LazySequentialSteps, TritonStrategy):
         if self._get_component_strategy(component_name) not in ("zero3", "expert_store"):
             return
         if getattr(self, "_zero3_brick", None) is None:
-            from neurobrix.pytorch.strategies.zero3 import Zero3Strategy
+            from .zero3 import Zero3Strategy
             self._zero3_brick = Zero3Strategy(
                 self.context, strategy_name="triton_lazy_sequential+zero3")
         self._zero3_brick.install_for_executor(component_name, executor)

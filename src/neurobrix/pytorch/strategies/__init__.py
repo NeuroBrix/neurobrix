@@ -27,8 +27,8 @@ import importlib
 from .base import ExecutionStrategy, StrategyContext
 
 # The compiled (ATen) strategy classes are imported when a name is resolved,
-# never at package import: a --triton run takes its strategies from
-# `.triton.TRITON_REGISTRY` and must not load the ATen branch (R33). The
+# never at package import: a strategy module imports the ATen branch, and
+# the Triton branch has its own strategies (`neurobrix.triton.strategies`). The
 # registry keeps the `name -> class` contract (membership, iteration,
 # `registry[name] is Class`) through a lazy mapping.
 _STRATEGY_CLASSES = {
@@ -185,16 +185,13 @@ STRATEGY_REGISTRY = _LazyRegistry({
 
 def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrategy:
     """
-    Get strategy instance based on Prism's decision.
+    Get strategy instance based on Prism's decision, for the PyTorch branch.
 
-    Mode dispatch (two-modes doctrine): on the triton path
-    (context.mode in {"triton", "triton_sequential"}) a NBXTensor-native
-    strategy from `triton/TRITON_REGISTRY` is used when the strategy has
-    been ported there; otherwise the PyTorch class is used (it already runs
-    on the triton path via the polymorphic transfer helper). The compiled
-    path always uses the PyTorch registry — byte-identical legacy behaviour.
+    A Triton mode ("triton", "triton_sequential") is refused by name: the
+    Triton branch's strategies are `neurobrix.triton.strategies`, which the
+    branch door hands a Triton run (RED_LINES.md line 16: no shared code).
 
-    ZERO FALLBACK: Crash if the strategy name is unknown to BOTH registries.
+    ZERO FALLBACK: Crash if the strategy name is unknown.
     """
     if strategy_name not in STRATEGY_REGISTRY:
         raise RuntimeError(
@@ -204,10 +201,9 @@ def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrat
 
     mode = getattr(context, "mode", "compiled")
     if mode in ("triton", "triton_sequential"):
-        from neurobrix.triton.strategies import TRITON_REGISTRY
-        triton_class = TRITON_REGISTRY.get(strategy_name)
-        if triton_class is not None:
-            return triton_class(context, strategy_name)
+        raise RuntimeError(
+            f"ZERO FALLBACK: mode {mode!r} runs the Triton branch, whose strategies are "
+            f"neurobrix.triton.strategies (asked through neurobrix.branch_door), not the PyTorch ones")
 
     strategy_class = STRATEGY_REGISTRY[strategy_name]
     return strategy_class(context, strategy_name)

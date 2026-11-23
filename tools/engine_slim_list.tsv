@@ -3,8 +3,8 @@
 # the findings count, and the scatter count of scatter_list.tsv, only go down; engine_lines is a measure:
 # the test prints the current count against it and never fails on it.
 # nbxtensor: c6c1cec9bcef602c90af9814ec46e73d6fa4ee40
-# engine_lines: 98993
-# findings: 166
+# engine_lines: 101665
+# findings: 165
 kind	path	symbol	why it stays
 dead	src/neurobrix/cli/commands/registry.py	installing_path	a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else
 dead	src/neurobrix/core/module/autoregressive/generator.py	AutoregressiveGenerator.num_generated	a test seam: read by tests/unit/serving/test_both_engines_read_the_stop_at_their_token_seam.py, nothing else
@@ -47,14 +47,13 @@ fact	src/neurobrix/core/memory/manager.py	release_flow_memory	the compiled engin
 fact	src/neurobrix/core/runtime/graph/compiled_sequence.py	_parse_dtype	returns a torch.dtype with the sequence's Prism remap (compute_dtype); nbxtensor's parse_dtype returns an NBXDtype — two types
 fact	src/neurobrix/core/runtime/graph/kv_cache_wrapper.py	_chunk_mask	the compiled engine's prefill-chunk mask as a torch tensor in the cache's dtype; nbxtensor's `paged_kv.chunk_mask` builds the same 0/-inf values as an NBXTensor, and nbxtensor never holds torch (R33) (lot A, 2026-11-08)
 fact	src/neurobrix/core/runtime/precision_contract.py	kind	a different function under the same name: the precision class of an op (precision / casting / passthrough), not a dtype's kind
-fact	src/neurobrix/pytorch/strategies/base.py	transfer_tensor	the strategy's method takes a DEVICE STRING (cpu, cuda:N, mps:N) and passes a non-tensor value through; the library's function takes a device index and an NBXTensor only — a different contract, not a copy (2026-11-02)
-fact	src/neurobrix/triton/strategies/base.py	transfer_tensor	the same method on the Triton branch: the strategy contract's pass-through of non-tensors; the device name is read and the tensor moved by `nbxtensor.backend.device_names.to_named_device` (2026-11-12)
 fact	src/neurobrix/kernels/metadata_ops.py	_native_layer_norm	the PyTorch branch's ATen handler for native_layer_norm (torch tensors in, torch tensors out); the scan matched the name of the library's cost declaration, not its work
 fact	src/neurobrix/kernels/metadata_ops.py	_parse_dtype	the PyTorch branch's ATen handler for a call's dtype keyword (a torch.dtype) (torch tensors in, torch tensors out); the scan matched the name of the library's dtype parser, not its work
 fact	src/neurobrix/kernels/metadata_ops.py	_softmax	the PyTorch branch's ATen handler for _softmax (torch tensors in, torch tensors out); the scan matched the name of the library's cost declaration, not its work
 fact	src/neurobrix/pytorch/prism/plan_advice.py	what_would_have_fit	a name collision: the plan's advice over its component verdicts, where the library's answers an allocator refusal — two facts, one name
 fact	src/neurobrix/pytorch/prism/runtime_widths.py	_aligned	a name collision: whether an op's operands are dtype-aligned as its wrapper launches them, where the library's rounds a byte count to an alignment
 fact	src/neurobrix/pytorch/prism/structure.py	memory_gb	a name collision: a profile device's raw memory in GB, where the library's is the rounded memory class a certified entry is keyed by
+fact	src/neurobrix/pytorch/strategies/base.py	transfer_tensor	the strategy's method takes a DEVICE STRING (cpu, cuda:N, mps:N) and passes a non-tensor value through; the library's function takes a device index and an NBXTensor only — a different contract, not a copy (2026-11-02)
 fact	src/neurobrix/triton/dtype.py	storage_dtype	already reads nbxtensor's itemsize.storage_dtype at this branch's fp64 fact and returns the NBXDtype member: the engine's dtype-engine method over the library's table
 fact	src/neurobrix/triton/sequence.py	_parse_dtype	parses through the library's parse_dtype, then remaps bf16<->fp16 to the plan's compute dtype (Prism's decision, the engine's) (2026-11-02)
 wrapper	src/neurobrix/_nbxtensor_host.py	active	a host service registered into nbxtensor.host: it imports its engine module when the library first calls it, not at registration (no engine import, no torch, at nbxtensor's load)
@@ -122,9 +121,6 @@ wrapper	src/neurobrix/core/runtime/tensor_compat.py	aten	a named question (is to
 wrapper	src/neurobrix/core/runtime_values.py	MissingRuntimeValue	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
 wrapper	src/neurobrix/core/state/policy.py	StatePolicyRefused	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
 wrapper	src/neurobrix/core/state/price.py	StateUndeclared	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
-wrapper	src/neurobrix/pytorch/strategies/base.py	synchronize_device	polymorphic: both branches' bases define it (the Triton one through DeviceAllocator), and the shared steps call it on self (2026-11-02)
-wrapper	src/neurobrix/pytorch/strategies/layer_streaming.py	_nbx_path	a test seam: six streaming tests stub it to run card-less (2026-11-02)
-wrapper	src/neurobrix/pytorch/strategies/shared_steps.py	cleanup	polymorphic: the flows call `cleanup()` on every strategy, this one empties the loaded set (2026-11-02)
 wrapper	src/neurobrix/core/workspace.py	SnapshotNotPresent	a named refusal: a missing snapshot, told apart from any other error by its callers
 wrapper	src/neurobrix/kernels/autotune_certify.py	UnreachableCensusKey	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
 wrapper	src/neurobrix/kernels/autotune_certify.py	WitnessDrift	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
@@ -156,6 +152,9 @@ wrapper	src/neurobrix/pytorch/prism/solver.py	ProfileFactMissing	the refusal of 
 wrapper	src/neurobrix/pytorch/prism/solver.py	get_allocation	the plan's lookup the flows ask through hasattr on any plan object
 wrapper	src/neurobrix/pytorch/prism/temporal_stream.py	StreamDeclarationError	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `RuntimeError` would name nothing
 wrapper	src/neurobrix/pytorch/prism/time_estimate.py	MissingFact	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `KeyError` would name nothing
+wrapper	src/neurobrix/pytorch/strategies/base.py	synchronize_device	polymorphic: both branches' bases define it (the Triton one through DeviceAllocator), and the shared steps call it on self (2026-11-02)
+wrapper	src/neurobrix/pytorch/strategies/layer_streaming.py	_nbx_path	a test seam: six streaming tests stub it to run card-less (2026-11-02)
+wrapper	src/neurobrix/pytorch/strategies/shared_steps.py	cleanup	polymorphic: the flows call `cleanup()` on every strategy, this one empties the loaded set (2026-11-02)
 wrapper	src/neurobrix/serving/client.py	new_chat	the daemon client's API (the CLI and the serving tests call it): each method is one request of the protocol
 wrapper	src/neurobrix/serving/client.py	shutdown	the daemon client's API (the CLI and the serving tests call it): each method is one request of the protocol
 wrapper	src/neurobrix/serving/client.py	status	the daemon client's API (the CLI and the serving tests call it): each method is one request of the protocol

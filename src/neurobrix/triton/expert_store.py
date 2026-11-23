@@ -6,7 +6,7 @@ share the residency POLICY (`core/runtime/expert_residency.py`, no tensor librar
 The slots themselves — the device arena, its views, the host-to-card copies and their stream, the card's own slot map
 and its clock, the kernels' launches — are nbxtensor's (`nbxtensor.memory.expert_slots.ExpertSlotStore`; the blocks
 another card holds whole: `HeldExperts`). The engine keeps what is a decision: WHICH expert sits in WHICH slot (the
-residency handed to the store), how many slots and on which card (Prism's plan, `pytorch/strategies/expert_store.py`),
+residency handed to the store), how many slots and on which card (Prism's plan, `triton/strategies/expert_store.py`),
 whether the next layer's predicted experts are copied ahead (`on_enqueued`, opt-in), and the recording of the
 decode's routing for Prism's reuse curve (`trace`). The library's fused op (`nbxtensor.ops.moe_fused`) asks and tells
 the store through `decodes_on_card`, `on_routed` and `on_enqueued`, which this store answers with those decisions.

@@ -1,0 +1,774 @@
+"""Execute one component a segment at a time, holding one segment's weights.
+
+The rung below every rung that keeps a component whole. `lazy_sequential`
+reduces the requirement from sum(components) to max(component);
+`cpu_streaming` does the same on the host. Neither helps a model that is ONE
+component larger than the budget — measured 2026-09-09,
+`DeepSeek-Coder-V2-Lite-Instruct` is a single `model` component of 17777 MB of
+live weights. This rung cuts the component itself.
+
+Prism decides WHERE to cut (`triton/prism/layer_partition.py`, from dataflow, never
+from a module name) and this executes what it decided. The segments are
+carried in the plan rather than recomputed here, because the executor's graph
+may have been transformed since Prism read it and a boundary recomputed on a
+different graph is not the boundary the budget was accepted under.
+
+ZERO SEMANTIC, and no vendor: it names no device, no backend and no brand. It
+runs wherever the allocation points.
+
+The Triton branch's twin of `pytorch/strategies/layer_streaming.py`, Torch-free (RED_LINES.md lines 16-19): the
+segment memory line reads the library's allocator, the Prism it asks is `neurobrix.triton.prism`, the reload rate is
+the Triton engine's.
+"""
+
+from __future__ import annotations
+
+import os
+
+from typing import Any, Callable, Dict, List, Optional
+
+from neurobrix.core.runtime.graph_executor import output_key
+from neurobrix.triton.strategies.base import ExecutionStrategy
+import logging
+from nbxtensor import memory as _nbx_memory
+_log = logging.getLogger(__name__)
+
+
+_ABSENT = object()
+
+
+def _piece_input(values: Dict[str, Any], name: str) -> Any:
+    """A piece's input by the name the executor strips from `input::<name>`: flat first (a seam
+    tensor id, a plain component input), then a DOTTED component input walked through the nested
+    dict the synthesizer builds (`added_cond_kwargs.resolution`) — the same resolution
+    `GraphExecutor` applies to its own inputs. A symbol CARRIER is a component input and may be
+    dotted; looked up flat it was refused as "nothing before it produced them"."""
+    if name in values:
+        return values[name]
+    cur: Any = values
+    for part in name.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return _ABSENT
+    return cur
+
+
+def _reset_segment_peak(seg_exec) -> None:
+    """Nothing on the Triton branch: the compiled branch's CUDA peak counter (`pytorch/strategies/layer_streaming`)
+    is torch's allocator's; the library's allocator keeps no per-segment peak to restart."""
+    return
+
+
+def _segment_memory_line(seg_exec) -> str:
+    """The device memory a streamed segment leaves when it has computed, before its release — said per segment so a
+    per-second trace can tell live tensors from an allocator's cache (the Mac, 2026-10-15 01:58: Allegro's first
+    transformer segment held 1.3 GB of weights while the footprint sat at 19 GB wired during its compute). The
+    Triton branch reads its own allocator (DeviceAllocator live and pool-cached bytes) — no torch on that branch (R33)."""
+    dev = str(getattr(seg_exec, "device", "") or "")
+    # read after the device's queue drained: the line follows the run's last LAUNCH (the Mac, 2026-10-15 04:21:
+    # MPS printed it the second the segment's weights arrived)
+    from neurobrix.core.device_utils import device_sync
+    if dev:
+        device_sync(dev)
+    idx = int(dev.split(":")[1]) if ":" in dev else 0
+    return (f"device live {_nbx_memory.memory_allocated(idx) / 2**20:.0f} MB, "
+            f"pool cached {_nbx_memory.pool_cached_bytes(idx) / 2**20:.0f} MB")
+
+
+def _weights_bytes(executor) -> int:
+    """The bytes of the weights an executor holds now (NBXTensor)."""
+    n = 0
+    for k, t in (getattr(executor, "_weights", None) or {}).items():
+        if t is not None and k != "_arenas":           # the arenas the Triton weights are views of: not a weight
+            # NBXTensor's own count (0 included: Sana's zero-size constants, 2026-11-09), `nbytes` otherwise
+            n += int(t.nbytes if getattr(t, "_nbytes", None) is None else t._nbytes)
+    return n
+
+
+#: (component, engine) -> [(bytes, seconds) of each run's reloads]: the draws a steady reload rate is read from
+_RELOAD_DRAWS: Dict[tuple, list] = {}
+
+
+def _note_reload(executor, nbx_path, component: str, reloaded_bytes: int, seconds: float) -> None:
+    """The engine's own measure of its per-token reload, handed to the active generated profile
+    (`autodetect.note_reload_rate`): the fact Prism prices a streamed piece's reload with, BEFORE the run. The supervisor's row 167
+    (2026-11-19) REPLACES the ruling of 2026-11-02 09:50 that "a rate a neighbour can disturb is no fact": a measured
+    fact is kept once measured and never paid twice, and a measure that cannot conclude keeps its best figure with
+    its spread. Three consecutive runs whose rates agree within
+    the steadiness gate (`autodetect.STEADY_SPREAD`) give their median; three that do not are KEPT with their spread and
+    date, priced at their low draw (`note_reload_rate(spread=)`), and replaced by the first steady three — never
+    dropped, which made every later launch on a busy machine probe again (the catalogue's kept homes, 2026-11-19)."""
+    from neurobrix.triton.prism import autodetect as _ad
+    stored = _ad.stored_major(nbx_path, component)
+    if stored is None or seconds <= 0:
+        return
+    engine = "triton"
+    draws = _RELOAD_DRAWS.setdefault((component, engine), [])
+    draws.append((int(reloaded_bytes), float(seconds)))
+    if len(draws) < 3:
+        return
+    last = draws[-3:]
+    rates = sorted(b / s for b, s in last)
+    med = rates[1]
+    b, sec = sum(x[0] for x in last), sum(x[1] for x in last)
+    where = f"{os.path.basename(str(nbx_path))}:{component}"
+    if rates[-1] - rates[0] > _ad.STEADY_SPREAD * med:
+        if _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med,
+                                f"{where}, 3 runs not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)} GB/s)",
+                                spread=(rates[0] / 1e9, rates[-1] / 1e9)):
+            _log.debug(f"   [Reload] {component}: per-token reload not steady ({', '.join(f'{r / 1e9:.3f}' for r in rates)}"
+                       f" GB/s over the last three runs): kept at its low draw until a steady measure")
+        return
+    _ad.note_reload_rate(_ad.ACTIVE_HARDWARE_ID, engine, stored, b, b / med, f"{where}, median of 3 steady runs")
+
+class LayerStreamingStrategy(ExecutionStrategy):
+    """One segment resident at a time, inside a single component."""
+
+    #: One segment's weights resident at a time, loaded and released around
+    #: each segment. That is managing its own residency, and it is why this
+    #: strategy needs the same runtime hook zero3 uses.
+    manages_weight_residency = True
+
+    #: And it loads them ITSELF, per segment, inside `segmented_run`. That is a NARROWER
+    #: claim than the flag above and the two must not be conflated: zero3 also manages its
+    #: own residency, but it does so THROUGH the loader — `load_component_weights`
+    #: partitions its blocks onto pinned host — so zero3 needs the whole-component load to
+    #: happen. This strategy needs it NOT to happen, because `segmented_run` calls
+    #: `load_weights` per segment and the whole-component load defeats the entire point.
+    #:
+    #: Without this, `_ensure_weights_loaded` loaded the component whole and then installed
+    #: the segmentation, in that order — so every class-1 MoE model died before any segment
+    #: ran: `live_tracked=0MB`, one allocation of 32 332 025 856 bytes on a 16 151 MB card,
+    #: and not one LAYERDIAG line. The predicate's own docstring named that outcome as the
+    #: thing it existed to prevent; it gated the install and not the load.
+    loads_own_weights = True
+
+    def __init__(self, context, strategy_name: str):
+        super().__init__(context, strategy_name)
+        self._segment_executors: Dict[str, List[Any]] = {}
+        self._installed_pieces: Dict[str, List[Any]] = {}   # the pieces `install_for_executor` runs, per component
+        self._installed: set = set()
+        self._cut_verified: set = set()
+        self._non_block: Dict[str, set] = {}
+        #: Per streamed component, the tids each piece's ops produce, in piece order.
+        self._produced: Dict[str, List[set]] = {}
+        self._last_read: Dict[str, Dict[str, int]] = {}   # component -> {input name: last piece reading it}
+
+    # -- segment executors -------------------------------------------------
+
+    def _segments_for(self, component_name: str) -> Optional[List[List[str]]]:
+        raw = (getattr(self.context, "layer_segments", None) or {}).get(component_name)
+        if not raw:
+            return None
+        return [list(pair) for pair in raw]
+
+    def _nbx_path(self, component_name: str) -> str:
+        """Delegates to the strategy brick — one resolver for every strategy."""
+        return self.resolve_artifact_path(component_name)
+
+
+    def _graph_prism_cut(self, component_name: str, base: Any) -> Dict[str, Any]:
+        """The base executor's graph as Prism cut it, or a refusal.
+
+        The SAME normalisation, with the SAME MoE declaration, over the base executor's graph. A
+        streamed base holds no weights and never compiles, so its graph is the one loaded (plus
+        the MoE fusion its load performed for an `llm` family); the 26 refusals the Mac counted
+        were exactly the boundaries on a fused op. The declaration comes from the PLAN: the vlm
+        flows declare a MoE LM only after its pieces are built. The normalisation leaves an
+        already-normalised graph unchanged (unit-gated); a base compiled whole would carry the
+        sequence's other in-place rewrites and be refused — unreachable for a weightless base.
+
+        The door: the graph must BE the graph Prism cut (`graph_fingerprint`), not merely contain
+        its boundary ids — a fusion made on one side only can leave every boundary of a
+        few-piece plan on an untouched op (register 106). Checked when the pieces are built AND
+        again before the component first runs, after its flow has declared what it declares: a
+        flow that fuses what the plan did not is refused rather than run on unfused pieces.
+        """
+        from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_for_branch
+        dag = getattr(base, "_dag", None)
+        if not isinstance(dag, dict):
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}' has no graph to cut")
+        dag = normalize_for_branch(dag, base.mode, base.family,
+                                   declared_moe=(getattr(self.context, "layer_moe", None) or {})
+                                   .get(component_name))
+        planned = (getattr(self.context, "layer_graphs", None) or {}).get(component_name)
+        here = graph_fingerprint(dag)
+        if planned is None:
+            raise RuntimeError(
+                f"layer_streaming: the plan carries no fingerprint of the graph "
+                f"'{component_name}' was cut on, so the graph cut here cannot be shown to be "
+                f"the same one. Re-plan with a solver that records it.")
+        if planned != here:
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}'s graph is not the one Prism cut "
+                f"(planned {planned}, here {here} — op count first). A fusion or rewrite ran "
+                f"on one side only; executing its boundaries here would run pieces nothing "
+                f"budgeted.")
+        return dag
+
+    def _ensure_flow_reads(self, component_name: str, base: Any) -> None:
+        """Hold the component's non-block weights on its BASE executor, once, when a flow reads
+        it by name (`flow_reads_by_name`: the flow embeds its tokens from this executor's table, or
+        projects its logits with this head's weight) —
+        what a whole executor holds and a streamed base did not: the Mac's 30 "requires
+        embed_tokens weight" refusals. Prism budgets these bytes as resident beside the pieces. Idempotent (a held
+        key is not reloaded), and called on every entry, so a base unloaded between phases gets
+        them back."""
+        from neurobrix.triton.prism.layer_partition import flow_reads_by_name
+        if not flow_reads_by_name(component_name, getattr(base, "_dag", None),
+                                  getattr(self.context, "topology", None)):
+            return                    # no flow reads this component by name: nothing to hold
+        nbx_path = self._nbx_path(component_name)
+        if component_name not in self._non_block:            # read once, not per step
+            self._non_block[component_name] = base.non_block_keys(nbx_path, component_name)
+        n = base.load_flow_read_weights(nbx_path, component_name,
+                                        keys=self._non_block[component_name])
+        if n and os.environ.get("NBX_LAYER_DIAG") == "1":
+            _log.debug(f"   [LAYERDIAG] '{component_name}': {n} non-block weights resident on the "
+                       f"base for the flow's by-name reads")
+
+    def _build_segment_executors(self, component_name: str) -> List[Any]:
+        """One executor per segment, each carrying that segment's graph.
+
+        `ExecutorFactory.create` takes a dag directly, so a segment goes
+        through exactly the path a component does — same binding, same
+        dispatch. And because `GraphExecutor.consumed_weight_names` reads the
+        executor's OWN dag, a segment executor asks the loader for precisely
+        its own weights with nothing further to arrange.
+        """
+        from neurobrix.triton.prism.layer_partition import LayerPartitioner, build_segment_graph, Segment
+        base = self.context.component_executors.get(component_name)
+        if base is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: no executor for '{component_name}'")
+        dag = self._graph_prism_cut(component_name, base)
+
+        bounds = self._segments_for(component_name)
+        if not bounds:
+            raise RuntimeError(
+                f"layer_streaming was chosen for '{component_name}' but the "
+                f"plan carries no segments for it")
+
+        order_index = {op_uid: i for i, op_uid
+                       in enumerate(dag.get("execution_order") or [])}
+        missing = [b for pair in bounds for b in pair if b not in order_index]
+        if missing:
+            # The graph moved under the plan. Refusing is the only honest
+            # answer: executing different boundaries than the ones the budget
+            # was accepted under is exactly the failure this rung exists to
+            # avoid.
+            raise RuntimeError(
+                f"layer_streaming: the plan's segment boundaries are not in "
+                f"'{component_name}'s graph ({len(missing)} of "
+                f"{2 * len(bounds)} op ids absent, e.g. {missing[0]!r}). The "
+                f"graph was transformed after Prism read it; re-plan rather "
+                f"than execute boundaries that no longer mean what they meant.")
+
+        nbx_path = self._nbx_path(component_name)
+
+        # A segment executor is the COMPONENT's executor with a different
+        # graph. Built from the base executor's own resolved configuration
+        # rather than through the factory, which wants a ComponentAllocation
+        # the strategy context does not carry — and because copying the
+        # resolved values is the only way to guarantee a segment runs under
+        # exactly the contract its component runs under: same family, same
+        # vendor and arch, same device, same dtype, same mode.
+        subs = [build_segment_graph(dag, Segment(index=index, first_op=first_op, last_op=last_op,
+                                                 op_count=order_index[last_op] - order_index[first_op] + 1),
+                                    order_index)
+                for index, (first_op, last_op) in enumerate(bounds)]
+        # Each piece takes over the values it is the LAST piece to read (`GraphExecutor._consumed_input_tids`), and
+        # frees each at its last use inside it, as the whole run does and as Prism's live curve prices it. Handed
+        # nothing, a piece held every value it received to its end beside the strategy's own reference: mochi-1-preview
+        # native at the 8 GB rung peaked each transformer piece above its price by what it received (+719 / +219 /
+        # +408 MB for 782 / 283 / 472 MB received, 2026-10-28). The component's declared outputs and the tensors its
+        # base protects are never handed over.
+        kept = set(dag.get("output_tensor_ids") or ()) | set(getattr(base, "_persistent_tensor_ids", None) or ())
+        last_reader = {n: i for i, sub in enumerate(subs) for n in (sub.get("segment_input_names") or [])}
+        executors = []
+        for index, sub in enumerate(subs):
+            handed = frozenset(f"input::{n}" for n in (sub.get("segment_input_names") or [])
+                               if last_reader[n] == index and n not in kept
+                               and f"input::{n}" in (sub.get("input_tensor_ids") or ()))
+            executors.append(self._piece_executor(base, sub, component_name, base, consumed_inputs=handed))
+        pieces = self._slice_stretches(component_name, base, dag, bounds, executors)
+        self._forward_op_level_tiling(component_name, base, pieces)
+        return pieces
+
+    @staticmethod
+    def _forward_op_level_tiling(component_name: str, base: Any, pieces: List[Any]) -> None:
+        """The plan's op-level tiling (`runtime_op_tiling`: banded convolutions, fused
+        upsample->conv pairs, residual chains) runs in the PIECES, which run every op of a
+        streamed component — never in the base, whose `run` walks them.
+
+        The runtime registers it on the base (`OpLevelTilingEngine.register_into_graph_executor`);
+        nothing carried it further, so a streamed component ran every planned band whole.
+        Measured 2026-10-05 on SANA-Video_2B_720p, 16 GB V100, triton certified-only: the plan
+        banded `aten.convolution::3` of each transformer block, the census keyed the bands
+        (11, 6720, 10|11, 42, ...) and the piece launched (11, 6720, 21, 42) — a refused key,
+        and in the compiled engine the full intermediate the band exists to avoid.
+
+        Each piece takes the interceptors of its own ops, now and at any later registration
+        on the base (forwarded like `register_triton_interceptors`). Refused by name: a group of
+        interceptors that hand each other a proxy split across two pieces (the proxy would
+        cross a seam no executor carries), and an op the plan tiles that no piece holds (its
+        band would silently run whole — the failure this exists to end)."""
+        held = [set((getattr(p, "_dag", None) or {}).get("execution_order") or []) for p in pieces]
+
+        def forward(interceptors: Dict[str, Any], groups, planned) -> None:
+            groups = [tuple(g) for g in groups]
+            for g in groups:
+                where = sorted(i for i, ops in enumerate(held) if any(u in ops for u in g))
+                if len(where) > 1:
+                    raise RuntimeError(
+                        f"layer_streaming: '{component_name}'s op-level tiling group {list(g)} "
+                        f"is split across pieces {where} of the plan; its interceptors hand "
+                        f"each other a proxy that cannot cross a seam")
+            nowhere = sorted(u for u in planned if u in interceptors
+                             and not any(u in ops for ops in held))
+            if nowhere:
+                raise RuntimeError(
+                    f"layer_streaming: '{component_name}'s plan tiles {nowhere[:4]}"
+                    f"{'...' if len(nowhere) > 4 else ''}, which no piece of the streamed graph "
+                    f"holds — the band would never run")
+            for piece, ops in zip(pieces, held):
+                mine = {u: f for u, f in interceptors.items() if u in ops}
+                if mine:
+                    piece.register_op_uid_interceptors(
+                        mine, groups=[g for g in groups if g[0] in ops],
+                        planned=[u for u in planned if u in mine])
+
+        forward(dict(getattr(base, "_op_uid_interceptors", None) or {}),
+                list(getattr(base, "_op_uid_groups", None) or []),
+                set(getattr(base, "_op_uid_planned", None) or ()))
+        LayerStreamingStrategy._follow(
+            base, component_name, op_uid=lambda interceptors, groups=(), planned=(): forward(
+                interceptors, groups, set(planned)))
+
+    @staticmethod
+    def _follow(executor: Any, component_name: str, **followers: Callable) -> None:
+        """Subscribe `followers` to `executor`'s later interceptor registrations through its
+        explicit hook (`GraphExecutor.follow_interceptor_registrations`). An executor that takes
+        registrations without that hook is refused by name: a registration it could not forward
+        would run the pieces without it."""
+        hook = getattr(executor, "follow_interceptor_registrations", None)
+        if hook is not None:
+            hook(f"layer_streaming:{component_name}", **followers)
+            return
+        takes = [n for n in ("register_op_uid_interceptors", "register_op_interceptors",
+                             "register_triton_interceptors")
+                 if getattr(executor, n, None) is not None]
+        if takes:
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}'s executor takes {takes} without the "
+                f"follow_interceptor_registrations hook — a later registration would never reach "
+                f"the executors that run its ops")
+
+    def _slice_stretches(self, component_name: str, base: Any, dag: Dict[str, Any],
+                         bounds: List[List[str]], executors: List[Any]) -> List[Any]:
+        """The pieces Prism planned in slices of a token axis (`layer_chunks`), each run by a
+        `ChunkedPiece` over its own executor: the piece loads the stretch's weights once and
+        every pass of it borrows them. A planned stretch that is not one of the plan's pieces is
+        refused — the budget was accepted on that piece."""
+        chunks = (getattr(self.context, "layer_chunks", None) or {}).get(component_name) or []
+        if not chunks:
+            return executors
+        from neurobrix.triton.strategies.chunked_piece import ChunkedPiece
+        at = {(f, l): i for i, (f, l) in enumerate(bounds)}
+        for chunk in chunks:
+            i = at.get((chunk["first_op"], chunk["last_op"]))
+            if i is None:
+                raise RuntimeError(
+                    f"layer_streaming: '{component_name}'s plan slices the stretch "
+                    f"{chunk['first_op']!r}..{chunk['last_op']!r} along {chunk['symbol']}, which "
+                    f"is not one of its pieces")
+            executors[i] = ChunkedPiece(
+                dag, executors[i], chunk,
+                lambda sub, lender: self._piece_executor(base, sub, component_name, lender))
+        return executors
+
+    @staticmethod
+    def _piece_executor(base: Any, sub: Dict[str, Any], component_name: str, lender: Any,
+                        consumed_inputs: frozenset = frozenset()) -> Any:
+        """An executor over a piece's graph `sub`, borrowing what `lender` holds; `consumed_inputs`, the `input::`
+        tids its caller hands over to each run (`GraphExecutor._consumed_input_tids`)."""
+        seg_exec = type(base)(
+            family=getattr(base, "family", None),
+            vendor=getattr(base, "vendor", None),
+            arch=getattr(base, "arch", None),
+            device=getattr(base, "device", None),
+            dtype=getattr(base, "dtype", None),
+            mode=getattr(base, "mode", "triton"),
+        )
+        cache_path = getattr(base, "_cache_path", None)
+        if cache_path is not None:
+            seg_exec._cache_path = cache_path
+        # Set BEFORE the graph loads: loading resolves the compiled engines' precision
+        # contract (`_init_from_dag`), and a piece must resolve its COMPONENT's — through the
+        # base, on the whole graph its calibration record was measured on, at the piece's own
+        # compute dtype. Resolved on a piece's graph the record was refused ("measured on
+        # another graph") and every piece ran the conservative contract: GLM-4.1V streamed,
+        # same tokens, logits off from whole. A piece's op uids index the whole's sets.
+        seg_exec._contract_from = base
+        # And it loads under its COMPONENT's runtime state — the request's resolution and the
+        # component handler, which the runtime and the factory give the base only — read at
+        # each load (`GraphExecutor._component_from`): a computable buffer is computed from it.
+        seg_exec._component_from = base
+        seg_exec._flow_reads_weights = False
+        # A piece computes under its COMPONENT's plan figures, which the factory gives the base only: the attention
+        # scores budget its device's compiled attention is cut at (`ComponentAllocation.attention_scores_budget_bytes`)
+        # and the drain cliff its Triton hot loop drains at (`deferred_drain_cliff_bytes`). Unset, a streamed
+        # transformer's pieces reached their attention with no budget and were refused on the Mac (Allegro 720x1280,
+        # 2026-10-15 16:02), and drained at the profile's cliff instead of the plan's.
+        seg_exec._attention_scores_budget_bytes = getattr(base, "_attention_scores_budget_bytes", None)
+        seg_exec._deferred_drain_cliff_bytes = getattr(base, "_deferred_drain_cliff_bytes", None)
+        # A piece loads what its own ops consume, and BORROWS any key it consumes that its
+        # lender holds: the base's non-block weights, resident for the flow's by-name reads
+        # (`_ensure_flow_reads`) — one copy; before, every piece reloaded every non-block weight
+        # with every run, the embedding into pieces that never read it, in no plan's budget. A
+        # pass of a sliced stretch (`ChunkedPiece`) borrows its whole stretch's from the piece.
+        seg_exec._borrow_from = lender
+        stray = sorted(set(consumed_inputs) - set(sub.get("input_tensor_ids") or ()))
+        if stray:
+            raise ValueError(f"ZERO FALLBACK: {component_name}: inputs handed to a piece that reads none of them: "
+                             f"{stray[:3]}")
+        seg_exec._consumed_input_tids = frozenset(consumed_inputs)
+        seg_exec.load_graph_from_dict(sub)
+        seg_exec._component_name = component_name
+        return seg_exec
+
+    # -- the strategy API --------------------------------------------------
+
+    def execute_component(
+        self,
+        component_name: str,
+        phase: str = "loop",
+        inputs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Run the component one segment at a time.
+
+        Values flow by NAME: a segment declares `segment_input_names`, which
+        are the tensor ids the executor will look up after stripping the
+        `input::` prefix, and its outputs come back keyed by tensor id. So a
+        segment's outputs feed the next segment's inputs with no renaming.
+        """
+        # A component is streamed when the PLAN carries segments for it.
+        # Not a device-string prefix: several places parse an allocation by
+        # splitting on ":" and taking the index, and a three-part device
+        # reached `int('mps')`.
+        import os as _os
+        if _os.environ.get("NBX_LAYER_DIAG") == "1":
+            _log.debug(f"[LAYERDIAG] execute_component({component_name}) "
+                       f"segments={self._segments_for(component_name)!r} "
+                       f"ctx_keys={list((getattr(self.context,'layer_segments',None) or {}).keys())}")
+        if not self._segments_for(component_name):
+            executor = self.context.component_executors.get(component_name)
+            if executor is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: no executor for '{component_name}'")
+            self.load_weights(component_name)
+            return executor.run(inputs or {})
+
+        if component_name not in self._segment_executors:
+            self._segment_executors[component_name] = \
+                self._build_segment_executors(component_name)
+        self._ensure_flow_reads(component_name,
+                                self.context.component_executors.get(component_name))
+        if component_name not in self._cut_verified:
+            # Once, before the first run: the flow has declared what it declares by now.
+            self._graph_prism_cut(component_name,
+                                  self.context.component_executors.get(component_name))
+            self._cut_verified.add(component_name)
+        return self._run_pieces(component_name,
+                                self.context.component_executors.get(component_name),
+                                self._segment_executors[component_name], inputs)
+
+    def _run_pieces(self, component_name: str, base: Any, pieces: List[Any],
+                    inputs: Optional[Dict[str, Any]], *args, **kwargs) -> Dict[str, Any]:
+        """Run the component's pieces in order, one resident at a time, and answer as the WHOLE
+        component would: its declared outputs, keyed as a whole run keys them, and — on the
+        base, for every reader of its run (`get_hidden_states`) — the tensors the whole run
+        keeps.
+
+        Values flow by NAME: a piece declares `segment_input_names`, the tensor ids the
+        executor looks up after stripping the `input::` prefix, and its outputs come back keyed
+        by tensor id, so a piece's outputs feed the next piece's inputs with no renaming.
+
+        What a whole run keeps beyond its outputs is what its base was asked to protect
+        (`enable_hidden_states_capture`: the pre-head tensor of a graph whose output is the
+        logits). That tid lives INSIDE a piece, never crosses a seam, and was protected on the
+        base, which runs no op — so no piece kept it and the base's reader found nothing:
+        Janus-Pro-7B streamed on the Mac fed its text-vocab logits to gen_head as the hidden
+        (addmm M = 102400 / 4096 = 25), while whole it reads the (B, T, 4096) hidden. Each
+        protected tid is now protected on the piece that PRODUCES it, and read from that piece
+        after it runs and BEFORE it unloads — unloading drops the arena and the capture both.
+        """
+        dag = getattr(base, "_dag", None) or {}
+        tensors = dag.get("tensors") or {}
+        declared = list(dag.get("output_tensor_ids") or [])
+        protected = set(getattr(base, "_persistent_tensor_ids", None) or ())
+        kept = protected | set(declared)
+        nbx_path = self._nbx_path(component_name)
+
+        # A protected tid no piece produces cannot be kept by any of them: the graph the
+        # pieces were cut from is not the one the base protected on. Refused by name rather
+        # than leaving the base's reader to find nothing.
+        if component_name not in self._produced:           # once: the pieces' graphs are fixed
+            self._produced[component_name] = [
+                {tid for op in ((p._dag or {}).get("ops") or {}).values()
+                 for tid in (op.get("output_tensor_ids") or [])} for p in pieces]
+        produced_by = self._produced[component_name]
+        all_produced = set().union(*produced_by)
+        orphan = sorted(t for t in protected - all_produced if not t.startswith("input::"))
+        if orphan:
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}' protects {orphan[:3]} on its base and "
+                f"no piece produces it, so none can keep it for the base's readers")
+
+        if component_name not in self._last_read:          # once: the pieces' graphs are fixed
+            self._last_read[component_name] = {
+                n: i for i, p in enumerate(pieces) for n in ((p._dag or {}).get("segment_input_names") or [])}
+        last_read = self._last_read[component_name]
+        final = {output_key(tensors.get(t), t) for t in declared} | set(declared)
+
+        capture: Dict[str, Any] = {}
+        base._pieces_capture = capture        # rebuilt every run: a decode step reads its own
+        values: Dict[str, Any] = dict(inputs or {})
+        # The values between the pieces wait on the host (Prism `layer_stream_swapped`): before each piece, what it
+        # reads comes to its device and every other value — the declared outputs excepted — is parked. The rule
+        # Prism's `LayerPartitioner._greedy_swapped` priced: a piece holds its weights, its inputs and what it makes.
+        swapped = component_name in (getattr(self.context, "layer_swapped", None) or ())
+        # The pieces Prism holds between the component's runs (`layer_stream_resident`): loaded at the first run, kept
+        # loaded until the component is released (`uninstall_for_executor`); the others load and unload around each run.
+        held = (getattr(self.context, "layer_resident", None) or {}).get(component_name) or frozenset()
+        for i, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
+            sub = seg_exec._dag
+            needed = sub.get("segment_input_names") or []
+            if swapped:
+                from neurobrix.triton.strategies.value_parking import to_device, to_host
+                dev = getattr(seg_exec, "device", None)
+                # a sliced stretch reads some of its inputs only in slices: those stay on the host, each pass
+                # uploading its slice (`ChunkedPiece.sliced_input_names`, the rule Prism prices)
+                by_slice = set(seg_exec.sliced_input_names()) if hasattr(seg_exec, "sliced_input_names") else set()
+                reads = set(needed) - by_slice
+                for n in list(values):
+                    values[n] = to_device(values[n], dev) if n in reads else (
+                        values[n] if n in final else to_host(values[n]))
+            feed = {n: _piece_input(values, n) for n in needed}
+            missing = [n for n, v in feed.items() if v is _ABSENT]
+            if missing:
+                raise RuntimeError(
+                    f"layer_streaming: segment {sub.get('segment_index')} "
+                    f"of '{component_name}' needs {missing[:3]} and "
+                    f"nothing before it produced them")
+            # what this piece takes over leaves `values` now: the piece holds the only reference and frees it at its
+            # last use (`_build_segment_executors`)
+            # — only where it IS the last reader of the pieces as they run: a stretch run in slices replaces its segment
+            # after the hand-over was decided on the segments (`_slice_stretches`), and may read a value a segment before it
+            # was handed (MiniCPM-o-4_5 triton on the M4 Pro: segment 3 of llm.model found aten.mul::16 popped, 2026-11-06)
+            for tid in getattr(seg_exec, "_consumed_input_tids", None) or ():
+                if last_read.get(tid[len("input::"):]) == i:
+                    values.pop(tid[len("input::"):], None)
+            for tid in protected & produced:
+                seg_exec.protect_tensor_id(tid)
+            # This piece's weights, and only this piece's: the executor asks its own dag
+            # what it consumes.
+            if i not in held or not getattr(seg_exec, "_weights_loaded", False):
+                # (the reload a token pays is measured once, at the machine's first launch: arena_probe.reloads)
+                seg_exec.load_weights(nbx_path, component_name)
+            _reset_segment_peak(seg_exec)
+            try:
+                out = seg_exec.run(feed, *args, **kwargs) or {}
+                capture.update(seg_exec.tensors_of_last_run(kept & produced))
+                _log.debug(f"   [{component_name}] segment {sub.get('segment_index')} computed: "
+                           f"{_segment_memory_line(seg_exec)}")
+            finally:
+                # Released before the next piece loads — a held piece excepted. This is the residency the plan
+                # was budgeted against.
+                if i not in held:
+                    seg_exec.unload_weights()
+                else:
+                    # A held piece keeps its weights and nothing of its run: its arena keeps its slots — inputs,
+                    # intermediates, outputs — to the next run, and 33 held pieces of mochi-1-preview's transformer held
+                    # 4.5 GB of them beside 10.8 GB of weights, MPS out of memory at the 27th (the Mac, 2026-10-27 23:26).
+                    # Its outputs are `out` (taken into `values` below), so the arena's references go now.
+                    seg_exec.release_run_tensors()
+            lost = sorted(t for t in protected & produced if t not in capture)
+            if lost:
+                raise RuntimeError(
+                    f"layer_streaming: segment {sub.get('segment_index')} of "
+                    f"'{component_name}' produced {lost[:3]}, protected on its base, and did "
+                    f"not keep it: the base's readers would find nothing")
+            if os.environ.get("NBX_LAYER_DIAG") == "1":
+                _log.debug(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                           f"type={type(out).__name__} repr={repr(out)[:160]}")
+                _log.debug(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                           f"declares {len(sub.get('output_tensor_ids') or [])} outputs, "
+                           f"returns {len(out)} keys; "
+                           f"returned={sorted(out)[:4]}; "
+                           f"kept={sorted(kept & produced)[:4]}")
+            values.update(out)
+            # `values` is now the only holder of what this piece made: kept bound to the end of the next piece's run,
+            # this piece's own result dict held every output on the device beside it, the ones parked on the host
+            # included (HAT-S at 2048 px on 16 GB: piece 1 held piece 0's 4 096 MB attention mask and two 2 304 MB maps
+            # the plan had parked, 2026-10-22).
+            del out, feed
+            # A value no later piece reads is released after its last reader, as the whole run frees a
+            # tensor after its last use: held to the end, every seam the component crossed stayed beside
+            # the pieces Prism priced without it (its live curve frees it).
+            for n in [n for n, j in last_read.items() if j == i and n in values and n not in final]:
+                del values[n]
+
+        # The component's declared outputs, keyed as a whole run keys them (`output_name`,
+        # else the tid) — not the last piece's dict, which holds only what the last piece
+        # produced and, in the triton engine, the protected tids beside them.
+        result: Dict[str, Any] = {}
+        for tid in declared:
+            key = output_key(tensors.get(tid), tid)
+            if key not in values:
+                raise RuntimeError(
+                    f"layer_streaming: '{component_name}' declares output {key!r} and no "
+                    f"piece returned it")
+            result[key] = values[key]
+        return result
+
+    def uninstall_for_executor(self, component_name: str, executor) -> None:
+        """The component is released (`RuntimeExecutor._unload_component_weights`): its held pieces
+        (`layer_stream_resident`) release their weights with it. The segmentation stays installed — the next load
+        finds it (`install_for_executor` is idempotent) and the held pieces load again at their first run."""
+        for seg_exec in [*(self._segment_executors.get(component_name) or ()),
+                         *(self._installed_pieces.get(component_name) or ())]:
+            if getattr(seg_exec, "_weights_loaded", False):
+                seg_exec.unload_weights()
+
+    def install_for_executor(self, component_name: str, executor) -> bool:
+        """Make this component's own executor run segment by segment.
+
+        Called by `RuntimeExecutor._ensure_weights_loaded` for any strategy
+        that declares `manages_weight_residency`. It exists because an
+        autoregressive flow never enters `execute_component` at all — the
+        flow handler calls `executor.run` directly, and `executor.py` says so
+        itself. zero3 uses this same hook for the same reason.
+
+        So the segmenting is installed ON the executor: `run` is replaced by
+        one that walks the segments, holding one segment's weights at a time.
+        Idempotent, and a component with no segments in the plan is left
+        exactly as it was.
+        """
+        if not self._segments_for(component_name):
+            # Not a streamed component — it stays whole and the runtime must load it.
+            # Saying so is the caller's only way to tell the two apart.
+            return False
+        if component_name in self._installed:
+            self._ensure_flow_reads(component_name, executor)   # a base unloaded between phases
+            return True
+        self._installed.add(component_name)
+
+        segments = self._build_segment_executors(component_name)
+        self._installed_pieces[component_name] = segments
+
+        # The base executor's constants are now dead, and they are not small.
+        #
+        # Every executor loads the constants baked into ITS OWN graph at
+        # construction (`_load_constants_from_graph`). A segment executor's graph
+        # carries the constants its own ops read, so the segments together hold
+        # the whole set — and the base holds a second, complete copy of it, while
+        # its `run` is about to be replaced by `segmented_run` and never executes
+        # a single op again.
+        #
+        # Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct (`NBX_MALLOC_TRACE`):
+        # 108 live blocks of 20 971 520 B = 2160 MB before the first segment loads,
+        # all from `_load_constant_triton`, for 54 distinct constants. Exactly half
+        # of that — 1080 MB on a 16 GB card — is this copy.
+        #
+        # The base is already weightless under this strategy: `_ensure_weights_loaded`
+        # returns early for a strategy that declares `loads_own_weights`, so it never
+        # loads a single weight. Holding its constants made it half-populated, which
+        # is the inconsistency, not the release.
+        released = 0
+        base_weights = getattr(executor, "_weights", None)
+        if isinstance(base_weights, dict) and base_weights:
+            held = {n for seg in segments
+                    for n in (getattr(seg, "_weights", None) or {})}
+            for name in [n for n in base_weights if n in held]:
+                released += 1
+                base_weights.pop(name, None)
+        if released and os.environ.get("NBX_LAYER_DIAG") == "1":
+            _log.debug(f"   [LAYERDIAG] released {released} base-executor constants of "
+                       f"'{component_name}' — the segment executors carry them")
+        # What the flow reads by name from this executor, which it holds like a whole one.
+        self._ensure_flow_reads(component_name, executor)
+
+        def segmented_run(inputs=None, *args, **kwargs):
+            if component_name not in self._cut_verified:
+                # Once, before the first run: the flow has declared what it declares by now
+                # (the vlm flows' `set_moe_config` comes after this install).
+                self._graph_prism_cut(component_name, executor)
+                self._cut_verified.add(component_name)
+            return self._run_pieces(component_name, executor, segments, inputs,
+                                    *args, **kwargs)
+
+        executor.run = segmented_run
+
+        # An interceptor registered on this executor must reach the SEGMENTS, because
+        # this executor no longer runs an op — `run` is `segmented_run` above, and the
+        # triton sequence that consults interceptors is compiled by each segment.
+        #
+        # The autoregressive flow registers the KV attention interceptor on the
+        # component's executor AFTER the strategy is installed, so nothing here can
+        # forward a registration that has not happened yet: the call itself is
+        # forwarded instead.
+        #
+        # Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct — the arms agree on the
+        # FIRST token and diverge from the second, which is the signature of a decode
+        # that is not reading a cache rather than of a broken graph:
+        #     whole     Sure, I'd be happy to
+        #     streamed  Suresearchsearchsearchsearchsearchsearchsearch
+        #
+        # One interceptor instance for all segments, deliberately. It indexes layers as
+        # `call_count % num_layers` on a counter it never resets, so three segments run in
+        # order inside one decode step continue the count instead of restarting it — the
+        # segmenting is invisible to the cache, which is the property that makes a shared
+        # instance correct rather than merely convenient.
+        def register_on_segments(interceptors, _segs=segments):
+            for seg_exec in _segs:
+                fn = getattr(seg_exec, "register_triton_interceptors", None)
+                if fn is None:
+                    raise RuntimeError(
+                        "layer_streaming: a segment executor cannot take an "
+                        "interceptor registration. Its decode would silently run "
+                        "with no KV cache, which reads as a model defect and is not "
+                        "one — a refusal is the only honest answer.")
+                fn(interceptors)
+
+        # The compiled engine's KV cache is registered by op TYPE (`register_op_interceptors`),
+        # and it must reach the segments for the same reason. Only the triton registration was
+        # forwarded, so a streamed compiled decode ran with no cache. Measured 2026-10-08 on the
+        # M4 Pro, TinyLlama-1.1B native greedy: whole ' Paris.', streamed 'The' and eleven
+        # newlines, ' Paris.' again with NBX_KV_RECOMPUTE=1. One instance for all segments,
+        # for the reason given above.
+        def register_op_types_on_segments(interceptors):
+            for seg_exec in segments:
+                fn = getattr(seg_exec, "register_op_interceptors", None)
+                if fn is None:
+                    raise RuntimeError(
+                        "layer_streaming: a segment executor cannot take an op-type "
+                        "interceptor registration. Its compiled decode would silently run "
+                        "with no KV cache, which reads as a model defect and is not one.")
+                fn(interceptors)
+        before = dict(getattr(executor, "_op_interceptors", None) or {})
+        if before:
+            register_op_types_on_segments(before)
+        LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments,
+                                       op=register_op_types_on_segments)
+
+        _log.debug(f"   [layer_streaming] '{component_name}': {len(segments)} "
+                   f"segments, one resident at a time")
+        return True
+
+    def prepare_inputs(self, component_name: str,
+                       inputs: Dict[str, Any]) -> Dict[str, Any]:
+        return self.transfer_dict(inputs, self.context.get_device(component_name))
+

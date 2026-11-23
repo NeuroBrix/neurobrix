@@ -1,0 +1,411 @@
+"""Strategy steps of the Triton strategies — the Triton branch's twin of `pytorch/strategies/shared_steps.py`, body for
+body (RED_LINES.md lines 16-19: the same steps written once per branch).
+
+One mixin per strategy, inherited first by its Triton class. Torch-free (R33); the NBXTensors they move go through the
+strategy's own transfer methods (`triton/strategies/base.py`).
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional, Set
+
+
+
+def _load_sharded_weights(self, component_name: str) -> None:
+    executor = self.context.component_executors.get(component_name)
+    if executor is None:
+        return
+
+    weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
+    if weights_loaded:
+        return
+
+    shard_map = self.get_shard_map(component_name)
+    # Was: read `nbx_path` off the package, and if absent skip the
+    # load without a word. That name exists on no package this
+    # engine builds, so the load never happened and never said so.
+    nbx_path = self.resolve_artifact_path(component_name)
+
+    if shard_map:
+        executor.load_weights(nbx_path, component_name, shard_map)
+    else:
+        executor.load_weights(nbx_path, component_name)
+
+
+def unload_sharded_weights(self, component_name: str) -> None:
+    """Unload a component spread over several cards (block scatter, pipeline parallel), both branches: each card
+    synchronised, then the branch's cache released (`_release_device_cache`)."""
+    executor = self.context.component_executors.get(component_name)
+    if executor is not None and hasattr(executor, '_weights') and bool(executor._weights):
+        devices = self.get_component_devices(component_name)
+        if hasattr(executor, '_is_fgp_mode'):
+            executor._is_fgp_mode = False
+        executor.unload_weights()
+        self._loaded_components.discard(component_name)
+        for device in devices:
+            self.synchronize_device(device)
+        self._release_device_cache(device)
+
+
+def _prepare_on_first_device(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    devices = self.get_component_devices(component_name)
+    target_device = devices[0] if devices else self.primary_device
+    return self.transfer_dict(inputs, target_device, self.use_async)
+
+class BlockScatterSteps:
+    """What the compiled and the Triton `BlockScatterStrategy` ran alike (pytorch/strategies/block_scatter.py, triton/strategies/block_scatter.py)."""
+
+    def is_fgp_component(self, component_name: str) -> bool:
+        return component_name in self.fgp_components
+
+    def get_shard_map(self, component_name: str) -> Dict[str, str]:
+        return self.fgp_components.get(component_name, {})
+
+    def get_component_devices(self, component_name: str) -> List[str]:
+        return self.component_devices.get(component_name, [self.primary_device])
+
+    def execute_component(
+        self,
+        component_name: str,
+        phase: str,
+        inputs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        executor = self.context.component_executors.get(component_name)
+        if executor is None:
+            raise RuntimeError(f"ZERO FALLBACK: No executor for '{component_name}'")
+
+        is_fgp = self.is_fgp_component(component_name)
+
+        if component_name not in self._loaded_components:
+            self._load_fgp_weights(component_name)
+            self._loaded_components.add(component_name)
+
+        if is_fgp and hasattr(executor, '_is_fgp_mode'):
+            executor._is_fgp_mode = True
+
+        if inputs:
+            inputs = self.prepare_inputs(component_name, inputs)
+
+        return executor.run(inputs or {})
+
+    _load_fgp_weights = _load_sharded_weights       # the same load as pipeline parallel's (one body)
+    unload_weights = unload_sharded_weights
+
+    prepare_inputs = _prepare_on_first_device
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "block_scatter"):
+        super().__init__(context, strategy_name)
+
+        self.devices: List[str] = context.get_all_devices()
+        self.use_async = True
+
+        # Parse FGP allocations from context
+        self.fgp_components: Dict[str, Dict[str, str]] = {}
+        self.component_devices: Dict[str, List[str]] = {}
+
+        for comp_name, alloc in context.allocations.items():
+            if isinstance(alloc, dict):
+                device_str = alloc.get('device', '')
+                shard_map = alloc.get('shard_map', {})
+            elif isinstance(alloc, tuple) and len(alloc) >= 2:
+                device_str, shard_map = alloc[0], alloc[1]
+            else:
+                continue
+
+            if isinstance(device_str, str) and device_str.startswith("fgp:"):
+                device_list = device_str[4:].split(",")
+                self.fgp_components[comp_name] = shard_map
+                self.component_devices[comp_name] = device_list
+            else:
+                if isinstance(device_str, str):
+                    self.component_devices[comp_name] = [device_str]
+
+        if not self.devices:
+            raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism for block scatter")
+        self.primary_device = self.devices[0]
+        self._loaded_components: Set[str] = set()
+
+
+class ComponentPlacementLazySteps:
+    """What the compiled and the Triton `ComponentPlacementLazyStrategy` ran alike (pytorch/strategies/component_placement.py, triton/strategies/component_placement.py)."""
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "component_placement_lazy"):
+        super().__init__(context, strategy_name)
+        self._phase_loaded: Set[str] = set()
+
+    def execute_component(
+        self,
+        component_name: str,
+        phase: str,
+        inputs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if component_name not in self._phase_loaded:
+            self.load_weights(component_name)
+            self._phase_loaded.add(component_name)
+        return super().execute_component(component_name, phase, inputs)
+
+
+class ComponentPlacementSteps:
+    """What the compiled and the Triton `ComponentPlacementStrategy` ran alike (pytorch/strategies/component_placement.py, triton/strategies/component_placement.py)."""
+
+    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Transfer inputs to component's device (NBXTensor)."""
+        target_device = self.component_devices.get(component_name)
+        if target_device is None:
+            return inputs
+
+        transferred = self.transfer_dict(inputs, target_device, self.use_async)
+        if self.use_async:
+            self.synchronize_device(target_device)
+        return transferred
+
+    def execute_component(
+        self,
+        component_name: str,
+        phase: str,
+        inputs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Execute component on its assigned GPU."""
+        executor = self.context.component_executors.get(component_name)
+        if executor is None:
+            raise RuntimeError(f"ZERO FALLBACK: No executor for '{component_name}'")
+
+        target_device = self.component_devices.get(component_name)
+        if target_device is None:
+            raise RuntimeError(f"ZERO FALLBACK: No device assignment for '{component_name}'")
+
+        self.load_weights(component_name)
+
+        if inputs:
+            inputs = self.prepare_inputs(component_name, inputs)
+
+        return executor.run(inputs or {})
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "component_placement"):
+        super().__init__(context, strategy_name)
+
+        self.devices = context.get_all_devices()
+        self.use_async = True  # Always use async when available
+
+        # Map components to their devices
+        self.component_devices: Dict[str, str] = {}
+        for comp_name, alloc_info in context.allocations.items():
+            if isinstance(alloc_info, dict):
+                device = alloc_info.get('device')
+                assert device is not None, f"Allocation dict missing 'device' key for {comp_name}"
+            else:
+                assert isinstance(alloc_info, tuple), f"Allocation must be dict or tuple, got {type(alloc_info)}"
+                device = alloc_info[0]
+            self.component_devices[comp_name] = device
+
+        self.state_device: Optional[str] = None
+
+
+class CPUExecutionSteps:
+    """What the compiled and the Triton `CPUExecutionStrategy` ran alike (pytorch/strategies/cpu_execution.py, triton/strategies/cpu_execution.py)."""
+
+    def unload_weights(self, component_name: str) -> None:
+        if self._eager:
+            return
+        super().unload_weights(component_name)
+
+    def prepare_inputs(
+        self,
+        component_name: str,
+        inputs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return self.transfer_dict(inputs, self.device)
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "cpu_execution"):
+        super().__init__(context, strategy_name)
+        # All components share the same logical "cpu" device.
+        self.device = "cpu"
+        # Loading mode from Prism plan (DATA-DRIVEN)
+        self._eager = context.loading_mode == "eager"
+        self._loaded_components: Set[str] = set()
+
+
+class LazySequentialSteps:
+    """What the compiled and the Triton `LazySequentialStrategy` ran alike (pytorch/strategies/lazy_sequential.py, triton/strategies/lazy_sequential.py)."""
+
+    def _get_component_strategy(self, component_name: str) -> str:
+        alloc = self.context.allocations.get(component_name)
+        if isinstance(alloc, dict):
+            return alloc.get('strategy', 'single_gpu')
+        return 'single_gpu'
+
+    def _get_component_device(self, component_name: str) -> str:
+        alloc = self.context.allocations.get(component_name)
+        if isinstance(alloc, dict):
+            return alloc.get('device', 'cpu')
+        elif isinstance(alloc, tuple):
+            return alloc[0]
+        return 'cpu'
+
+    def uninstall_for_executor(self, component_name: str,
+                               executor=None) -> None:
+        """Lifecycle mirror of install_for_executor (see the compiled
+        LazySequential twin for the request-2 stale-install class)."""
+        brick = getattr(self, "_zero3_brick", None)
+        if brick is not None:
+            brick.uninstall_for_executor(component_name, executor)
+
+    def unload_weights(self, component_name: str) -> None:
+        self.uninstall_for_executor(component_name)
+        super().unload_weights(component_name)
+        self._loaded_components.discard(component_name)
+        self._pinned_components.discard(component_name)
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "lazy_sequential"):
+        super().__init__(context, strategy_name)
+        self._loaded_components: Set[str] = set()
+        self._pinned_components: Set[str] = set()
+
+
+class PipelineParallelSteps:
+    """What the compiled and the Triton `PipelineParallelStrategy` ran alike (pytorch/strategies/pipeline_parallel.py, triton/strategies/pipeline_parallel.py)."""
+
+    def is_pp_component(self, component_name: str) -> bool:
+        return component_name in self.pp_components
+
+    def get_shard_map(self, component_name: str) -> Dict[str, str]:
+        return self.pp_components.get(component_name, {})
+
+    def get_component_devices(self, component_name: str) -> List[str]:
+        return self.component_devices.get(component_name, [self.primary_device])
+
+    _load_pp_weights = _load_sharded_weights        # the same load as block scatter's (one body)
+    unload_weights = unload_sharded_weights
+
+    prepare_inputs = _prepare_on_first_device
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "pipeline_parallel"):
+        super().__init__(context, strategy_name)
+
+        self.devices: List[str] = context.get_all_devices()
+        self.use_async = True
+
+        # Parse PP allocations from context (same format as FGP: fgp: prefix)
+        self.pp_components: Dict[str, Dict[str, str]] = {}
+        self.component_devices: Dict[str, List[str]] = {}
+
+        for comp_name, alloc in context.allocations.items():
+            if isinstance(alloc, dict):
+                device_str = alloc.get('device', '')
+                shard_map = alloc.get('shard_map', {})
+            elif isinstance(alloc, tuple) and len(alloc) >= 2:
+                device_str, shard_map = alloc[0], alloc[1]
+            else:
+                continue
+
+            if isinstance(device_str, str) and device_str.startswith("fgp:"):
+                device_list = device_str[4:].split(",")
+                self.pp_components[comp_name] = shard_map
+                self.component_devices[comp_name] = device_list
+            else:
+                if isinstance(device_str, str):
+                    self.component_devices[comp_name] = [device_str]
+
+        if not self.devices:
+            raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism for pipeline parallel")
+        self.primary_device = self.devices[0]
+        self._loaded_components: Set[str] = set()
+
+
+class SingleGPUSteps:
+    """What the compiled and the Triton `SingleGPUStrategy` ran alike (pytorch/strategies/single_gpu.py, triton/strategies/single_gpu.py)."""
+
+    def prepare_inputs(
+        self,
+        component_name: str,
+        inputs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Ensure inputs are on the assigned GPU (NBXTensor transfer)."""
+        return self.transfer_dict(inputs, self.device)
+
+
+class WeightShardingSteps:
+    """What the compiled and the Triton `WeightShardingStrategy` ran alike (pytorch/strategies/weight_sharding.py, triton/strategies/weight_sharding.py)."""
+
+    def execute_component(
+        self,
+        component_name: str,
+        phase: str,
+        inputs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        executor = self.context.component_executors.get(component_name)
+        if executor is None:
+            raise RuntimeError(f"ZERO FALLBACK: No executor for component '{component_name}'")
+
+        if component_name in self.sharded_components:
+            primary_device = self.sharded_components[component_name][0]
+        elif component_name in self.regular_components:
+            primary_device = self.regular_components[component_name]
+        else:
+            primary_device = str(executor.device)
+
+        if inputs:
+            inputs = self.transfer_dict(inputs, primary_device, async_transfer=False)
+
+        return executor.run(inputs or {})
+
+    def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        if component_name in self.sharded_components:
+            target = self.sharded_components[component_name][0]
+        elif component_name in self.regular_components:
+            target = self.regular_components[component_name]
+        else:
+            return inputs
+        return self.transfer_dict(inputs, target, async_transfer=False)
+
+    def cleanup(self) -> None:
+        self._loaded_components.clear()
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "weight_sharding"):
+        super().__init__(context, strategy_name)
+
+        # Parse sharded vs regular component allocations
+        self.sharded_components: Dict[str, List[str]] = {}
+        self.regular_components: Dict[str, str] = {}
+
+        for comp_name, alloc_info in context.allocations.items():
+            if isinstance(alloc_info, dict):
+                device_str = alloc_info.get('device', '')
+            else:
+                device_str = alloc_info[0] if isinstance(alloc_info, tuple) else str(alloc_info)
+
+            if device_str.startswith("tp:"):
+                devices = device_str[3:].split(",")
+                self.sharded_components[comp_name] = devices
+            else:
+                self.regular_components[comp_name] = device_str
+
+        self._loaded_components: Set[str] = set()
+
+
+def execute_whole_component(
+    self,
+    component_name: str,
+    phase: str,
+    inputs: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Execute component on CPU.
+
+    Identical pattern to SingleGPUStrategy: load weights (lazy or
+    eager), prepare inputs (ensure CPU tensors), execute.
+    """
+    executor = self.context.component_executors.get(component_name)
+    if executor is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: No executor for '{component_name}'"
+        )
+
+    if component_name not in self._loaded_components:
+        self.load_weights(component_name)
+        if self._eager:
+            self._loaded_components.add(component_name)
+
+    if inputs:
+        inputs = self.prepare_inputs(component_name, inputs)
+
+    outputs = executor.run(inputs or {})
+    return outputs

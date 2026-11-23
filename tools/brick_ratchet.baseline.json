@@ -565,22 +565,6 @@
     77,
     8
    ],
-   "src/neurobrix/pytorch/strategies/chunked_piece.py::ChunkedPiece._run_pass": [
-    53,
-    5
-   ],
-   "src/neurobrix/pytorch/strategies/expert_store.py::build_expert_store_state": [
-    100,
-    3
-   ],
-   "src/neurobrix/pytorch/strategies/layer_streaming.py::LayerStreamingStrategy._run_pieces": [
-    92,
-    3
-   ],
-   "src/neurobrix/pytorch/strategies/zero3.py::Zero3Strategy._build_ratchet_state": [
-    108,
-    3
-   ],
    "src/neurobrix/core/validators/nbx_validator.py::NBXValidator._validate_weights_index": [
     85,
     5
@@ -844,6 +828,22 @@
    "src/neurobrix/pytorch/prism/time_estimate.py::plan_seconds": [
     64,
     4
+   ],
+   "src/neurobrix/pytorch/strategies/chunked_piece.py::ChunkedPiece._run_pass": [
+    53,
+    5
+   ],
+   "src/neurobrix/pytorch/strategies/expert_store.py::build_expert_store_state": [
+    100,
+    3
+   ],
+   "src/neurobrix/pytorch/strategies/layer_streaming.py::LayerStreamingStrategy._run_pieces": [
+    92,
+    3
+   ],
+   "src/neurobrix/pytorch/strategies/zero3.py::Zero3Strategy._build_ratchet_state": [
+    108,
+    3
    ],
    "src/neurobrix/serving/engine.py::InferenceEngine.generate": [
     72,
@@ -1269,6 +1269,22 @@
     63,
     3
    ],
+   "src/neurobrix/triton/strategies/chunked_piece.py::ChunkedPiece._run_pass": [
+    53,
+    5
+   ],
+   "src/neurobrix/triton/strategies/expert_store.py::build_expert_store_state": [
+    96,
+    3
+   ],
+   "src/neurobrix/triton/strategies/layer_streaming.py::LayerStreamingStrategy._run_pieces": [
+    92,
+    3
+   ],
+   "src/neurobrix/triton/strategies/zero3.py::Zero3Strategy._build_ratchet_state": [
+    90,
+    2
+   ],
    "src/neurobrix/triton/weight_loader.py::load_component_weights": [
     82,
     4
@@ -1316,14 +1332,13 @@
    "src/neurobrix/core/runtime/resolution/i2v_conditioning.py <- neurobrix.core.runtime.resolution.i2v_spec._vae_temporal_ratio",
    "src/neurobrix/core/runtime/resolution/vace_control_conditioning.py <- neurobrix.core.runtime.resolution.i2v_conditioning._to_channels_first",
    "src/neurobrix/core/runtime/resolution/vace_control_conditioning.py <- neurobrix.core.runtime.resolution.vace_spec._vae_latent_stats",
-   "src/neurobrix/pytorch/strategies/expert_store.py <- neurobrix.core.device_utils._parse_device",
-   "src/neurobrix/pytorch/strategies/expert_store.py <- neurobrix.pytorch.prism.expert_topology._block_of",
-   "src/neurobrix/pytorch/strategies/layer_streaming.py <- neurobrix.core.runtime.graph_executor._reset_cuda_peak",
-   "src/neurobrix/triton/strategies/pipeline_parallel.py <- neurobrix.triton.strategies.block_scatter._nbx_device_str",
-   "src/neurobrix/pytorch/strategies/zero3.py <- neurobrix.core.runtime.graph_executor._reset_cuda_peak",
    "src/neurobrix/pytorch/prism/profiler.py <- neurobrix.pytorch.prism.runtime_widths._SDPA",
    "src/neurobrix/pytorch/prism/solver.py <- neurobrix.pytorch.prism.profiler._is_attention",
    "src/neurobrix/pytorch/prism/solver.py <- neurobrix.triton.weight_loader._BLOCK_RE",
+   "src/neurobrix/pytorch/strategies/expert_store.py <- neurobrix.core.device_utils._parse_device",
+   "src/neurobrix/pytorch/strategies/expert_store.py <- neurobrix.pytorch.prism.expert_topology._block_of",
+   "src/neurobrix/pytorch/strategies/layer_streaming.py <- neurobrix.core.runtime.graph_executor._reset_cuda_peak",
+   "src/neurobrix/pytorch/strategies/zero3.py <- neurobrix.core.runtime.graph_executor._reset_cuda_peak",
    "src/neurobrix/serving/engine.py <- neurobrix.core.runtime.prompt_length._flatten_tokenizer_output",
    "src/neurobrix/serving/session.py <- neurobrix.core.runtime.prompt_length._flatten_tokenizer_output",
    "src/neurobrix/triton/audio_frontend.py <- neurobrix.core.module.audio.mel_dsp._conformer_mel",
@@ -1353,10 +1368,13 @@
    "src/neurobrix/triton/prism/solver.py <- neurobrix.triton.weight_loader._BLOCK_RE",
    "src/neurobrix/triton/sequence.py <- neurobrix.core.device_utils._parse_device",
    "src/neurobrix/triton/sequential.py <- neurobrix.triton.sequence._BLOCK_RE",
+   "src/neurobrix/triton/strategies/expert_store.py <- neurobrix.core.device_utils._parse_device",
+   "src/neurobrix/triton/strategies/expert_store.py <- neurobrix.triton.prism.expert_topology._block_of",
+   "src/neurobrix/triton/strategies/pipeline_parallel.py <- neurobrix.triton.strategies.block_scatter._nbx_device_str",
    "src/neurobrix/triton/vace_control_conditioning.py <- neurobrix.core.runtime.resolution.vace_spec._vae_latent_stats",
    "src/neurobrix/triton/vace_control_conditioning.py <- neurobrix.triton.i2v_conditioning._to_channels_first"
   ],
-  "reach": 511,
+  "reach": 510,
   "tensor_logic": {},
   "twins": {
    "src/neurobrix/triton/neurotax/__init__.py": "src/neurobrix/pytorch/neurotax/__init__.py",
@@ -1396,7 +1414,23 @@
    "src/neurobrix/triton/prism/structure.py": "src/neurobrix/pytorch/prism/structure.py",
    "src/neurobrix/triton/prism/temporal_stream.py": "src/neurobrix/pytorch/prism/temporal_stream.py",
    "src/neurobrix/triton/prism/time_estimate.py": "src/neurobrix/pytorch/prism/time_estimate.py",
-   "src/neurobrix/triton/prism/work.py": "src/neurobrix/pytorch/prism/work.py"
+   "src/neurobrix/triton/prism/work.py": "src/neurobrix/pytorch/prism/work.py",
+   "src/neurobrix/triton/strategies/__init__.py": "src/neurobrix/pytorch/strategies/__init__.py",
+   "src/neurobrix/triton/strategies/base.py": "src/neurobrix/pytorch/strategies/base.py",
+   "src/neurobrix/triton/strategies/block_scatter.py": "src/neurobrix/pytorch/strategies/block_scatter.py",
+   "src/neurobrix/triton/strategies/chunked_piece.py": "src/neurobrix/pytorch/strategies/chunked_piece.py",
+   "src/neurobrix/triton/strategies/component_placement.py": "src/neurobrix/pytorch/strategies/component_placement.py",
+   "src/neurobrix/triton/strategies/cpu_execution.py": "src/neurobrix/pytorch/strategies/cpu_execution.py",
+   "src/neurobrix/triton/strategies/expert_store.py": "src/neurobrix/pytorch/strategies/expert_store.py",
+   "src/neurobrix/triton/strategies/layer_streaming.py": "src/neurobrix/pytorch/strategies/layer_streaming.py",
+   "src/neurobrix/triton/strategies/lazy_sequential.py": "src/neurobrix/pytorch/strategies/lazy_sequential.py",
+   "src/neurobrix/triton/strategies/pipeline_parallel.py": "src/neurobrix/pytorch/strategies/pipeline_parallel.py",
+   "src/neurobrix/triton/strategies/shared_steps.py": "src/neurobrix/pytorch/strategies/shared_steps.py",
+   "src/neurobrix/triton/strategies/single_gpu.py": "src/neurobrix/pytorch/strategies/single_gpu.py",
+   "src/neurobrix/triton/strategies/tiled_norm.py": "src/neurobrix/pytorch/strategies/tiled_norm.py",
+   "src/neurobrix/triton/strategies/value_parking.py": "src/neurobrix/pytorch/strategies/value_parking.py",
+   "src/neurobrix/triton/strategies/weight_sharding.py": "src/neurobrix/pytorch/strategies/weight_sharding.py",
+   "src/neurobrix/triton/strategies/zero3.py": "src/neurobrix/pytorch/strategies/zero3.py"
   }
  }
 }

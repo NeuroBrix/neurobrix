@@ -8,9 +8,9 @@ at boundaries. Strategy-level logic is pure device routing — torch-free.
 
 from typing import Dict, Any, Optional, List, Set
 
-from neurobrix.pytorch.strategies.base import StrategyContext
+from .base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.pytorch.strategies.shared_steps import WeightShardingSteps   # the steps both branches share
+from .shared_steps import WeightShardingSteps   # the Triton twin of the PyTorch steps
 
 
 class WeightShardingStrategy(WeightShardingSteps, TritonStrategy):

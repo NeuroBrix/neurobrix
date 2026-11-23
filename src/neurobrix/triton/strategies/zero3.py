@@ -1,32 +1,146 @@
-"""Zero3 (CPU offload + GPU compute) — triton path (NBXTensor, zero torch).
+"""
+Zero3 Strategy — CPU Offload with GPU Compute + Block-Wise Pipelining
 
-Zero3's block-wise ratchet pipelining is ALREADY mode-polymorphic: it drives
-H2D/evict through DeviceAllocator stream + event ctypes APIs, pins host
-weights via NBXTensor.pin_host(), and rebinds arena slots through the
-TritonSequence handle — all torch-free on the NBXTensor path. So the triton
-zero3 reuses that validated ratchet (mixin) rather than duplicating ~660
-lines; it only swaps the transfer/sync surface for the NBXTensor one
-(TritonStrategy) and drops the torch.cuda device-detection fallback.
+Last-resort Prism cascade when no other strategy fits the model in
+aggregate VRAM. Weights live on CPU (pinned for fast DMA); compute
+happens on a single GPU. Correctness contract: every op runs with its
+args (weights included) on the GPU execution device.
 
-NOTE: the shared module still carries a `torch` import for the compiled
-path's polymorphic branches; a fully torch-free shared ratchet is a
-follow-up for the two-version split. The triton entry point itself adds no
-torch.
+Execution model: **block-wise ratchet pipelining** (no longer a
+per-op slow-path). At any time at most two transformer blocks have
+a GPU copy resident in the arena — the one currently executing
+(block N) and the one being prefetched (N+1). Block N-1 is evicted
+immediately after compute on block N begins, reclaiming its VRAM
+before the next expand.
+
+Async overlap is driven by a dedicated transfer stream:
+
+    H2D(block N+1) on transfer_stream  ──┐
+                                         │ event_record(block_N+1_ready)
+                                         ▼
+    compute(block N) on default stream   ▲
+                                         │ stream_wait_event(block_N+1_ready)
+                                         │ before first op of block N+1
+                                         │
+    evict(block N-1) on host             ▼
+
+Eviction flow per block:
+    1. materialize_slots_depending_on(weight_slot_ids)
+         → copy any intermediate that aliases a block-N-1 weight (via
+           `_base`/storage) into fresh storage. Safe because the
+           moe_fusion.py Pass 2 output-sweep already prunes orphaned
+           aten::t views at compile time, so on clean graphs this is
+           a cheap no-op (0 slots materialized).
+    2. rebind_partial({tid: cpu_original for tid in block_N-1})
+       + recompute_op_devices_for_slots — arena slots point at CPU
+       tensors again so subsequent pure-CPU ops from the block stay
+       correct.
+    3. Drop Python refs in gpu_cache[N-1] → NBXTensor.__del__
+       → DeviceAllocator.free_cuda → PCIe-visible memory returned
+       to the driver.
+
+Priming (one-shot, first tick):
+    * mark_cpu_weighted_ops_for_transfer(exec_dev): every weighted op
+      whose weight is still CPU (never promoted) gets
+      needs_transfer=True. Used only for weights outside any
+      block — embeddings, final norm, lm_head. All block-weighted
+      ops are handled by the ratchet, which rebinds them to GPU
+      tensors before they execute.
+    * override_weightless_op_devices(exec_dev): creation ops (arange,
+      scalar_tensor, full) inherit device from the CPU-weighted chain
+      so they'd allocate on CPU. Force them to exec_dev directly.
+
+Multi-pass support (autoregressive decode):
+    `_post_run_hook` fires after each forward pass. It evicts every
+    block still in gpu_cache so the next pass starts from the same
+    state as the first, avoiding VRAM growth across the decode loop.
+
+Install model:
+    Hooks installed at weight-load time so flow handlers that bypass
+    strategy.execute_component (most notably GraphLMSession.prefill
+    for autoregressive LLMs) get correct behaviour. GraphExecutor.run
+    picks up executor._persistent_pre_op_callback and
+    executor._post_run_hook transparently.
+
+The Triton branch's twin (RED_LINES.md lines 16-19):
+    `pytorch/strategies/zero3.py` without Torch, merged with the
+    former Triton subclass (`Zero3Strategy(TritonStrategy, <the
+    PyTorch Zero3Strategy>)`, whose method resolution it keeps: the
+    NBXTensor transfer and sync surface of `TritonStrategy`, the
+    subclass's torch-free `_get_exec_device`, the PyTorch ratchet's
+    other methods). The sequence is the TritonSequence (or the
+    triton-sequential weight view) over NBXTensors, exposing the
+    priming API (rebind_partial, recompute_op_devices_for_slots,
+    get_op_blocks, materialize_slots_depending_on,
+    override_weightless_op_devices, mark_cpu_weighted_ops_for_transfer);
+    the transport (copy stream, block upload, readiness events) is
+    nbxtensor's (`nbxtensor.memory.block_upload`), not the strategy's.
+    A ratchet state that says it is not the Triton engine's
+    (`is_triton` False) is refused by name.
+
+Portability:
+    The library's block upload is backend-dispatched through its
+    allocator, routed through the CUDA or HIP runtime depending on the
+    active backend. MPS /
+    CPU-only execute devices fall back to synchronous prefetch (no
+    stream) so the ratchet stays correct even without overlap.
 """
 
-from neurobrix.pytorch.strategies.zero3 import Zero3Strategy as _SharedZero3
-from .base import TritonStrategy
+from __future__ import annotations
+
+import logging
+import os
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from neurobrix.core.device_utils import device_empty_cache
+
+from .base import StrategyContext, TritonStrategy
+
+logger = logging.getLogger(__name__)
 
 
-class Zero3Strategy(TritonStrategy, _SharedZero3):
-    """Zero3 CPU-offload-with-GPU-compute on the triton path.
+# Device-string prefixes that name a GPU zero3 can ratchet on. One tuple, used
+# both to RESOLVE the execution device and to decide whether to install on it —
+# they disagreed before, and the disagreement was the bug.
+_ZERO3_GPU_PREFIXES = ("cuda", "hip", "xpu", "mps")
 
-    MRO: TritonStrategy (NBXTensor transfer + DeviceAllocator sync) →
-    _SharedZero3 (block-pipelining ratchet, NBXTensor-capable) →
-    ExecutionStrategy. The shared `__init__` runs and calls
-    `self._get_exec_device()`, which resolves to the torch-free override
-    below.
+
+def _triton_only(is_triton: bool, what: str) -> None:
+    """Refuse by name a ratchet step asked for an engine that is not the Triton one."""
+    if not is_triton:
+        raise RuntimeError(f"ZERO FALLBACK: zero3 {what}: the Triton zero3 runs the Triton engine's sequence only "
+                           f"(the PyTorch engine's is pytorch/strategies/zero3.py)")
+
+
+class Zero3Strategy(TritonStrategy):
+    """CPU offload with block-wise GPU ratchet pipelining, on the Triton engine (NBXTensor, zero torch).
+
+    Weights live on CPU (pinned for fast DMA). At most two blocks are
+    resident on GPU at any time (current + prefetched). Async H2D on a
+    dedicated transfer stream overlaps with compute on the default
+    stream; per-block eviction returns VRAM to the driver immediately
+    after the block's last op finishes.
     """
+
+    #: zero3 keeps weights on pinned host memory and streams them to the
+    #: device for compute. It has always managed its own residency; this
+    #: declares what the runtime previously inferred from its name.
+    manages_weight_residency = True
+
+    def __init__(self, context: StrategyContext, strategy_name: str = "zero3"):
+        super().__init__(context, strategy_name)
+        self.exec_device = self._get_exec_device()
+        self._loaded_components: Set[str] = set()
+        self._pinned_components: Set[str] = set()
+        self._installed: Dict[str, Any] = {}
+        # component_name → ratchet state. Rebuilt lazily on first
+        # callback tick since the compiled sequence isn't available
+        # until the executor's bootstrap finishes.
+        self._ratchet: Dict[str, Dict[str, Any]] = {}
+
+    # ------------------------------------------------------------------
+    # Device / setup helpers
+    # ------------------------------------------------------------------
 
     def _get_exec_device(self) -> str:
         """Pick the GPU execution device from Prism allocations (torch-free).
@@ -43,6 +157,735 @@ class Zero3Strategy(TritonStrategy, _SharedZero3):
                 device_str = alloc_info[0]
             if device_str.startswith("zero3:"):
                 device_str = device_str.split(":", 1)[1]
-            if device_str and device_str.startswith(("cuda", "hip", "xpu", "mps")):
+            if device_str and device_str.startswith(_ZERO3_GPU_PREFIXES):
                 return device_str
         return "cuda:0"
+
+    def _exec_dev_idx(self) -> int:
+        """Parse the numeric device index out of self.exec_device."""
+        if ":" in self.exec_device:
+            try:
+                return int(self.exec_device.split(":", 1)[1])
+            except ValueError:
+                return 0
+        return 0
+
+    def _pin_cpu_weights(self, component_name: str, executor: Any) -> None:
+        """Pin CPU weights in-place for non_blocking DMA.
+
+        NBXTensor.pin_host(), zero torch.
+
+        In the triton path, the weight_loader already allocates CPU
+        shards as pinned NBXTensors (see triton/weight_loader.py
+        _load_to_pinned_cpu). This method becomes a no-op for those —
+        pin_host() on an already-pinned tensor returns self. Kept for
+        robustness: any CPU weight that slips through unpinned (e.g.
+        from a custom loader, a test harness, or a future zero3
+        variant) gets promoted here.
+
+        Pinned memory doubles effective PCIe throughput AND is required
+        for cudaMemcpyAsync H2D overlap on a non-default stream. With
+        unpinned sources, the driver silently inserts a staging copy
+        that blocks the transfer stream.
+        """
+        weights = getattr(executor, '_weights', None)
+        if not weights:
+            return
+        from .expert_store import holds_expert_files
+        if holds_expert_files(self.context.allocations, component_name):
+            return  # its host experts are views of the container's files (expert_store.py)
+
+        total_mb = 0.0
+        for t in weights.values():
+            if hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu':
+                # NBXTensor and QuantizedTensor both carry their byte size
+                # (a quantized weight has no element size: int4 packed + scales).
+                total_mb += t._nbytes
+        total_mb /= (1024 * 1024)
+        if total_mb == 0:
+            return
+
+        use_pin = True
+        plan = getattr(self.context, '_plan', None)
+        cpu_ram_mb = getattr(plan, 'cpu_ram_mb', 0) if plan else 0
+        if cpu_ram_mb > 0:
+            from neurobrix.triton.prism.cpu_config import should_pin_memory, CPUConfig
+            cpu = CPUConfig(
+                model="runtime", cores=1, threads=1,
+                ram_mb=cpu_ram_mb, architecture="",
+            )
+            use_pin = should_pin_memory(cpu, total_mb)
+
+        if not use_pin:
+            logger.debug(
+                f"[Zero3] {component_name}: skip pin_memory "
+                f"(weights={total_mb:.0f}MB, ram={cpu_ram_mb}MB)"
+            )
+            return
+
+        pinned = 0
+        for name in list(weights):
+            tensor = weights[name]
+            if hasattr(tensor, '_device') and getattr(tensor, '_device', None) == 'cpu':
+                if not getattr(tensor, '_pinned', False):
+                    weights[name] = tensor.pin_host()
+                    pinned += 1
+        if pinned:
+            logger.debug(
+                f"[Zero3] {component_name}: pinned {pinned} weights "
+                f"({total_mb:.0f}MB) for DMA to {self.exec_device}"
+            )
+
+    # ------------------------------------------------------------------
+    # Public hook API
+    # ------------------------------------------------------------------
+
+    def install_for_executor(self, component_name: str, executor: Any) -> None:
+        """Install pinning, priming, and the ratchet callback.
+
+        Called by RuntimeExecutor._ensure_weights_loaded so that flow
+        handlers which bypass strategy.execute_component (most notably
+        GraphLMSession.prefill calling executor.run directly) still
+        benefit from the ratchet. Idempotent.
+        """
+        import os as _os_d
+        if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
+            logger.debug(f"[Z3DIAG] install_for_executor({component_name}) "
+                         f"already={component_name in self._installed}")
+        if component_name in self._installed:
+            return
+        self._pin_cpu_weights(component_name, executor)
+        self._pinned_components.add(component_name)
+        # The ratchet installs on any GPU, using the same accelerator set
+        # `_get_exec_device` above already resolves against. Written as
+        # `startswith("cuda")` this contradicted the resolution twelve lines
+        # up: the class picked `mps:0` correctly and then declined to install
+        # on it, so on Apple and AMD the weights were pinned and NOTHING
+        # managed GPU residency — zero3 was selected by Prism (a 31 GB
+        # component was assigned it on mps:0) and then did nothing at all.
+        #
+        # The ratchet's primitives — nbxtensor.memory.block_upload's copy
+        # stream, upload and events — are backend-dispatched through the
+        # library's allocator and were verified working on Metal before
+        # this guard was widened. The memory counters it also touches are
+        # diagnostics only (NBX_ZERO3_VRAM_LOG), so their accounting does not
+        # gate the mechanism. A backend where a primitive does NOT work now
+        # raises from that primitive, which is a loud failure where the old
+        # guard gave a silent no-op.
+        if not self.exec_device.startswith(_ZERO3_GPU_PREFIXES):
+            return
+        self._install(component_name, executor)
+        self._prepare_expert_store(component_name, executor)
+
+    def _prepare_expert_store(self, component_name: str, executor: Any) -> None:
+        """An expert store's setup — the sequence the engine runs compiled, the store built, the blocks other cards
+        hold copied there, the dense part primed — is the component becoming ready: done HERE, inside the weight
+        load (`RuntimeExecutor._ensure_weights_loaded`, a load span), never at the first op of the first request.
+        Qwen3-30B-A3B triton on 4 V100 (2026-10-28): 7.7 s of copies onto the cards and 3.4 s of compile sat in the
+        19 s time to first token. A sequence that does not exist before its first pass (triton-sequential's per-pass
+        weight view) is built there, as before."""
+        alloc = self.context.allocations.get(component_name)
+        if not (isinstance(alloc, dict) and alloc.get('strategy') == "expert_store"):
+            return
+        if self._ratchet.get(component_name) is not None:
+            return
+        if getattr(executor, 'mode', None) == "triton" and hasattr(executor, '_ensure_triton_compiled'):
+            executor._ensure_triton_compiled(executor._triton_device_index())
+        state = self._build_ratchet_state(component_name, executor)
+        if state is not None and not state['primed']:
+            self._ratchet_prime(state, component_name)
+
+    # ------------------------------------------------------------------
+    # Ratchet state + install
+    # ------------------------------------------------------------------
+
+
+    def _seq_handle(self, executor: Any):
+        """Return (seq, is_triton) or (None, None) if neither is ready (the Triton engine's: is_triton True)."""
+        tseq = getattr(executor, '_triton_seq', None)
+        if tseq is not None:
+            return tseq, True
+        # triton-sequential: no arena, its weight store seen through the same six calls.
+        view = getattr(executor, '_triton_seq_view', None)
+        if view is not None:
+            return view[1], True
+        return None, None
+
+    def _snapshot_cpu_originals(
+        self, executor: Any, blocks: Dict[int, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Map tensor_id → current CPU NBXTensor.
+
+        Captured once before the ratchet starts. These refs are what
+        rebind_partial restores to when a block is evicted — without
+        them the arena would have stale pointers to freed GPU memory.
+        """
+        weights = getattr(executor, '_weights', {}) or {}
+        originals: Dict[str, Any] = {}
+        for entry in blocks.values():
+            for tid in entry.get('weight_tensor_ids', []):
+                # Weight keys in executor._weights are stripped of the
+                # "param::" prefix by the weight loader. Probe both.
+                key_variants = (tid, tid[7:] if tid.startswith("param::") else tid)
+                for k in key_variants:
+                    if k in weights:
+                        originals[tid] = weights[k]
+                        break
+        return originals
+
+    def _build_op_to_block(
+        self, blocks: Dict[int, Dict[str, Any]]
+    ) -> Dict[int, int]:
+        """Invert get_op_blocks() output into op_idx → block_idx."""
+        op_to_block: Dict[int, int] = {}
+        for bidx, entry in blocks.items():
+            for op_idx in range(entry['first_op'], entry['last_op'] + 1):
+                op_to_block[op_idx] = bidx
+        return op_to_block
+
+    def _weight_slot_ids_for_block(
+        self, seq: Any, bidx: int, blocks: Dict[int, Dict[str, Any]]
+    ) -> List[int]:
+        """Translate block weight tensor_ids into arena slot indices."""
+        entry = blocks.get(bidx)
+        if entry is None:
+            return []
+        tid_to_slot = getattr(seq, '_tid_to_slot', {})
+        slots: List[int] = []
+        for tid in entry['weight_tensor_ids']:
+            slot = tid_to_slot.get(tid)
+            if slot is not None:
+                slots.append(slot)
+        return slots
+
+    def _prefetch_block(
+        self, state: Dict[str, Any], bidx: int, is_triton: bool
+    ) -> None:
+        """Async H2D for block `bidx` on the transfer stream.
+
+        Populates state['gpu_cache'][bidx] with freshly allocated GPU
+        tensors and records a readiness event. The default stream must
+        call stream_wait_event on that event before consuming any of
+        these tensors.
+        """
+        if bidx in state['gpu_cache']:
+            return
+        entry = state['blocks'].get(bidx)
+        if entry is None:
+            return
+        dev_idx = state['exec_dev_idx']
+        host = {tid: state['cpu_originals'][tid] for tid in entry['weight_tensor_ids']
+                if state['cpu_originals'].get(tid) is not None}
+        _triton_only(is_triton, "prefetch")
+        # the library's block upload: on the copy stream with a readiness event, or synchronous without one
+        from nbxtensor.memory.block_upload import upload_block
+        state['gpu_cache'][bidx], ev = upload_block(host, dev_idx, state['transfer_stream'])
+        if ev is not None:
+            state['block_events'][bidx] = ev
+
+    def _install_block_on_arena(
+        self, state: Dict[str, Any], bidx: int
+    ) -> None:
+        """Rebind arena slots of block bidx to its GPU-resident copy."""
+        moved = state['gpu_cache'].get(bidx)
+        if not moved:
+            return
+        seq = state['seq']
+        modified = seq.rebind_partial(moved)
+        seq.recompute_op_devices_for_slots(modified)
+
+    def _wait_for_block(
+        self, state: Dict[str, Any], bidx: int, is_triton: bool
+    ) -> None:
+        """Make the compute stream wait until block bidx is fully H2D'd.
+
+        Drains the readiness event so subsequent ops on the default
+        stream see committed data. Fast-path no-op if the event never
+        got recorded (synchronous prefetch path).
+        """
+        ev = state['block_events'].pop(bidx, None)
+        if ev is None:
+            return
+        _triton_only(is_triton, "wait")
+        from nbxtensor.memory.block_upload import wait_for_upload
+        wait_for_upload(ev)
+
+    def _evict_block(
+        self, state: Dict[str, Any], bidx: int, is_triton: bool
+    ) -> None:
+        """Release GPU memory of block bidx and restore CPU bindings.
+
+        Order matters:
+          1. Materialize any arena slot that aliases a block-bidx
+             weight (rare — should be 0 on clean graphs, see
+             moe_fusion.py Pass 2 comment).
+          2. Rebind arena slots to the CPU originals. Subsequent
+             fast-path reads on those slots see CPU tensors which
+             route through the slow path automatically.
+          3. Drop the Python refs in gpu_cache. NBXTensor.__del__
+             calls into the allocator to free the GPU memory.
+          4. Sync the device so outstanding reads on the freed
+             tensors finish before we return.
+        """
+        if bidx not in state['gpu_cache']:
+            return
+        seq = state['seq']
+        blocks = state['blocks']
+        weight_slot_ids = self._weight_slot_ids_for_block(seq, bidx, blocks)
+
+        # Step 1: break aliases
+        seq.materialize_slots_depending_on(weight_slot_ids)
+
+        # Step 2: restore CPU bindings
+        restore_map: Dict[str, Any] = {}
+        entry = blocks.get(bidx, {})
+        for tid in entry.get('weight_tensor_ids', []):
+            cpu_t = state['cpu_originals'].get(tid)
+            if cpu_t is not None:
+                restore_map[tid] = cpu_t
+        if restore_map:
+            modified = seq.rebind_partial(restore_map)
+            seq.recompute_op_devices_for_slots(modified)
+
+        # Step 3: drop GPU refs
+        state['gpu_cache'].pop(bidx, None)
+
+        # Step 4: sync so the next malloc sees the freed region
+        _triton_only(is_triton, "evict")
+        from nbxtensor.memory.block_upload import wait_device
+        wait_device()
+
+    def _reset_ratchet(self, component_name: str) -> None:
+        """Drop every GPU-cached STREAMED block — the resident ones
+        (`state['resident']`, the plan's `resident_weight_mb`) stay for
+        the next pass. Fired by _post_run_hook so multi-pass decode
+        stays flat-VRAM."""
+        state = self._ratchet.get(component_name)
+        if state is None:
+            return
+        is_triton = state['is_triton']
+        _triton_only(is_triton, "reset")
+        # Peak VRAM observation (criterion C diagnostics). Log once per
+        # pass end when NBX_ZERO3_VRAM_LOG is set, read from
+        # DeviceAllocator (exact NBX accounting).
+        if os.environ.get("NBX_ZERO3_VRAM_LOG"):
+            dev_idx = state['exec_dev_idx']
+            from nbxtensor import memory as nbx_memory
+            peak_mb = nbx_memory.peak_memory_allocated(dev_idx) / 1e6
+            live_mb = nbx_memory.memory_allocated(dev_idx) / 1e6
+            logger.debug(f"[Zero3] {component_name} pass_end: "
+                f"peak_vram={peak_mb:.1f}MB live_vram={live_mb:.1f}MB "
+                f"blocks_cached={len(state['gpu_cache'])}")
+            nbx_memory.reset_peak_memory(dev_idx)
+        resident = state['resident']
+        for bidx in list(state['gpu_cache'].keys()):
+            if bidx not in resident:
+                self._evict_block(state, bidx, is_triton)
+        # Also drop any unwaited readiness events.
+        from nbxtensor.memory.block_upload import drop_upload_events
+        drop_upload_events(state['block_events'].values())
+        state['block_events'].clear()
+        state['current_block'] = -1
+        state['fresh_pass'] = True
+
+    def _build_ratchet_state(
+        self, component_name: str, executor: Any
+    ) -> Optional[Dict[str, Any]]:
+        """Construct per-component ratchet state. Returns None only while
+        the executor has no compiled sequence yet (retried at the next op).
+        A component with nothing to pipeline — no block structure (Janus
+        gen_head: four weights, all block -1) or no block weight on the
+        host — gets a PRIME-ONLY state: no blocks, but the priming sweep
+        still runs, because its host weights reach the GPU ops through
+        that sweep and nothing else. Returning None there left them on the
+        host and the first op died on "mat1 is on cuda:0 ... cpu"
+        (Janus-Pro-7B native under zero3 on a 16 GB card, 2026-09-27).
+
+        Called once at the first pre_op_cb tick when the compiled
+        sequence is guaranteed to be built and device-annotated.
+        """
+        seq, is_triton = self._seq_handle(executor)
+        import os as _os_d
+        _z3d = _os_d.environ.get("NBX_ZERO3_DIAG") == "1"
+        if seq is None:
+            if _z3d:
+                logger.debug(f"[Z3DIAG] build_state({component_name}): NO SEQ")
+            return None
+        try:
+            blocks = seq.get_op_blocks()
+        except Exception as e:
+            logger.warning(
+                f"[Zero3] {component_name}: get_op_blocks failed ({e}); "
+                f"falling back to unpipelined slow path"
+            )
+            return self._prime_only_state(component_name, seq, is_triton, executor)
+        # Filter out block -1 (embeddings / final norm / lm_head) — those
+        # weights are small and stay resident across the whole pass.
+        real_blocks = {bidx: entry for bidx, entry in blocks.items() if bidx >= 0}
+        if not real_blocks:
+            # No transformer blocks — nothing to pipeline, everything to prime.
+            if _z3d:
+                logger.debug(f"[Z3DIAG] build_state({component_name}): NO REAL "
+                             f"BLOCKS ({len(blocks)} raw) — prime only")
+            return self._prime_only_state(component_name, seq, is_triton, executor)
+
+        op_to_block = self._build_op_to_block(real_blocks)
+        cpu_originals = self._snapshot_cpu_originals(executor, real_blocks)
+        # If no block weight is CPU, there's nothing to promote — e.g.
+        # Prism chose single_gpu but zero3 is still selected as strategy
+        # for some reason. Skip pipelining; fall back to priming only.
+        has_cpu_block_weights = any(
+            hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu'
+            for t in cpu_originals.values()
+        )
+        if not has_cpu_block_weights:
+            if _z3d:
+                logger.debug(f"[Z3DIAG] build_state({component_name}): NO CPU "
+                             f"BLOCK WEIGHTS ({len(cpu_originals)} originals) — prime only")
+            return self._prime_only_state(component_name, seq, is_triton, executor)
+
+        # Stream setup. Transfer stream carries the async H2D; the
+        # compute stream is the runtime default (stream=0).
+        dev_idx = self._exec_dev_idx()
+        transfer_stream = 0
+        transfer_stream_torch = None                 # the PyTorch engine's stream: none on this branch
+        _triton_only(is_triton, "ratchet state")
+        try:
+            from nbxtensor.memory.block_upload import open_copy_stream
+            transfer_stream = open_copy_stream(dev_idx)
+        except Exception as e:
+            logger.warning(
+                f"[Zero3] {component_name}: transfer_stream create "
+                f"failed ({e}); falling back to synchronous prefetch"
+            )
+            transfer_stream = 0
+
+        # `expert_store` (Prism, `_zero3_resident_budgets`): the dense part resident, the routed
+        # experts served from an expert cache on the card (triton/strategies/expert_store.py).
+        alloc = self.context.allocations.get(component_name)
+        if isinstance(alloc, dict) and alloc.get('strategy') == "expert_store":
+            from .expert_store import build_expert_store_state
+            return build_expert_store_state(self, component_name, executor, seq, is_triton, blocks,
+                                            dev_idx, transfer_stream, transfer_stream_torch)
+
+        nonblock = blocks.get(-1)
+        if nonblock is not None and nonblock.get('weight_tensor_ids'):
+            cpu_originals.update(self._snapshot_cpu_originals(executor, {-1: nonblock}))
+        budget = int(self._resident_budget_mb(component_name) * 1024 * 1024)
+        resident, resident_bytes = self._resident_blocks(nonblock, real_blocks, cpu_originals, budget)
+        state_blocks = {**real_blocks, **({-1: nonblock} if -1 in resident else {})}
+
+        state: Dict[str, Any] = {
+            'seq': seq,
+            'is_triton': is_triton,
+            'exec_dev_idx': dev_idx,
+            'blocks': state_blocks,
+            'op_to_block': op_to_block,
+            'cpu_originals': cpu_originals,
+            'gpu_cache': {},
+            'block_events': {},
+            'current_block': -1,
+            'transfer_stream': transfer_stream,
+            'transfer_stream_torch': transfer_stream_torch,
+            'primed': False,
+            'executor': executor,
+            'resident': resident,
+            'streamed': [b for b in sorted(real_blocks) if b not in resident],
+            'fresh_pass': False,
+        }
+        self._ratchet[component_name] = state
+        if -1 in resident:
+            # Bound before the priming sweep, so the ops reading them are not flipped to the
+            # per-op host transfer that sweep gives a weight left on the host.
+            self._prefetch_block(state, -1, is_triton)
+            self._wait_for_block(state, -1, is_triton)
+            self._install_block_on_arena(state, -1)
+        n_res = len([b for b in resident if b >= 0])
+        logger.debug(f"[Zero3] {component_name}: ratchet built — {len(real_blocks)} blocks, "
+            f"{n_res} resident + {'non-block weights + ' if -1 in resident else ''}"
+            f"{resident_bytes / 2**20:.0f} MB kept on the card (plan: "
+            f"{self._resident_budget_mb(component_name):.0f} MB), "
+            f"{len(state['streamed'])} streamed per pass through a 2-block window, "
+            f"path=triton, stream={'async' if transfer_stream else 'sync'}")
+        return state
+
+    def _resident_budget_mb(self, component_name: str) -> float:
+        """The MB of `component_name`'s weights the plan keeps resident on the card across
+        passes (`ComponentAllocation.resident_weight_mb`, passed through the allocations)."""
+        alloc = self.context.allocations.get(component_name)
+        if isinstance(alloc, dict):
+            return float(alloc.get('resident_weight_mb', 0.0))
+        return 0.0
+
+    @classmethod
+    def _resident_blocks(cls, nonblock: Optional[Dict[str, Any]], real_blocks: Dict[int, Dict[str, Any]],
+                         cpu_originals: Dict[str, Any], budget: int) -> Tuple[Set[int], int]:
+        """The blocks the plan keeps RESIDENT across passes (`resident_weight_mb`, the room its plan leaves on
+        the card beside everything it holds with this component), and the bytes they spend: the non-block
+        weights first — every pass reads them, op by op — then the blocks in execution order, each whole,
+        while its bytes fit. Only the rest streams through the window.
+
+        Non-block weights the loader already placed on the card (the Triton loader keeps them there,
+        `triton/weight_loader.py`) spend the grant all the same: the plan priced every weight of the
+        component against it. Before, the grant went to blocks alone and the non-block weights sat beside
+        it unpriced — Qwen2.5-Coder-14B --triton on one V100-16GB: 9 blocks resident on top of them, out of
+        memory at the second pass, short by 38 MB (2026-11-12 23:08)."""
+        spent = cls._host_bytes(nonblock, cpu_originals, on_card=True) if nonblock is not None else 0
+        resident: Set[int] = set()
+        for bidx in ([-1] if nonblock is not None else []) + sorted(real_blocks):
+            nbytes = cls._host_bytes(nonblock if bidx == -1 else real_blocks[bidx], cpu_originals)
+            if nbytes and spent + nbytes <= budget:
+                resident.add(bidx)
+                spent += nbytes
+            elif bidx != -1:
+                break
+        return resident, spent
+
+    @staticmethod
+    def _host_bytes(entry: Dict[str, Any], cpu_originals: Dict[str, Any], on_card: bool = False) -> int:
+        """The bytes a block's host weights occupy once on the card (each tensor once); with `on_card`, the
+        bytes of its weights already on a card instead."""
+        total = 0
+        for t in (cpu_originals.get(tid) for tid in dict.fromkeys(entry.get('weight_tensor_ids', []))):
+            if t is not None and (getattr(t, '_device', None) == 'cpu') != on_card:
+                total += int(t._nbytes)
+        return total
+
+    def _prime_only_state(
+        self, component_name: str, seq: Any, is_triton: bool, executor: Any
+    ) -> Dict[str, Any]:
+        """A ratchet with no blocks: the priming sweep runs once, the
+        per-op step finds no block to move, the pass-end reset has nothing
+        to evict."""
+        state: Dict[str, Any] = {
+            'seq': seq,
+            'is_triton': is_triton,
+            'exec_dev_idx': self._exec_dev_idx(),
+            'blocks': {},
+            'op_to_block': {},
+            'cpu_originals': {},
+            'gpu_cache': {},
+            'block_events': {},
+            'current_block': -1,
+            'transfer_stream': 0,
+            'transfer_stream_torch': None,
+            'primed': False,
+            'executor': executor,
+            'resident': set(),
+            'streamed': [],
+            'fresh_pass': False,
+        }
+        self._ratchet[component_name] = state
+        return state
+
+    def _ratchet_prime(self, state: Dict[str, Any], component_name: str) -> None:
+        """One-shot priming sweep over the compiled op list.
+
+        Flips CPU-weighted ops to slow-path transfer (for weights that
+        NEVER get pipelined — block -1 weights) and forces weightless
+        op devices to the exec GPU so creation ops allocate on the
+        right device.
+        """
+        if state['primed']:
+            return
+        seq = state['seq']
+        _triton_only(state['is_triton'], "prime")
+        dev = state['exec_dev_idx']
+        n_flipped = seq.mark_cpu_weighted_ops_for_transfer(dev)
+        seq.override_weightless_op_devices(dev)
+        path_label = f"triton/cuda:{dev}"
+        logger.debug(
+            f"[Zero3] {component_name}: primed {n_flipped} "
+            f"non-pipelined CPU-weighted ops on {path_label}"
+        )
+        import os as _os_d
+        if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
+            logger.debug(f"[Z3DIAG] primed({component_name}): flipped="
+                         f"{n_flipped} path={path_label}")
+        state['primed'] = True
+
+    def _ratchet_on_op(
+        self, state: Dict[str, Any], op_idx: int
+    ) -> None:
+        """Per-op ratchet step. Fast-path: same block as previous op,
+        nothing to do. Slow path: transition into a new block,
+        prefetch/evict/rebind as needed.
+        """
+        if state['fresh_pass']:
+            # Both engines re-bind every weight slot from the executor's
+            # host weights at the start of a run (`bind_weights`), so the
+            # resident non-block weights are bound again here, before the
+            # pass's first op reads them. The blocks are re-bound at their
+            # transitions below, resident or streamed.
+            state['fresh_pass'] = False
+            if -1 in state['resident']:
+                self._install_block_on_arena(state, -1)
+        bidx = state['op_to_block'].get(op_idx)
+        if bidx is None:
+            # Op belongs to a non-block weight group (embed, head, norm).
+            # Those weights are handled by the priming sweep — no action.
+            return
+        if bidx == state['current_block']:
+            return
+
+        # Transition into block `bidx`.
+        is_triton = state['is_triton']
+
+        # Step 1: make sure this block is prefetched. If we reached it
+        # before the H2D fired (cold start, first block of a pass, or
+        # a non-sequential op order), kick off a synchronous fetch.
+        if bidx not in state['gpu_cache']:
+            self._prefetch_block(state, bidx, is_triton)
+        # Drain the readiness event (no-op for synchronous prefetch).
+        self._wait_for_block(state, bidx, is_triton)
+        # Bind arena to this block's GPU copy.
+        self._install_block_on_arena(state, bidx)
+
+        # Step 2: evict the block we just left (current_block), if any — never a resident one.
+        prev = state['current_block']
+        resident = state['resident']
+        if (prev >= 0 and prev != bidx and prev in state['gpu_cache']
+                and prev not in resident):
+            self._evict_block(state, prev, is_triton)
+
+        # Step 3: kick off the prefetch of the next STREAMED block for overlap (a resident
+        # block is already on the card).
+        next_bidx = next((b for b in state['streamed'] if b > bidx), None)
+        if next_bidx is not None and next_bidx not in state['gpu_cache']:
+            self._prefetch_block(state, next_bidx, is_triton)
+
+        state['current_block'] = bidx
+
+    def _install(self, component_name: str, executor: Any) -> None:
+        """Attach ratchet + priming callbacks to the executor."""
+        strategy = self
+        # Diag gate captured ONCE at install — the callback is the
+        # per-op hot loop (house 5.8 rule: hoisted gates, zero cost
+        # off; gardien 2026-08-18).
+        import os as _os_i
+        _z3d_cb = _os_i.environ.get("NBX_ZERO3_DIAG") == "1"
+
+        def pre_op_cb(op_idx: int, op: Any) -> None:
+            if _z3d_cb and op_idx == 0:
+                logger.debug(f"[Z3DIAG] pre_op_cb({component_name}) op0 "
+                             f"ratchet_present="
+                             f"{strategy._ratchet.get(component_name) is not None}")
+            state = strategy._ratchet.get(component_name)
+            if state is None:
+                state = strategy._build_ratchet_state(component_name, executor)
+                if state is None:
+                    # Executor not ready or no block structure — nothing
+                    # to pipeline. Return and try again next op.
+                    return
+            if not state['primed']:
+                strategy._ratchet_prime(state, component_name)
+            strategy._ratchet_on_op(state, op_idx)
+
+        def post_run_hook() -> None:
+            strategy._reset_ratchet(component_name)
+
+        executor._persistent_pre_op_callback = pre_op_cb
+        executor._post_run_hook = post_run_hook
+        self._installed[component_name] = executor
+
+    def uninstall_for_executor(self, component_name: str,
+                               executor: Any = None) -> None:
+        """Public uninstall chokepoint — the lifecycle mirror of
+        install_for_executor. RuntimeExecutor._unload_component_weights
+        calls this BEFORE executor.unload_weights(): the ratchet/pin
+        state tracks the exact tensors being dropped, and a stale
+        `_installed` entry makes the NEXT load skip re-install and run
+        the hot loop against replaced (CPU, unpinned) weights — the
+        warm-daemon request-2 device-mismatch class
+        (custom.rms_norm::0 "cuda:0 and cpu", pinned qwen3vl row,
+        2026-08-08/17). Idempotent; no-op for never-installed
+        components."""
+        self._uninstall(component_name)
+        self._loaded_components.discard(component_name)
+        self._pinned_components.discard(component_name)
+
+    def _uninstall(self, component_name: str) -> None:
+        """Reverse of _install. Called on unload_weights / cleanup."""
+        executor = self._installed.pop(component_name, None)
+        if executor is not None:
+            executor._persistent_pre_op_callback = None
+            executor._post_run_hook = None
+        state = self._ratchet.pop(component_name, None)
+        if state is not None:
+            # Evict anything still resident, then tear down the stream.
+            is_triton = state['is_triton']
+            for bidx in list(state['gpu_cache'].keys()):
+                self._evict_block(state, bidx, is_triton)
+            if state.get('expert_store') is not None:
+                from .expert_store import release_expert_store
+                release_expert_store(state)
+            from nbxtensor.memory.block_upload import close_copy_stream
+            close_copy_stream(state.get('transfer_stream') or 0, state['block_events'].values())
+
+    # ------------------------------------------------------------------
+    # Strategy entry points
+    # ------------------------------------------------------------------
+
+    def execute_component(
+        self,
+        component_name: str,
+        phase: str = "loop",
+        inputs: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Run a component under zero3 with ratchet pipelining."""
+        executor = self.context.component_executors.get(component_name)
+        if executor is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: No executor for component '{component_name}'"
+            )
+
+        if component_name not in self._loaded_components:
+            self.load_weights(component_name)
+            self._loaded_components.add(component_name)
+        if component_name not in self._installed:
+            self.install_for_executor(component_name, executor)
+
+        prepared = self.prepare_inputs(component_name, inputs or {})
+        return executor.run(prepared)
+
+    def load_weights(self, component_name: str) -> None:
+        """Load weights then install hooks immediately.
+
+        Overrides base so the post-load install fires regardless of
+        whether the flow reaches execute_component (diffusion) or
+        bypasses it (autoregressive LLM prefill). Idempotent.
+        """
+        super().load_weights(component_name)
+        executor = self.context.component_executors.get(component_name)
+        if executor is not None:
+            self.install_for_executor(component_name, executor)
+
+    # ------------------------------------------------------------------
+    # Inputs / outputs / cleanup
+    # ------------------------------------------------------------------
+
+    def prepare_inputs(
+        self,
+        component_name: str,
+        inputs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Move model inputs to the GPU execution device."""
+        return self.transfer_dict(inputs, self.exec_device)
+
+
+    def unload_weights(self, component_name: str) -> None:
+        """Uninstall hooks, then fall through to the base implementation."""
+        self._uninstall(component_name)
+        super().unload_weights(component_name)
+        self._loaded_components.discard(component_name)
+        self._pinned_components.discard(component_name)
+        device_empty_cache(self.exec_device)
+
+    def cleanup(self) -> None:
+        """Release all zero3 resources — called when the strategy exits."""
+        for name in list(self._installed.keys()):
+            self._uninstall(name)
+        self._loaded_components.clear()
+        self._pinned_components.clear()
+        self._ratchet.clear()
+        device_empty_cache(self.exec_device)

@@ -1,0 +1,238 @@
+"""The `expert_store` component strategy: zero3's ratchet with the dense part resident and the routed
+experts served from an expert cache on the card.
+
+Prism selects it (`_zero3_resident_budgets`) for a routed component when its dense part plus one
+layer's full expert set fit the room zero3 would have streamed through, but not every weight. The
+plan carries two figures: `resident_weight_mb` (the dense part) and `expert_cache_mb` (the cache).
+
+The runtime half is a different ratchet STATE, not a different class. `Zero3Strategy` builds it
+when the component's allocation names `expert_store`, so every path that reaches zero3 reaches
+it: plan-level zero3, and the lazy_sequential brick in both engines. The state holds:
+* one resident pseudo-block -1 with every weight the ratchet would have streamed that is not a
+  routed expert. It is bound before the priming sweep and re-bound at each pass's first op, like
+  zero3's non-block weights, and no block streams;
+* the expert weights, which stay on pinned host memory, their arena slots bound to the host tensors;
+* the Triton engine's expert store (`triton/expert_store.py`, NBXTensor) sized `expert_cache_mb // one expert's bytes` slots. It is published
+  as `_expert_store` on the sequence (the triton MoE closures) and on the executor
+  (triton-sequential dispatch), which call it with the experts each fused op routes to.
+
+On a unified device the plan marks the store `expert_files` (Prism Strategy 2.5): the dense part is
+loaded to the device and the expert weights are views of the container's shards
+(`core/runtime/expert_files.py`), never pinned — on Metal pinned host memory counts against the same
+working set.
+
+The Triton branch's twin of `pytorch/strategies/expert_store.py`, Torch-free (RED_LINES.md lines 16-19): the store
+and the held experts are the library's and the Triton engine's; a caller that says it is not the Triton engine
+(`is_triton` False) is refused by name.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, Set
+
+from neurobrix.core.runtime.expert_residency import FUSED_OP, ExpertResidency, routed_layers
+import logging
+_log = logging.getLogger(__name__)
+
+#: The component strategy name, as Prism writes it into the plan.
+EXPERT_STORE = "expert_store"
+
+_MIB = 1024 * 1024
+
+
+def expert_cache_mb(allocations: Dict[str, Any], component_name: str) -> float:
+    alloc = allocations.get(component_name)
+    return float(alloc.get('expert_cache_mb', 0.0)) if isinstance(alloc, dict) else 0.0
+
+
+def holds_expert_files(allocations: Dict[str, Any], component_name: str) -> bool:
+    """True when the plan holds `component_name` as a unified expert store whose experts are views of
+    the container's files: nothing of it is pinned."""
+    alloc = allocations.get(component_name)
+    return (isinstance(alloc, dict) and alloc.get('strategy') == EXPERT_STORE
+            and bool(alloc.get('expert_files')))
+
+
+def card_residency_applies(is_triton: bool, store: Any, like) -> bool:
+    """Whether a decode token's residency is kept ON THE CARD (`NBXExpertStore.enable_device_decode`): the Triton
+    engine, half-precision experts COPIED into slots (not bound in place), the routing's reuse curve already recorded
+    (the trace reads the routing back) — and a backend whose kernels read a tensor's `data_ptr()` as their address,
+    which the residency's launches stand on (`nbxtensor.backend.capabilities.backend_kernels_read_data_ptr`; armed
+    on "Triton, not in place" alone until 2026-11-11, whatever the backend). It decides; it builds nothing."""
+    from nbxtensor.backend.capabilities import backend_kernels_read_data_ptr
+    from nbxtensor.dtype.nbx_dtype import NBXDtype as _D
+    return bool(is_triton and not store.in_place and store.trace is None
+                and getattr(like[0], "_dtype", None) in (_D.float16, _D.bfloat16)
+                and backend_kernels_read_data_ptr())
+
+
+def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: Any, is_triton: bool,
+                             blocks: Dict[int, Dict[str, Any]], dev_idx: int, transfer_stream: int,
+                             transfer_stream_torch: Any) -> Dict[str, Any]:
+    """The ratchet state of an `expert_store` component (see the module docstring). `z3` is the
+    Zero3Strategy whose helpers (snapshot, byte count, prefetch, install) the state reuses."""
+    layers = routed_layers(getattr(executor, '_dag', None) or {})
+    if not layers:
+        raise RuntimeError(
+            f"ZERO FALLBACK: {component_name} is planned `expert_store` but its executed graph holds "
+            f"no fused routed layer (custom::moe_fused) — the plan and the graph disagree")
+    expert_tids: Set[str] = {t for ids in layers.values() for x in ids for t in x}
+    dense = [t for t in dict.fromkeys(t for e in blocks.values() for t in e.get('weight_tensor_ids', []))
+             if t not in expert_tids]
+    dense_entry = {'first_op': 0, 'last_op': -1, 'weight_tensor_ids': dense}
+    cpu_originals = z3._snapshot_cpu_originals(executor, {-1: dense_entry})
+    dense_bytes = z3._host_bytes(dense_entry, cpu_originals)
+    resident_mb = z3._resident_budget_mb(component_name)
+    if dense_bytes > resident_mb * _MIB:
+        raise RuntimeError(
+            f"ZERO FALLBACK: {component_name}'s dense part is {dense_bytes / _MIB:.1f} MB on the host and "
+            f"the plan keeps {resident_mb:.0f} MB resident — Prism priced a different dense part")
+
+    # One expert's (gate, up, down) host triple sets the slot geometry; every layer must share it.
+    layer0 = next(iter(layers))
+    geometry = None
+    like = None
+    for key, (g, u, d) in layers.items():
+        for e in range(len(g)):
+            trip = z3._snapshot_cpu_originals(executor, {0: {'weight_tensor_ids': [g[e], u[e], d[e]]}})
+            if len(trip) != 3:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: expert {e} of {key!r} has {len(trip)} of its 3 weights in the "
+                    f"executor's weights — the store copies host experts")
+            t3 = (trip[g[e]], trip[u[e]], trip[d[e]])
+            geo = tuple((tuple(t.shape), str(getattr(t, 'dtype', None) if not hasattr(t, '_dtype')
+                                             else t._dtype)) for t in t3)
+            if geometry is None:
+                geometry, like = geo, t3
+            elif geo != geometry:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: expert {e} of {key!r} is {geo}, expert 0 of {layer0!r} is {geometry} "
+                    f"— the store's slots hold one expert geometry per component")
+    slot_bytes = sum(z3._host_bytes({'weight_tensor_ids': ['x']}, {'x': t}) for t in like)
+    cache_mb = expert_cache_mb(z3.context.allocations, component_name)
+    n_slots = int(cache_mb * _MIB // slot_bytes) if slot_bytes else 0
+    widest = max(len(ids[0]) for ids in layers.values())
+    ops = (getattr(executor, '_dag', None) or {}).get('ops') or {}
+    top_k = max(int((op.get('attributes') or {}).get('top_k', 0)) for op in ops.values()
+                if op.get('op_type') == FUSED_OP)
+    if n_slots < top_k:
+        raise RuntimeError(
+            f"ZERO FALLBACK: {component_name}'s expert cache is {cache_mb:.0f} MB = {n_slots} slots of "
+            f"{slot_bytes / _MIB:.2f} MB, below the top_k={top_k} experts one token reads — Prism "
+            f"selects expert_store only when the routed working set fits")
+
+    residency = ExpertResidency(n_slots)
+    if not is_triton:
+        raise RuntimeError(f"ZERO FALLBACK: {component_name}: the Triton expert store is built for the Triton engine "
+                           f"only (the PyTorch engine's is pytorch/strategies/expert_store.py)")
+    from neurobrix.triton.expert_store import NBXExpertStore
+    store = NBXExpertStore(residency, dev_idx, like,
+                           in_place=holds_expert_files(z3.context.allocations, component_name))
+    seq._expert_store = store
+    executor._expert_store = store
+    # the decode's routing, recorded once per model as its reuse curve (core/runtime/routing_reuse.py), read by Prism
+    from neurobrix.core.runtime import routing_reuse as _rr
+    _model = executor._registry_model_name() if hasattr(executor, "_registry_model_name") else None
+    if _model and _rr.load(_model, component_name) is None:
+        _n_exp = max(len(ids[0]) for ids in layers.values())
+        store.trace = _rr.ExpertTrace(_model, component_name, top_k, _n_exp)
+    holders = _hold_experts_on_cards(z3, component_name, executor, seq, is_triton, layers)
+    # A decode token's residency on the card (`NBXExpertStore.enable_device_decode`): half-precision experts copied
+    # into slots (not bound in place), once the routing's reuse curve is recorded (the trace reads the routing back).
+    if card_residency_applies(is_triton, store, like):
+        store.enable_device_decode({k: i for i, k in enumerate(layers)}, widest)
+
+    state: Dict[str, Any] = {
+        'seq': seq,
+        'is_triton': is_triton,
+        'exec_dev_idx': dev_idx,
+        'blocks': {-1: dense_entry},
+        'op_to_block': {},
+        'cpu_originals': cpu_originals,
+        'gpu_cache': {},
+        'block_events': {},
+        'current_block': -1,
+        'transfer_stream': transfer_stream,
+        'transfer_stream_torch': transfer_stream_torch,
+        'primed': False,
+        'executor': executor,
+        'resident': {-1},
+        'streamed': [],
+        'fresh_pass': False,
+        'expert_store': store,
+        'held_experts': holders,
+    }
+    z3._ratchet[component_name] = state
+    z3._prefetch_block(state, -1, is_triton)
+    z3._wait_for_block(state, -1, is_triton)
+    z3._install_block_on_arena(state, -1)
+    _log.debug(f"[ExpertStore] {component_name}: dense {dense_bytes / _MIB:.0f} MB resident (plan "
+        f"{resident_mb:.0f} MB), {len(layers)} routed layers x {widest} experts on the host, cache "
+        f"{n_slots} slots x {slot_bytes / _MIB:.2f} MB = {n_slots * slot_bytes / _MIB:.0f} MB (plan "
+        f"{cache_mb:.0f} MB), path=triton")
+    return state
+
+
+def _hold_experts_on_cards(z3: Any, component_name: str, executor: Any, seq: Any, is_triton: bool,
+                           layers: Dict[str, Any]) -> list:
+    """The routed experts of the blocks Prism holds WHOLE on other cards (`ComponentAllocation.expert_cards`, S3),
+    copied once onto those cards and published as `_expert_cards` {layer key: (card, (gate, up, down))} on the
+    sequence and the executor: their fused op runs on that card (`moe_fused_dispatch`, triton-sequential). Each layer's block is read as Prism reads it (`expert_topology._block_of`, the first gate
+    weight); a block Prism holds on a card with no routed layer of this graph is refused by name. Returns the holders."""
+    cards = (z3.context.allocations.get(component_name) or {}).get('expert_cards') or {}
+    seq._expert_cards = executor._expert_cards = None
+    if not cards:
+        return []
+    from neurobrix.triton.prism.expert_topology import _block_of
+    from neurobrix.core.device_utils import _parse_device
+    tensors = (getattr(executor, '_dag', None) or {}).get('tensors') or {}
+    owner: Dict[int, str] = {}
+    for card, spec in cards.items():
+        first, last = (int(b) for b in spec['blocks'])
+        for b in range(first, last + 1):
+            owner[b] = card
+    per_card: Dict[str, Dict[str, list]] = {}
+    covered = set()
+    for key, (g, u, d) in layers.items():
+        b = _block_of(key, tensors)
+        card = owner.get(b)
+        if card is None:
+            continue
+        covered.add(b)
+        trips = []
+        for e in range(len(g)):
+            t = z3._snapshot_cpu_originals(executor, {0: {'weight_tensor_ids': [g[e], u[e], d[e]]}})
+            trips.append((t[g[e]], t[u[e]], t[d[e]]))
+        per_card.setdefault(card, {})[key] = trips
+    missing = sorted(set(owner) - covered)
+    if missing:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the plan holds blocks {missing} of {component_name} on "
+            f"{sorted({owner[b] for b in missing})} and its executed graph routes no layer of them — the plan and "
+            f"the graph disagree")
+    held: Dict[str, Any] = {}
+    holders = []
+    for card, lay in sorted(per_card.items()):
+        from nbxtensor.memory.expert_slots import HeldExperts
+        holder = HeldExperts(_parse_device(card)[1], lay)
+        holders.append(holder)
+        for key in lay:
+            held[key] = (card, holder.layers[key])
+        _log.debug(f"[ExpertStore] {component_name}: blocks {cards[card]['blocks']} — {len(lay)} routed layers, every "
+                   f"expert — held on {card}: {holder.bytes / _MIB:.0f} MB (plan {cards[card]['cache_mb']:.0f} MB)")
+    seq._expert_cards = executor._expert_cards = held
+    return holders
+
+
+def release_expert_store(state: Dict[str, Any]) -> None:
+    for holder in state.get('held_experts') or ():
+        holder.release()
+    for holder in (state.get('seq'), state.get('executor')):
+        if holder is not None and getattr(holder, '_expert_cards', None):
+            holder._expert_cards = None
+    store = state.get('expert_store')
+    if store is None:
+        return
+    store.release()
+    for holder in (state.get('seq'), state.get('executor')):
+        if holder is not None and getattr(holder, '_expert_store', None) is store:
+            holder._expert_store = None

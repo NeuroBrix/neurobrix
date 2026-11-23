@@ -9,9 +9,9 @@ runtime surfaces a clear error if GPU-less NBX compute is actually invoked.
 
 from typing import Dict, Any, Optional, Set
 
-from neurobrix.pytorch.strategies.base import StrategyContext
+from .base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.pytorch.strategies.shared_steps import CPUExecutionSteps   # the steps both branches share
+from .shared_steps import CPUExecutionSteps   # the Triton twin of the PyTorch steps
 
 
 class CPUExecutionStrategy(CPUExecutionSteps, TritonStrategy):

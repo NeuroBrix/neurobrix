@@ -9,10 +9,10 @@ detection uses NBXTensor `_device_idx` (no torch `.device`).
 
 from typing import Dict, Any, Optional, List, Set
 
-from neurobrix.pytorch.strategies.base import StrategyContext
+from .base import StrategyContext
 from .base import TritonStrategy
 from .block_scatter import _nbx_device_str
-from neurobrix.pytorch.strategies.shared_steps import PipelineParallelSteps   # the steps both branches share
+from .shared_steps import PipelineParallelSteps   # the Triton twin of the PyTorch steps
 
 
 class PipelineParallelStrategy(PipelineParallelSteps, TritonStrategy):

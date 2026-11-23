@@ -19,7 +19,6 @@ if TYPE_CHECKING:
     from neurobrix.core.runtime.loader import RuntimePackage
     from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    from neurobrix.pytorch.strategies import ExecutionStrategy
 
 
 @dataclass
@@ -45,8 +44,8 @@ class FlowContext:
     # Loaded modules (scheduler, tokenizer, etc.)
     modules: Dict[str, Any]
 
-    # Execution strategy from Prism
-    strategy: 'ExecutionStrategy'
+    # Execution strategy from Prism: the branch's ExecutionStrategy (`neurobrix.<side>.strategies`, the branch door's)
+    strategy: Any
 
     # Pre-indexed connections: {comp_name: {input_name: [sources]}}
     connections_index: Dict[str, Dict[str, List[str]]]

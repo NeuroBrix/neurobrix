@@ -55,9 +55,10 @@ LAYERS: dict[str, dict[str, str]] = {
 }
 
 ROOT = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "core"
-#: the vendorless layer: core/, and Prism, which left core/ on 23/11/2026 for its two branches (pytorch/prism and its
-#: Torch-free twin triton/prism) and stays vendorless on both
-ROOTS = (ROOT, ROOT.parent / "pytorch" / "prism", ROOT.parent / "triton" / "prism")
+#: the vendorless layer: core/, and Prism and its strategies, which left core/ on 23/11/2026 for their two branches
+#: (pytorch/prism, pytorch/strategies and their Torch-free twins triton/prism, triton/strategies) and stay vendorless on both
+ROOTS = (ROOT, ROOT.parent / "pytorch" / "prism", ROOT.parent / "triton" / "prism",
+         ROOT.parent / "pytorch" / "strategies", ROOT.parent / "triton" / "strategies")
 
 
 def _as_original(key: str) -> str:

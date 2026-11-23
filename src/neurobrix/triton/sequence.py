@@ -321,7 +321,7 @@ class TritonSequence(SequenceSteps):
     """
 
     #: The component's expert store when its plan names `expert_store` (set and cleared by the
-    #: zero3 ratchet, `pytorch/strategies/expert_store.py`); the MoE closures read it per call.
+    #: zero3 ratchet, `triton/strategies/expert_store.py`); the MoE closures read it per call.
     _expert_store = None
     _expert_cards = None      # {layer key: (card, (gate, up, down))} held whole on other cards (S3)
     _replay_segment = None    # the segment of a decode step replayed in segments (`_expert_segments`), in its signature

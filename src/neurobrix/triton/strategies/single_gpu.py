@@ -8,9 +8,9 @@ plan); only the transfer base differs (two-modes doctrine).
 
 from typing import Dict, Any, Optional, Set
 
-from neurobrix.pytorch.strategies.base import StrategyContext
+from .base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.pytorch.strategies.shared_steps import SingleGPUSteps, execute_whole_component   # the steps both branches share
+from .shared_steps import SingleGPUSteps, execute_whole_component   # the Triton twin of the PyTorch steps
 
 
 class SingleGPUStrategy(SingleGPUSteps, TritonStrategy):

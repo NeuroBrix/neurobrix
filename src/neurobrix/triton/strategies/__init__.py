@@ -1,48 +1,227 @@
-"""Triton execution strategies — NBXTensor-native (zero torch).
+"""
+NeuroBrix Execution Strategies — the Triton branch (NBXTensor-native, zero torch)
 
-Full mirror of the PyTorch strategy registry for the triton execution path.
-`get_strategy()` (parent package) routes here when `context.mode` is
-"triton" / "triton_sequential". Every Prism strategy name has a triton-native
-entry so any model that goes through the triton branch gets a zero-torch
-placement strategy. (tp_sharding is NOT a strategy — it is the shard-creation
+The Triton branch's twin of `pytorch/strategies/__init__.py` (RED_LINES.md lines 16-19): the same public names
+(`STRATEGY_REGISTRY`, `get_strategy`, `StrategyContext`, `ExecutionStrategy`, `strategy_manages_weight_residency`,
+the strategy classes), each answering for the Triton side only, plus `TritonStrategy` (the base of every Triton
+strategy) and `TRITON_REGISTRY` (the same registry under its former name). Every Prism strategy name has a
+Triton entry; no name is sent to the PyTorch branch. (tp_sharding is NOT a strategy — it is the shard-creation
 utility used by weight_sharding's "tp:" prefix.)
 
-Two-modes doctrine: these are deliberate duplicates of pytorch/strategies/*.py,
-sharing only the StrategyContext contract — never compute code. The heavy
-zero3 ratchet is reused via mixin (it is already NBXTensor-capable) rather
-than duplicated.
+Strategy classes that handle component execution based on Prism allocation decisions.
+The executor delegates to these classes — NO placement decisions in executor.
+
+Strategy Hierarchy (granularity):
+  Single GPU → Component Placement → Pipeline Parallel (layer) → Block Scatter → Weight Sharding
+
+Every strategy listed here is a first-class citizen — NeuroBrix is universal
+and must handle any hardware combination. Prism scores ALL strategies and
+selects the best viable one for the given hardware profile.
+
+Strategies:
+- SingleGPUStrategy: All components on one GPU
+- ComponentPlacementStrategy: Whole components distributed across GPUs
+- ComponentPlacementLazyStrategy: Component placement with lazy weight swap
+- PipelineParallelStrategy: Per-layer sequential fill across GPUs (like Accelerate)
+- BlockScatterStrategy: Block-level best-fit distribution across GPUs
+- WeightShardingStrategy: Weight-file-level round-robin across GPUs
+- LazySequentialStrategy: One component at a time on largest GPU
+- Zero3Strategy: CPU offload with GPU compute streaming
 """
 
-from .base import TritonStrategy
-from .single_gpu import SingleGPUStrategy
-from .component_placement import (
-    ComponentPlacementStrategy,
-    ComponentPlacementLazyStrategy,
-)
-from .pipeline_parallel import PipelineParallelStrategy
-from .block_scatter import BlockScatterStrategy
-from .weight_sharding import WeightShardingStrategy
-from .lazy_sequential import LazySequentialStrategy
-from .cpu_execution import CPUExecutionStrategy
-from .zero3 import Zero3Strategy
+import importlib
 
-# Triton-native strategies, keyed by the same Prism strategy names as the
-# PyTorch registry. Complete: every registry name has a zero-torch entry.
-TRITON_REGISTRY = {
-    "single_gpu": SingleGPUStrategy,
-    "single_gpu_lifecycle": SingleGPUStrategy,
-    "component_placement": ComponentPlacementStrategy,
-    "component_placement_lazy": ComponentPlacementLazyStrategy,
-    "pipeline_parallel": PipelineParallelStrategy,
-    "block_scatter": BlockScatterStrategy,
-    "weight_sharding": WeightShardingStrategy,
-    "lazy_sequential": LazySequentialStrategy,
-    "zero3": Zero3Strategy,
-    "cpu_execution": CPUExecutionStrategy,
+from .base import ExecutionStrategy, StrategyContext, TritonStrategy
+
+# The strategy classes are imported when a name is resolved, never at package
+# import (a strategy module imports the executor stack). The registry keeps the
+# `name -> class` contract (membership, iteration, `registry[name] is Class`)
+# through a lazy mapping.
+_STRATEGY_CLASSES = {
+    "SingleGPUStrategy": ".single_gpu",
+    "ComponentPlacementStrategy": ".component_placement",
+    "ComponentPlacementLazyStrategy": ".component_placement",
+    "PipelineParallelStrategy": ".pipeline_parallel",
+    "BlockScatterStrategy": ".block_scatter",
+    "WeightShardingStrategy": ".weight_sharding",
+    "LazySequentialStrategy": ".lazy_sequential",
+    "LayerStreamingStrategy": ".layer_streaming",
+    "Zero3Strategy": ".zero3",
+    "CPUExecutionStrategy": ".cpu_execution",
 }
+
+
+#: Which strategies decide for themselves where their weights live.
+#:
+#: This is a DECLARATION, read without importing anything (the PyTorch
+#: twin's reason: resolving the class imports its strategy module).
+#:
+#: The classes still declare the attribute, and
+#: `test_the_table_and_the_classes_agree` fails if the two ever drift, so
+#: this table cannot silently fall out of step with the strategies it names.
+_MANAGES_WEIGHT_RESIDENCY = frozenset({
+    "zero3",            # weights on pinned host memory, streamed for compute
+    "expert_store",     # zero3 with the dense part resident and routed experts cached on the card
+    "layer_streaming",  # one segment of one component resident at a time
+})
+
+
+def strategy_manages_weight_residency(strategy_name: str) -> bool:
+    """Does the named strategy decide for itself where its weights live?
+
+    The runtime needs this for a component whose sub-strategy is named in the
+    plan rather than being the plan's own strategy — `lazy_sequential` mapping
+    one component to `zero3`, for instance. The NAME is used as a key into the
+    registry, never as a test: what is read is the class's own declaration.
+
+    Unknown names answer False rather than raising: the runtime asks this of
+    every component, including ones whose allocation carries no sub-strategy
+    at all, and an unknown name there means "nothing special", not an error.
+    """
+    return strategy_name in _MANAGES_WEIGHT_RESIDENCY
+
+
+def _strategy_class(class_name: str):
+    return getattr(importlib.import_module(_STRATEGY_CLASSES[class_name], __name__), class_name)
+
+
+class _LazyRegistry(dict):
+    """name -> strategy class; the class module is imported on first access."""
+
+    def __getitem__(self, name):
+        entry = dict.__getitem__(self, name)
+        if isinstance(entry, str):
+            entry = _strategy_class(entry)
+            dict.__setitem__(self, name, entry)
+        return entry
+
+    def get(self, name, default=None):
+        return self[name] if name in self else default
+
+    def values(self):
+        return [self[k] for k in self]
+
+    def items(self):
+        return [(k, self[k]) for k in self]
+
+
+def __getattr__(name):
+    if name in _STRATEGY_CLASSES:
+        return _strategy_class(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# =============================================================================
+# STRATEGY REGISTRY
+# =============================================================================
+# Every strategy name that Prism can emit MUST have a registry entry.
+# ZERO FALLBACK: get_strategy() crashes on unknown names.
+#
+# Format: "strategy_name" → StrategyClass
+# The solver uses these exact string names in ExecutionPlan.strategy.
+# =============================================================================
+
+STRATEGY_REGISTRY = _LazyRegistry({
+    # === Single Device ===
+    "single_gpu": "SingleGPUStrategy",
+    "single_gpu_lifecycle": "SingleGPUStrategy",
+    # The PLACEMENT of the op-level tiling rung is single-GPU — every component on
+    # the largest card, exactly as `single_gpu` places them. What distinguishes it
+    # is not where the weights go but that the ops which overflow are cut, and that
+    # rides in `plan.runtime_op_tiling`, which the graph executor wires as op_uid
+    # interceptors. So it is the same strategy class under a name that says WHY the
+    # component is on the accelerator, and this entry is what makes that name
+    # buildable rather than a crash at selection time.
+    "op_level_tiling": "SingleGPUStrategy",
+
+    # === Component Placement (whole-component distribution) ===
+    "component_placement": "ComponentPlacementStrategy",
+    "component_placement_lazy": "ComponentPlacementLazyStrategy",
+
+    # === Pipeline Parallel (per-layer sequential fill) ===
+    "pipeline_parallel": "PipelineParallelStrategy",
+
+    # === Block Scatter (block-level best-fit distribution) ===
+    "block_scatter": "BlockScatterStrategy",
+
+    # === Weight Sharding (weight-file round-robin) ===
+    "weight_sharding": "WeightShardingStrategy",
+
+    # === Sequential / Offload ===
+    "lazy_sequential": "LazySequentialStrategy",
+    "zero3": "Zero3Strategy",
+    # `expert_store` is NOT a plan strategy and has no entry here. It is a COMPONENT strategy — the
+    # name Prism writes into one `ComponentAllocation.strategy` of a plan whose own strategy is
+    # `lazy_sequential` or `zero3` (`_place_component` Strategy 2.5, `_zero3_resident_budgets`) —
+    # and `get_strategy` is only ever asked the plan's. Its runtime half is a ratchet STATE of
+    # Zero3Strategy, reached through both rungs (triton/strategies/expert_store.py). The component
+    # namespace is `ExecutorFactory.STRATEGY_MAP`; test_solver_registry_parity.py holds both.
+
+    # === CPU-only (Doctrine R35 last-resort cascade) ===
+    "cpu_execution": "CPUExecutionStrategy",
+    # Same PLACEMENT as cpu_execution — every component on the host — and the
+    # same class, exactly as single_gpu_lifecycle reuses SingleGPUStrategy.
+    # What differs is the PLAN: the solver forces `loading_mode = "lazy"` so
+    # the requirement drops from sum(components) to max(component), which is
+    # the whole reason the rung exists. Two names, one placement, different
+    # plan semantics.
+    #
+    # Added to the solver's cascade on 2026-09-03 and NOT registered here, so
+    # the last rung of the ladder — the one that exists to guarantee a model
+    # always runs — crashed with "Unknown strategy 'cpu_streaming'" the moment
+    # it was selected. Caught by the CPU-only battery cell added in the same
+    # session, on the full-zoo gate.
+    "cpu_streaming": "CPUExecutionStrategy",
+
+    # === Layer streaming (below every rung that keeps a component whole) ===
+    # One segment of ONE component resident at a time. Reached only when
+    # nothing above it is viable — it wins by scoring 50, never by a test on a
+    # vendor, a device count or a memory size.
+    #
+    # It declares `manages_weight_residency`, which is how the runtime now
+    # knows to drive it through `execute_component` and to offer it
+    # `install_for_executor`. That question used to be "is this zero3", a
+    # name, which is why this entry waited.
+    "layer_streaming": "LayerStreamingStrategy",
+})
+
+
+def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrategy:
+    """
+    Get strategy instance based on Prism's decision, for the Triton branch.
+
+    A context whose mode is not a Triton mode ("triton", "triton_sequential")
+    is refused by name: the PyTorch branch's strategies are
+    `pytorch/strategies`, never reached from here.
+
+    ZERO FALLBACK: Crash if the strategy name is unknown.
+    """
+    if strategy_name not in STRATEGY_REGISTRY:
+        raise RuntimeError(
+            f"ZERO FALLBACK: Unknown strategy '{strategy_name}'. "
+            f"Available: {sorted(STRATEGY_REGISTRY.keys())}"
+        )
+
+    mode = getattr(context, "mode", None)
+    if mode not in ("triton", "triton_sequential"):
+        raise RuntimeError(
+            f"ZERO FALLBACK: the Triton strategies run the Triton modes (triton, triton_sequential); "
+            f"mode {mode!r} is the PyTorch branch's (pytorch/strategies)")
+
+    strategy_class = STRATEGY_REGISTRY[strategy_name]
+    return strategy_class(context, strategy_name)
+
+
+#: The registry under the name the Triton package carried before the doubling.
+TRITON_REGISTRY = STRATEGY_REGISTRY
+
 
 __all__ = [
     "TritonStrategy",
+    "TRITON_REGISTRY",
+    "strategy_manages_weight_residency",
+    "ExecutionStrategy",
+    "StrategyContext",
     "SingleGPUStrategy",
     "ComponentPlacementStrategy",
     "ComponentPlacementLazyStrategy",
@@ -50,7 +229,9 @@ __all__ = [
     "BlockScatterStrategy",
     "WeightShardingStrategy",
     "LazySequentialStrategy",
-    "CPUExecutionStrategy",
+    "LayerStreamingStrategy",
     "Zero3Strategy",
-    "TRITON_REGISTRY",
+    "CPUExecutionStrategy",
+    "get_strategy",
+    "STRATEGY_REGISTRY",
 ]

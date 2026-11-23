@@ -9,9 +9,9 @@ contract as the pytorch strategy, NBXTensor compute path.
 
 from typing import Dict, Any, Optional
 
-from neurobrix.pytorch.strategies.base import StrategyContext
+from .base import StrategyContext
 from .base import TritonStrategy
-from neurobrix.pytorch.strategies.shared_steps import ComponentPlacementLazySteps, ComponentPlacementSteps   # the steps both branches share
+from .shared_steps import ComponentPlacementLazySteps, ComponentPlacementSteps   # the Triton twin of the PyTorch steps
 
 
 class ComponentPlacementStrategy(ComponentPlacementSteps, TritonStrategy):
