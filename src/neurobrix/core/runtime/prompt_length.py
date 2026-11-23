@@ -41,6 +41,19 @@ def declared_chat_mode(defaults: Optional[Dict[str, Any]], asked: Any = None) ->
     return bool(defaults["chat_mode"])
 
 
+def decode_bound(rendered: int, reach: int, source: str, asked: Optional[int] = None) -> int:
+    """The tokens a served generation may decode: the bound the request or the container declares (`asked`), else
+    the positions the session still holds after the `rendered` prompt — a container that declares no max_tokens
+    (Devstral, Qwen3.8) is bounded by its own window, neither refused nor given an engine number (orchestrator
+    23/11 09:19). A prompt that leaves no position is refused by name."""
+    if asked is not None:
+        return int(asked)
+    if (left := reach - rendered) < 1:
+        raise ContextLengthExceeded(f"the prompt fills {rendered} of the {reach} positions a session holds "
+                                    f"({source}) and leaves none to generate")
+    return left
+
+
 def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
     """Normalize tokenizer return into a flat List[int]."""
     if hasattr(token_ids, 'input_ids'):

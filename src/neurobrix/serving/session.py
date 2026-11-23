@@ -13,7 +13,7 @@ behind the user's back (the owner's decision, 2026-11-08).
 `play_turn` is the one turn both the daemon (`InferenceEngine.chat`) and `neurobrix run --turns` play.
 """
 
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from nbxtensor.memory.kv_session import KVSession
 
@@ -97,7 +97,7 @@ class ConversationSession:
         return info
 
 
-def play_turn(session: ConversationSession, message: str, max_tokens: int,
+def play_turn(session: ConversationSession, message: str, max_tokens: Optional[int],
               generate: Callable[[List[int], KVSession], Dict[str, Any]]) -> Dict[str, Any]:
     """One chat turn: the user message joins the conversation, the template renders it, the ceiling is checked, and
     `generate(token_ids, kv_session)` runs it on the session's cache (it returns the engine's result with its "text").
@@ -105,6 +105,8 @@ def play_turn(session: ConversationSession, message: str, max_tokens: int,
     session.add_user_message(message)
     try:
         token_ids = session.build_token_ids()
+        from neurobrix.core.runtime.prompt_length import decode_bound      # None: the reach left after the prompt
+        max_tokens = decode_bound(len(token_ids), session.kv.ceiling, session.kv.source, max_tokens)
         session.check_fits(token_ids, max_tokens)
         result = generate(token_ids, session.kv)
     except BaseException:

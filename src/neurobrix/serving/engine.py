@@ -418,10 +418,13 @@ class InferenceEngine:
             raise RuntimeError("ZERO FALLBACK: Engine not loaded. Call load() first.")
 
         # Build inputs with pre-tokenized IDs instead of string prompt
+        reach, source = (kv_session.ceiling, kv_session.source) if kv_session is not None else self.session_reach()
         inputs = {
             "global.input_token_ids": token_ids,
             "global.chat_mode": False,  # Template already applied
             **decode,
+            # the decode bound the request or container declares, else the reach left after this prompt
+            "global.max_tokens": self._decode_bound(decode, len(token_ids), reach, source),
         }
         if "global.seed" in inputs:
             device_seed(self._device, inputs["global.seed"])
@@ -463,8 +466,9 @@ class InferenceEngine:
         when past the session's reach (ContextLengthExceeded: the OpenAI door's 400 context_length_exceeded)."""
         decode = self._decode_inputs(kwargs)
         from neurobrix.core.runtime.prompt_length import refuse_past_reach
-        return refuse_past_reach("these messages need", len(self._rendered(messages, tools)), self._max_tokens(decode),
-                                 "a session", *self.session_reach())
+        rendered, (reach, source) = len(self._rendered(messages, tools)), self.session_reach()
+        return refuse_past_reach("these messages need", rendered, self._decode_bound(decode, rendered, reach, source),
+                                 "a session", reach, source)
 
     def _rendered(self, messages: list, tools: Optional[list]) -> list:
         """`messages` as a completion prefills them: the embedded chat template's ids, its tools contract when given."""
@@ -475,13 +479,15 @@ class InferenceEngine:
         return [int(t) for t in _flatten_tokenizer_output(tokenizer.apply_chat_template(
             messages, tokenize=True, add_generation_prompt=True, **({"tools": tools} if tools else {})))]
 
-    def _max_tokens(self, decode: Dict[str, Any]) -> int:
-        """A decode bound nobody declared truncates silently; the request wins, then the container, then a refusal."""
-        from neurobrix.core.runtime_values import resolve as _resolve_runtime
-        return int(_resolve_runtime(
-            "max_tokens", container=self._pkg.defaults,
-            extra=[("the request", decode.get("global.max_tokens"))],
-            why="It bounds this generation."))
+    def _max_tokens(self, decode: Dict[str, Any]) -> Optional[int]:
+        """The decode bound the request declares, else the container's, else None: the session's reach left after
+        the prompt bounds it (prompt_length.decode_bound, where the prompt's length is known)."""
+        asked = decode.get("global.max_tokens")
+        return int(asked) if asked is not None else (self._pkg.defaults or {}).get("max_tokens")
+
+    def _decode_bound(self, decode: Dict[str, Any], rendered: int, reach: int, source: str) -> int:
+        from neurobrix.core.runtime.prompt_length import decode_bound
+        return decode_bound(rendered, reach, source, self._max_tokens(decode))
 
     def _execute(self, inputs: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         """One request through the executor with `run`'s recovery armed (cli/commands/run.py arm_replan): a device
@@ -595,7 +601,7 @@ class InferenceEngine:
             from nbxtensor.memory.kv_session import KVSession
             ceiling, source = self.session_reach()
             self._agent_kv = KVSession(ceiling, source)
-        max_tokens = self._max_tokens(decode)
+        max_tokens = self._decode_bound(decode, len(token_ids), self._agent_kv.ceiling, self._agent_kv.source)
         refuse_past_reach("these messages need", len(token_ids), max_tokens, "a session", self._agent_kv.ceiling,
                           self._agent_kv.source)
         from neurobrix.core.state.constraint import constraint_for      # the request's grammar, its vocabulary kept
