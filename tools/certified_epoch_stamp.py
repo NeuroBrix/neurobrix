@@ -8,6 +8,8 @@ file named) and, per file, counts each certification owed (one key in one memory
   re-proven  the draft holds it for that class, every proof of it at the library's epoch, the configuration
              byte-identical to the shipped one, and the same matrix-unit tile (or none on both);
   failed     the ledger's last line for it says failed (its re-prove raised, or it could not be filed);
+  retired    a `--retired` list names it (verdict `retired_*`): a key the library gives no launch, so there is nothing
+             to re-prove or recertify (the draft must not hold it);
   pending    neither — not yet tried, or tried by no ledger line, or a draft configuration or unit tile that differs;
              and, both ways, a draft certification the file did not owe or a shipped one already of the
              library's epoch that the draft does not hold as it stands.
@@ -16,13 +18,14 @@ A file is REPLACED (`--apply`) only when nothing is pending: every certification
 the draft file passes the library's own gate (`validate`: the epoch, the format, every proof). The replacement is the
 draft file as it stands: it holds the re-proven certifications only, and is never mixed. THE FAILED CERTIFICATIONS
 LEAVE THE FILE until their full recertification: each one is appended to `--recert-list` (file, key, memory_class,
-reason) — never dropped silently, never retuned here. The re-prove runs under one code generator: a re-proven
+reason) — never dropped silently, never retuned here. THE RETIRED ONES leave the file too, counted apart (the table's
+`retired`) and kept off `--recert-list`: the list that names them is their record. The re-prove runs under one code generator: a re-proven
 certification's proofs under OTHER generators (`also_proven`, alternates) leave with the replacement too, and each is
 appended to `--recert-list` with its `generator`, to be re-proven under it. A file with every certification failed is not replaced (its
 replacement would be empty): it is said, and left for a ruling.
 
 One row per file reached (a draft file or a ledger line) is written to `--table` (file, keys, re_proven, failed,
-seconds, generators_dropped), replacing that file's earlier row. A file's recert rows and table row are written BEFORE it is replaced, and
+seconds, generators_dropped, retired), replacing that file's earlier row. A file's recert rows and table row are written BEFORE it is replaced, and
 the replacement is whole or nothing (a copy beside it, renamed over it): a stop at any point loses no failed key. Run with the frozen library's python: the library reads the files.
 """
 import argparse
@@ -37,7 +40,7 @@ from nbxtensor.ops import autotune_certified as C
 from neurobrix.kernels.autotune_certify import unit_tile
 
 LEDGER = "reprove_epoch_ledger.tsv"
-TABLE_COLS = ["file", "keys", "re_proven", "failed", "seconds", "generators_dropped"]
+TABLE_COLS = ["file", "keys", "re_proven", "failed", "seconds", "generators_dropped", "retired"]
 RECERT_COLS = ["file", "key", "memory_class", "reason", "generator"]
 
 
@@ -61,6 +64,18 @@ def read_ledger(path):
     return out
 
 
+def read_retired(paths):
+    """{(file, key text, memory class GB)} a `--retired` list names with a verdict `retired_*` (columns file, key,
+    memory_class, verdict; any other verdict retires nothing)."""
+    out = set()
+    for path in paths or []:
+        with open(path, newline="") as fh:
+            for r in csv.DictReader(fh, delimiter="\t"):
+                if str(r.get("verdict") or "").startswith("retired"):
+                    out.add((r["file"], _norm(r["key"]), int(str(r["memory_class"]).rstrip("g"))))
+    return out
+
+
 def _generators(head):
     """The code generators (`C.proof_backend`) one memory class's certifications are proven under: every proof of its
     head and of its alternates (`also_proven` included)."""
@@ -78,16 +93,16 @@ def owed_heads(entries):
     return out
 
 
-def judge(shipped_path, draft_path, ledger, rel):
+def judge(shipped_path, draft_path, ledger, rel, retired=frozenset()):
     """The file's verdict: {'keys', 're_proven', 'failed' [(key, class, reason)], 'pending' [(key, class, why)],
-    'seconds', 'problems' (the draft's gate), 'reached'}."""
+    'retired', 'seconds', 'problems' (the draft's gate), 'reached'}."""
     doc = json.loads(Path(shipped_path).read_text(encoding="utf-8"))
     owed = owed_heads(doc.get("entries") or {})
     draft_doc = json.loads(Path(draft_path).read_text(encoding="utf-8")) if Path(draft_path).exists() else None
     draft = {_norm(k): e for k, e in ((draft_doc or {}).get("entries") or {}).items()}
     fname = str(rel)
     v = {"keys": len(owed), "re_proven": 0, "failed": [], "pending": [], "seconds": 0.0, "problems": [],
-         "generators_dropped": [],
+         "generators_dropped": [], "retired": 0,
          "reached": draft_doc is not None or any(k[0] == fname for k in ledger)}
     owed_ids = set()
     for ktext, cls, head in owed:
@@ -96,7 +111,12 @@ def judge(shipped_path, draft_path, ledger, rel):
         if line is not None:
             v["seconds"] += float(line.get("seconds") or 0)
         got = C.entry_for_memory_gb(draft.get(ktext), cls)
-        if got is not None:
+        if (fname, ktext, cls) in retired:
+            if got is None:
+                v["retired"] += 1
+            else:
+                v["pending"].append((ktext, cls, "named retired, yet the draft holds it"))
+        elif got is not None:
             if not _class_epochs(got) <= {C.BITS_EPOCH}:
                 v["pending"].append((ktext, cls, "the draft's proof is not of the library's bits epoch"))
             elif got.get("config") != head.get("config"):
@@ -165,24 +185,25 @@ def _replace(src, dst):
         tmp.unlink(missing_ok=True)
 
 
-def run(shipped, draft, table, recert_list, apply=False, say=print):
+def run(shipped, draft, table, recert_list, apply=False, say=print, retired=()):
     shipped, draft = Path(shipped), Path(draft)
-    ledger = read_ledger(draft / LEDGER)
+    ledger, retired = read_ledger(draft / LEDGER), read_retired(retired)
     rows, recert, replaced = [], [], []
     for path in C.files(shipped):
         rel = path.relative_to(shipped)
-        v = judge(path, draft / rel, ledger, rel)
+        v = judge(path, draft / rel, ledger, rel, retired)
         if not v["keys"] or not v["reached"]:
             continue
         row = {"file": str(rel), "keys": v["keys"], "re_proven": v["re_proven"], "failed": len(v["failed"]),
-               "seconds": f"{v['seconds']:.1f}", "generators_dropped": len(v["generators_dropped"])}
+               "seconds": f"{v['seconds']:.1f}", "generators_dropped": len(v["generators_dropped"]),
+               "retired": v["retired"]}
         rows.append(row)
         ready = not v["pending"] and not v["problems"] and v["re_proven"] > 0
         state = ("READY" if ready else "ALL FAILED: not replaced, left for a ruling" if not v["pending"]
                  and not v["re_proven"] else f"NOT READY: {len(v['pending'])} pending"
                  + (f", draft gate: {v['problems'][0]}" if v["problems"] else ""))
         say(f"{rel}: {v['keys']} owed, {v['re_proven']} re-proven, {len(v['failed'])} failed, "
-            f"{v['seconds']:.1f} s — {state}")
+            f"{v['retired']} retired, {v['seconds']:.1f} s — {state}")
         for ktext, cls, why in v["pending"][:3]:
             say(f"  pending {ktext} {cls}g: {why}")
         mine = []
@@ -217,10 +238,12 @@ def main(argv=None):
     ap.add_argument("--table", required=True, help="the stamp table (TSV: file, keys, re_proven, failed, seconds)")
     ap.add_argument("--recert-list", required=True, help="the full-recertification list the failed keys join (TSV)")
     ap.add_argument("--apply", action="store_true", help="replace every READY shipped file by its draft")
+    ap.add_argument("--retired", nargs="+", default=[], help="TSV(s) of keys the library gives no launch (file, key, "
+                    "memory_class, verdict retired_*): they leave the file, counted apart, off --recert-list")
     a = ap.parse_args(argv)
     if Path(a.draft).resolve() == Path(a.shipped).resolve():
         sys.exit("the draft tree is the shipped tree: refused")
-    run(a.shipped, a.draft, a.table, a.recert_list, apply=a.apply)
+    run(a.shipped, a.draft, a.table, a.recert_list, apply=a.apply, retired=a.retired)
     return 0
 
 

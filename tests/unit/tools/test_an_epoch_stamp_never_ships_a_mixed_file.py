@@ -6,7 +6,8 @@ recertification list; one table row per file.
 What would this file do if the code were wrong? A file with a key not yet tried replaced -> the first test RED; a
 draft configuration that differs counted re-proven -> the second RED; a failed key dropped silently, not listed, or a
 replacement holding an epoch-less proof, or no table row -> the third RED; a re-chosen unit tile counted re-proven ->
-the unit test RED; a stop during the replacement losing a failed key or truncating the file -> the stop test RED.
+the unit test RED; a stop during the replacement losing a failed key or truncating the file -> the stop test RED; a
+retired key kept in the file, put on the recertification list or not counted apart -> the retired test RED.
 """
 import csv
 import json
@@ -117,7 +118,7 @@ def test_the_failed_keys_leave_the_file_and_join_the_recert_list(tmp_path):
     assert rec[0]["reason"] == "oracle: too far"
     table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
     assert table == [{"file": "nvidia/volta/toy_kernel.fp32.json", "keys": "2", "re_proven": "1", "failed": "1",
-                      "seconds": "5.0", "generators_dropped": "0"}]
+                      "seconds": "5.0", "generators_dropped": "0", "retired": "0"}]
 
 
 def test_a_stop_during_the_replacement_loses_no_failed_key_and_truncates_nothing(tmp_path, monkeypatch):
@@ -182,3 +183,23 @@ def test_a_shipped_certification_already_at_the_epoch_is_not_lost_by_the_replace
     _write(tmp_path / "draft", {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}, K3: at_epoch})
     assert _run(tmp_path)["replaced"] == ["nvidia/volta/toy_kernel.fp32.json"]
     assert sorted(json.loads(shipped.read_text())["entries"]) == sorted([K1, K3])
+
+
+def test_a_retired_key_leaves_the_file_counted_apart_and_off_the_recert_list(tmp_path):
+    """A key the frozen library gives no launch (the matrix unit takes it: the wrapper never reached the autotuner) is
+    named in a --retired list (file, key, memory_class, verdict retired_*): it leaves the file with the replacement,
+    is counted apart in the table, and never joins the recertification list (there is nothing to recertify). A row
+    of another verdict in the same list retires nothing."""
+    shipped = _setup(tmp_path, {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}},
+                     [(K1, "reproven"), (K2, "failed")])
+    retired = tmp_path / "retired.tsv"
+    retired.write_text("file\tmemory_class\tverdict\tkey\n"
+                       f"nvidia/volta/toy_kernel.fp32.json\t16g\tretired_unit_routed\t{K2}\n"
+                       f"nvidia/volta/toy_kernel.fp32.json\t16g\treproven_live\t{K1}\n")
+    out = S.run(tmp_path / "shipped", tmp_path / "draft", tmp_path / "table.tsv", tmp_path / "recert.tsv",
+                apply=True, say=lambda *a: None, retired=[retired])
+    assert out["replaced"] == ["nvidia/volta/toy_kernel.fp32.json"]
+    assert list(json.loads(shipped.read_text())["entries"]) == [K1]
+    assert not (tmp_path / "recert.tsv").exists() and out["recert"] == []
+    table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
+    assert [(r["re_proven"], r["failed"], r["retired"]) for r in table] == [("1", "0", "1")]
