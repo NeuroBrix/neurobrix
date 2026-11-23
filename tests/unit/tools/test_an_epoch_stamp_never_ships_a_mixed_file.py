@@ -7,7 +7,8 @@ What would this file do if the code were wrong? A file with a key not yet tried 
 draft configuration that differs counted re-proven -> the second RED; a failed key dropped silently, not listed, or a
 replacement holding an epoch-less proof, or no table row -> the third RED; a re-chosen unit tile counted re-proven ->
 the unit test RED; a stop during the replacement losing a failed key or truncating the file -> the stop test RED; a
-retired key kept in the file, put on the recertification list or not counted apart -> the retired test RED.
+retired key kept in the file, put on the recertification list or not counted apart -> the retired test RED; a file
+whose every key is retired shipped (empty or as it was), or one with a key failed removed -> the removal test RED.
 """
 import csv
 import json
@@ -203,3 +204,27 @@ def test_a_retired_key_leaves_the_file_counted_apart_and_off_the_recert_list(tmp
     assert not (tmp_path / "recert.tsv").exists() and out["recert"] == []
     table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
     assert [(r["re_proven"], r["failed"], r["retired"]) for r in table] == [("1", "0", "1")]
+
+
+def test_a_file_whose_every_key_is_retired_is_removed_not_shipped_empty(tmp_path):
+    """A file every certification of which is retired (no key the library forms) has nothing left to ship: --apply
+    REMOVES it (an empty certified file is not shipped), its table row counting the keys retired, nothing on the
+    recertification list. A file with one key failed and not retired is still left as it is, for a ruling."""
+    shipped = _write(tmp_path / "shipped", {K1: {"config": _cfg(1), "proof": _proof()},
+                                            K2: {"config": _cfg(2), "proof": _proof(n=2)}})
+    (tmp_path / "draft").mkdir()
+    _ledger(tmp_path / "draft", [(K1, "failed"), (K2, "failed")])
+    retired = tmp_path / "retired.tsv"
+    retired.write_text("file\tmemory_class\tverdict\tkey\n"
+                       f"nvidia/volta/toy_kernel.fp32.json\t16g\tretired_out_dtype_unformed\t{K1}\n")
+    run = lambda: S.run(tmp_path / "shipped", tmp_path / "draft", tmp_path / "table.tsv", tmp_path / "recert.tsv",
+                        apply=True, say=lambda *a: None, retired=[retired])
+    before = shipped.read_bytes()
+    out = run()                                                   # K2 failed, not retired: left for a ruling
+    assert out["replaced"] == [] and out["removed"] == [] and shipped.read_bytes() == before
+    retired.write_text(retired.read_text() + f"nvidia/volta/toy_kernel.fp32.json\t16g\tretired_out_dtype_unformed\t{K2}\n")
+    out = run()
+    assert out["removed"] == ["nvidia/volta/toy_kernel.fp32.json"] and not shipped.exists()
+    assert out["recert"] == [] and not (tmp_path / "recert.tsv").exists()
+    table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
+    assert [(r["keys"], r["re_proven"], r["failed"], r["retired"]) for r in table] == [("2", "0", "0", "2")]

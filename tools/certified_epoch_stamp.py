@@ -22,7 +22,8 @@ reason) — never dropped silently, never retuned here. THE RETIRED ONES leave t
 `retired`) and kept off `--recert-list`: the list that names them is their record. The re-prove runs under one code generator: a re-proven
 certification's proofs under OTHER generators (`also_proven`, alternates) leave with the replacement too, and each is
 appended to `--recert-list` with its `generator`, to be re-proven under it. A file with every certification failed is not replaced (its
-replacement would be empty): it is said, and left for a ruling.
+replacement would be empty): it is said, and left for a ruling. A file with every certification RETIRED (and none
+pending or failed) is REMOVED by `--apply`: no key the library forms is left in it, and an empty file is not shipped.
 
 One row per file reached (a draft file or a ledger line) is written to `--table` (file, keys, re_proven, failed,
 seconds, generators_dropped, retired), replacing that file's earlier row. A file's recert rows and table row are written BEFORE it is replaced, and
@@ -188,7 +189,7 @@ def _replace(src, dst):
 def run(shipped, draft, table, recert_list, apply=False, say=print, retired=()):
     shipped, draft = Path(shipped), Path(draft)
     ledger, retired = read_ledger(draft / LEDGER), read_retired(retired)
-    rows, recert, replaced = [], [], []
+    rows, recert, replaced, removed = [], [], [], []
     for path in C.files(shipped):
         rel = path.relative_to(shipped)
         v = judge(path, draft / rel, ledger, rel, retired)
@@ -199,7 +200,8 @@ def run(shipped, draft, table, recert_list, apply=False, say=print, retired=()):
                "retired": v["retired"]}
         rows.append(row)
         ready = not v["pending"] and not v["problems"] and v["re_proven"] > 0
-        state = ("READY" if ready else "ALL FAILED: not replaced, left for a ruling" if not v["pending"]
+        gone = not v["pending"] and not v["failed"] and not v["re_proven"] and v["retired"] == v["keys"]
+        state = ("READY" if ready else "EVERY KEY RETIRED: removed, nothing left to ship" if gone else "ALL FAILED: not replaced, left for a ruling" if not v["pending"]
                  and not v["re_proven"] else f"NOT READY: {len(v['pending'])} pending"
                  + (f", draft gate: {v['problems'][0]}" if v["problems"] else ""))
         say(f"{rel}: {v['keys']} owed, {v['re_proven']} re-proven, {len(v['failed'])} failed, "
@@ -228,7 +230,11 @@ def run(shipped, draft, table, recert_list, apply=False, say=print, retired=()):
             _replace(draft / rel, path)
             replaced.append(str(rel))
             say(f"  replaced {path} by its draft")
-    return {"rows": rows, "recert": recert, "replaced": replaced}
+        if gone and apply:
+            path.unlink()
+            removed.append(str(rel))
+            say(f"  removed {path}: every key it owed is retired")
+    return {"rows": rows, "recert": recert, "replaced": replaced, "removed": removed}
 
 
 def main(argv=None):
@@ -237,7 +243,8 @@ def main(argv=None):
     ap.add_argument("--draft", required=True, help="the draft tree the re-prove wrote (and its ledger)")
     ap.add_argument("--table", required=True, help="the stamp table (TSV: file, keys, re_proven, failed, seconds)")
     ap.add_argument("--recert-list", required=True, help="the full-recertification list the failed keys join (TSV)")
-    ap.add_argument("--apply", action="store_true", help="replace every READY shipped file by its draft")
+    ap.add_argument("--apply", action="store_true", help="replace every READY shipped file by its draft, remove "
+                    "every file whose keys are all retired")
     ap.add_argument("--retired", nargs="+", default=[], help="TSV(s) of keys the library gives no launch (file, key, "
                     "memory_class, verdict retired_*): they leave the file, counted apart, off --recert-list")
     a = ap.parse_args(argv)
