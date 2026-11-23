@@ -142,14 +142,36 @@ def test_the_line_goes_to_stderr_never_to_stdout(home, monkeypatch, capsys):
 def test_an_nbxtensor_that_does_not_match_the_pin_is_said_without_the_network(home, monkeypatch):
     pin, _ = _have(monkeypatch, nbxtensor_installed="0.0.1")
     monkeypatch.setattr(uc, "_start_refresh", lambda: None)
+    monkeypatch.setattr(uc, "library_commit", lambda: "0" * 40)     # another commit (a git install), or ...
     lines = uc.notice_lines()                       # no cache, no index: the local check alone
-    assert any("0.0.1" in line and str(pin.specifier) in line and "nbxtensor" in line for line in lines)
+    said = pin.url.rsplit("@", 1)[-1][:12] if pin.url else str(pin.specifier)
+    assert any("0.0.1" in line and said in line and "nbxtensor" in line for line in lines), lines
+    if pin.url:                                     # ... a published wheel, which is no commit at all
+        monkeypatch.setattr(uc, "library_commit", lambda: "")
+        assert any("a published release" in line and said in line for line in uc.notice_lines())
+
+
+@pytest.mark.parametrize("pin", ["nbxtensor>=0.1.11",
+                                 "nbxtensor @ git+https://github.com/NeuroBrix/nbxtensor.git@" + "a" * 40])
+def test_the_pinned_library_is_silence_by_version_or_by_commit(home, monkeypatch, pin):
+    # red before the commit pin was read (2026-11-23): a commit pin has no version specifier, so the check either
+    # said nothing for a wrong library or (published-release advice) pushed a release the commit pin does not name
+    from packaging.requirements import Requirement
+    req = Requirement(pin)
+    monkeypatch.setattr(uc, "nbxtensor_requirement", lambda: req)
+    monkeypatch.setattr(uc, "installed_version", lambda name: "0.1.11" if name == "nbxtensor" else __version__)
+    monkeypatch.setattr(uc, "library_commit", lambda: "a" * 40)
+    monkeypatch.setattr(uc, "_start_refresh", lambda: None)
+    assert uc.notice_lines({"latest": {"nbxtensor": "0.1.12"}}) == ([] if req.url else [
+        f"nbxtensor 0.1.12 is published (you have 0.1.11): {uc.update_command('nbxtensor')}",
+        f"({uc.SWITCH}=1 turns this check off)"])
 
 
 def test_a_newer_nbxtensor_the_pin_allows_is_said_and_one_it_refuses_is_silence(home, monkeypatch):
     pin, installed = _have(monkeypatch)
     uc.write_cache({"checked_at": time.time(), "latest": {"neurobrix": __version__, "nbxtensor": "999.0.0"}})
-    assert pin.specifier.contains("999.0.0") == any("999.0.0" in line for line in uc.notice_lines())
+    # a commit pin names no release: a published one is never advised under it
+    assert (not pin.url and pin.specifier.contains("999.0.0")) == any("999.0.0" in line for line in uc.notice_lines())
     monkeypatch.setattr(uc, "nbxtensor_requirement", lambda: __import__("packaging.requirements").requirements.Requirement("nbxtensor>=0"))
     assert any("999.0.0" in line and uc.update_command("nbxtensor") in line for line in uc.notice_lines())
 

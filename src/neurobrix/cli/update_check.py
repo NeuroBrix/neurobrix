@@ -174,6 +174,20 @@ def nbxtensor_requirement():
     return found[0] if found else None
 
 
+def library_commit():
+    """The commit the installed nbxtensor was built from, as pip recorded it (`direct_url.json`): the commit of a git
+    install, "" for a published wheel (no record: not any commit), None when it cannot say (a local tree)."""
+    import json
+    from importlib.metadata import PackageNotFoundError, distribution
+    try:
+        raw = distribution(LIBRARY).read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+    if not raw:
+        return ""
+    return (json.loads(raw).get("vcs_info") or {}).get("commit_id")
+
+
 def _install_kind():
     """How this neurobrix was installed, as far as its metadata and its environment say: (kind, source directory)."""
     from importlib.metadata import PackageNotFoundError, distribution
@@ -221,13 +235,21 @@ def notice_lines(record=None) -> list:
     latest = record.get("latest", {})
     lines = []
     have_engine, have_lib, pin = installed_version(ENGINE), installed_version(LIBRARY), nbxtensor_requirement()
-    if pin and have_lib and not pin.specifier.contains(have_lib, prereleases=True):
+    # between releases the engine pins its library by COMMIT (`nbxtensor @ git+<repository>@<sha40>`): a version says
+    # nothing of it, the commit pip recorded does (supervisor 23/11 01:01)
+    want = pin.url.rsplit("@", 1)[-1] if pin is not None and pin.url else None
+    have_commit = library_commit() if want and have_lib else None
+    if want and have_commit is not None and have_commit != want:
+        lines.append(f"nbxtensor {have_lib} ({f'commit {have_commit[:12]}' if have_commit else 'a published release'}) "
+                     f"is installed but neurobrix {have_engine} needs {LIBRARY} at commit {want[:12]}: "
+                     f"{update_command(LIBRARY, f' @ {pin.url}')}")
+    elif not want and pin and have_lib and not pin.specifier.contains(have_lib, prereleases=True):
         lines.append(f"nbxtensor {have_lib} is installed but neurobrix {have_engine} needs {LIBRARY}{pin.specifier}: "
                      f"{update_command(LIBRARY, str(pin.specifier))}")
     if have_engine and latest.get(ENGINE) and Version(latest[ENGINE]) > Version(have_engine):
         lines.append(f"neurobrix {latest[ENGINE]} is published (you have {have_engine}): {update_command(ENGINE)}")
     new_lib = latest.get(LIBRARY)
-    if have_lib and new_lib and Version(new_lib) > Version(have_lib) and (pin is None or pin.specifier.contains(new_lib)):
+    if have_lib and new_lib and Version(new_lib) > Version(have_lib) and (pin is None or (not pin.url and pin.specifier.contains(new_lib))):
         lines.append(f"nbxtensor {new_lib} is published (you have {have_lib}): {update_command(LIBRARY)}")
     if lines:
         lines.append(f"({SWITCH}=1 turns this check off)")

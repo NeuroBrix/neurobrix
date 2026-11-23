@@ -2553,8 +2553,8 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
     replay = P.vmm_first_replay(0) if owed_chunk else None    # made ahead: it prices the rest
     if not first or owed_chunk:
         launch_lines.say("measure", work_said([], replay, q["vmm_reps"] * (1 + len(q["vmm_ks"])) - 1 if replay else 0))
+    dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
     if not first:
-        dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first = {"source": f"measured {stamp} at the first launch on this machine (autodetect, quick: one GEMM size, "
                            f"{q['copy_bytes'] >> 20} MB copies; tools/profile_facts.py measures the full set)",
                  "matmul_tflops": {t: round(P.matmul_tflops(t, q["gemm_sizes"], q["gemm_warmup"], q["gemm_rep"])["best"], 1)
@@ -2562,7 +2562,6 @@ def ensure_measured_facts(hardware_id: str, engine: Optional[str] = None, contai
                  **{k: round(v, 1) for k, v in P.copies(q["copy_bytes"], q["copy_reps"]).items()}}
         added["measured"] = sorted(k for k in first if k != "source")
     if engine is not None and engine not in (first.get("gemv_gbps") or {}):
-        dtypes = [t for t in (devices[0].get("supports_dtypes") or []) if t in ("float16", "float32", "bfloat16")]
         first.setdefault("gemv_gbps", {})[engine] = {t: P.gemv_gbps(t, engine, *q["gemv_kn"], q["gemv_reps"]) for t in dtypes}
         added["gemv_gbps"] = [engine]
     # every card model's chunk swept at once, each on its own first card, side by side (`kept.sweep_chunks`)
