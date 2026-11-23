@@ -228,3 +228,22 @@ def test_a_file_whose_every_key_is_retired_is_removed_not_shipped_empty(tmp_path
     assert out["recert"] == [] and not (tmp_path / "recert.tsv").exists()
     table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
     assert [(r["keys"], r["re_proven"], r["failed"], r["retired"]) for r in table] == [("2", "0", "0", "2")]
+
+
+def test_a_retired_key_the_draft_still_holds_stays_pending_and_the_file_is_not_replaced(tmp_path):
+    """qa 1244-2: a key named retired that the draft holds is a contradiction for a ruling, never counted retired: the
+    file stays as shipped, the key said pending."""
+    shipped = _setup(tmp_path, {K1: {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)},
+                                K2: {"config": _cfg(2), "proof": _proof(C.BITS_EPOCH, n=2)}},
+                     [(K1, "reproven"), (K2, "reproven")])
+    retired = tmp_path / "retired.tsv"
+    retired.write_text("file\tmemory_class\tverdict\tkey\n"
+                       f"nvidia/volta/toy_kernel.fp32.json\t16g\tretired_unit_routed\t{K2}\n")
+    said = []
+    before = shipped.read_bytes()
+    out = S.run(tmp_path / "shipped", tmp_path / "draft", tmp_path / "table.tsv", tmp_path / "recert.tsv",
+                apply=True, say=said.append, retired=[retired])
+    assert out["replaced"] == [] and out["removed"] == [] and shipped.read_bytes() == before
+    assert any("named retired, yet the draft holds it" in s for s in said)
+    table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
+    assert [(r["re_proven"], r["retired"]) for r in table] == [("1", "0")]
