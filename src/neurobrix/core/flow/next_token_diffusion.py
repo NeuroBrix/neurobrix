@@ -81,6 +81,8 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
 
     def execute(self) -> Dict[str, Any]:
         defaults = self.ctx.pkg.defaults
+        from neurobrix.core.flow.audio_utils import refuse_without_reference_clip
+        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
         device = self.ctx.primary_device
         dtype = self.ctx.compute_dtype()
 

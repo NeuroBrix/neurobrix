@@ -357,7 +357,8 @@ def request_voice(resolved: Dict, defaults: Dict) -> Optional[str]:
         v = resolved.get(key)
         if isinstance(v, str) and v:
             return v
-    return defaults.get("voice")
+    v = defaults.get("voice")       # a voice NAME only: a declaration such as {"reference_clip_required": true} is none
+    return v if isinstance(v, str) and v else None
 
 
 def phoneme_ids(prompt: str, nbx_path_str: str, phoneme_vocab: Dict,

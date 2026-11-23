@@ -127,6 +127,8 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
     # ─── public entry ──────────────────────────────────────────────────────────
     def execute(self) -> Dict[str, Any]:
         defaults = self.ctx.pkg.defaults
+        from neurobrix.core.flow.audio_utils import refuse_without_reference_clip
+        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
         _nbx_device.select(parse_device_idx(self.ctx.primary_device))
 
         # Replay v1 capability gate: this flow's per-token/chunk

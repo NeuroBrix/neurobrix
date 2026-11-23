@@ -47,6 +47,8 @@ class TritonDualAREngine(ComponentFlowHandler):
 
     def execute(self) -> Dict[str, Any]:
         """Execute DualAR pipeline."""
+        from neurobrix.core.flow.audio_utils import refuse_without_reference_clip
+        refuse_without_reference_clip(self.ctx.pkg.defaults)      # a cloned voice and no clip: refused by name
         flow = self.ctx.pkg.topology.get("flow", {})
         audio_config = flow.get("audio", {})
         stages = audio_config.get("stages", [])

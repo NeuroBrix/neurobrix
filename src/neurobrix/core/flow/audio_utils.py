@@ -476,11 +476,37 @@ def shipped_voices(nbx_path) -> Tuple[Path, List[str]]:
     return vdir, sorted(p.stem for p in vdir.glob("*.pt"))
 
 
+def declared_voice(defaults):
+    """What the container's `runtime/defaults.json` declares as its voice: ("name", voice) for a voice name,
+    ("clip_required", None) for `{"reference_clip_required": true}` (a model that speaks only in a voice cloned from a
+    reference clip: builder 1237), (None, None) when it declares none. Any other value is refused by name: a voice is
+    never read from a value the engine does not understand (a dict read as truthy passed as a voice, qa 1237-3)."""
+    value = defaults.get("voice")
+    if value is None or value == "":
+        return None, None
+    if isinstance(value, str):
+        return "name", value
+    if value == {"reference_clip_required": True}:
+        return "clip_required", None
+    raise RuntimeError(f"ZERO FALLBACK: runtime/defaults.json declares voice {value!r}: neither a voice name nor "
+                       f'{{"reference_clip_required": true}}, so no voice is read from it')
+
+
+def refuse_without_reference_clip(defaults) -> None:
+    """The run of a container that declares its voice is cloned from a reference clip, refused by name: this version
+    takes no clip (`--reference-audio` is refused at the command line, cli/utils.UNREAD_FLAGS), and the model has no
+    voice of its own to speak in — nothing is invented in its place (supervisor 23/11 08:00, order B)."""
+    if declared_voice(defaults)[0] == "clip_required":
+        raise RuntimeError("ZERO FALLBACK: this model speaks only in a voice cloned from a reference recording "
+                           '(runtime/defaults.json: voice {"reference_clip_required": true}), and cloning from a '
+                           "recording (--reference-audio) is not wired in this version: it cannot run yet")
+
+
 def voices_to_choose(cache_path, defaults) -> List[str]:
     """The voices a request must choose from — the container ships them and declares no default — else []: what
     `requested_voice` would refuse inside the run, known before it (a served request missing `voice` is a 400)."""
     vdir = Path(cache_path) / "modules" / "voices"
-    return [] if defaults.get("voice") or not vdir.is_dir() else shipped_voices(cache_path)[1]
+    return [] if declared_voice(defaults)[0] == "name" or not vdir.is_dir() else shipped_voices(cache_path)[1]
 
 
 def requested_voice(engine, available) -> str:
@@ -500,9 +526,9 @@ def requested_voice(engine, available) -> str:
         if value:
             return str(value)
 
-    declared = engine.ctx.pkg.defaults.get("voice")
-    if declared:
-        return str(declared)
+    kind, declared = declared_voice(engine.ctx.pkg.defaults)
+    if kind == "name":
+        return declared
 
     raise RuntimeError(
         f"ZERO FALLBACK: this artefact ships {len(available)} voices and "
