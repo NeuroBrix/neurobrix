@@ -30,3 +30,18 @@ def test_every_kept_conversation_door_reads_the_container():
     eng = (SRC / "serving/engine.py").read_text()
     assert 'declared_context_keeps(self._pkg.defaults, "a chat session")' in eng
     assert 'declared_context_keeps(self._pkg.defaults, "a request with its history")' in eng
+
+
+def test_a_served_history_on_a_container_that_keeps_none_is_a_400_before_it_runs():
+    """The OpenAI door answers a history the container does not declare it keeps with a 400 naming it, before any
+    decode (`check_context`): the TinyLlama serve of 23/11 answered its second turn with a 500."""
+    from types import SimpleNamespace
+    from neurobrix.core.runtime.prompt_length import ConversationNotKept
+    from neurobrix.serving.engine import InferenceEngine
+    e = InferenceEngine.__new__(InferenceEngine)
+    e._pkg = SimpleNamespace(defaults={"chat_mode": True})
+    e._decode_inputs = lambda kw: {}
+    msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]
+    with pytest.raises(ConversationNotKept, match="does not declare whether it keeps one") as err:
+        e.check_context(msgs)
+    assert err.value.api_code == "conversation_not_kept"

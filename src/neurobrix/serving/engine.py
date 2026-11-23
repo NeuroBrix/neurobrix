@@ -465,7 +465,9 @@ class InferenceEngine:
         """The positions a completion over `messages` needs (rendered prompt + its decode bound), refused BEFORE it runs
         when past the session's reach (ContextLengthExceeded: the OpenAI door's 400 context_length_exceeded)."""
         decode = self._decode_inputs(kwargs)
-        from neurobrix.core.runtime.prompt_length import refuse_past_reach
+        from neurobrix.core.runtime.prompt_length import declared_context_keeps, refuse_past_reach
+        if sum(m.get("role") != "system" for m in messages) > 1:     # the request carries its history: before it runs
+            declared_context_keeps(self._pkg.defaults, "a request with its history")
         rendered, (reach, source) = len(self._rendered(messages, tools)), self.session_reach()
         return refuse_past_reach("these messages need", rendered, self._decode_bound(decode, rendered, reach, source),
                                  "a session", reach, source)

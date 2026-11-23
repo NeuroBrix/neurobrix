@@ -392,11 +392,11 @@ def chat_completions(door, handler, body) -> Optional[Dict[str, Any]]:
         reader = _turn_reader(tokenizer, parser, reasoning, opens)
         grammar = _constrained(body, tokenizer, forced, tools, parser, named, reasoning if opens else None)
         extra = {"grammar": grammar} if grammar is not None else {}
-        from neurobrix.core.runtime.prompt_length import ContextLengthExceeded
+        from neurobrix.core.runtime.prompt_length import ContextLengthExceeded, ConversationNotKept
         try:                               # past what a served session holds: refused before it runs (OpenAI's code)
             engine.check_context(messages, tools=tools, **decode)
-        except ContextLengthExceeded as e:
-            raise errors.ApiError(400, str(e), param="messages", code="context_length_exceeded") from e
+        except (ContextLengthExceeded, ConversationNotKept) as e:    # the request's fault: a 400 naming it
+            raise errors.ApiError(400, str(e), param="messages", code=e.api_code) from e
         work = lambda: engine.complete_turn(messages, tools=tools, **extra, **decode)   # noqa: E731
         spool = None
     else:

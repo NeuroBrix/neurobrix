@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 class ContextLengthExceeded(ValueError):
     """A prompt and its decode bound past what the model or a served session holds (OpenAI: context_length_exceeded)."""
+    api_code = "context_length_exceeded"
 
 
 def refuse_past_reach(what: str, rendered: int, max_tokens: int, holder: str, reach: int, source: str) -> int:
@@ -54,6 +55,12 @@ def decode_bound(rendered: int, reach: int, source: str, asked: Optional[int] = 
     return left
 
 
+class ConversationNotKept(RuntimeError):
+    """A kept conversation asked of a container that does not declare it keeps one (the OpenAI door: a 400 naming
+    it, never a 500)."""
+    api_code = "conversation_not_kept"
+
+
 def declared_context_keeps(defaults: Optional[Dict[str, Any]], what: str) -> None:
     """A conversation kept across turns (`neurobrix run --turns`, a served chat session, a request that carries its
     history) runs only for a container that declares it keeps one — runtime/defaults.json `context: {"keeps": true}`;
@@ -61,11 +68,11 @@ def declared_context_keeps(defaults: Optional[Dict[str, Any]], what: str) -> Non
     name: the engine supplies no answer of its own."""
     ctx = (defaults or {}).get("context")
     if not isinstance(ctx, dict) or "keeps" not in ctx:
-        raise RuntimeError(f"ZERO FALLBACK: {what} keeps a conversation, and the container does not declare whether "
+        raise ConversationNotKept(f"ZERO FALLBACK: {what} keeps a conversation, and the container does not declare whether "
                            'it keeps one (runtime/defaults.json: context {"keeps": ...}): it is the container\'s '
                            "to say, not the engine's")
     if not ctx["keeps"]:
-        raise RuntimeError(f"ZERO FALLBACK: {what} keeps a conversation, and this container declares it keeps none "
+        raise ConversationNotKept(f"ZERO FALLBACK: {what} keeps a conversation, and this container declares it keeps none "
                            '(runtime/defaults.json: context {"keeps": false})')
 
 
