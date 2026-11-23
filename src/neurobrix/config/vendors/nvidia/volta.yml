@@ -173,6 +173,11 @@ precision:
 measured:
   source: "measured 2026-10-24 22:38:01 CEST on card 0 of the rack, alone (tools/profile_facts.py); copied here 2026-10-25 for the generated one-card profiles"
   matmul_tflops: {float16: 42.3, float32: 13.5}
+  # the runtime's own footprint per engine, READ at a first launch instead of a child that measures it (first-launch
+  # step 4): Dell 4x V100, 23/11/2026, engine 6240f695e8f0 + library def527d8183f, 49 fresh-home first launches, one
+  # value on all (16 GB and 32 GB cards alike)
+  runtime_base_mb: {compiled: 803, triton: 207}
+  runtime_base_library: "0.1.11"   # nbxtensor release the base was measured on: another release re-measures it once
   memory_gbps: 789
   h2d_gbps: 8.1
   d2h_gbps: 3.7

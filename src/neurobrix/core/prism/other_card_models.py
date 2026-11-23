@@ -182,7 +182,11 @@ def shipped_or_sibling_base(device: dict, path, engine: str) -> Optional[int]:
     with its source line), else a sibling profile's measure on this machine (`other_card_models.base_from_siblings`).
     None: no figure anywhere — the one case the caller measures it once, says it, keeps it."""
     from neurobrix.core.prism.loader import vendor_block
-    shipped = ((vendor_block(device, "measured") or {}).get("runtime_base_mb") or {}).get(engine)
-    if shipped is not None:
+    import nbxtensor
+    block = vendor_block(device, "measured") or {}
+    shipped = (block.get("runtime_base_mb") or {}).get(engine)
+    # the base is the runtime's footprint for ONE library release (the Dell 11-17/11: triton 206, 481, 643 as the
+    # library moved): a figure measured on another release is not read — the sibling or the one measure answers
+    if shipped is not None and str(block.get("runtime_base_library")) == str(nbxtensor.__version__):
         return int(shipped)
     return base_from_siblings(path.parent, exclude=path, engine=engine).get(engine)
