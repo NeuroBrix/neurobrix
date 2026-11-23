@@ -617,7 +617,8 @@ class InferenceEngine:
         """The template's gap before a reply (core/runtime/reply_boundary) for a request that runs in chat mode: the
         request's own flag, else the container's. '' for a request that is not rendered by the template."""
         from neurobrix.core.runtime.reply_boundary import reply_gap
-        asked = chat_mode if chat_mode is not None else (self._pkg.defaults or {}).get("chat_mode", False)
+        from neurobrix.core.runtime.prompt_length import declared_chat_mode
+        asked = declared_chat_mode(self._pkg.defaults, chat_mode)
         tokenizer = self._executor.modules.get("tokenizer") if self._executor else None
         return reply_gap(tokenizer) if asked else ""
 

@@ -140,9 +140,8 @@ class TextProcessor:
             input_ids tensor [1, seq_len]
         """
         # chat_mode: the CLI's, else the container's defaults
-        _SENTINEL = object()
-        cli_chat = self._resolver.get("global.chat_mode", default=_SENTINEL)
-        chat_mode = bool(cli_chat) if cli_chat is not _SENTINEL else self._defaults["chat_mode"]
+        from neurobrix.core.runtime.prompt_length import declared_chat_mode
+        chat_mode = declared_chat_mode(self._defaults, self._resolver.get("global.chat_mode", default=None))
 
         has_template = hasattr(self._tokenizer, 'has_chat_template') and self._tokenizer.has_chat_template()
         # Priority 1: HuggingFace chat_template

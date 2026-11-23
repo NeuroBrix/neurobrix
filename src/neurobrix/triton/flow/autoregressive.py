@@ -29,7 +29,7 @@ from neurobrix.core.runtime.lm_facts import (  # noqa: F401  (re-exported for th
     image_guidance_weight as image_cfg_weight, lm_config_of as session_lm_config, session_lm_name)
 from neurobrix.core.flow.decoder_cache import _session_dag   # both branches read the session's DAG alike
 # the prompt as the flow tokenizes it: one rule for the flow, the plan and the derived census (pure Python)
-from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output, prompt_token_ids
+from neurobrix.core.runtime.prompt_length import _flatten_tokenizer_output, declared_chat_mode, prompt_token_ids
 import logging
 from nbxtensor import device as _nbx_device, memory as _nbx_memory
 _log = logging.getLogger(__name__)
@@ -452,12 +452,7 @@ class TritonAutoregressiveHandler:
         # full HF chat template (system prompt + role markers), producing a
         # ~10x longer prompt (orpheus: 39 vs 4 tokens) and a completely
         # different prefill → garbage decode. Was the orpheus triton bug.
-        _SENT = object()
-        _cli_chat = self.ctx.variable_resolver.resolved.get("global.chat_mode", _SENT)
-        if _cli_chat is not _SENT and _cli_chat is not None:
-            chat_mode = bool(_cli_chat)
-        else:
-            chat_mode = bool(defaults.get("chat_mode", False))
+        chat_mode = declared_chat_mode(defaults, self.ctx.variable_resolver.resolved.get("global.chat_mode"))
 
         token_ids = prompt_token_ids(tokenizer, prompt, defaults, is_image_ar, chat_mode)
         token_ids = _flatten_tokenizer_output(token_ids)

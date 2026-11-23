@@ -27,6 +27,20 @@ def refuse_past_reach(what: str, rendered: int, max_tokens: int, holder: str, re
     return need
 
 
+def declared_chat_mode(defaults: Optional[Dict[str, Any]], asked: Any = None) -> bool:
+    """Whether a request is rendered by the chat template: the request's own flag when it gives one, else the
+    container's `chat_mode` (runtime/defaults.json) — the ONE reader of the key for the processor, the flow, the
+    prefill length, the reply's gap and the served door. Absent from the container and not asked, refused by name:
+    the engine supplies no value of its own (owner reset 22/11: a missing value is added at its source)."""
+    if asked is not None:
+        return bool(asked)
+    if not defaults or "chat_mode" not in defaults:
+        raise RuntimeError("ZERO FALLBACK: the container declares no chat_mode (runtime/defaults.json) and the "
+                           "request gives none: whether its prompt is rendered by the chat template is the "
+                           "container's to say, not the engine's")
+    return bool(defaults["chat_mode"])
+
+
 def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
     """Normalize tokenizer return into a flat List[int]."""
     if hasattr(token_ids, 'input_ids'):
@@ -112,7 +126,7 @@ def prompt_tokens(root: Path, prompt: str, defaults: Optional[Dict[str, Any]] = 
         defaults = json.loads(p.read_text()) if p.exists() else {}
     return len(prompt_token_ids(container_tokenizer(root), prompt, defaults,
                                 generation_type(root) == "autoregressive_image",
-                                bool(defaults.get("chat_mode", False))))
+                                declared_chat_mode(defaults)))
 
 
 def run_prompt_tokens(root: Path, prompt: str, defaults: Dict[str, Any], asked: Optional[int]) -> Optional[int]:

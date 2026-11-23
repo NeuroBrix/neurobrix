@@ -679,10 +679,9 @@ def _extract_text(outputs: Dict[str, Any], executor) -> Optional[str]:
             # A reply to a prompt the chat template rendered starts after the template's own gap
             # (core/runtime/reply_boundary): the request's chat mode, else the container's, as the processor reads it.
             resolver = getattr(executor, "variable_resolver", None)
-            chat = resolver.resolved.get("global.chat_mode") if resolver is not None else None
-            if chat is None:
-                chat = (getattr(getattr(executor, "pkg", None), "defaults", None) or {}).get("chat_mode", False)
-            if chat:
+            from neurobrix.core.runtime.prompt_length import declared_chat_mode
+            if declared_chat_mode(getattr(getattr(executor, "pkg", None), "defaults", None),
+                                  resolver.resolved.get("global.chat_mode") if resolver is not None else None):
                 from neurobrix.core.runtime.reply_boundary import reply_gap, without_reply_gap
                 text = without_reply_gap(text, reply_gap(tokenizer))
             return text

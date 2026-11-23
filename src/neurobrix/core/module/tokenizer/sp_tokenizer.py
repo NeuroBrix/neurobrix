@@ -64,7 +64,7 @@ class SPTokenizer:
         self._pad_id = self._config.get("pad_token_id", self._sp.pad_id() if hasattr(self._sp, 'pad_id') else 0)
         self._eos_id = self._config.get("eos_token_id", self._sp.eos_id() if hasattr(self._sp, 'eos_id') else 1)
         self._unk_id = self._config.get("unk_token_id", self._sp.unk_id() if hasattr(self._sp, 'unk_id') else 2)
-        self._bos_id = self._config.get("bos_token_id", 2)  # Default BOS=2 for Gemma-style
+        self._bos_id = self._config.get("bos_token_id", self._sp.bos_id())  # the model file's own trainer spec
         self._max_length = self._config.get("model_max_length", 512)
 
         # DATA-DRIVEN: add_bos_token and add_eos_token from config
