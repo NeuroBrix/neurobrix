@@ -25,6 +25,15 @@ appended to `--recert-list` with its `generator`, to be re-proven under it. A fi
 replacement would be empty): it is said, and left for a ruling. A file with every certification RETIRED (and none
 pending or failed) is REMOVED by `--apply`: no key the library forms is left in it, and an empty file is not shipped.
 
+ADD FROM A SUBSET DRAFT (`--add-from DRAFT ...`, no ledger): a recertification draft (`autotune certify --keys --out`)
+holds a SUBSET of a file's keys, each certified on ONE memory class at the library's bits epoch. Each of its
+certifications is ADDED to the shipped file: a key the file lacks takes the draft's entry as it stands; a key the file
+holds for the other class takes this class in its variant slot, the other class untouched. It NEVER replaces: a
+certification of the same key and class already in the file (or added by an earlier draft of the same run) is refused
+by name, as is a draft entry of no single class or of another bits epoch, and a file with any refusal, or whose result
+fails the library's `validate`, is not written. A row per file (file, added, variants, refused) goes to `--table` first;
+with `--apply` the file is then written whole (beside it, renamed over it), in the certifier's own format.
+
 One row per file reached (a draft file or a ledger line) is written to `--table` (file, keys, re_proven, failed,
 seconds, generators_dropped, retired), replacing that file's earlier row. A file's recert rows and table row are written BEFORE it is replaced, and
 the replacement is whole or nothing (a copy beside it, renamed over it): a stop at any point loses no failed key. Run with the frozen library's python: the library reads the files.
@@ -43,6 +52,7 @@ from neurobrix.kernels.autotune_certify import unit_tile
 LEDGER = "reprove_epoch_ledger.tsv"
 TABLE_COLS = ["file", "keys", "re_proven", "failed", "seconds", "generators_dropped", "retired"]
 RECERT_COLS = ["file", "key", "memory_class", "reason", "generator"]
+ADD_COLS = ["file", "added", "variants", "refused"]
 
 
 def _norm(ktext):
@@ -237,17 +247,98 @@ def run(shipped, draft, table, recert_list, apply=False, say=print, retired=()):
     return {"rows": rows, "recert": recert, "replaced": replaced, "removed": removed}
 
 
+def _add_one(entries, ktext, cert):
+    """Place one draft certification in `entries` (keyed by normalised key text): "added", "variant", or the refusal."""
+    classes = C.covered_memory_gbs(cert)
+    if len(classes) != 1 or cert.get("variants"):
+        return f"covers {sorted(classes)}, not one memory class"
+    if not _class_epochs(cert) <= {C.BITS_EPOCH}:
+        return "a proof not of the library's bits epoch"
+    cls = next(iter(classes))
+    cur = entries.get(ktext)
+    if C.entry_for_memory_gb(cur, cls) is not None:
+        return f"the file already holds {ktext} for {cls}g: an existing certification is never overwritten"
+    if cur is None:
+        entries[ktext] = cert
+        return "added"
+    cur.setdefault("variants", {})[f"{cls}g"] = cert
+    return "variant"
+
+
+def _write_doc(doc, dst):
+    """`dst` becomes `doc` in the certifier's own format, whole or not at all (written beside it, renamed over it)."""
+    dst = Path(dst)
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
+        os.replace(tmp, dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def add(shipped, drafts, table, apply=False, say=print):
+    """Add every certification of the subset drafts to the shipped files (module docstring); returns the rows and the
+    files written."""
+    shipped = Path(shipped)
+    plan = {}                        # rel -> [(ktext, cert, draft)]
+    for d in map(Path, drafts):
+        for path in C.files(d):
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            plan.setdefault(path.relative_to(d), []).extend(
+                (_norm(k), e, d) for k, e in (doc.get("entries") or {}).items())
+    rows, written = [], []
+    for rel, certs in sorted(plan.items(), key=lambda x: str(x[0])):
+        target = shipped / rel
+        if not target.exists():
+            say(f"{rel}: REFUSED, no shipped file to add to")
+            rows.append({"file": str(rel), "added": 0, "variants": 0, "refused": len(certs)})
+            continue
+        doc = json.loads(target.read_text(encoding="utf-8"))
+        entries = {_norm(k): e for k, e in (doc.get("entries") or {}).items()}
+        n = {"added": 0, "variant": 0}
+        refused = []
+        for ktext, cert, d in certs:
+            got = _add_one(entries, ktext, json.loads(json.dumps(cert)))
+            if got in n:
+                n[got] += 1
+            else:
+                refused.append(got)
+                say(f"  REFUSED {rel} {ktext} (from {d}): {got}")
+        merged = {**doc, "entries": entries}
+        problems = C.validate(merged, target) if not refused else []
+        row = {"file": str(rel), "added": n["added"], "variants": n["variant"], "refused": len(refused)}
+        rows.append(row)
+        _upsert(table, ADD_COLS, [row], key=lambda r: r["file"])
+        ok = not refused and not problems
+        say(f"{rel}: {n['added']} added, {n['variant']} beside the other class, {len(refused)} refused — "
+            + ("READY" if ok else "NOT WRITTEN" + (f", gate: {problems[0]}" if problems else "")))
+        if ok and apply:
+            _write_doc(merged, target)
+            written.append(str(rel))
+            say(f"  wrote {target}")
+    return {"rows": rows, "written": written}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--shipped", required=True, help="the certified tree re-proven from (vendor/profile/*.json)")
-    ap.add_argument("--draft", required=True, help="the draft tree the re-prove wrote (and its ledger)")
+    ap.add_argument("--draft", help="the draft tree the re-prove wrote (and its ledger)")
     ap.add_argument("--table", required=True, help="the stamp table (TSV: file, keys, re_proven, failed, seconds)")
-    ap.add_argument("--recert-list", required=True, help="the full-recertification list the failed keys join (TSV)")
+    ap.add_argument("--recert-list", help="the full-recertification list the failed keys join (TSV)")
     ap.add_argument("--apply", action="store_true", help="replace every READY shipped file by its draft, remove "
                     "every file whose keys are all retired")
     ap.add_argument("--retired", nargs="+", default=[], help="TSV(s) of keys the library gives no launch (file, key, "
                     "memory_class, verdict retired_*): they leave the file, counted apart, off --recert-list")
+    ap.add_argument("--add-from", nargs="+", default=[], help="subset recertification draft(s): ADD their certifications "
+                    "(never replacing one); no ledger, no --draft or --recert-list")
     a = ap.parse_args(argv)
+    if a.add_from:
+        if any(Path(d).resolve() == Path(a.shipped).resolve() for d in a.add_from):
+            sys.exit("a draft tree is the shipped tree: refused")
+        add(a.shipped, a.add_from, a.table, apply=a.apply)
+        return 0
+    if not (a.draft and a.recert_list):
+        ap.error("--draft and --recert-list are required (or --add-from)")
     if Path(a.draft).resolve() == Path(a.shipped).resolve():
         sys.exit("the draft tree is the shipped tree: refused")
     run(a.shipped, a.draft, a.table, a.recert_list, apply=a.apply, retired=a.retired)

@@ -8,7 +8,9 @@ draft configuration that differs counted re-proven -> the second RED; a failed k
 replacement holding an epoch-less proof, or no table row -> the third RED; a re-chosen unit tile counted re-proven ->
 the unit test RED; a stop during the replacement losing a failed key or truncating the file -> the stop test RED; a
 retired key kept in the file, put on the recertification list or not counted apart -> the retired test RED; a file
-whose every key is retired shipped (empty or as it was), or one with a key failed removed -> the removal test RED.
+whose every key is retired shipped (empty or as it was), or one with a key failed removed -> the removal test RED. A
+subset draft's certification not added, added over another class's proof, or an existing certification of the same
+key and class overwritten -> the two add tests RED.
 """
 import csv
 import json
@@ -32,12 +34,12 @@ def _cfg(b):
     return {"kwargs": {"BLOCK": b}, "num_warps": 4, "num_stages": 2, "num_ctas": 1, "maxnreg": None}
 
 
-def _proof(epoch=None, n=1):
+def _proof(epoch=None, n=1, mem=16384):
     """A proof of the key (n, 'fp32'): the library's gate refuses a proof whose shape is not its entry's key, and a
     draft refused for that is never refused for the reason a test means (qa 1227-3: the configuration test was)."""
     p = {"date": "2026-11-01T00:00:00+00:00", "engine_version": "0", "backend": {"triton": "3.8.0", "name": "cuda"},
          "shape": [n, "fp32"], "deviation": 0.0, "tolerance": 1e-4, "oracle": "fp64",
-         "machine": {"device": {"memory_mb": 16384}, "clocks_mhz": {"0": {"graphics": 1290}}},
+         "machine": {"device": {"memory_mb": mem}, "clocks_mhz": {"0": {"graphics": 1290}}},
          "built": {"gpu": True}}
     if epoch is not None:
         p["bits_epoch"] = epoch
@@ -247,3 +249,54 @@ def test_a_retired_key_the_draft_still_holds_stays_pending_and_the_file_is_not_r
     assert any("named retired, yet the draft holds it" in s for s in said)
     table = list(csv.DictReader(open(tmp_path / "table.tsv"), delimiter="\t"))
     assert [(r["re_proven"], r["retired"]) for r in table] == [("1", "0")]
+
+
+def _unit_cert(b, n, mem):
+    return {"config": _cfg(b), "proof": _proof(C.BITS_EPOCH, n=n, mem=mem), "excluded": [],
+            "unit": {"tile": {"block_m": 64, "block_n": 64, "block_k": 32, "warps_m": 2, "warps_n": 2, "group_m": 8},
+                     "deviation": 0.0, "best_ms": 1.0}}
+
+
+def _add(tmp_path, *drafts, apply=True):
+    return S.add(tmp_path / "shipped", [tmp_path / d for d in drafts], tmp_path / "add_table.tsv", apply=apply,
+                 say=lambda *a: None)
+
+
+def test_a_subset_draft_adds_its_certifications_and_a_class_beside_the_other(tmp_path):
+    """1245: a recertification draft holds a SUBSET of a file's keys, one memory class. Its certification is ADDED: a
+    key the file lacks gets the draft's entry as it stands; a key the file holds for the OTHER class gets this class
+    beside it (the variant slot), the other class's certification untouched; every other entry stays as it was."""
+    K3 = C.key_repr((3, "fp32"))
+    k1 = {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}
+    k3 = {"config": _cfg(3), "proof": _proof(C.BITS_EPOCH, n=3)}
+    shipped = _write(tmp_path / "shipped", {K1: k1, K3: k3})
+    _write(tmp_path / "d16", {K2: _unit_cert(2, 2, 16384)})
+    _write(tmp_path / "d32", {K1: _unit_cert(5, 1, 32768)})
+    assert _add(tmp_path, "d16", "d32", apply=False)["written"] == [] and json.loads(shipped.read_text())["entries"] == {
+        K1: k1, K3: k3}                                                        # no --apply: nothing written
+    out = _add(tmp_path, "d16", "d32")
+    assert out["written"] == ["nvidia/volta/toy_kernel.fp32.json"]
+    doc = json.loads(shipped.read_text())
+    e = doc["entries"]
+    assert e[K3] == k3 and e[K2] == _unit_cert(2, 2, 16384)
+    assert {k: v for k, v in e[K1].items() if k != "variants"} == k1          # the 16 GB certification untouched
+    assert e[K1]["variants"] == {"32g": _unit_cert(5, 1, 32768)}
+    assert C.entry_for_memory_gb(e[K1], 32) == _unit_cert(5, 1, 32768) and C.entry_for_memory_gb(e[K1], 16) == e[K1]
+    assert C.validate(doc, shipped) == []
+    table = list(csv.DictReader(open(tmp_path / "add_table.tsv"), delimiter="\t"))
+    assert [(r["added"], r["variants"], r["refused"]) for r in table] == [("1", "1", "0")]
+
+
+def test_an_existing_certification_of_the_same_key_and_class_is_never_overwritten(tmp_path):
+    """The add never replaces: a draft certification whose key and class the file already holds is refused by name,
+    and the file is not written at all (whole or nothing), even for the other keys of the same draft."""
+    k1 = {"config": _cfg(1), "proof": _proof(C.BITS_EPOCH)}
+    shipped = _write(tmp_path / "shipped", {K1: k1})
+    _write(tmp_path / "d16", {K1: _unit_cert(7, 1, 16384), K2: _unit_cert(2, 2, 16384)})
+    before = shipped.read_bytes()
+    said = []
+    out = S.add(tmp_path / "shipped", [tmp_path / "d16"], tmp_path / "add_table.tsv", apply=True, say=said.append)
+    assert out["written"] == [] and shipped.read_bytes() == before
+    assert any("never overwritten" in s and K1 in s for s in said)
+    table = list(csv.DictReader(open(tmp_path / "add_table.tsv"), delimiter="\t"))
+    assert [(r["added"], r["variants"], r["refused"]) for r in table] == [("1", "0", "1")]
