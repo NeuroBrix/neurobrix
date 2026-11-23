@@ -57,7 +57,7 @@ def test_each_turn_states_its_own_time_to_first_token(monkeypatch, capsys):
     run_timings.open_container()
     NOW[0] = 10.0
     args = SimpleNamespace(model="stand-in", system=None, max_tokens=8)
-    pkg = SimpleNamespace(manifest={"family": "llm"}, defaults={"max_tokens": 8})
+    pkg = SimpleNamespace(manifest={"family": "llm"}, defaults={"max_tokens": 8, "context": {"keeps": True}})
     plan = SimpleNamespace(kv_cache_plan=SimpleNamespace(session_reach=4096, max_cache_len=4096))
 
     def drain():

@@ -93,7 +93,7 @@ def _llm_engine(monkeypatch) -> InferenceEngine:
     e = _engine()
     e._family, e._session = "llm", _Session()
     e._executor.modules = {"tokenizer": _Tokenizer()}
-    e._pkg = SimpleNamespace(defaults={"max_tokens": 8})
+    e._pkg = SimpleNamespace(defaults={"max_tokens": 8, "context": {"keeps": True}})   # a container keeping a chat
     e._plan = e._executor.plan = SimpleNamespace(kv_cache_plan=SimpleNamespace(session_reach=4096, max_cache_len=4096),
                                                  strategy="single_gpu", primary_device="cpu", loading_mode="eager")
     e._agent_kv = None

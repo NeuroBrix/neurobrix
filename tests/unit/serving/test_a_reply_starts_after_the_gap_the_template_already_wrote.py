@@ -161,4 +161,7 @@ def test_the_cli_text_of_a_chat_mode_run_drops_the_gap_and_a_non_chat_run_keeps_
     assert _extract_text(outputs, executor(True)) == "Hello! How can I help?"
     assert _extract_text(outputs, executor(None, {"chat_mode": True})) == "Hello! How can I help?"
     assert _extract_text(outputs, executor(False, {"chat_mode": True})) == " Hello! How can I help?"
-    assert _extract_text(outputs, executor(None)) == " Hello! How can I help?"
+    assert _extract_text(outputs, executor(None, {"chat_mode": False})) == " Hello! How can I help?"
+    import pytest
+    with pytest.raises(RuntimeError, match="declares no chat_mode"):      # neither the request nor the container says
+        _extract_text(outputs, executor(None))
