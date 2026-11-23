@@ -45,3 +45,9 @@ def test_a_served_history_on_a_container_that_keeps_none_is_a_400_before_it_runs
     with pytest.raises(ConversationNotKept, match="does not declare whether it keeps one") as err:
         e.check_context(msgs)
     assert err.value.api_code == "conversation_not_kept"
+
+
+def test_an_undeclared_context_names_the_remedy():
+    from neurobrix.core.runtime.prompt_length import declared_context_keeps
+    with pytest.raises(RuntimeError, match=r"install the corrected container"):
+        declared_context_keeps({}, "a chat session")

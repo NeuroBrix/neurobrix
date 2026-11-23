@@ -28,6 +28,12 @@ def refuse_past_reach(what: str, rendered: int, max_tokens: int, holder: str, re
     return need
 
 
+# The remedy of a refusal for a value a container predating it lacks, in the engine's own wording for incomplete model
+# data (core/module/cache/factory.py): the value is the container's, so the fix is the corrected container.
+REMEDY = ("; this container predates the key: install the corrected container "
+          "(neurobrix remove <model> && neurobrix import <org>/<model>)")
+
+
 def declared_chat_mode(defaults: Optional[Dict[str, Any]], asked: Any = None) -> bool:
     """Whether a request is rendered by the chat template: the request's own flag when it gives one, else the
     container's `chat_mode` (runtime/defaults.json) — the ONE reader of the key for the processor, the flow, the
@@ -38,7 +44,7 @@ def declared_chat_mode(defaults: Optional[Dict[str, Any]], asked: Any = None) ->
     if not defaults or "chat_mode" not in defaults:
         raise RuntimeError("ZERO FALLBACK: the container declares no chat_mode (runtime/defaults.json) and the "
                            "request gives none: whether its prompt is rendered by the chat template is the "
-                           "container's to say, not the engine's")
+                           "container's to say, not the engine's" + REMEDY)
     return bool(defaults["chat_mode"])
 
 
@@ -70,7 +76,7 @@ def declared_context_keeps(defaults: Optional[Dict[str, Any]], what: str) -> Non
     if not isinstance(ctx, dict) or "keeps" not in ctx:
         raise ConversationNotKept(f"ZERO FALLBACK: {what} keeps a conversation, and the container does not declare whether "
                            'it keeps one (runtime/defaults.json: context {"keeps": ...}): it is the container\'s '
-                           "to say, not the engine's")
+                           "to say, not the engine's" + REMEDY)
     if not ctx["keeps"]:
         raise ConversationNotKept(f"ZERO FALLBACK: {what} keeps a conversation, and this container declares it keeps none "
                            '(runtime/defaults.json: context {"keeps": false})')
