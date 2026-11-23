@@ -36,6 +36,16 @@ def _add_run_command_arguments(p):
                         'kernels and is not the run\'s speed')
 
 
+def _add_size_arguments(p):
+    """The output size a request asks, and whether the vendor's resolution binning applies to it."""
+    p.add_argument('--height', type=int, default=None, help='Output height in pixels')
+    p.add_argument('--width', type=int, default=None, help='Output width in pixels')
+    p.add_argument('--no-resolution-binning', action='store_true', dest='no_resolution_binning',
+                   help='Generate at the size asked. A model whose vendor bins its sizes (the container records '
+                        'it) otherwise generates at its nearest trained size and resizes back, said on the launch '
+                        'line')
+
+
 def _add_run_arguments(p):
     """The request arguments shared by `run` and `calibrate` (one list, one help)."""
     p.add_argument('--model', default=None, help='Model name (auto-detected from running daemon if omitted)')
@@ -47,8 +57,7 @@ def _add_run_arguments(p):
     p.add_argument('--audio', default=None, help='Input audio file path (for speech-to-text models)')
     p.add_argument('--steps', type=int, default=None, help='Number of inference steps')
     p.add_argument('--cfg', type=float, default=None, help='Guidance scale')
-    p.add_argument('--height', type=int, default=None, help='Output height in pixels')
-    p.add_argument('--width', type=int, default=None, help='Output width in pixels')
+    _add_size_arguments(p)
     p.add_argument('--output', help='Output file path (default: output.png)')
     p.add_argument('--seed', type=int, help='Random seed for reproducibility')
     p.add_argument('--temperature', type=float, default=None, help='Sampling temperature (0 = greedy)')

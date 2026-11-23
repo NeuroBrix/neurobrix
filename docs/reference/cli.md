@@ -68,6 +68,7 @@ neurobrix run [options]
 | `--cfg` `CFG` | — | Guidance scale |
 | `--height` `HEIGHT` | — | Output height in pixels |
 | `--width` `WIDTH` | — | Output width in pixels |
+| `--no-resolution-binning` | off | Generate at the size asked. A model whose vendor bins its sizes (the container records it) otherwise generates at its nearest trained size and resizes back, said on the launch line |
 | `--output` `OUTPUT` | — | Output file path (default: output.png) |
 | `--seed` `SEED` | — | Random seed for reproducibility |
 | `--temperature` `TEMPERATURE` | — | Sampling temperature (0 = greedy) |
@@ -463,6 +464,7 @@ neurobrix calibrate [options]
 | `--cfg` `CFG` | — | Guidance scale |
 | `--height` `HEIGHT` | — | Output height in pixels |
 | `--width` `WIDTH` | — | Output width in pixels |
+| `--no-resolution-binning` | off | Generate at the size asked. A model whose vendor bins its sizes (the container records it) otherwise generates at its nearest trained size and resizes back, said on the launch line |
 | `--output` `OUTPUT` | — | Output file path (default: output.png) |
 | `--seed` `SEED` | — | Random seed for reproducibility |
 | `--temperature` `TEMPERATURE` | — | Sampling temperature (0 = greedy) |
@@ -594,6 +596,7 @@ neurobrix drift [options]
 | `--cfg` `CFG` | — | Guidance scale |
 | `--height` `HEIGHT` | — | Output height in pixels |
 | `--width` `WIDTH` | — | Output width in pixels |
+| `--no-resolution-binning` | off | Generate at the size asked. A model whose vendor bins its sizes (the container records it) otherwise generates at its nearest trained size and resizes back, said on the launch line |
 | `--output` `OUTPUT` | — | Output file path (default: output.png) |
 | `--seed` `SEED` | — | Random seed for reproducibility |
 | `--temperature` `TEMPERATURE` | — | Sampling temperature (0 = greedy) |

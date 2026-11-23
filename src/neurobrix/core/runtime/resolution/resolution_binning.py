@@ -185,6 +185,17 @@ def restore_plan(orig_h: int, orig_w: int, new_h: int, new_w: int,
                        contract.mode, contract.align_corners)
 
 
+def binning_line(binned: Optional[BinnedRequest]) -> Optional[str]:
+    """The one launch line a request that resolution binning resizes is shown with: the size asked, the bin it is
+    generated at, resized back. None when the request does not run binned or its bin is the size asked. The vendor's
+    default is a DEFAULT, said, never a lock: `--no-resolution-binning` runs the size asked (orders 23/11/2026)."""
+    if binned is None or tuple(binned.requested) == tuple(binned.binned):
+        return None
+    (rh, rw), (bh, bw) = binned.requested, binned.binned
+    return (f"resolution binning (vendor default): {rw}x{rh} asked, generated at {bw}x{bh}, resized back "
+            f"(--no-resolution-binning generates at the size asked)")
+
+
 def bin_request(topology: Mapping[str, Any], merged: Dict[str, Any],
                 requested_flag: Any = None) -> Optional[BinnedRequest]:
     """Classify the request in `merged` (the executor's merged defaults, request applied) and rewrite its

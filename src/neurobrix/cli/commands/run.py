@@ -16,6 +16,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from typing import Optional
 
 from neurobrix.cli.utils import find_model, refuse_unread_flags
 
@@ -245,6 +246,45 @@ def request_decode_bound(args, cached_defaults=None):
     return int(asked) + sum(len((getattr(args, a, None) or '').encode('utf-8')) for a in ('prompt', 'system'))
 
 
+def binning_asked(args) -> Optional[bool]:
+    """What the request says of resolution binning: False with `--no-resolution-binning`, else the value of
+    `--set global.use_resolution_binning=<value>` when given, else None (the container's recorded vendor default).
+    One reading for the plan and for the run's inputs, so both size the same request."""
+    if getattr(args, "no_resolution_binning", False):
+        return False
+    for item in getattr(args, "set", None) or []:
+        key, eq, value = str(item).partition("=")
+        if eq and key.strip() == "global.use_resolution_binning":
+            return value.strip().lower() not in ("", "0", "false")
+    return None
+
+
+def binning_inputs(args) -> dict:
+    """The run's input that carries `--no-resolution-binning` to the executor's `bin_request` (its REQUEST_FLAG);
+    {} when the request says nothing (the container's recorded default holds) or asks for binning by --set."""
+    from neurobrix.core.runtime.resolution.resolution_binning import REQUEST_FLAG
+    return {REQUEST_FLAG: False} if getattr(args, "no_resolution_binning", False) else {}
+
+
+def request_size_inputs(args) -> dict:
+    """The run's inputs for the size the request asks: global.height / global.width when it names them, and the
+    binning flag (`binning_inputs`)."""
+    named = {f"global.{k}": getattr(args, k) for k in ("height", "width") if getattr(args, k, None) is not None}
+    return {**named, **binning_inputs(args)}
+
+
+def binned_size(args, topo_path, height: int, width: int) -> tuple:
+    """(height, width) the request is planned at: the executor's own classification (`bin_request`) of the size
+    asked, with the request's binning word (`binning_asked`). A request it resizes is said once at launch
+    (`binning_line`, the vendor's default; both branches pass here)."""
+    from neurobrix.core.runtime.resolution.resolution_binning import bin_request, binning_line
+    hw = {"height": height, "width": width}
+    line = binning_line(bin_request(json.load(open(topo_path)), hw, binning_asked(args)))
+    if line:
+        log.info(line)
+    return hw["height"], hw["width"]
+
+
 def scoring_request(args) -> bool:
     """Whether the request is a teacher-forced scoring one (`--set global.score_mode=<true value>`): its flow runs the
     head over every prompt position, so Prism prices the head at the prompt's rows (`FlowBindings.head_rows`)."""
@@ -376,10 +416,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # runs at the bin. The plan is sized at the same bin, by the same function — Sana-1024 was
     # planned at 320 x 512 and ran at 768 x 1280 (the census walk, 2026-09-29).
     if height is not None and width is not None and _topo_path.exists():
-        from neurobrix.core.runtime.resolution.resolution_binning import bin_request
-        _hw = {"height": height, "width": width}
-        bin_request(json.load(open(_topo_path)), _hw, None)
-        height, width = _hw["height"], _hw["width"]
+        height, width = binned_size(args, _topo_path, height, width)
 
     # OPTIONAL by nature: a model without a VAE has no scale factor, a model
     # without a temporal axis has no compression. Absent is a legitimate answer
@@ -815,10 +852,7 @@ def cmd_run(args):
 
     if args.steps is not None:
         inputs["global.num_inference_steps"] = args.steps
-    if args.height is not None:
-        inputs["global.height"] = args.height
-    if args.width is not None:
-        inputs["global.width"] = args.width
+    inputs.update(request_size_inputs(args))
     if num_frames is not None:
         # The frame count the CLI RESOLVED (request → container defaults → family), not only the
         # raw argument: a video flow reading `global.num_frames` for its image conditioning
