@@ -568,7 +568,7 @@ tables on the card it names.
   import <org>/<name>` is run once for it, and `list` and every use say so in one line. `list --json` is schema 2:
   `name` is the one name, `entry` the directory. `calibrate`, `drift` and `inspect` take the one name too, and the
   documentation's examples use it.
-- **Attribution**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.es); a NOTICE file
+- **Attribution**: author, maintainer and copyright holder Hocine Benkelaya (contact@neurobrix.org); a NOTICE file
   ships beside the LICENSE (supported and funded by Neural Network Holding Ltd, commercial distribution by WizWorks OÜ).
 - **The PyTorch engine's memory reserve on a device whose runtime growth is measured is that measure**: where the
   compiled engine's growth during a run is a fact (measured for the model, or declared by the device's vendor file), it
