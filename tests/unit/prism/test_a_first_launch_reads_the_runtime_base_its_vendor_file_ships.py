@@ -18,3 +18,14 @@ def test_without_a_vendor_figure_a_sibling_answers_else_none(monkeypatch, tmp_pa
     monkeypatch.setattr(O, "base_from_siblings", lambda *a, **k: {"triton": 300})
     assert O.shipped_or_sibling_base({}, tmp_path / "p.yml", "triton") == 300
     assert O.shipped_or_sibling_base({}, tmp_path / "p.yml", "compiled") is None
+
+
+def test_the_apple_m4_pro_ships_every_fact_a_first_launch_would_measure():
+    """The M4 Pro's vendor file states its runtime base per engine and its chunk (0: no VMM on Metal): a fresh-home
+    first launch on it measures nothing (the Mac, 23/11: "detecting its hardware once" only)."""
+    import pathlib
+    import yaml
+    import neurobrix
+    f = pathlib.Path(neurobrix.__file__).parent / "config" / "vendors" / "apple" / "apple_m4_pro.yml"
+    measured = yaml.safe_load(f.read_text())["measured"]
+    assert set(measured["runtime_base_mb"]) == {"compiled", "triton"} and measured["vmm_chunk_bytes"] == 0
