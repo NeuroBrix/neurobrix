@@ -618,3 +618,25 @@ def test_a_request_past_the_served_reach_is_a_named_400_before_it_runs(make):
     _assert_error(status, body, 400, param="messages")
     assert body["error"]["code"] == "context_length_exceeded" and "50" in body["error"]["message"]
     assert not [c for c in eng.calls if c[0] == "complete"]                 # nothing ran
+
+
+def test_a_history_its_container_keeps_none_of_is_a_named_400_before_it_runs(make, monkeypatch):
+    """A request carrying its history to a container that does not declare it keeps a conversation (runtime/defaults.json
+    `context`): 400 conversation_not_kept with the refusal's text and remedy, before any work runs — never a 500 (the
+    TinyLlama serve of 23/11; qa 1260-1: the door's mapping in routes.py tested). Red if routes.py lets
+    ConversationNotKept through (a 500) or maps it to another code."""
+    from neurobrix.core.runtime.prompt_length import declared_context_keeps
+    eng = FakeEngine()
+
+    def check(messages, tools=None, **kw):
+        if sum(m.get("role") != "system" for m in messages) > 1:
+            declared_context_keeps({}, "a request with its history")
+        return 1
+    monkeypatch.setattr(eng, "check_context", check)
+    srv, base = make(eng)
+    msgs = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]
+    status, body, _ = _post(base + "/v1/chat/completions", {"model": "fake-model", "messages": msgs, "max_tokens": 8})
+    _assert_error(status, body, 400, param="messages")
+    assert body["error"]["code"] == "conversation_not_kept"
+    assert "install the corrected container" in body["error"]["message"]
+    assert not any(c[0] == "complete" for c in eng.calls)
