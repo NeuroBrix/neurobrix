@@ -13,7 +13,8 @@ function, no adaptation layer. This scan lists, in `src/neurobrix` (both branche
               a module-level alias of an imported name, a name the engine imports from nbxtensor for other modules to
               import from it (a re-export), and a parameter no call site ever passes (it is always its default);
   fact        engine code computing a fact nbxtensor exposes: a definition carrying the name of a public nbxtensor fact
-              function (or one of its synonyms, `SYNONYMS`), and a literal table of dtype sizes.
+              function (or one of its synonyms, `SYNONYMS`), and a literal table of dtype sizes;
+and, beside them, `pending`: a CALLER PENDING marker the stale rule no longer holds (CALLER PENDING, below).
 
 Every finding ends deleted, or stays with its reason in one sentence: the engine's list of them is
 `tools/engine_slim_list.tsv` (kind, path, symbol, why it stays), whose header records the nbxtensor release it was scanned
@@ -36,10 +37,31 @@ THE TWO BRANCHES (RED_LINES.md lines 16-22): a doubled brick lives at `src/neuro
     the door is alive on both sides.
 `scan(..., twin_aware=False)` is the raw scan (twins counted separately, the door ignored): `--counts` prints both.
 
+CALLER PENDING (ruling 24/11 11:24). A definition written one hand-in before its caller is declared IN THE CODE, by
+one comment on the line(s) directly above its `def`/`class` (above its decorators, if any), never in the list:
+
+    # CALLER PENDING: <the hand-in that brings its caller> <YYYY-MM-DD>
+
+e.g. `# CALLER PENDING: H2 (the tie bind, lead/mac-tie-h2) 2026-11-24`. A comment is not code: it is no reference
+(the definition stays dead to every other rule) and no code line (the measure is unchanged). A marked definition with
+no caller is PENDING, not dead: not a finding, not counted. `--write-list` writes every pending entry (path, symbol,
+the hand-in, the date; a twin folded into its original's entry as findings are) into the list's one section
+`## CALLER PENDING`, below the findings; the test holds that section to the markers of the code. The section is
+EMPTY at the release gate: `--release` exits non-zero while one entry stands.
+THE STALE RULE: a pending entry stops being pending, and is a finding of kind `pending` (counted, so the suite turns
+red until the marker goes), when
+  * its definition HAS a caller (some other code refers to it: the hand-in that brings the caller has landed, the
+    marker is left behind), or
+  * its date is more than PENDING_DAYS days before the scan's day (the named hand-in did not bring the caller in
+    time: land the caller, or delete the definition).
+The first is exact (the scan's own reference rule decides it); the second bounds a promise no caller kept, with a
+date the code states and the scan reads, never a git history it would have to interpret.
+
     python tools/engine_slim_scan.py            # the findings, one per line: kind, path, symbol, detail
     python tools/engine_slim_scan.py --lines    # the engine's code-line count
     python tools/engine_slim_scan.py --counts   # findings and code lines both ways: raw, and twin/door-aware
     python tools/engine_slim_scan.py --write-list   # rewrite tools/engine_slim_list.tsv (refused if the findings rose)
+    python tools/engine_slim_scan.py --release  # the release gate: non-zero while a CALLER PENDING entry stands
 
 Standard library only (ast). A scan, not a proof: its rules are syntactic, so a finding is a question a person answers
 (delete it, or write why it stays) — never deleted on the scan's word alone.
@@ -48,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime
 import hashlib
 import importlib.util
 import re
@@ -122,6 +145,12 @@ DTYPE_NAMES = {"float16", "float32", "float64", "bfloat16", "int8", "int16", "in
                "fp16", "fp32", "fp64", "bf16", "half", "float", "double", "complex64", "complex128"}
 
 Finding = Tuple[str, str, str, str]          # (kind, path relative to the repository, symbol, detail)
+#: a CALLER PENDING marker: one comment directly above a definition (the module docstring)
+PENDING_MARKER = re.compile(r"^\s*#\s*CALLER PENDING:\s*(?P<handin>\S.*?)\s+(?P<date>\d{4}-\d{2}-\d{2})\s*$")
+#: the days a CALLER PENDING marker holds after its date; past them the entry is a finding (the stale rule)
+PENDING_DAYS = 14
+#: the list's one section of pending entries, written by --write-list below the findings
+PENDING_SECTION = "## CALLER PENDING"
 
 
 # ─────────────────────────────── reading the code ───────────────────────────────
@@ -172,17 +201,30 @@ def read_list(path: Path = LIST) -> Tuple[Dict[str, str], Dict[Tuple[str, str, s
         if line.startswith("# ") and ": " in line and " " not in line[2:].split(": ", 1)[0]:
             k, v = line[2:].split(": ", 1)
             head[k] = v
-        elif line.strip() and not line.startswith("#") and not line.startswith("kind\t"):
+        elif line.strip() and not line.startswith("#") and not line.startswith("kind\t") \
+                and not line.startswith("pending\t"):
             kind, rel, symbol, why = (line.split("\t") + [""])[:4]
             rows[(kind, rel, symbol)] = why
     return head, rows
 
 
-def write_list(repo: Path = REPO, library: Path = LIBRARY, path: Path = LIST) -> int:
+def read_pending(path: Path = LIST) -> Dict[Tuple[str, str], Tuple[str, str]]:
+    """{(path, symbol): (the hand-in that brings its caller, its date)} of the list's CALLER PENDING section."""
+    out = {}
+    for line in path.read_text().splitlines():
+        if line.startswith("pending\t"):
+            _, rel, symbol, handin, date = (line.split("\t") + ["", ""])[:5]
+            out[(rel, symbol)] = (handin, date)
+    return out
+
+
+def write_list(repo: Path = REPO, library: Path = LIBRARY, path: Path = LIST,
+               today: Optional[datetime.date] = None) -> int:
     """Rewrite the list from a fresh scan, every reason already written kept; refused if the findings rose over its
-    header (the code-line count is written as a measure, never refused)."""
+    header (the code-line count is written as a measure, never refused). The CALLER PENDING section is written from
+    the code's markers (`pending`), on the day `today` (default: the day of the scan)."""
     library = installed_library(repo, library)
-    found = sorted({(k, p, s) for k, p, s, _ in scan(repo, library)})
+    found = sorted({(k, p, s) for k, p, s, _ in scan(repo, library, today=today)})
     lines = engine_lines(repo)
     head, why = read_list(path) if path.exists() else ({}, {})
     if "findings" in head and len(found) > int(head["findings"]):
@@ -195,8 +237,49 @@ def write_list(repo: Path = REPO, library: Path = LIBRARY, path: Path = LIST) ->
            f"# nbxtensor: {library_stamp(library)}", f"# engine_lines: {lines}", f"# findings: {len(found)}",
            "kind\tpath\tsymbol\twhy it stays"]
     out += ["\t".join((k, p, s, why.get((k, p, s), ""))) for k, p, s in found]
+    out += [f"{PENDING_SECTION}: a definition whose caller a named hand-in brings (written from the code's markers,",
+            "## never by hand; not a finding; EMPTY at the release gate: --release). pending, path, symbol, hand-in, date"]
+    out += ["\t".join(("pending", p, s, h, d)) for (p, s), (h, d) in sorted(pending(repo, library, today).items())]
     path.write_text("\n".join(out) + "\n")
     return len(found)
+
+
+def pending_marker(lines: List[str], node) -> Optional[Tuple[str, str]]:
+    """(hand-in, date) of the CALLER PENDING comment directly above `node` (above its decorators), else None: the
+    comment block that ends on the line before the definition is read, upward, to its first non-comment line."""
+    i = min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])]) - 2
+    while i >= 0 and lines[i].lstrip().startswith("#"):
+        m = PENDING_MARKER.match(lines[i])
+        if m:
+            return m["handin"], m["date"]
+        i -= 1
+    return None
+
+
+def _definitions(t: ast.Module):
+    """The definitions the dead rule reads: (node, owning class or None) — module-level ones and methods."""
+    defs = [(n, None) for n in t.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    for c in [n for n in t.body if isinstance(n, ast.ClassDef)]:
+        defs += [(m, c) for m in c.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    return defs
+
+
+def pending(repo: Path = REPO, library: Path = LIBRARY, today: Optional[datetime.date] = None,
+            twin_aware: bool = True) -> Dict[Tuple[str, str], Tuple[str, str]]:
+    """{(path, symbol): (hand-in, date)} of the definitions that are CALLER PENDING today: marked, no caller, inside
+    PENDING_DAYS of their date (a marker past the stale rule is a finding of `scan`, not an entry here). A twin entry
+    its original carries too is folded into the original's, as findings are."""
+    out: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    scan(repo, library, twin_aware, today, out)
+    if not twin_aware:
+        return out
+    twins = Twins(repo / "src" / "neurobrix")
+    folded = {}
+    for (rel, symbol), entry in out.items():
+        orig = twins.original_of(repo / rel)
+        if orig is None or (_rel(orig, repo, library), symbol) not in out:
+            folded[(rel, symbol)] = entry
+    return folded
 
 
 def _parse(p: Path) -> ast.Module:
@@ -518,10 +601,13 @@ def _library_facts(repo: Path = REPO, library: Path = LIBRARY) -> Dict[str, str]
     return out
 
 
-def scan(repo: Path = REPO, library: Path = LIBRARY, twin_aware: bool = True) -> List[Finding]:
+def scan(repo: Path = REPO, library: Path = LIBRARY, twin_aware: bool = True, today: Optional[datetime.date] = None,
+         pending_out: Optional[Dict[Tuple[str, str], Tuple[str, str]]] = None) -> List[Finding]:
     """Every finding of the repository at `repo` against the library package at `library` (the installed one by
     default), sorted (kind, path, symbol). `twin_aware` (the default) reads the two branches (the module docstring);
-    False gives the raw scan: twins counted separately, the door ignored."""
+    False gives the raw scan: twins counted separately, the door ignored. `today` (default: the day of the scan) is the
+    day the CALLER PENDING stale rule counts from; `pending_out`, when given, receives the pending entries."""
+    today = today or datetime.date.today()
     ENGINE, LIBRARY = repo / "src" / "neurobrix", library
     twins = Twins(ENGINE, enabled=twin_aware)
     usage_files = [p for r in [repo / u for u in USAGE_ROOTS] + [library] if r.is_dir() for p in _py_files(r)]
@@ -569,29 +655,29 @@ def scan(repo: Path = REPO, library: Path = LIBRARY, twin_aware: bool = True) ->
         own = _Refs()
         own.visit(t)
         self_refs = _definition_refs(t)
-        defs = [(n, None) for n in t.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
-        for c in [n for n in t.body if isinstance(n, ast.ClassDef)]:
-            defs += [(m, c) for m in c.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
-        for node, owner in defs:
+        lines = p.read_text(encoding="utf-8").splitlines()
+        for node, owner in _definitions(t):
             name = node.name
-            if name.startswith("__") and name.endswith("__"):
-                continue
-            if _is_registered(node) or name in data_words:
-                continue
-            if owner is None and (_module_name(p, repo, library), name) in door:
-                continue                                   # named through the branch door: alive on both sides
-            # used elsewhere: another file names it (the other side of its brick is not a use); or this file names it
-            # outside its own body
-            other = twins.other_side(p)
-            elsewhere = [q for q in naming.get(name, ()) if q != p and not (other and q.is_relative_to(other))]
-            if elsewhere:
-                continue
-            body_names = self_refs.get(id(node), set())
-            in_file_outside = name in own.names and (name not in body_names or _count_name(t, name) > _count_name(node, name))
-            if in_file_outside:
-                continue
             symbol = f"{owner.name}.{name}" if owner is not None else name
-            findings.append(("dead", _rel(p, repo, library), symbol, "no reference outside its own body (tests excluded)"))
+            marker = pending_marker(lines, node)
+            if marker is not None and _is_dead(p, t, node, owner, own, self_refs, naming, door, data_words, twins,
+                                               repo, library):
+                due = _date(marker[1], p, symbol) + datetime.timedelta(days=PENDING_DAYS)
+                if today <= due:
+                    if pending_out is not None:
+                        pending_out[(_rel(p, repo, library), symbol)] = marker
+                else:
+                    findings.append(("pending", _rel(p, repo, library), symbol,
+                                     f"its CALLER PENDING marker ({marker[0]}, {marker[1]}) is past {due}: no caller "
+                                     f"came; land the caller or delete the definition"))
+                continue
+            if marker is not None:
+                findings.append(("pending", _rel(p, repo, library), symbol,
+                                 f"its CALLER PENDING marker ({marker[0]}, {marker[1]}) stands and it has a caller: "
+                                 f"delete the marker"))
+                continue
+            if _is_dead(p, t, node, owner, own, self_refs, naming, door, data_words, twins, repo, library):
+                findings.append(("dead", _rel(p, repo, library), symbol, "no reference outside its own body (tests excluded)"))
 
     # 2. duplicate
     groups: Dict[str, List[Tuple[Path, str, str]]] = defaultdict(list)
@@ -667,6 +753,31 @@ def scan(repo: Path = REPO, library: Path = LIBRARY, twin_aware: bool = True) ->
     return sorted(set(findings))
 
 
+def _date(text: str, p: Path, symbol: str) -> datetime.date:
+    try:
+        return datetime.date.fromisoformat(text)
+    except ValueError:
+        raise ScanRefused(f"{p}: {symbol}'s CALLER PENDING marker dates it {text!r}, not a day (YYYY-MM-DD)") from None
+
+
+def _is_dead(p, t, node, owner, own, self_refs, naming, door, data_words, twins, repo, library) -> bool:
+    """The dead rule (the module docstring): `node` of file `p` is referred to by nothing outside its own body."""
+    name = node.name
+    if name.startswith("__") and name.endswith("__"):
+        return False
+    if _is_registered(node) or name in data_words:
+        return False
+    if owner is None and (_module_name(p, repo, library), name) in door:
+        return False                                   # named through the branch door: alive on both sides
+    # used elsewhere: another file names it (the other side of its brick is not a use); or this file names it
+    # outside its own body
+    other = twins.other_side(p)
+    if [q for q in naming.get(name, ()) if q != p and not (other and q.is_relative_to(other))]:
+        return False
+    body_names = self_refs.get(id(node), set())
+    return not (name in own.names and (name not in body_names or _count_name(t, name) > _count_name(node, name)))
+
+
 def _fold_twins(findings: List[Finding], twins: Twins, repo: Path, library: Path) -> List[Finding]:
     """Every twin finding its original carries too (same kind, same symbol read on the PyTorch side) folded into the
     original's: the original's entry covers its twin, never listed twice."""
@@ -739,10 +850,24 @@ def _never_passed(fn, param: str, sites: List[ast.Call]) -> bool:
     return True
 
 
+def release_gate(repo: Path = REPO, library: Path = LIBRARY, today: Optional[datetime.date] = None) -> int:
+    """`--release`: 0 when no CALLER PENDING entry stands, else 1, every entry printed (the section is EMPTY at the
+    release gate)."""
+    left = pending(repo, library, today)
+    for (path, symbol), (handin, date) in sorted(left.items()):
+        print(f"CALLER PENDING\t{path}\t{symbol}\t{handin}\t{date}")
+    print(f"release gate: {len(left)} CALLER PENDING entr{'y' if len(left) == 1 else 'ies'}"
+          + ("" if not left else ": the section is empty at the release gate (land the caller, or delete the "
+             "definition)"))
+    return 1 if left else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="the engine's slimming scan")
     ap.add_argument("--lines", action="store_true", help="print the engine's Python line count")
     ap.add_argument("--write-list", action="store_true", help=f"rewrite {LIST.name} (refused if the findings rose)")
+    ap.add_argument("--release", action="store_true",
+                    help="the release gate: exit non-zero while a CALLER PENDING entry stands")
     ap.add_argument("--counts", action="store_true",
                     help="print the findings and code lines both ways: raw (twins counted separately, the door "
                          "ignored) and twin/door-aware")
@@ -756,7 +881,8 @@ def main(argv=None) -> int:
         raw = {f[:3] for f in scan(REPO, lib, twin_aware=False)}
         aware = {f[:3] for f in scan(REPO, lib)}
         lines, (lines_aware, grew) = engine_lines(), engine_lines_twin_aware()
-        by_kind = lambda f: ", ".join(f"{k} {sum(1 for x in f if x[0] == k)}" for k in ("dead", "duplicate", "wrapper", "fact"))
+        by_kind = lambda f: ", ".join(f"{k} {sum(1 for x in f if x[0] == k)}"
+                                      for k in ("dead", "duplicate", "wrapper", "fact", "pending"))
         print(f"findings: raw {len(raw)} ({by_kind(raw)}); twin/door-aware {len(aware)} ({by_kind(aware)}); "
               f"the list's header: {read_list()[0].get('findings')}")
         print(f"engine_lines: raw {lines}; twin-aware {lines_aware} (a twin counted past its original's lines); "
@@ -767,6 +893,8 @@ def main(argv=None) -> int:
     if a.write_list:
         print(f"{LIST.name}: {write_list()} findings")
         return 0
+    if a.release:
+        return release_gate(REPO, installed_library())
     for kind, path, symbol, detail in scan(REPO, installed_library()):
         print(f"{kind}\t{path}\t{symbol}\t{detail}")
     return 0

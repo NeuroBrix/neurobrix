@@ -3,7 +3,7 @@
 # the findings count, and the scatter count of scatter_list.tsv, only go down; engine_lines is a measure:
 # the test prints the current count against it and never fails on it.
 # nbxtensor: 3e51f191906cdef611aa445b2967736ac044dac3
-# engine_lines: 101764
+# engine_lines: 102256
 # findings: 165
 kind	path	symbol	why it stays
 dead	src/neurobrix/cli/commands/registry.py	installing_path	a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else
@@ -109,7 +109,6 @@ wrapper	src/neurobrix/core/runtime/graph_executor.py	execute	the executor interf
 wrapper	src/neurobrix/core/runtime/lm_facts.py	decode_sequences(resolved)	the run's resolved values (a CLI cfg_scale) — the tests pass it (tests/unit/prism/test_the_plan_prices_every_cache_its_decoder_opens)
 wrapper	src/neurobrix/core/runtime/phase_trace.py	first	the ledger's read door: _FIRST is the module's private state
 wrapper	src/neurobrix/core/runtime/phase_trace.py	mark(note)	passed positionally by the Triton flow through its alias `_phase_mark` (triton/flow/autoregressive.py: the allocator's live/cached/free note); the scan reads calls by name, and the one call it saw by that name left with the build tools (2026-11-13)
-wrapper	src/neurobrix/core/runtime/phase_trace.py	mark(sync)	passed positionally by the Triton flow through its alias `_phase_mark` (triton/flow/autoregressive.py: the device sync before a stamp); the scan reads calls by name, and the one call it saw by that name left with the build tools (2026-11-13)
 wrapper	src/neurobrix/core/runtime/shape_resolver.py	ShapeResolutionError	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing
 wrapper	src/neurobrix/core/runtime/symexpr.py	ExpressionError	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ValueError` would name nothing
 wrapper	src/neurobrix/core/runtime/symexpr.py	RealInShapeSlot	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ExpressionError` would name nothing
@@ -142,6 +141,7 @@ wrapper	src/neurobrix/processors/espeak_ng/reader/phonemes.py	Unreadable	a named
 wrapper	src/neurobrix/processors/messages.py	ProcessorRefused	a named refusal: the one type of every sentence a person reads about a processor, raised by `messages.refusal` and caught by name (2026-11-16)
 wrapper	src/neurobrix/processors/store.py	find_spec(path)	the import system's MetaPathFinder protocol: `importlib` calls `find_spec(name, path, target)` positionally on every finder of `sys.meta_path` (2026-11-16)
 wrapper	src/neurobrix/processors/store.py	find_spec(target)	the same protocol method: its third positional parameter, given by `importlib` (2026-11-16)
+wrapper	src/neurobrix/pytorch/neurotax/tie.py	TieDeclarationError	a named refusal: the tie reader's one type for a malformed or misplaced tie declaration (its message names the container, the place, the key and the remedy), caught by name by the tie reader's tests and by the tie bind, where a bare `ValueError` would name nothing; its Triton twin is this row (2026-11-24)
 wrapper	src/neurobrix/pytorch/prism/arena_probe.py	ProbeOutOfMemory	the arena probe's child process says by name that the device could not hold its request — the measure's bound, crossing a process boundary as text; the library's DeviceOOMError is raised in the child, its figures do not travel (2026-11-07)
 wrapper	src/neurobrix/pytorch/prism/arena_probe.py	ProbeUncertified	the arena probe's child says by name that its request formed a key the certified directory does not serve — the measure's bound, crossing a process boundary as text; the library's KeyNotCertified is raised in the child (2026-11-07)
 wrapper	src/neurobrix/pytorch/prism/chunked_region.py	_Mix	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing
@@ -171,3 +171,6 @@ wrapper	src/neurobrix/triton/sequential.py	bind_inputs	the interface every seque
 wrapper	src/neurobrix/triton/session.py	use_branch	the session is the flows' handle; the KV wrapper behind it is the session's to replace
 wrapper	src/neurobrix/triton/symbols.py	UnboundSymbolError	a typed refusal of the engine's error contract (162 references): callers and tests name it, where a bare RuntimeError would name nothing
 wrapper	src/neurobrix/triton/symbols.py	get	the symbol table's accessor (6 403 call sites): the bindings dict stays private, `is_bound` decides boundness
+## CALLER PENDING: a definition whose caller a named hand-in brings (written from the code's markers,
+## never by hand; not a finding; EMPTY at the release gate: --release). pending, path, symbol, hand-in, date
+pending	src/neurobrix/pytorch/neurotax/tie.py	read_tie	H2 (the tie bind, lead/mac-tie-h2)	2026-11-24

@@ -104,3 +104,69 @@ def test_a_file_it_cannot_read_is_refused_by_name(tmp_path):
     _write(r, "src/neurobrix/broken.py", "def f(:\n")
     with pytest.raises(S.ScanRefused, match="broken.py"):
         S.scan(r)
+
+
+# ─── CALLER PENDING (ruling 24/11 11:24): a marker in the code, never a line written by hand ───
+
+_MARK = "# CALLER PENDING: H9 (a hand-in, lead/x) {date}\n"
+_DAY = S.datetime.date(2026, 11, 24)
+
+
+def _pending_repo(tmp_path: Path, marked: str, called: bool = False, date: str = "2026-11-24") -> Path:
+    r = tmp_path / "repo"
+    _write(r, "site/nbxtensor/__init__.py", "")
+    _write(r, "src/neurobrix/__init__.py", "")
+    _write(r, "src/neurobrix/c.py",
+           "def plain():\n    return 1\n\n" + marked.format(date=date) + "def later(x):\n    return x + 1\n")
+    _write(r, "tools/use.py", "from neurobrix.c import later\nlater(1)\n" if called else "x = 1\n")
+    return r
+
+
+def _kinds(r: Path, today=_DAY):
+    return {(k, s) for k, _, s, _ in S.scan(r, r / "site" / "nbxtensor", today=today)}
+
+
+def test_a_marked_definition_with_no_caller_is_pending_not_dead(tmp_path):
+    r = _pending_repo(tmp_path, _MARK)
+    got = _kinds(r)
+    assert ("dead", "plain") in got and not {f for f in got if f[1] == "later"}, got
+    assert S.pending(r, r / "site" / "nbxtensor", _DAY) == {
+        ("src/neurobrix/c.py", "later"): ("H9 (a hand-in, lead/x)", "2026-11-24")}
+
+
+def test_without_the_marker_it_is_dead_as_before(tmp_path):
+    r = _pending_repo(tmp_path, "# an ordinary comment\n")
+    assert ("dead", "later") in _kinds(r)
+    assert S.pending(r, r / "site" / "nbxtensor", _DAY) == {}
+
+
+def test_the_release_gate_is_red_while_an_entry_stands(tmp_path, capsys):
+    r = _pending_repo(tmp_path, _MARK)
+    assert S.release_gate(r, r / "site" / "nbxtensor", _DAY) == 1
+    assert "later" in capsys.readouterr().out
+    r2 = _pending_repo(tmp_path / "two", "")
+    assert S.release_gate(r2, r2 / "site" / "nbxtensor", _DAY) == 0
+
+
+def test_a_marker_left_behind_by_its_caller_is_a_finding(tmp_path):
+    r = _pending_repo(tmp_path, _MARK, called=True)
+    assert ("pending", "later") in _kinds(r)
+    assert S.pending(r, r / "site" / "nbxtensor", _DAY) == {}
+
+
+def test_a_marker_past_its_days_is_a_finding(tmp_path):
+    r = _pending_repo(tmp_path, _MARK, date="2026-11-01")
+    assert ("pending", "later") not in _kinds(r, today=S.datetime.date(2026, 11, 15))      # day 14: still pending
+    assert ("pending", "later") in _kinds(r, today=S.datetime.date(2026, 11, 16))          # day 15: stale
+    assert S.pending(r, r / "site" / "nbxtensor", S.datetime.date(2026, 11, 16)) == {}
+
+
+def test_the_list_section_is_written_from_the_markers(tmp_path):
+    r = _pending_repo(tmp_path, _MARK)
+    lst = tmp_path / "list.tsv"
+    lst.write_text("# findings: 9\n")
+    lib = tmp_path / "installed" / "nbxtensor"                 # the list is written against a library outside the tree
+    _write(lib.parent, "nbxtensor/__init__.py", "__version__ = '0.0'\n")
+    S.write_list(r, lib, lst, today=_DAY)
+    assert S.read_pending(lst) == {("src/neurobrix/c.py", "later"): ("H9 (a hand-in, lead/x)", "2026-11-24")}
+    assert all(k != "pending" for k, _, _ in S.read_list(lst)[1])          # an entry is no finding

@@ -91,6 +91,8 @@ NOT_SEMANTIC = {
     ("core/module/temporal_stream_runner.py", "nbytes"): "a parked stream state answering the library's deferred-free "
         "batch (nbxtensor.memory.deferred_frees.DeferredFrees.add reads t.nbytes()) with the device bytes it holds: "
         "none, it waits in host memory; no size is computed",
+    ("pytorch/neurotax/tie.py", "_carriers"): "a walk of topology.json's keys (the places under the flow that carry a "
+        "logits_source key, by path): no tensor, no shape, no memory; 'carrier' here is a key's carrier",
 }
 
 # Names that are tensor semantics wherever they are defined.

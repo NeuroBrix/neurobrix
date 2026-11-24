@@ -12,6 +12,8 @@ the INSTALLED library (the release pyproject.toml pins). Every finding is on the
    (`tools/scatter_scan.py`) never exceed `tools/scatter_list.tsv`'s header. The engine's code-line count
    (`tools/brick_ratchet.code_lines`) is a measure, printed against the header, never a failure (ruling 17/11 16:11).
 5. The list was scanned against the release the engine pins, read from the installed package, never from this tree.
+6. The list's CALLER PENDING section is the code's markers (`--write-list` writes it); it is empty at the release gate
+   (`tools/engine_slim_scan.py --release`), never here: a pending entry is no finding.
 
 What would this file do if the engine grew? A new dead or duplicated definition: rules 1 and 4 RED; a new scattered
 definition: rule 4 RED; new plain lines: printed, green; a list regenerated against another release of the library: rule 5 RED."""
@@ -82,6 +84,15 @@ def test_the_engine_and_its_findings_only_go_down():
     assert len(scattered) <= int(head["definitions"]), (
         f"the engine holds {len(scattered)} scattered tensor definitions (the header of {SC.LIST.name}: "
         f"{head['definitions']}): it only shrinks; found: " + "; ".join(f"{p}:{s}" for p, s in scattered))
+
+
+def test_the_caller_pending_section_is_the_codes_markers():
+    """Rule 6 (ruling 24/11 11:24): the list's CALLER PENDING section is the markers of the code, never a line written
+    by hand; an entry is no finding (the stale rule's findings are rule 1's)."""
+    listed, marked = S.read_pending(S.LIST), S.pending(REPO, S.installed_library())
+    assert listed == marked, (f"the CALLER PENDING section of {S.LIST.name} is not the code's markers: run "
+                              f"`python tools/engine_slim_scan.py --write-list` (listed {sorted(listed)}, the code "
+                              f"marks {sorted(marked)})")
 
 
 def test_the_list_was_scanned_against_the_installed_pinned_release():
