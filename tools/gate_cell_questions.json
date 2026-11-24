@@ -1,0 +1,164 @@
+{
+ "_about": "The gate cell's questions (tools/gate_cell_same_request.py). A gate question is one where the model CHOOSES at every step: its vendor top-2 margin (transformers, the rendered prompt with the pinned date, the container's dtype, the logits after the model's own scaling) is at least the floor at every decoded position (`gate_cell_same_request.py --check-question`). The run sends the `gating` entries in order and never gates an OPEN entry; the open red is the open entry with \"pinned\": false (no system message: the template renders today's date). A status follows the measures; the Mac measures are a probe, the gate's card (V100) measures are to be added by the same command.",
+ "floor": 0.5,
+ "units": "vendor logit units (the logits transformers returns, after granite's logits_scaling); one bf16 step near 24 is 0.125",
+ "gating": [
+  {
+   "text": "What is the capital of France?",
+   "status": "GATE",
+   "pinned": true,
+   "measures": [
+    {
+     "min_margin": 1.4375,
+     "position": 47,
+     "token": " fam",
+     "runner_up": " the",
+     "decoded": 63,
+     "floor": 0.5,
+     "verdict": "GATE",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 5.4.0 torch 2.14.0 mps",
+     "measured": "2026-11-24",
+     "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  },
+  {
+   "text": "Give one word that rhymes with cat.",
+   "status": "GATE",
+   "pinned": true,
+   "measures": [
+    {
+     "min_margin": 0.75,
+     "position": 1,
+     "token": "isk",
+     "runner_up": "is",
+     "decoded": 4,
+     "floor": 0.5,
+     "verdict": "GATE",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 5.4.0 torch 2.14.0 mps",
+     "measured": "2026-11-24",
+     "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  }
+ ],
+ "open_measured": [
+  {
+   "text": "Name a planet of the solar system.",
+   "status": "OPEN",
+   "pinned": true,
+   "measures": [
+    {
+     "min_margin": 0.0,
+     "position": 15,
+     "token": " is",
+     "runner_up": "'s",
+     "decoded": 25,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 5.4.0 torch 2.14.0 mps",
+     "measured": "2026-11-24",
+     "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  },
+  {
+   "text": "How far is it from the Sun, roughly?",
+   "status": "OPEN",
+   "pinned": true,
+   "measures": [
+    {
+     "min_margin": 0.125,
+     "position": 52,
+     "token": ",",
+     "runner_up": " and",
+     "decoded": 65,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 5.4.0 torch 2.14.0 mps",
+     "measured": "2026-11-24",
+     "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  },
+  {
+   "text": "Name one of its moons, if it has any.",
+   "status": "OPEN",
+   "pinned": true,
+   "measures": [
+    {
+     "min_margin": 0.1875,
+     "position": 35,
+     "token": " th",
+     "runner_up": " dense",
+     "decoded": 55,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 5.4.0 torch 2.14.0 mps",
+     "measured": "2026-11-24",
+     "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  },
+  {
+   "text": "Name the largest planet of the solar system.",
+   "status": "OPEN",
+   "pinned": true,
+   "measures": [
+    {
+     "min_margin": 0.25,
+     "position": 69,
+     "token": " Its",
+     "runner_up": "<|end_of_text|>",
+     "decoded": 93,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 5.4.0 torch 2.14.0 mps",
+     "measured": "2026-11-24",
+     "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  },
+  {
+   "text": "Name a planet of the solar system.",
+   "status": "OPEN",
+   "pinned": false,
+   "note": "the 24/11 date prompt: no system message, the template renders the day the request is sent",
+   "measures": [
+    {
+     "min_margin": 0.0,
+     "position": 17,
+     "token": " only",
+     "runner_up": " third",
+     "decoded": 29,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-24",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 5.4.0 torch 2.14.0 mps",
+     "measured": "2026-11-24",
+     "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  }
+ ]
+}

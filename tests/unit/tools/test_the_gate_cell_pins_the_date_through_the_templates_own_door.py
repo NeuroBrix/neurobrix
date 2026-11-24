@@ -67,7 +67,7 @@ def test_a_template_without_a_date_needs_no_system_message():
 
 def test_the_gating_bodies_carry_only_the_model_and_the_messages():
     """The body is empty of sampling keys, so the container's greedy defaults apply; the system message leads each."""
-    bodies = G.bodies("m", "SYS")
-    assert len(bodies) == 3 and bodies[0]["messages"][1]["content"] == "Name a planet of the solar system."
+    bodies = G.bodies("m", "SYS", ["q1", "q2", "q3"])
+    assert len(bodies) == 3 and bodies[0]["messages"][1]["content"] == "q1"
     assert all(set(b) == {"model", "messages"} and b["messages"][0] == {"role": "system", "content": "SYS"} for b in bodies)
-    assert all(len(b["messages"]) == 1 for b in G.bodies("m", None))
+    assert all(len(b["messages"]) == 1 for b in G.bodies("m", None, ["q1", "q2"]))
