@@ -13,7 +13,9 @@ run again on each segment after an added token). The vendor's greedy answers wer
 granite-3.1-1b-a400m-instruct (byte-level BPE, no prefix, no BOS added) was equal and must stay equal.
 
 The vendor's ids are recorded in data/chat_prompt_vendor_ids.json (transformers 5.23.0, the 5 requests of the Mac
-baseline). The tokenizer files are the models' own, read from the snapshot directory NBX_VENDOR_SNAPSHOTS
+baseline), rendered on the day `rendered_on` names: a template that writes today's date (granite's
+`strftime_now('%B %d, %Y')`) is rendered here on that day, so the record compares the same text on every later day.
+The tokenizer files are the models' own, read from the snapshot directory NBX_VENDOR_SNAPSHOTS
 (default ~/Mounts/Super-HF-Snapshots); a host without them skips by name.
 
 Run: python -m pytest tests/unit/module/test_a_chat_prompt_is_the_vendors_ids_token_for_token.py
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -34,8 +37,18 @@ RECORD = json.loads((Path(__file__).parent / "data" / "chat_prompt_vendor_ids.js
 SNAPSHOTS = Path(os.environ.get("NBX_VENDOR_SNAPSHOTS", str(Path.home() / "Mounts" / "Super-HF-Snapshots")))
 
 
+class _OnTheRecordingDay(datetime):
+    """`datetime` whose `now()` is the day the vendor's ids were rendered (the record's `rendered_on`), at noon."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.fromisoformat(RECORD["rendered_on"] + "T12:00:00")
+
+
 @pytest.mark.parametrize("model", sorted(RECORD["models"]))
-def test_every_turn_is_prefilled_with_the_vendors_ids(model):
+def test_every_turn_is_prefilled_with_the_vendors_ids(model, monkeypatch):
+    from neurobrix.core.module.tokenizer import chat_template
+    monkeypatch.setattr(chat_template, "datetime", _OnTheRecordingDay)     # strftime_now renders the recording's day
     folder = SNAPSHOTS / model
     if not (folder / "tokenizer.json").exists():
         pytest.skip(f"{model}: no tokenizer files under {SNAPSHOTS} (set NBX_VENDOR_SNAPSHOTS)")
