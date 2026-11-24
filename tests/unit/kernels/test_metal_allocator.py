@@ -115,7 +115,13 @@ def test_no_metal_means_a_raise_not_a_cpu_backend(monkeypatch):
 def test_a_device_without_unified_memory_is_refused():
     """Every address here is a shared buffer's `contents()`. That is the same
     address the GPU sees only on unified memory; on a discrete Metal GPU the
-    pointer would be silently wrong, so construction must refuse."""
+    pointer would be silently wrong, so construction must refuse.
+
+    The refusal is asked of a NEW `MetalRuntime()`; the process's runtime is never dropped. This cell used to
+    `reset_runtime_for_tests()` around the construction, and the reset keeps `faults._FAULT_BUFFERS` (the per-device
+    fault word, never freed by contract): every armed kernel after it bound a word of the dropped runtime and was
+    refused ("pointer argument 3 ... lies in no allocation", `test_index_select_along_any_axis_needs_no_layout_copy`
+    red in the in-order kernels run, 2026-11-24). Held by test_a_refused_metal_runtime_keeps_the_process_runtime.py."""
     if not _on_metal():
         pytest.skip("needs an Apple GPU")
 
@@ -132,14 +138,12 @@ def test_a_device_without_unified_memory_is_refused():
     import Metal
     original = Metal.MTLCreateSystemDefaultDevice
     Metal.MTLCreateSystemDefaultDevice = lambda: _Discrete()
-    metal_device.reset_runtime_for_tests()
     try:
         with pytest.raises(metal_device.MetalUnavailableError,
                            match="unified memory"):
             metal_device.MetalRuntime()
     finally:
         Metal.MTLCreateSystemDefaultDevice = original
-        metal_device.reset_runtime_for_tests()
         assert real is metal_device.MetalRuntime.__init__
 
 
