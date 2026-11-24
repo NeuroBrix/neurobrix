@@ -151,11 +151,13 @@ def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "",
     # named this rewrite as the reason boundaries move since before this pass existed.
     if family:
         try:
+            from neurobrix import branch_door as _branch_door
             from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+            tokens = _branch_door.names("neurotax", "", "moe_tokens")[0]()
             if declared_moe is None:
-                detect_and_fuse_moe(out, family)
+                detect_and_fuse_moe(out, family, tokens=tokens)
             else:
-                detect_and_fuse_moe(out, family, norm_topk_prob=bool(declared_moe), declared=True)
+                detect_and_fuse_moe(out, family, norm_topk_prob=bool(declared_moe), declared=True, tokens=tokens)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
                 f"normalize_for_branch: the MoE fusion failed on this graph "

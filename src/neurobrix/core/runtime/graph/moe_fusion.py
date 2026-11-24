@@ -17,33 +17,46 @@ from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 import re
 import os
 
-from neurobrix import branch_door as _branch_door
 import logging
 _log = logging.getLogger(__name__)
 
 # The expert weights' key tokens, AS THE PARSER NAMES THEM — the neurotaxe has one reader.
 # Spelled here once, a renamed canonical token (the SwiGLU gate's `gate` -> `ffn_gate`,
 # 2026-09-26) would leave this reader matching nothing and the fusion silently off.
-# Asked of the running branch's NeuroTax twin AT THE CALL, never bound at import: the branch is chosen after the imports.
-def _tokens() -> Dict[str, str]:
-    """The canonical tokens this reader matches, vendor word -> token, from the NeuroTax twin of the branch in force."""
-    registry = _branch_door.names("neurotax", "", "SynonymRegistry")[0]
-    return {word: registry.resolve(word) for word in ("experts", "layers", "mlp", "gate_proj", "up_proj", "down_proj")}
+# GIVEN BY THE CALLER, from its own branch's NeuroTax engine (`neurotax.moe_tokens()`): this file imports nothing of
+# the engine, standard library only, so that it can be kept byte for byte where no engine is installed.
+_VENDOR_WORDS = ("experts", "layers", "mlp", "gate_proj", "up_proj", "down_proj")
 
 
-def _expert_proj() -> Dict[str, str]:
-    """The three expert projections, role -> canonical token (gate, up, down)."""
-    tokens = _tokens()
-    return {role: tokens[vendor] for role, vendor in (("gate", "gate_proj"), ("up", "up_proj"), ("down", "down_proj"))}
+class _Tokens(NamedTuple):
+    """The canonical tokens this reader matches, vendor word -> token, as the caller's NeuroTax engine gave them."""
+    by_word: Dict[str, str]
 
+    @classmethod
+    def of(cls, tokens: Optional[Dict[str, str]]) -> "_Tokens":
+        """The caller's mapping, held; a missing or empty vendor word is refused by name, never guessed."""
+        missing = [w for w in _VENDOR_WORDS if not isinstance(tokens, dict) or not tokens.get(w)]
+        if missing:
+            raise ValueError(f"ZERO FALLBACK: [MoE Fusion] the caller gave no NeuroTax token for {missing}: pass "
+                             "tokens=<its branch's neurotax>.moe_tokens() (the six vendor words -> canonical tokens).")
+        return cls({w: tokens[w] for w in _VENDOR_WORDS})
 
-def _expert_tid(prefix: str, expert_id: int, role: str) -> str:
-    return f"param::{prefix}.{_tokens()['experts']}.{expert_id}.{_expert_proj()[role]}.weight"
+    def __getitem__(self, word):
+        """The canonical token of one vendor word (`experts`, `layers`, `mlp`)."""
+        return self.by_word[word]
+
+    def proj(self) -> Dict[str, str]:
+        """The three expert projections, role -> canonical token (gate, up, down)."""
+        return {role: self.by_word[v] for role, v in (("gate", "gate_proj"), ("up", "up_proj"), ("down", "down_proj"))}
+
+    def tid(self, prefix: str, expert_id: int, role: str) -> str:
+        """The tensor id of one expert's projection weight under `prefix`, in the caller's tokens."""
+        return f"param::{prefix}.{self.by_word['experts']}.{expert_id}.{self.proj()[role]}.weight"
 
 
 def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool = True,
                         declared: bool = False,
-                        refusals: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                        refusals: Optional[Dict[str, str]] = None, *, tokens: Dict[str, str]) -> Dict[str, Any]:
     """
     Detect MoE patterns in DAG and replace with fused ops.
 
@@ -69,18 +82,20 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             the stacked-expert matcher declined (the per-expert matcher's
             refusals are silent by design: most of them are "no per-expert
             weights here", which the stacked matcher then answers).
+        tokens: REQUIRED, no default: the six vendor words (experts, layers,
+            mlp, gate_proj, up_proj, down_proj) -> canonical token, from the
+            caller's own branch's NeuroTax engine (`neurotax.moe_tokens()`).
 
     Returns:
         The DAG (same reference, possibly mutated)
     """
+    tok = _Tokens.of(tokens)
     if os.environ.get("NBX_DISABLE_MOE_FUSION"):
         return _unfused(dag, family, declared)
     if family != "llm" and not declared:
         return dag
 
-    ops = dag.get("ops", {})
-    execution_order = dag.get("execution_order", [])
-    tensors = dag.get("tensors", {})
+    ops, execution_order, tensors = dag.get("ops", {}), dag.get("execution_order", []), dag.get("tensors", {})
 
     # Single O(N) pass: find all topk ops with k > 1
     moe_topk_uids = _wide_topks(ops, execution_order)
@@ -124,7 +139,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             consumer_map, producer_map, topk_uid,
             norm_topk_prob=norm_topk_prob,
             blend=blend,
-            whole_sweep=not swept_whole,
+            whole_sweep=not swept_whole, tok=tok,
         )
         swept_whole = swept_whole or result is not None
         if result is None and blend is None:
@@ -136,7 +151,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             result = _fuse_one_stacked_layer(
                 dag, ops, execution_order, tensors,
                 consumer_map, producer_map, topk_uid,
-                declared_norm=norm_topk_prob if declared else None)
+                declared_norm=norm_topk_prob if declared else None, tok=tok)
             if isinstance(result, Declined):
                 declined[topk_uid] = result.reason
                 if refusals is not None:
@@ -324,7 +339,7 @@ def _fuse_one_moe_layer(
     topk_uid: str,
     norm_topk_prob: bool = True,
     blend: Optional["GateBlend"] = None,
-    whole_sweep: bool = True,
+    whole_sweep: bool = True, *, tok: _Tokens,
 ) -> Optional[Tuple[int, str, Dict[str, Any], int]]:
     """
     Fuse one MoE layer starting from a topk op.
@@ -379,14 +394,14 @@ def _fuse_one_moe_layer(
                        seed_weights_tid, seed_indices_tid, moe_op_uids)
 
     # num_experts from topk input shape (gate_scores last dim) — ZERO HARDCODE
-    num_experts = _count_total_experts(tensors, topk_uid, ops)
+    num_experts = _count_total_experts(tensors, topk_uid, ops, tok)
 
     # Step 2: Extract expert weight IDs BEFORE removing boundary ops
     # Boundary removal would exclude mm ops whose outputs exit the subgraph (down projection),
     # but we need those mm ops to extract the expert weight tensor IDs.
     expert_weight_ids, num_experts_found, hidden_states_tid = \
         _trace_expert_blocks(ops, execution_order, tensors, consumer_map,
-                             producer_map, moe_op_uids, topk_uid, num_experts)
+                             producer_map, moe_op_uids, topk_uid, num_experts, tok=tok)
 
     # Step 3: Remove boundary ops — ops whose outputs have consumers OUTSIDE the MoE subgraph.
     # These ops must stay in execution_order. This happens AFTER weight extraction.
@@ -1114,7 +1129,7 @@ def _trace_expert_blocks(
     producer_map: Dict[str, str],
     moe_op_uids: Set[str],
     _topk_uid: str,  # unused, kept for API compatibility
-    num_experts: int = 0,
+    num_experts: int = 0, *, tok: _Tokens,
 ) -> Tuple[Dict[str, List[str]], int, Optional[str]]:
     """
     Extract expert weight tensor IDs from MM ops in the MoE subgraph.
@@ -1129,9 +1144,9 @@ def _trace_expert_blocks(
     """
     # Pattern: param::<prefix>.<expert>.Y.<swiglu gate|up|down>.weight, the tokens the parser
     # emits (a container holds no raw vendor name). Group 1 = expert_id, group 2 = the token.
-    expert_role = {token: role for role, token in _expert_proj().items()}
+    expert_role = {token: role for role, token in tok.proj().items()}
     weight_pattern = re.compile(
-        rf"param::.*\.{re.escape(_tokens()['experts'])}\.(\d+)\."
+        rf"param::.*\.{re.escape(tok['experts'])}\.(\d+)\."
         rf"({'|'.join(re.escape(t) for t in expert_role)})\.weight")
 
     # Collect weight tensor IDs from mm ops in the MoE subgraph
@@ -1213,7 +1228,7 @@ def _trace_expert_blocks(
     # The weight pattern is e.g., "param::block.1.ffn.expert.0.gate.weight"
     # We need to extract "block.1" to reconstruct missing expert paths
     block_prefix = None
-    block_pattern = re.compile(rf"param::(.*?)\.{re.escape(_tokens()['experts'])}\.\d+")
+    block_pattern = re.compile(rf"param::(.*?)\.{re.escape(tok['experts'])}\.\d+")
     for projs in expert_weights.values():
         for tid in projs.values():
             m = block_pattern.match(tid)
@@ -1240,11 +1255,11 @@ def _trace_expert_blocks(
             # Some experts may be partially built (e.g., gate+up present but down
             # was not activated during build). Fill missing projections from pattern.
             gate_tid = projs.get("gate") or (
-                _expert_tid(block_prefix, expert_id, "gate") if block_prefix else "")
+                tok.tid(block_prefix, expert_id, "gate") if block_prefix else "")
             up_tid = projs.get("up") or (
-                _expert_tid(block_prefix, expert_id, "up") if block_prefix else "")
+                tok.tid(block_prefix, expert_id, "up") if block_prefix else "")
             down_tid = projs.get("down") or (
-                _expert_tid(block_prefix, expert_id, "down") if block_prefix else "")
+                tok.tid(block_prefix, expert_id, "down") if block_prefix else "")
             gate_ids.append(gate_tid)
             up_ids.append(up_tid)
             down_ids.append(down_tid)
@@ -1260,9 +1275,9 @@ def _trace_expert_blocks(
         elif block_prefix is not None:
             # Expert absent from graph (never activated during build)
             # Construct tensor ID from pattern — weights ARE in the checkpoint
-            gate_tid = _expert_tid(block_prefix, expert_id, "gate")
-            up_tid = _expert_tid(block_prefix, expert_id, "up")
-            down_tid = _expert_tid(block_prefix, expert_id, "down")
+            gate_tid = tok.tid(block_prefix, expert_id, "gate")
+            up_tid = tok.tid(block_prefix, expert_id, "up")
+            down_tid = tok.tid(block_prefix, expert_id, "down")
             gate_ids.append(gate_tid)
             up_ids.append(up_tid)
             down_ids.append(down_tid)
@@ -1286,7 +1301,7 @@ def _trace_expert_blocks(
 def _count_total_experts(
     tensors: Dict[str, Any],
     topk_uid: str,
-    ops: Dict[str, Any],
+    ops: Dict[str, Any], tok: _Tokens,
 ) -> int:
     """
     Derive num_experts from the gate_scores tensor shape (dim -1).
@@ -1302,8 +1317,8 @@ def _count_total_experts(
 
     # Fallback: count from weight tensor IDs
     weight_pattern = re.compile(
-        rf"param::{re.escape(_tokens()['layers'])}\.\d+\.{re.escape(_tokens()['mlp'])}"
-        rf"\.{re.escape(_tokens()['experts'])}\.(\d+)\.{re.escape(_expert_proj()['gate'])}\.weight")
+        rf"param::{re.escape(tok['layers'])}\.\d+\.{re.escape(tok['mlp'])}"
+        rf"\.{re.escape(tok['experts'])}\.(\d+)\.{re.escape(tok.proj()['gate'])}\.weight")
     expert_ids = set()
     for tid in tensors:
         m = weight_pattern.match(tid)
@@ -1626,7 +1641,7 @@ def _stacked_fused_op(tensors, fused_uid, *, top_k, num_experts, F, H,
 
 def _fuse_one_stacked_layer(dag, ops, execution_order, tensors,
                             consumer_map, producer_map, topk_uid,
-                            declared_norm=None):
+                            declared_norm=None, *, tok):
     """Match and fuse one stacked-expert MoE layer, either routing order.
     Returns like `_fuse_one_moe_layer`, or a `Declined` naming why this is
     not such a block — every check REFUSES rather than guessing."""
@@ -1644,7 +1659,7 @@ def _fuse_one_stacked_layer(dag, ops, execution_order, tensors,
             topk_uid)
     return _fuse_softmax_first_dense_layer(
         dag, ops, execution_order, tensors, consumer_map, producer_map,
-        topk_uid, declared_norm=declared_norm)
+        topk_uid, declared_norm=declared_norm, tok=tok)
 
 
 def _fuse_softmax_after_topk_layer(dag, ops, execution_order, tensors,
@@ -1890,7 +1905,7 @@ def _same_shape(tensors: Dict[str, Any], a: str, b: str) -> bool:
 
 def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
                                     consumer_map, producer_map, topk_uid,
-                                    declared_norm=None):
+                                    declared_norm=None, *, tok):
     """Match and fuse one softmax-before-topk stacked block built in its dense
     all-experts form (see the section header). Returns like
     `_fuse_one_moe_layer`, or a `Declined` naming the first structural
@@ -2145,7 +2160,7 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
 
     # --- the fused op -------------------------------------------------------
     parent = topk.get("parent_module", "") or ""
-    bm = re.match(rf"({re.escape(_tokens()['layers'])}\.\d+)", parent)
+    bm = re.match(rf"({re.escape(tok['layers'])}\.\d+)", parent)
     fused_uid = f"moe_fused::{bm.group(1) if bm else topk_uid}"
     if fused_uid in ops:
         fused_uid = f"moe_fused::{topk_uid}"

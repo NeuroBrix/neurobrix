@@ -21,6 +21,7 @@ import json
 import pytest
 
 from tests.conftest import installed_container
+from neurobrix.pytorch.neurotax import moe_tokens
 
 MODEL = "granite-3.1-1b-a400m-instruct"
 
@@ -32,7 +33,7 @@ def granite_dag():
 
 def _fused(dag):
     from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
-    return detect_and_fuse_moe(copy.deepcopy(dag), family="llm")
+    return detect_and_fuse_moe(copy.deepcopy(dag), family="llm", tokens=moe_tokens())
 
 
 def test_every_router_fuses_and_no_baked_split_survives(granite_dag):

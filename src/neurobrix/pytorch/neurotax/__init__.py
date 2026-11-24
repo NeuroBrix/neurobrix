@@ -1193,6 +1193,14 @@ def normalize_tensor_name_strict(name: str) -> str:
     return parser.normalize_strict(name)
 
 
+def moe_tokens() -> Dict[str, str]:
+    """The six tokens the MoE fusion reads expert weights by, vendor word -> canonical token, from this registry.
+
+    The fusion (core/runtime/graph/moe_fusion.py) imports nothing of the engine: each caller passes these, from the
+    NeuroTax engine of its own branch."""
+    return {word: SynonymRegistry.resolve(word) for word in ("experts", "layers", "mlp", "gate_proj", "up_proj", "down_proj")}
+
+
 def first_non_canonical(names, unknown_is_literal: bool = False):
     """The first name that is not a fixed point of the parser, as (name, what it should be), or None.
 

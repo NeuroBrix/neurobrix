@@ -4,6 +4,7 @@ routing (granite on the Mac 23/11: "split_with_sizes expects split_sizes to sum 
 import pytest
 
 from neurobrix.core.runtime.graph import moe_fusion
+from neurobrix.pytorch.neurotax import moe_tokens
 
 
 def test_a_routed_graph_is_refused_and_a_plain_one_passes(monkeypatch):
@@ -23,9 +24,9 @@ def test_the_switch_reaches_the_refusal_through_the_fusion_pass_itself(monkeypat
     monkeypatch.setenv("NBX_DISABLE_MOE_FUSION", "1")
     monkeypatch.setattr(moe_fusion, "_wide_topks", lambda ops, order: ["aten.topk::0"])
     with pytest.raises(RuntimeError, match="carries the build-time routing as constants"):
-        moe_fusion.detect_and_fuse_moe({"ops": {}, "execution_order": []}, "llm")
+        moe_fusion.detect_and_fuse_moe({"ops": {}, "execution_order": []}, "llm", tokens=moe_tokens())
     with pytest.raises(RuntimeError, match="carries the build-time routing as constants"):
-        moe_fusion.detect_and_fuse_moe({"ops": {}, "execution_order": []}, "image", declared=True)
+        moe_fusion.detect_and_fuse_moe({"ops": {}, "execution_order": []}, "image", declared=True, tokens=moe_tokens())
     monkeypatch.setattr(moe_fusion, "_wide_topks", lambda ops, order: [])
     dag = {"ops": {}, "execution_order": []}
-    assert moe_fusion.detect_and_fuse_moe(dag, "llm") is dag
+    assert moe_fusion.detect_and_fuse_moe(dag, "llm", tokens=moe_tokens()) is dag

@@ -3,7 +3,10 @@ is chosen after the imports, so a module-level ask bound whichever twin the impo
 
 What it would do if the claim were wrong: importing core/flow/shared_steps.py or core/runtime/graph/moe_fusion.py
 asks the door (red: the ask below raises at import); a call after the branch is chosen reads another branch's twin (red:
-the twin the call used is recorded and compared)."""
+the twin the call used is recorded and compared).
+
+moe_fusion.py asks no twin at all since red line 28 (it is self-contained, its tokens given by the caller): it stays
+in the import check; the call check is its shared callers' door, `neurotax.moe_tokens` asked at the call."""
 import importlib
 import subprocess
 import sys
@@ -43,5 +46,5 @@ def test_a_call_reads_the_twin_of_the_branch_in_force(side, monkeypatch):
         return real(brick, sub, *members)
     monkeypatch.setattr(branch_door, "_CHOSEN", [side])
     monkeypatch.setattr(branch_door, "names", spy)
-    assert shared_steps._joint_keys() and moe_fusion._expert_proj()
+    assert shared_steps._joint_keys() and moe_fusion._Tokens.of(branch_door.names("neurotax", "", "moe_tokens")[0]())
     assert asked and set(asked) == {(side, "neurotax")}, asked

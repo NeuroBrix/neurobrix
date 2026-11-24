@@ -31,6 +31,7 @@ import pytest
 
 from neurobrix.core.runtime.graph import moe_fusion as MF
 from tests.unit.runtime.test_a_stacked_expert_block_routed_softmax_first_is_fused import qwen3vl_block
+from neurobrix.pytorch.neurotax import moe_tokens
 
 T, H, E, K = 7, 8, 16, 4
 
@@ -115,7 +116,7 @@ GEOMETRIES = [(1, 1), (8, 4)]
 def test_a_declared_grouped_router_is_refused_by_name(n_group, topk_group):
     g = grouped_router(n_group, topk_group)
     with pytest.raises(RuntimeError) as err:
-        MF.detect_and_fuse_moe(g, "llm", declared=True)
+        MF.detect_and_fuse_moe(g, "llm", declared=True, tokens=moe_tokens())
     msg = str(err.value)
     assert "1 router(s) of a declared MoE left unfused" in msg, msg
     assert "topk:" in msg and "topk.in" not in msg and "topk.g" not in msg, msg
@@ -132,7 +133,7 @@ def test_no_matcher_is_handed_a_router_selecting_on_choice_scores(n_group, topk_
     g = grouped_router(n_group, topk_group)
     before = copy.deepcopy(g)
     refusals = {}
-    out = MF.detect_and_fuse_moe(g, "llm", refusals=refusals)
+    out = MF.detect_and_fuse_moe(g, "llm", refusals=refusals, tokens=moe_tokens())
     assert seen == [], f"a matcher was handed the router or its group top-k: {seen}"
     assert list(refusals) == ["topk"] and "choice scores" in refusals["topk"], refusals
     assert out == before, "an undeclared refusal leaves the graph as recorded"
@@ -147,10 +148,10 @@ def test_the_group_top_ks_are_part_of_the_router(n_group, topk_group):
                                                 (True, False, "a choice bias")])
 def test_each_mark_of_choice_scores_is_refused(bias, sigmoid, named):
     refusals = {}
-    MF.detect_and_fuse_moe(grouped_router(8, 4, bias=bias, sigmoid=sigmoid), "llm", refusals=refusals)
+    MF.detect_and_fuse_moe(grouped_router(8, 4, bias=bias, sigmoid=sigmoid), "llm", refusals=refusals, tokens=moe_tokens())
     assert list(refusals) == ["topk"] and named in refusals["topk"], refusals
 
 
 def test_a_router_selecting_on_its_softmax_scores_still_fuses():
-    g = MF.detect_and_fuse_moe(qwen3vl_block(), "llm", declared=True)
+    g = MF.detect_and_fuse_moe(qwen3vl_block(), "llm", declared=True, tokens=moe_tokens())
     assert [o["op_type"] for o in g["ops"].values()].count("custom::moe_fused") == 1

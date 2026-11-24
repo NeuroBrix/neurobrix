@@ -28,6 +28,7 @@ from neurobrix.core.runtime.graph import moe_fusion as MF
 from tests.conftest import installed_container
 
 from .test_a_stacked_expert_block_routed_softmax_first_is_fused import qwen3vl_block
+from neurobrix.pytorch.neurotax import moe_tokens
 
 
 def _protected(op):
@@ -63,7 +64,7 @@ def assert_closed(before, after):
 
 
 def _fused(dag, family="llm", **kw):
-    d = MF.detect_and_fuse_moe(copy.deepcopy(dag), family, **kw)
+    d = MF.detect_and_fuse_moe(copy.deepcopy(dag), family, **kw, tokens=moe_tokens())
     assert any(d["ops"][u]["op_type"] == "custom::moe_fused" for u in d["execution_order"])
     return d
 

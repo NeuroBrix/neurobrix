@@ -16,7 +16,7 @@ def _solver(lm):
 
 def test_a_declared_moe_is_sized_on_a_fused_copy(monkeypatch):
     seen = {}
-    def fake_fuse(dag, family, norm_topk_prob=True, declared=False):
+    def fake_fuse(dag, family, norm_topk_prob=True, declared=False, *, tokens):
         seen["declared"] = declared; seen["norm"] = norm_topk_prob
         dag["ops"]["moe_fused::block.0"] = {"op_type": "custom::moe_fused", "input_tensor_ids": []}
         return dag

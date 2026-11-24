@@ -28,8 +28,7 @@ from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 from neurobrix.pytorch.prism.host_footprint import engine_of, streamed_loads
 from neurobrix.pytorch.prism import owed_facts as OF
 from neurobrix.pytorch.prism import load_ceiling
-from neurobrix.pytorch.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
-from neurobrix.pytorch.prism.structure import names_accelerator
+from neurobrix.pytorch.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile, names_accelerator
 from nbxtensor.backend.host_memory import MemoryState, memory_state
 from neurobrix.pytorch.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
                                                 rung_down_mb, describe as _describe_budget, read_device_sharing,
@@ -4806,8 +4805,9 @@ class PrismSolver:
         if hit is None or hit[0] is not graph or hit[1] != norm_topk_prob:
             from neurobrix.core.optim.passes.normalize import graph_copy
             from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
-            hit = (graph, norm_topk_prob,
-                   detect_and_fuse_moe(graph_copy(graph), "declared", norm_topk_prob=norm_topk_prob, declared=True))
+            from neurobrix.pytorch.neurotax import moe_tokens
+            hit = (graph, norm_topk_prob, detect_and_fuse_moe(
+                graph_copy(graph), "declared", norm_topk_prob=norm_topk_prob, declared=True, tokens=moe_tokens()))
             memo[id(graph)] = hit
         return hit[2]
 

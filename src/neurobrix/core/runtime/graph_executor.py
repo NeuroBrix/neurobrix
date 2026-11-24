@@ -627,7 +627,7 @@ class GraphExecutor:
             self._dag = detect_and_fuse_moe(
                 self._dag, self.family,
                 norm_topk_prob=norm_topk_prob,
-                declared=True,
+                declared=True, tokens=_branch_door.names("neurotax", "", "moe_tokens")[0](),
             )
             # A rewrite that adds readers loads what it now reads. The
             # weights were chosen from the un-fused graph, in which no op
@@ -1207,7 +1207,7 @@ class GraphExecutor:
         from .graph.moe_fusion import detect_and_fuse_moe
         self._dag = detect_and_fuse_moe(
             self._dag, self.family,
-            norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True)
+            norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True), tokens=_branch_door.names("neurotax", "", "moe_tokens")[0](),
         )
 
         # ORDER MATTERS HERE. fusion_horizontal runs FIRST because it

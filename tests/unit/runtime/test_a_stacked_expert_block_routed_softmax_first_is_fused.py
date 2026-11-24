@@ -43,6 +43,7 @@ import torch.nn.functional as TF
 
 from neurobrix.core.runtime.graph import moe_fusion as MF
 from tests.conftest import installed_container
+from neurobrix.pytorch.neurotax import moe_tokens
 
 # ─────────────────────────────── the synthetic block ──────────────────────────────
 
@@ -277,7 +278,7 @@ def _fuse(dag, refusals=None, norm=None):
     if norm is None:
         norm = any(o["op_type"] == "aten::div" for o in dag["ops"].values())
     return MF.detect_and_fuse_moe(d, "multimodal", norm_topk_prob=norm, declared=True,
-                                  refusals=refusals)
+                                  refusals=refusals, tokens=moe_tokens())
 
 
 def _fused_ops(dag):
@@ -330,7 +331,7 @@ def test_the_renormalisation_is_read_off_the_graph():
     assert d2["ops"]["moe_fused::block.0"]["attributes"]["norm_topk_prob"] is False
     # an undeclared pass (the llm family's first fusion) takes the graph's answer
     d3 = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(renorm=False)), "llm",
-                                norm_topk_prob=True)
+                                norm_topk_prob=True, tokens=moe_tokens())
     assert d3["ops"]["moe_fused::block.0"]["attributes"]["norm_topk_prob"] is False
 
 
@@ -341,7 +342,7 @@ def test_a_registry_that_contradicts_the_build_is_named(renorm):
     # and the executor's patch loop names it on an op the first pass fused
     from neurobrix.core.runtime.graph_executor import GraphExecutor
     ex = GraphExecutor.__new__(GraphExecutor)
-    ex._dag = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(renorm=renorm)), "llm")
+    ex._dag = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(renorm=renorm)), "llm", tokens=moe_tokens())
     ex.family = "llm"
     ex.set_moe_config(norm_topk_prob=renorm)          # agreeing: silent
     with pytest.raises(RuntimeError, match="the registry declares"):
@@ -360,7 +361,7 @@ def test_a_block_that_is_not_this_one_is_declined_by_name(variant, reason):
     # an undeclared pass: declined, named, the graph left exactly as built
     refusals = {}
     d2 = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(**variant)), "llm",
-                                refusals=refusals)
+                                refusals=refusals, tokens=moe_tokens())
     assert not _fused_ops(d2), f"{variant} must not fuse"
     assert "topk" in refusals and reason in refusals["topk"], refusals
     assert d2["execution_order"] == qwen3vl_block(**variant)["execution_order"]
@@ -419,7 +420,7 @@ def test_every_qwen3_vl_moe_layer_now_fuses():
     bmm_before = sum(1 for u in dag["execution_order"] if dag["ops"][u]["op_type"] == "aten::bmm")
     refusals = {}
     d2 = MF.detect_and_fuse_moe(dag, "multimodal", norm_topk_prob=lm["norm_topk_prob"],
-                                declared=True, refusals=refusals)
+                                declared=True, refusals=refusals, tokens=moe_tokens())
     fused = _fused_ops(d2)
     assert routers == 48 and len(fused) == 48, (routers, len(fused), list(refusals.items())[:2])
     assert not refusals
@@ -461,7 +462,7 @@ def test_every_qwen3_vl_moe_layer_now_fuses():
 ])
 def test_the_other_moe_containers_fuse_as_before(model, comp, family, layers):
     dag, _ = _graph(model, comp)
-    d2 = MF.detect_and_fuse_moe(dag, family, norm_topk_prob=True)
+    d2 = MF.detect_and_fuse_moe(dag, family, norm_topk_prob=True, tokens=moe_tokens())
     fused = _fused_ops(d2)
     assert len(fused) == layers
     for u in fused:
@@ -499,7 +500,7 @@ def test_the_declared_pass_sees_every_router_left_unfused():
     over the one left — which refuses it by name — instead of skipping because
     some fused op exists."""
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    d = MF.detect_and_fuse_moe(_with_a_stray_router(qwen3vl_block()), "llm")
+    d = MF.detect_and_fuse_moe(_with_a_stray_router(qwen3vl_block()), "llm", tokens=moe_tokens())
     assert _fused_ops(d) == ["moe_fused::block.0"]
     assert MF.unfused_routers(d) == ["stray.topk"]
     ex = GraphExecutor.__new__(GraphExecutor)
@@ -507,7 +508,7 @@ def test_the_declared_pass_sees_every_router_left_unfused():
     with pytest.raises(RuntimeError, match="left unfused .*stray.topk"):
         ex.set_moe_config(norm_topk_prob=True)
     # a fully fused graph: the declared pass has nothing to see and is not run
-    full = MF.detect_and_fuse_moe(qwen3vl_block(), "llm")
+    full = MF.detect_and_fuse_moe(qwen3vl_block(), "llm", tokens=moe_tokens())
     ex2 = GraphExecutor.__new__(GraphExecutor)
     ex2._dag, ex2.family = full, "llm"
     order = list(full["execution_order"])

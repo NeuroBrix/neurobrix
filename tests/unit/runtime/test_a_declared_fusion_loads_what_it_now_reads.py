@@ -55,7 +55,7 @@ class _FakeLoader:
         _FakeLoader.calls.append(set(only or [])); return {k: torch.ones(1) for k in (only or [])}
 
 
-def _fake_fusion(dag, family, norm_topk_prob=True, declared=False):
+def _fake_fusion(dag, family, norm_topk_prob=True, declared=False, *, tokens):
     # the declared fusion: one fused op that reads EVERY expert
     dag["ops"]["moe_fused::block.0"] = {
         "op_type": "custom::moe_fused",

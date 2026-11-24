@@ -9,7 +9,7 @@ expert synthesized under `gate`).
 from __future__ import annotations
 
 from neurobrix.core.runtime.graph import moe_fusion as M
-from neurobrix.pytorch.neurotax import normalize_tensor_name
+from neurobrix.pytorch.neurotax import moe_tokens, normalize_tensor_name
 
 
 def _graph(present_experts, num_experts):
@@ -26,7 +26,8 @@ def _graph(present_experts, num_experts):
             ops[mm_uid] = {"op_type": "aten::mm", "attributes": {"args": [
                 {"type": "tensor", "tensor_id": "x"}, {"type": "tensor", "tensor_id": f"{t_uid}::out_0"}]}}
             order += [t_uid, mm_uid]
-    ids, found, _ = M._trace_expert_blocks(ops, order, tensors, {}, producer, set(order), "topk", num_experts)
+    ids, found, _ = M._trace_expert_blocks(ops, order, tensors, {}, producer, set(order), "topk", num_experts,
+                                           tok=M._Tokens.of(moe_tokens()))
     return ids, found, tensors
 
 

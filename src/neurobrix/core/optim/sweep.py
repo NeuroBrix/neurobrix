@@ -84,9 +84,9 @@ def sweep_model(model_dir: Path, out_dir: Path) -> dict:
         graph = json.loads(raw)
         n_stored_order = len(graph.get("execution_order") or [])
         try:
-            from neurobrix.core.runtime.graph.moe_fusion import (
-                detect_and_fuse_moe)
-            graph = detect_and_fuse_moe(graph, fam, declared=True)
+            from neurobrix import branch_door as _branch_door
+            from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+            graph = detect_and_fuse_moe(graph, fam, declared=True, tokens=_branch_door.names("neurotax", "", "moe_tokens")[0]())
         except Exception:
             # A build the fusion does not recognise analyses as-is; the
             # two order counts then agree and the row says so.

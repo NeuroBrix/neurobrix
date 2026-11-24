@@ -17,6 +17,7 @@ import pytest
 import neurobrix.core.runtime.graph.moe_fusion as F
 from neurobrix.core.optim.passes.normalize import graph_copy
 from neurobrix.core.paths import cache_dir
+from neurobrix.pytorch.neurotax import moe_tokens
 
 MODEL = "deepseek-moe-16b-chat"      # 18 610 ops, per-expert layers (granite, smaller, takes the stacked matcher)
 
@@ -30,12 +31,12 @@ def graph():
 
 
 def test_the_fused_graph_is_the_one_every_layer_sweeping_whole_gives(graph, monkeypatch):
-    fused = F.detect_and_fuse_moe(graph_copy(graph), "declared", norm_topk_prob=True, declared=True)
+    fused = F.detect_and_fuse_moe(graph_copy(graph), "declared", norm_topk_prob=True, declared=True, tokens=moe_tokens())
     real = F._fuse_one_moe_layer
     calls = []
     monkeypatch.setattr(F, "_fuse_one_moe_layer",
                         lambda *a, **k: calls.append(k.get("whole_sweep")) or real(*a, **{**k, "whole_sweep": True}))
-    every_whole = F.detect_and_fuse_moe(graph_copy(graph), "declared", norm_topk_prob=True, declared=True)
+    every_whole = F.detect_and_fuse_moe(graph_copy(graph), "declared", norm_topk_prob=True, declared=True, tokens=moe_tokens())
     assert calls[0] is True and len(calls) > 1 and not any(calls[1:]), "only the first fusion sweeps every op"
     digest = lambda g: hashlib.sha256(json.dumps(g, sort_keys=True).encode()).hexdigest()   # noqa: E731
     assert digest(fused) == digest(every_whole), (
