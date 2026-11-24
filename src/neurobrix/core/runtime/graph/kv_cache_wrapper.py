@@ -479,18 +479,25 @@ class KVCacheAttentionWrapper:
 
     def _spill_cut(self, heads: int, kv_heads: int, kv_dims: int, keys: int) -> Tuple[int, int]:
         """(key positions a block, query rows a span) of a spilled chunk under `spill_scores_bytes`: a quarter of it at
-        most for one fp32 key block (K and V of whole pages), the rest for the one score matrix a (span, block) writes
-        (4 bytes x heads x rows x positions). Unstated (a plan with no session chunk): one page of rows over `keys`.
-        Refused by name when one row over one page does not fit."""
-        tpp = self.cache.page_tokens
+        most for one fp32 key block (whole pages when a page fits that quarter, else as many keys as fit — a plan's
+        reserve priced over a card of one page is smaller than one page of fp32 keys: 16384 bytes against 262144 for
+        Qwen2.5-Coder-7B on a V100-16GB, gate 1393), the rest for the one score matrix a (span, block) writes
+        (4 bytes x heads x rows x positions); when the quarter holds no key, the block that leaves one row its scores.
+        Unstated (a plan with no session chunk): one page of rows over `keys`. Refused by name when one row over one
+        key does not fit."""
+        tpp, key_bytes = self.cache.page_tokens, 4 * kv_heads * kv_dims
         budget = self.spill_scores_bytes
         if budget is None:
-            budget = 4 * heads * tpp * keys + 4 * kv_heads * kv_dims * tpp
-        block = max(tpp, min(-(-keys // tpp) * tpp, (int(budget) // 4) // (4 * kv_heads * kv_dims) // tpp * tpp))
-        span = (int(budget) - 4 * kv_heads * kv_dims * block) // (4 * heads * block)
+            budget = 4 * heads * tpp * keys + key_bytes * tpp
+        fit = (int(budget) // 4) // key_bytes                          # the keys a quarter of the reserve holds
+        if fit >= tpp:
+            block = max(tpp, min(-(-keys // tpp) * tpp, fit // tpp * tpp))
+        else:
+            block = max(1, min(keys, fit or int(budget) // (key_bytes + 4 * heads)))
+        span = (int(budget) - key_bytes * block) // (4 * heads * block)
         if span < 1:
             raise RuntimeError(f"ZERO FALLBACK: one row of a spilled prefill chunk over one block of {block} keys "
-                               f"writes {4 * heads * block} bytes of scores beside {4 * kv_heads * kv_dims * block} "
+                               f"writes {4 * heads * block} bytes of scores beside {key_bytes * block} "
                                f"bytes of keys; the plan leaves {budget}")
         return block, span
 

@@ -16,6 +16,9 @@ from nbxtensor.memory.paged_kv import PagedTritonKVCache
 from nbxtensor.tensor import NBXTensor
 
 LAYERS, HK, H, D, PT, HID, POSITIONS = 2, 2, 8, 64, 64, 16, 512
+#: the Dell's figures (Qwen2.5-Coder-7B, gate 1393, turn 2): 28 query heads, 4 KV heads of 128, pages of 64 — the
+#: library's spilled chunk reads its blocks at most the card part's own keys (memory/paged_kv._chunk_attention_spilled)
+DELL = dict(h=28, hk=4, d=128)
 
 
 @pytest.fixture(autouse=True)
@@ -32,12 +35,12 @@ class _Graph:
     """A two-layer graph: each run attends its rows through the interceptor as the Triton sequence does (a chunk over
     the cache's whole pages, else the one-pass append) with q/k/v read from fixed per-position tables."""
 
-    def __init__(self, wrapper, seed: int):
+    def __init__(self, wrapper, seed: int, h: int = H, hk: int = HK, d: int = D):
         rng = np.random.default_rng(seed)
-        self.w = wrapper
-        self.q = [rng.standard_normal((1, H, POSITIONS, D)).astype(np.float16) for _ in range(LAYERS)]
-        self.k = [rng.standard_normal((1, HK, POSITIONS, D)).astype(np.float16) for _ in range(LAYERS)]
-        self.v = [rng.standard_normal((1, HK, POSITIONS, D)).astype(np.float16) for _ in range(LAYERS)]
+        self.w, self.h, self.hk, self.d = wrapper, h, hk, d
+        self.q = [rng.standard_normal((1, h, POSITIONS, d)).astype(np.float16) for _ in range(LAYERS)]
+        self.k = [rng.standard_normal((1, hk, POSITIONS, d)).astype(np.float16) for _ in range(LAYERS)]
+        self.v = [rng.standard_normal((1, hk, POSITIONS, d)).astype(np.float16) for _ in range(LAYERS)]
         self.rows_run, self.got, self.hidden = [], {}, None
 
     def enable_hidden_states_capture(self):
@@ -50,7 +53,7 @@ class _Graph:
         for layer in range(LAYERS):
             q, k, v = (_dev(t[layer][:, :, pos]) for t in (self.q, self.k, self.v))
             if self.w._whole_pages:
-                out = self.w._prefill_over_pages(q, k, v, k, v, False, layer, 0.0, D ** -0.5).to(NBXDtype.float32)
+                out = self.w._prefill_over_pages(q, k, v, k, v, False, layer, 0.0, self.d ** -0.5).to(NBXDtype.float32)
                 out = out.numpy()
                 for i in range(self.w._chunk_real):
                     self.got[(layer, self.w._chunk_start + i)] = out[0, :, i].astype(np.float64)
@@ -66,28 +69,30 @@ class _Graph:
     def want(self, layer: int, p: int):
         """Causal attention of position p over positions 0..p, fp64."""
         q = self.q[layer][0, :, p].astype(np.float64)
-        k = np.repeat(self.k[layer][0, :, :p + 1].astype(np.float64), H // HK, 0)
-        v = np.repeat(self.v[layer][0, :, :p + 1].astype(np.float64), H // HK, 0)
-        s = np.einsum("hd,hnd->hn", q, k) * D ** -0.5
+        k = np.repeat(self.k[layer][0, :, :p + 1].astype(np.float64), self.h // self.hk, 0)
+        v = np.repeat(self.v[layer][0, :, :p + 1].astype(np.float64), self.h // self.hk, 0)
+        s = np.einsum("hd,hnd->hn", q, k) * self.d ** -0.5
         e = np.exp(s - s.max(-1, keepdims=True))
         return np.einsum("hn,hnd->hd", e / e.sum(-1, keepdims=True), v)
 
 
-def _session(card_pages: int, seed: int):
+def _session(card_pages: int, seed: int, h: int = H, hk: int = HK, d: int = D):
     from neurobrix.triton.kv_cache import TritonAttentionInterceptor
     from neurobrix.triton.session import TritonLMSession
-    cache = PagedTritonKVCache(LAYERS, HK, D, D, max_cache_len=100000, dtype=NBXDtype.float16, page_tokens=PT,
+    cache = PagedTritonKVCache(LAYERS, hk, d, d, max_cache_len=100000, dtype=NBXDtype.float16, page_tokens=PT,
                                async_release=False, initial_cache_len=PT, card_pages=card_pages,
-                               host_spill=HostSpill(LAYERS, HK, D, D, 1 << 30))
-    w = TritonAttentionInterceptor(cache, H)
-    graph = _Graph(w, seed)
+                               host_spill=HostSpill(LAYERS, hk, d, d, 1 << 30))
+    w = TritonAttentionInterceptor(cache, h)
+    graph = _Graph(w, seed, h, hk, d)
     return TritonLMSession(graph, w, HID, ["input_ids", "position_ids"], uses_embeds=False,
                            uses_absolute_position=True), graph
 
 
+@pytest.mark.parametrize("dims", [{}, DELL], ids=["small", "dell"])
 @pytest.mark.parametrize("chunk", [128, 64, None])
-def test_two_turns_past_one_card_page_prefill_within_it_and_equal_the_oracle(chunk):
-    session, graph = _session(1, 7 + (chunk or 0))
+def test_two_turns_past_one_card_page_prefill_within_it_and_equal_the_oracle(chunk, dims):
+    """Turn 2 runs over spilled blocks, at the small figures and the Dell's."""
+    session, graph = _session(1, 7 + (chunk or 0), **dims)
     ids = list(range(1000, 1200))
     session.prefill(_dev(np.asarray([ids[:130]], np.int64)), 1, start=0, chunk=chunk, ids=ids[:130])   # turn 1
     cache = session.kv_wrapper.cache
