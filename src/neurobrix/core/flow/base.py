@@ -166,16 +166,6 @@ class ComponentFlowHandler(FlowHandler):
         self._ensure_weights_loaded = ensure_weights_fn
         self._unload_component_weights = unload_weights_fn
 
-    def _decoder_call(self, name: str, embed_weight, read: Callable[[], Any]):
-        """One forward call of a decoding component; returns the token embedding to read after it (`read` reads it
-        again). A device out-of-memory re-plan inside the call (`RuntimeExecutor._replan_after_oom`) frees every table
-        and loads it again under the plan it gives the flow's ctx: the embedding read before the call is the old
-        load's (a freed arena on the Triton branch; on the PyTorch one a tensor keeping the old load alive), so it is
-        read again from the reloaded table. The audio_llm and encoder_decoder decoders of both branches call it."""
-        plan = self.ctx.plan
-        self._execute_component(name, "forward", None)
-        return embed_weight if self.ctx.plan is plan else read()
-
     def _get_component_output(self, comp_name: str) -> Optional["torch.Tensor"]:
         """A component's primary output tensor — the compiled handlers' lookup (torch is imported here, not at load). The
         Triton handlers that read outputs (audio_llm, vlm, rnnt) define their own, on NBXTensor."""

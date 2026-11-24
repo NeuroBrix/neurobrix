@@ -9,6 +9,7 @@ No torch imports in this file (except at audio preprocessing boundary).
 
 import time
 
+from neurobrix.triton.flow.decoder_call import decoder_call   # the decoder call, once per branch
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 from neurobrix.core.flow.shared_steps import _maybe_log_topk   # both branches
@@ -249,7 +250,7 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
             self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
             self.ctx.variable_resolver.resolved["input_ids"] = input_ids
 
-            embed_weight = self._decoder_call(dec_name, embed_weight, lambda: _get_embed_weight(self.ctx, dec_name))
+            embed_weight = decoder_call(self.ctx, self._execute_component, dec_name, embed_weight, lambda: _get_embed_weight(self.ctx, dec_name))
             if kv is not None and step == 1:
                 kv.set_decode_mode()
 

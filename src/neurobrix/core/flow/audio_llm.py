@@ -14,6 +14,7 @@ import time
 import torch
 from typing import Any, Dict, List, Optional
 
+from neurobrix.pytorch.flow.decoder_call import decoder_call   # the decoder call, once per branch
 from neurobrix import decode_progress, decode_stop
 from .base import ComponentFlowHandler, register_flow
 from .table_gather import gather_rows
@@ -241,7 +242,7 @@ class AudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids
 
             _steps.before_run()
-            embed_weight = self._decoder_call(lm_name, embed_weight, lambda: self._get_embed_weight(lm_name))
+            embed_weight = decoder_call(self.ctx, self._execute_component, lm_name, embed_weight, lambda: self._get_embed_weight(lm_name))
             _steps.after_run()
 
             output = self._get_component_output(lm_name)

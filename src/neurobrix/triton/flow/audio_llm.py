@@ -22,6 +22,7 @@ import time
 import numpy as np
 from typing import Any, Dict, List, Optional
 
+from neurobrix.triton.flow.decoder_call import decoder_call   # the decoder call, once per branch
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 from neurobrix.core.flow.shared_steps import AudioLLMSteps   # the steps both branches share
@@ -232,7 +233,7 @@ class TritonAudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
             res["position_ids"] = position_ids
 
             _steps.before_run()
-            embed_weight = self._decoder_call(lm_name, embed_weight, lambda: self._get_embed_weight(lm_name))
+            embed_weight = decoder_call(self.ctx, self._execute_component, lm_name, embed_weight, lambda: self._get_embed_weight(lm_name))
             _steps.after_run()
 
             output = self._get_component_output(lm_name)

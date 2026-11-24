@@ -11,6 +11,7 @@ ZERO HARDCODE: All parameters from NBX container.
 
 import time
 
+from neurobrix.pytorch.flow.decoder_call import decoder_call   # the decoder call, once per branch
 from neurobrix import decode_progress, decode_stop
 import torch
 from neurobrix.core.device_utils import device_multinomial
@@ -253,7 +254,7 @@ class EncoderDecoderEngine(ComponentFlowHandler):
             self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
             self.ctx.variable_resolver.resolved["input_ids"] = input_ids
 
-            embed_weight = self._decoder_call(dec_name, embed_weight, lambda: self._get_embed_weight(dec_name))
+            embed_weight = decoder_call(self.ctx, self._execute_component, dec_name, embed_weight, lambda: self._get_embed_weight(dec_name))
             if kv is not None and step == 1:
                 kv.set_decode_mode(actual_seq_len=1)
 
