@@ -90,7 +90,9 @@ def test_a_missing_kernel_key_is_counted_and_named(tmp_path, monkeypatch, capsys
     capsys.readouterr()
     assert rig.main("--arm", "new", "--gate") == 1     # the ruling: a key swept on the gate's request is red
     for at in (rig.verdict()["autotune"], rig.state()["steps"]["gate"]["autotune"]):
-        assert at["replayed"] == 1 and at["missing_count"] == 2 and at["missing"] == NAMES
+        assert at["replayed"] == 1 and at["missing_count"] == 2
+        # written outside any arm's run here: named so, never guessed (the arm attribution: its own test file)
+        assert at["missing"] == [{"key": n, "arm": J.NO_ARM} for n in NAMES]
         assert at["snapshot"] == freeze["snapshot"]
     err = capsys.readouterr().err
     assert "2 missing" in err and all(n in err for n in NAMES)

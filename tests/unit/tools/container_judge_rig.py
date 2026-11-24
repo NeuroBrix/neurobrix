@@ -21,7 +21,9 @@ GRAPH_DIFF = {"annotation_changes": 3, "arg_witnessed": 2, "beyond_annotation": 
 
 
 class Rig:
-    """`outputs[(tag, arm)]` is the bytes the stand-in run writes for that arm; `calls` holds each run's argv/env."""
+    """`outputs[(tag, arm)]` is the bytes the stand-in run writes for that arm; `calls` holds each run's argv/env;
+    `sweeps[(tag, arm)]` = {replay identity: config} the stand-in run adds to the shared replay cache (a key it
+    swept at run time)."""
 
     def __init__(self, tmp_path: Path, monkeypatch, family: str = "image", request=None):
         self.out = tmp_path / "work"
@@ -35,6 +37,7 @@ class Rig:
                         ("new", "sequential"): b"A", ("new", "triton"): b"A"}
         self.calls = []
         self.gate_calls = []
+        self.sweeps = {}
         monkeypatch.setattr(J, "CACHE", self.cache)
         monkeypatch.setattr(J.C, "CACHE", self.cache)
         monkeypatch.setattr(J.C, "request_args", lambda name, fam, extra: list(self.request) + list(extra))
@@ -79,6 +82,13 @@ class Rig:
             logpath.write_text("$ run\nRuntimeError: no output\n")
             return 1
         outp.write_bytes(data)
+        if self.sweeps.get((tag, arm)):
+            replay = Path(env["NEUROBRIX_REPLAY_CACHE"])
+            replay.mkdir(parents=True, exist_ok=True)
+            f = replay / "autotune_configs_apple-42e-e3.json"
+            stored = json.loads(f.read_text()) if f.exists() else {}
+            stored.update(self.sweeps[(tag, arm)])
+            f.write_text(json.dumps(stored))
         return 0
 
     def _gate(self, a, b):

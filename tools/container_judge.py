@@ -21,8 +21,13 @@ One run root, `<out>/<model>/`:
             on the staged .nbx file build.json names; a file that is absent, or whose sha256 (or byte count) is not
             build.json's, is REFUSED BY NAME and the verdict is red. `autotune` adds what the shared replay cache
             holds: {replayed, missing, missing_count} — every kernel key the arms swept because the frozen
-            directory did not hold it, counted and named. A key swept during the gate turns the gate RED, by name
-            (`swept_keys_refusal`: the gate judges at its own default request, a conventional size).
+            directory did not hold it, counted and named, each as {key, arm}: the arm that swept it. The replay
+            cache is shared by the two arms, so each arm's run records the keys the cache gained during that run
+            (its key set read before and after the run: `swept` in the arm's state); a key no recorded run gained
+            is named with the arm "none recorded". A key swept during the judging of this container turns the gate
+            RED, by name, whichever arm swept it (`swept_keys_refusal`: the gate judges at its own default
+            request, a conventional size). verdict.json and the gate's state carry `rule_version`
+            (RULE_VERSION): a stored verdict with none, or an older one, is not reused — the gate re-judges.
 
 An arm runs on the container the builder's record names, or not at all: the cached container's `created_at` must
 equal previous.json's (old arm) or build.json's (new arm); any other container is REFUSED BY NAME.
@@ -97,6 +102,25 @@ def sha_streamed(path: Path, chunk: int = 1 << 24) -> tuple:
     return h.hexdigest(), n
 
 
+def replay_key_name(ident) -> str:
+    """A replay cache identity `<module>.<kernel>::<key>` named `<kernel>::<key>` (the name the gate prints)."""
+    qual, sep, key = str(ident).partition("::")
+    return f"{qual.rsplit('.', 1)[-1]}::{key}" if sep else str(ident)
+
+
+def replay_keys(replay: Path) -> set:
+    """Every key name (`replay_key_name`) the replay cache holds now: read before and after an arm's run, the
+    difference is exactly what that run swept into the shared cache."""
+    names = set()
+    for f in sorted(Path(replay).glob("autotune_configs_*.json")) if Path(replay).is_dir() else ():
+        try:
+            stored = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        names.update(replay_key_name(i) for i in (stored if isinstance(stored, dict) else ()))
+    return names
+
+
 def autotune_account(directory: Path, replay: Path) -> dict:
     """What the arms' shared replay cache holds against the frozen directory: `replayed` = the keys it holds that the
     frozen directory also holds, `missing` = every key it holds that the frozen directory does NOT (a kernel key the
@@ -124,9 +148,31 @@ def autotune_account(directory: Path, replay: Path) -> dict:
             if sep and (kernel, key) in held:
                 replayed += 1
             else:
-                missing.append(f"{kernel}::{key}" if sep else str(ident))
+                missing.append(replay_key_name(ident))
     missing = sorted(set(missing))
     return {"replayed": replayed, "missing": missing, "missing_count": len(missing)}
+
+
+NO_ARM = "none recorded"
+RULE_VERSION = 2   # 2: a key swept during the gate turns it red, each key named with the arm that swept it
+
+
+def attribute_arms(missing, sweeps: dict) -> list:
+    """Each missing key name as {key, arm}: `sweeps` = {arm tag: the key names its recorded runs gained in the
+    replay cache}. Two tags join with '+'; a key no recorded run gained is NO_ARM (said, never guessed)."""
+    out = []
+    for name in missing:
+        entry = name if isinstance(name, dict) else {"key": name}
+        key = entry["key"]
+        arms = [tag for tag in ("old", "new") if key in set(sweeps.get(tag) or ())]
+        out.append({"key": key, "arm": "+".join(arms) if arms else NO_ARM})
+    return out
+
+
+def _arm_words(arm: str) -> str:
+    if arm == NO_ARM:
+        return "swept by no recorded arm run"
+    return "swept by the " + " and the ".join(arm.split("+")) + " arm" + ("s" if "+" in arm else "")
 
 
 SWEPT_KEYS_RULING = (
@@ -147,14 +193,18 @@ def swept_keys_refusal(stamp: dict):
     (a user's own size) one autotune is allowed and said: that is the engine's run, not the gate's.
 
     None when the arms swept no key on the gate's request; else the reason the gate is red, naming every
-    `<kernel>::<key>` the replay cache holds that the frozen directory does not, and the remedy."""
-    missing = list(stamp.get("missing") or [])
+    `<kernel>::<key>` the replay cache holds that the frozen directory does not, each with the arm that swept it
+    (the replay cache is shared by the two arms: a key the OLD arm swept keeps the gate red just the same), and the
+    remedy."""
+    missing = [m if isinstance(m, dict) else {"key": m, "arm": NO_ARM} for m in stamp.get("missing") or []]
     count = int(stamp.get("missing_count", len(missing)) or 0)
     if count <= 0 and not missing:
         return None
     return (f"{count} kernel key(s) swept at run time on the gate's own request, a conventional size: a certificate "
-            f"missing for each — " + ", ".join(missing)
-            + "; remedy: the census and certification of those keys at this conventional size")
+            f"missing for each — " + ", ".join(f"{m['key']} ({_arm_words(m['arm'])})" for m in missing)
+            + "; whichever arm swept a key, the gate is red: any key swept during the judging of this container at "
+            "its conventional size is a missing certificate; remedy: the census and certification of those keys at "
+            "this conventional size")
 
 
 def write_whole(path: Path, obj) -> None:
@@ -316,6 +366,16 @@ class Judge:
                 return False                   # a verdict on other arms than the stamped ones: re-gate
             if not (self.dir / "verdict.json").exists():
                 return False
+            try:
+                stored = json.loads((self.dir / "verdict.json").read_text()).get("rule_version")
+            except (OSError, ValueError, AttributeError):
+                stored = None
+            for where, have in (("state.json", st.get("rule_version")), ("verdict.json", stored)):
+                if not isinstance(have, int) or have < RULE_VERSION:
+                    log(f"{self.model}: the stored verdict ({where}) carries rule_version {have!r}, this judge's rule "
+                        f"is {RULE_VERSION} (a key swept during the gate turns it red, named with its arm): not "
+                        f"reused — the gate re-judges")
+                    return False
         return True
 
     def env(self, tree: bool = True) -> dict:
@@ -376,10 +436,12 @@ class Judge:
             self.set_aside(f"{tag}_", f"measured on {('the request ' + repr(prev)) if prev else 'a request this state did not record'}; "
                                       f"this attempt runs '{self.request_key}'")
         res = {}
+        prev_runs = (self.state["steps"].get(f"{tag}_outputs") or {}).get("runs") or {}
         for arm, flag in (("sequential", ["--sequential"]), ("triton", ["--triton"])):
             outp = self.dir / f"{tag}_{arm}{ext}"
             if outp.exists() and (self.dir / f"{tag}_{arm}.log").exists() and sha(outp):
-                res[arm] = {"rc": 0, "sha": sha(outp), "output": str(outp), "cached": True}
+                res[arm] = {"rc": 0, "sha": sha(outp), "output": str(outp), "cached": True,
+                            "swept": list((prev_runs.get(arm) or {}).get("swept") or [])}   # the run that made it
                 continue
             cmd = [ENGINE_PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", one_name.cli_name(name)] + req + flag + ["--output", str(outp)]
             t0 = time.time()
@@ -387,11 +449,13 @@ class Judge:
             env = self.env(); env.update(POLICY_ENV)
             env["NEUROBRIX_AUTOTUNE_CERTIFIED_DIR"] = freeze["directory"]
             env["NEUROBRIX_REPLAY_CACHE"] = freeze["replay"]
+            before = replay_keys(Path(freeze["replay"]))      # the shared cache's keys before this run ...
             rc = run(cmd, env, self.dir / f"{tag}_{arm}.log", self.args.timeout)
+            swept = sorted(replay_keys(Path(freeze["replay"])) - before)   # ... and what this run added to it
             logtext = (self.dir / f"{tag}_{arm}.log").read_text(errors="replace")
             unsupported = "UNSUPPORTED PATH" in logtext and "encoding" in logtext
             res[arm] = {"rc": rc, "sha": sha(outp), "output": str(outp), "seconds": round(time.time() - t0, 1),
-                        "n_a": bool(unsupported and arm == "sequential")}
+                        "n_a": bool(unsupported and arm == "sequential"), "swept": swept}
         return res
 
     def set_aside(self, prefix: str, why: str) -> None:
@@ -665,6 +729,9 @@ class Judge:
         freeze = dict(self.state.get("autotune_freeze") or {})
         if freeze.get("directory") and freeze.get("replay"):
             freeze.update(autotune_account(Path(freeze["directory"]), Path(freeze["replay"])))
+            sweeps = {tag: [k for r in ((self.state["steps"].get(f"{tag}_outputs") or {}).get("runs") or {}).values()
+                            for k in (r or {}).get("swept") or ()] for tag in ("old", "new")}
+            freeze["missing"] = attribute_arms(freeze["missing"], sweeps)
         return freeze
 
     def write_verdict(self, verdict: str, bytes_verdict: dict, vendor, nbx_sha256=None) -> dict:
@@ -675,12 +742,13 @@ class Judge:
                "request": self.current_request("new"), "policy": POLICY, "autotune": self.autotune_stamp(),
                "judged": {"created_at": build.get("created_at"),
                           "nbx_sha256": nbx_sha256 or build.get("nbx_sha256", build.get("sha256"))},
-               "old_container": prev.get("created_at")}
+               "old_container": prev.get("created_at"), "rule_version": RULE_VERSION}
         write_whole(self.dir / "verdict.json", out)
         return out
 
     def refuse_gate(self, reason: str, nbx_sha256=None) -> bool:
-        self.mark("gate", False, verdict="FAIL", reason=reason, autotune=self.autotune_stamp())
+        self.mark("gate", False, verdict="FAIL", reason=reason, autotune=self.autotune_stamp(),
+                  rule_version=RULE_VERSION)
         self.write_verdict(f"FAIL ({reason})", {}, None, nbx_sha256)
         log(f"{self.model}: gate FAIL — {reason}")
         return False
@@ -708,7 +776,7 @@ class Judge:
         if swept:
             verdict = f"FAIL ({swept}; the gate's verdict on the bytes: {verdict})"
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
-                  autotune=stamp, vendor=vendor or None, request=self.current_request("new"))
+                  autotune=stamp, vendor=vendor or None, request=self.current_request("new"), rule_version=RULE_VERSION)
         self.write_verdict(verdict, bytes_verdict, vendor, nbx_sha256)
         log(f"{self.model}: gate {verdict} — both arms under {POLICY}; bytes {bytes_verdict}; " + graph_summary(gd)
             + f"; {autotune_summary(stamp)}")
@@ -720,7 +788,8 @@ def autotune_summary(stamp: dict) -> str:
     missing = stamp.get("missing") or []
     return (f"autotune: {stamp.get('replayed', 0)} key(s) replayed from the frozen directory, "
             f"{stamp.get('missing_count', len(missing))} missing from it (swept)"
-            + (": " + ", ".join(missing) if missing else ""))
+            + (": " + ", ".join(f"{m['key']} ({_arm_words(m['arm'])})" if isinstance(m, dict) else str(m)
+                                for m in missing) if missing else ""))
 
 
 def graph_summary(gd: dict) -> str:
