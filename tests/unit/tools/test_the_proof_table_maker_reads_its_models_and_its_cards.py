@@ -22,8 +22,8 @@ def test_the_command_line_reads_the_models_the_draft_the_proof_card_and_the_card
     a = T.parse_args([str(tmp_path / "m.txt"), str(tmp_path / "draft"), "--proof-card", "3", "--cards", "2"])
     assert a.proof_card == 3 and a.card_list == ["2"] and a.cards == "2"
     assert a.homes == tmp_path / "draft.homes" and a.hardware is None
-    with pytest.raises(SystemExit):
-        T.parse_args([str(tmp_path / "m.txt"), str(tmp_path / "draft")])          # --proof-card is required
+    a = T.parse_args([str(tmp_path / "m.txt"), str(tmp_path / "draft")])        # --proof-card is optional
+    assert a.proof_card is None and a.card_list is None
 
 
 def test_the_proof_card_among_the_model_s_cards_is_refused_by_name():
@@ -159,3 +159,36 @@ def test_a_triton_run_declares_its_cards_from_the_place_it_declares_its_profile(
     declare_for("triton", "p", plan=plan, proof_card=2)
     declare_for("triton", "q")
     assert seen == [("profile", "p"), ("cards", [0, 1, 2]), ("profile", "q")]
+
+
+def test_a_run_without_proof_card_is_accepted_and_proves_on_the_launch_card(tmp_path, monkeypatch, capsys):
+    """No --proof-card (a one-card run: the proof card is the model's card): the tool runs, the first launch carries
+    no `--proof-card` (the library's rule: none declared, the launch's own card alone), CUDA_VISIBLE_DEVICES is the
+    model's one card, and the model's line says the launch card proved. The device layer is a stand-in."""
+    import subprocess
+    import sys
+    import types
+    import neurobrix.core.paths as paths
+    models = tmp_path / "models.txt"
+    models.write_text("TinyLlama-1.1B-Chat-v1.0 --prompt hi\n")
+    monkeypatch.setitem(sys.modules, "one_name", types.SimpleNamespace(cli_name=lambda m: m))
+    monkeypatch.setattr(paths, "cache_dir", lambda: tmp_path / "catalogue")
+    monkeypatch.setattr(paths, "engine_home", lambda: tmp_path / "machine_home")
+    runs = []
+
+    def fake_run(cmd, env=None, **kw):
+        runs.append((list(cmd), dict(env or {})))
+        if "stdout" in kw and hasattr(kw["stdout"], "write"):
+            kw["stdout"].write("[ew-proof] this run proved 3 element-wise variant(s) in 0.1 s\n")
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert T.main([str(models), str(tmp_path / "draft"), "--cards", "0"]) == 0
+    (cmd, env), = runs
+    assert "--proof-card" not in cmd and cmd[-1] == "--triton"
+    assert env["CUDA_VISIBLE_DEVICES"] == "0"
+    out = capsys.readouterr().out
+    assert "TinyLlama-1.1B-Chat-v1.0: proved on the launch card" in out and "proved 3" in out
+    assert T.visible_devices(None, None, None) == (None, None)                  # no card list: the machine's own
+    assert "CUDA_VISIBLE_DEVICES" not in T.run_env(T.fresh_home(tmp_path / "h", "m"), None, "/c", base={})
+    assert T.proving_card(3, 1) == "the proof card 3 (visible ordinal 1)"
