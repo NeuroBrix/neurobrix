@@ -136,6 +136,9 @@ def test_the_run_declares_its_plan_s_cards_and_its_proof_card_to_the_library():
         run_cards(plan, 0)
     with pytest.raises(ValueError, match="0 or more"):
         run_cards(plan, -1)
+    # register row 444: the plan places the model on ONE of the two given cards; the empty sibling is declared too
+    profile = NS(devices=[NS(index=0), NS(index=1)])
+    assert run_cards(plan, None, profile) == [0, 1]
     with pytest.raises(ValueError, match="Triton modes only"):
         declare_for("compiled", object(), plan=plan, proof_card=1)
     args = create_parser().parse_args(["run", "--model", "m", "--triton", "--proof-card", "1"])

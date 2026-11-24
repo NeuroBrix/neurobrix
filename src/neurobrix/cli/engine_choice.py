@@ -119,23 +119,28 @@ def declare_for(mode: str, hw_profile, plan=None, proof_card=None) -> None:
         declare_hardware_profile(hw_profile)
         if plan is not None:
             from nbxtensor.ops.ew_proof_child import declare_proof_cards
-            declare_proof_cards(run_cards(plan, proof_card))
+            declare_proof_cards(run_cards(plan, proof_card, hw_profile))
     elif proof_card is not None:
         raise ValueError(f"--proof-card {proof_card}: the element-wise proofs run in the Triton modes only, not in "
                          f"--{mode.replace('_', '-')}")
 
 
-def run_cards(plan, proof_card=None) -> list:
-    """The visible ordinals of the cards a run was given: the plan's accelerator cards (`plan_devices`, "cuda:N"),
-    then the proof card when one is given. A negative proof card, or one the plan places the model on, is refused by
-    name."""
+def run_cards(plan, proof_card=None, hw_profile=None) -> list:
+    """The visible ordinals of the cards a run was GIVEN: every accelerator card of its hardware profile (`hw_profile.
+    devices`, their `index`: a card the plan leaves empty is the proofs' best room, register row 444), the plan's own
+    cards (`plan_devices`, "cuda:N"), then the proof card when one is given. A negative proof card, or one the plan
+    places the model on, is refused by name."""
     from neurobrix.core.device_utils import plan_devices
-    cards = sorted({int(str(d).partition(":")[2] or 0) for d in plan_devices(plan)})
+    placed = {int(str(d).partition(":")[2] or 0) for d in plan_devices(plan)}
+    given = {int(d.index) for d in (getattr(hw_profile, "devices", None) or [])
+             if getattr(d, "index", None) is not None}
+    cards = sorted(placed | given)
     if proof_card is None:
         return cards
     if int(proof_card) < 0:
         raise ValueError(f"--proof-card {proof_card}: a visible ordinal is 0 or more")
-    if int(proof_card) in cards:
-        raise ValueError(f"--proof-card {proof_card}: the plan places the model on that card (its cards: {cards}); "
+    if int(proof_card) in placed:
+        raise ValueError(f"--proof-card {proof_card}: the plan places the model on that card (its cards: "
+                         f"{sorted(placed)}); "
                          f"the proofs need a card the model does not run on")
-    return cards + [int(proof_card)]
+    return sorted(set(cards) | {int(proof_card)})
