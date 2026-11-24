@@ -10,6 +10,7 @@ tracemalloc) — red at the second; a window that is not the whole computation's
 at the third; the last test certifies a windowed key on a card."""
 from __future__ import annotations
 
+import contextlib
 import tracemalloc
 
 import numpy as np
@@ -78,14 +79,43 @@ def test_a_window_is_the_whole_computations_rows(monkeypatch):
         np.testing.assert_array_equal(block, whole[r0:r1])
 
 
+@contextlib.contextmanager
+def expert_tables_released():
+    """Every MoE expert table the library's harness builds inside the block is released at its exit, its pins with it.
+
+    `autotune_harness._expert_table` keeps the last eight keys' tables, their pins AND the expert tensors, for the
+    process (a table holds bare addresses: Volta read freed memory without it, 2026-11-12). A pytest process is not a
+    certification run: the one certification below left eight expert bases pinned at count 3 (gate, up, down), and
+    every pin test of tests/unit/triton after it in the same process found the driver still pinning them
+    (`_PIN_COUNTS`, 2026-11-24; bisected by scripts/bisect_order_leak.py). The tables held before the block are
+    left as they were."""
+    from nbxtensor.memory.allocator import DeviceAllocator
+    held = list(H._EXPERT_TABLES)
+    try:
+        yield
+    finally:
+        added = [entry for entry in H._EXPERT_TABLES if not any(entry is h for h in held)]
+        if added:
+            DeviceAllocator.sync_device()
+        for tables, _experts in added:
+            tables.release_pins()
+        H._EXPERT_TABLES[:] = [entry for entry in H._EXPERT_TABLES if any(entry is h for h in held)]
+
+
+def certify_a_windowed_key(monkeypatch):
+    """Certify one MoE key above the oracle's cap on this card and return its entry (the device cell's body)."""
+    AC._bind_hardware_profile()
+    monkeypatch.setattr(F, "ORACLE_MAX_MACS", 3 * 64 * 96 * 128)
+    key = _key(96, 128, 2048, 8, mul=True)
+    return AC.certify_key(QUAL, _tuner(), key, 1e-2, np.random.default_rng(3), bench=lambda fn: (fn(), 1.0)[1])
+
+
 def test_a_windowed_key_certifies_on_the_device(monkeypatch):
     """On a card: the certification of a key above the cap measures every candidate on the oracle's row windows."""
     from nbxtensor.memory.allocator import DeviceAllocator
     if DeviceAllocator.device_count() < 1:
         pytest.skip("needs a device")
-    AC._bind_hardware_profile()
-    monkeypatch.setattr(F, "ORACLE_MAX_MACS", 3 * 64 * 96 * 128)
-    key = _key(96, 128, 2048, 8, mul=True)
-    entry = AC.certify_key(QUAL, _tuner(), key, 1e-2, np.random.default_rng(3), bench=lambda fn: (fn(), 1.0)[1])
+    with expert_tables_released():
+        entry = certify_a_windowed_key(monkeypatch)
     assert entry["excluded"] == [] and entry["proof"]["accepted"] >= 1, entry
     assert "row window" in entry["proof"]["oracle"], entry["proof"]["oracle"]
