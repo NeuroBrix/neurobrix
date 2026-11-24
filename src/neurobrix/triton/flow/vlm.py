@@ -54,6 +54,7 @@ from nbxtensor.ops import wrappers as w
 from nbxtensor.ops import linalg_wrappers as _nbx_linalg_wrappers  # the family the moved names live in (M2 split)
 from neurobrix.core.flow.base import requests_speech
 from neurobrix.core.flow.shared_steps import VLMSteps, keep_hidden_tap   # the steps both branches share
+from neurobrix.triton.flow.prefilled_ids import StatesThePrefilledIds   # this branch's stored-ids method
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
 from nbxtensor import device as _nbx_device
@@ -157,7 +158,7 @@ def _keep_forward_rows(rows, resolved, output, was_whole) -> None:
         rows.keep(output, was_whole)
 
 
-class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
+class TritonVLMEngine(StatesThePrefilledIds, VLMSteps, ComponentFlowHandler):
     """Vision-conditioned LLM (R33): encode image → merge embeds →
     mrope decode. Mirror of core/flow/vlm.py VLMEngine."""
 
@@ -698,7 +699,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                                             "global.generated_text")
         if out_var and resolved.get("global.transcription") is not None:
             resolved[out_var] = resolved["global.transcription"]
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(prefix_ids + [span_token_id] * n_modal + suffix_ids)
 
     # ─── staged-splice contract (MiniCPM-o class; R30 mirror) ─────────
 
@@ -1100,7 +1101,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                                             "global.generated_text")
         if out_var and resolved.get("global.transcription") is not None:
             resolved[out_var] = resolved["global.transcription"]
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(ids)
 
     def _tokenize_with_placeholder_run(
             self, prompt: str, span_kind: Optional[str],
@@ -1509,7 +1510,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                 "gen_hidden": _gen_hidden,
                 "dtype": dtype,
             })
-            return self.ctx.variable_resolver.resolve_all()
+            return self._resolved_with_the_prefilled_ids(_gen_ids)
 
         base_positions_np, next_pos = self._build_mrope_positions_np(
             self._mrope_segments(len(ids), img_span, aud_span, vis_grid_llm))
@@ -1596,7 +1597,7 @@ class TritonVLMEngine(VLMSteps, ComponentFlowHandler):
                                             "global.generated_text")
         if out_var and resolved.get("global.transcription") is not None:
             resolved[out_var] = resolved["global.transcription"]
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(ids)
 
     def _build_masked_splice_ids(
             self, prompt: str, vlm: Dict[str, Any], pre: Dict[str, Any],

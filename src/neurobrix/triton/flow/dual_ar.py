@@ -19,6 +19,7 @@ from nbxtensor.random.seeded_draw import draw_from_probabilities as _sample_toke
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import max_tokens_of
+from neurobrix.triton.flow.prefilled_ids import StatesThePrefilledIds   # this branch's stored-ids method
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 from neurobrix.core.flow.shared_steps import _is_tensor, float32_host   # dual_ar and tts_llm, the same
 import logging
@@ -33,7 +34,7 @@ _log = logging.getLogger(__name__)
 _DUALAR_SEED = 1234
 
 
-class TritonDualAREngine(ComponentFlowHandler):
+class TritonDualAREngine(StatesThePrefilledIds, ComponentFlowHandler):
     """
     Triton-mode DualAR semantic token generation + codec decoding.
 
@@ -267,7 +268,7 @@ class TritonDualAREngine(ComponentFlowHandler):
         from neurobrix.core.flow.audio_utils import postprocess_audio_output
         postprocess_audio_output(self.ctx)
 
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(prompt_ids)
 
     def _decode_codes(self, codes_np: np.ndarray, comp_name: str, stages: list, max_tokens: int) -> None:
         """Steps 3 and 4: the acoustic code grid [1, num_codebooks, T] through the RVQ decode and the

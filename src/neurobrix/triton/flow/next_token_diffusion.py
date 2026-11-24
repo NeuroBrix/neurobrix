@@ -38,6 +38,7 @@ from neurobrix.triton.cfg.engine import TritonCFGEngine
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import max_tokens_of
 from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
+from neurobrix.triton.flow.prefilled_ids import StatesThePrefilledIds   # this branch's stored-ids method
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
 from neurobrix.core.flow.audio_utils import refuses_a_cloned_voice_without_its_clip
@@ -115,7 +116,7 @@ def speaker_prompt_ids(tok, prompt: str, speech_start_id: int) -> List[int]:
     return ids
 
 
-class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
+class TritonNextTokenDiffusionEngine(StatesThePrefilledIds, ComponentFlowHandler):
     """Triton-mode VibeVoice next-token-diffusion TTS (NBXTensor end-to-end)."""
 
     LM = "model.language_model"
@@ -205,7 +206,7 @@ class TritonNextTokenDiffusionEngine(ComponentFlowHandler):
                 self._unload_component_weights(comp)
             release_flow_memory(self.ctx.primary_device)
 
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(prompt_ids)
 
     # ─── the two generation paths ───────────────────────────────────────────
     def _generate_reprefill(self, prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id,

@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 
 from nbxtensor.random.seeded_draw import draw_from_probabilities   # the host draw both engines share (R30)
 
+from .prefilled_ids import StatesThePrefilledIds   # this branch's stored-ids method
 from .base import ComponentFlowHandler, register_flow
 
 # The rule and its history live in core.runtime_values.
@@ -32,7 +33,7 @@ _DUALAR_SEED = 1234
 
 
 @register_flow("dual_ar")
-class DualAREngine(ComponentFlowHandler):
+class DualAREngine(StatesThePrefilledIds, ComponentFlowHandler):
     """
     DualAR semantic token generation + codec decoding.
 
@@ -306,7 +307,7 @@ class DualAREngine(ComponentFlowHandler):
         from .audio_utils import postprocess_audio_output
         postprocess_audio_output(self.ctx)
 
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(prompt_ids)
 
     def _try_chunked_forward(self, comp_name: str) -> bool:
         """Run chunked forward if input seq_len exceeds graph's build-time seq_len."""

@@ -44,6 +44,7 @@ import time
 import torch
 from typing import Any, Dict, List, Optional
 
+from .prefilled_ids import StatesThePrefilledIds   # this branch's stored-ids method
 from .base import ComponentFlowHandler, register_flow
 from neurobrix.core.flow.shared_steps import _require_default, encode_nopad   # both branches
 from .table_gather import gather_rows
@@ -57,7 +58,7 @@ _log = logging.getLogger(__name__)
 
 
 @register_flow("next_token_diffusion")
-class NextTokenDiffusionEngine(ComponentFlowHandler):
+class NextTokenDiffusionEngine(StatesThePrefilledIds, ComponentFlowHandler):
     """
     VibeVoice next-token-diffusion TTS.
 
@@ -222,7 +223,7 @@ class NextTokenDiffusionEngine(ComponentFlowHandler):
                 self._unload_component_weights(comp)
             release_flow_memory(device)
 
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(prompt_ids)
 
     # ─── Diffusion sampling (mirror of vendor sample_speech_tokens) ────────────
 

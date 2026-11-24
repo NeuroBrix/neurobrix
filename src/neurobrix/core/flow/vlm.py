@@ -40,6 +40,7 @@ import os as _os_vlm
 import torch
 from typing import Any, Dict, List, Optional, Tuple
 
+from .prefilled_ids import StatesThePrefilledIds   # this branch's stored-ids method
 from .base import ComponentFlowHandler, register_flow, requests_speech
 from .table_gather import gather_rows
 from neurobrix import decode_progress, decode_stop
@@ -93,7 +94,7 @@ def _keep_forward_rows(rows, resolved, output, was_whole) -> None:
 
 
 @register_flow("vlm")
-class VLMEngine(VLMSteps, ComponentFlowHandler):
+class VLMEngine(StatesThePrefilledIds, VLMSteps, ComponentFlowHandler):
     """Vision-conditioned LLM: encode image → merge embeds → decode text.
 
     topology.flow.vlm:
@@ -639,7 +640,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
         out_var = vlm.get("output", {}).get("variable", "global.generated_text")
         if out_var and resolved.get("global.transcription") is not None:
             resolved[out_var] = resolved["global.transcription"]
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(prefix_ids + [span_token_id] * n_modal + suffix_ids)
 
     # ─── staged-splice contract (MiniCPM-o class) ────────────────────────
 
@@ -1065,7 +1066,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                                             "global.generated_text")
         if out_var and resolved.get("global.transcription") is not None:
             resolved[out_var] = resolved["global.transcription"]
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(ids)
 
     def _tokenize_with_placeholder_run(
             self, prompt: str, span_kind: Optional[str],
@@ -1535,7 +1536,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                 "device": device,
                 "dtype": dtype,
             })
-            return self.ctx.variable_resolver.resolve_all()
+            return self._resolved_with_the_prefilled_ids(_gen_ids)
 
         base_positions, next_pos = self._build_mrope_positions(
             self._mrope_segments(len(ids), img_span, aud_span, vis_grid_llm),
@@ -1621,7 +1622,7 @@ class VLMEngine(VLMSteps, ComponentFlowHandler):
                                             "global.generated_text")
         if out_var and resolved.get("global.transcription") is not None:
             resolved[out_var] = resolved["global.transcription"]
-        return self.ctx.variable_resolver.resolve_all()
+        return self._resolved_with_the_prefilled_ids(ids)
 
     def _build_masked_splice_ids(
             self, prompt: str, vlm: Dict[str, Any], pre: Dict[str, Any],
