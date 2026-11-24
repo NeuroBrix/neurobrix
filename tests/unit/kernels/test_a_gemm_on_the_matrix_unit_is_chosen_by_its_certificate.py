@@ -8,9 +8,17 @@ oracle (`autotune_certify._unit_runs`), and the entry names the unit's tile only
 (`autotune_certified.unit_choice`, `linalg_wrappers._gemm_route`). A batched product keeps its unit route (its dtypes
 differ between the two routes) and its no-key rule.
 
+Since the matrix-family rule (library 863bf47, 2026-11-22) WHICH unit runs is the rule's, never the certificate's: a GEMM
+the profile's unit takes and whose rows fill its tile runs on the unit with every certificate and with none (a
+confirmation run included); the certificate picks only among the unit's declared tiles, and an entry that names the
+FMA kernel for such a launch is refused by name and the rule's tile runs (`autotune_certified.ruled_unit_tile`). The
+gate no longer asks a unit tile to beat the FMA kernel; it still asks it to carry its tile and to re-read within the
+tolerance.
+
 What these tests would do if the code were wrong: the unit's early return left in `mm_launches` — the census keys
-nothing for M >= 64 (red at the first test); the route read from the threshold — the FMA certificate is ignored (red
-at the route tests); a unit choice slower than the FMA kernel, or without its tile, accepted by the directory's gate
+nothing for M >= 64 (red at the first test); the route taken from the certificate instead of the rule — an entry
+naming the FMA kernel obeyed, or not refused by name, or a confirmation run sent to the FMA kernel (red at the route
+tests); a unit choice without its tile, or whose deviation exceeds the tolerance, accepted by the directory's gate
 (red at the validation tests). The device test certifies one fp16 key and reads the choice back.
 """
 from __future__ import annotations
@@ -75,18 +83,26 @@ def test_the_certificate_s_unit_tile_is_served(route):
     assert got == {**tile, "split_a": False, "split_b": False}
 
 
-def test_the_certificate_s_fma_choice_runs_the_fma_kernel(route):
+def test_a_certificate_naming_the_fma_kernel_is_refused_by_name_and_the_rules_unit_runs(route):
     LW, C, mp = route
+    from nbxtensor.ops import autotune_cache as atc
+    mp.setattr(atc, "key_of", lambda t, a, k: (128, 256, 256))
     mp.setattr(C, "unit_choice", lambda t, a, k: ("fma", None))
-    assert LW._gemm_route(object(), (), {}, dict(_UNIT)) is None
+    C.reset_refused_unit_entries()
+    try:
+        assert LW._gemm_route(object(), (), {}, dict(_UNIT)) == _UNIT     # the rule's tile, not the FMA kernel
+        refused = C.refused_unit_entries()
+        assert len(refused) == 1 and "names the FMA kernel" in next(iter(refused.values())), refused
+    finally:
+        C.reset_refused_unit_entries()
 
 
-def test_no_certificate_takes_the_declared_unit_but_a_confirmation_run_the_fma_launch(route):
+def test_no_certificate_takes_the_declared_unit_in_a_confirmation_run_too(route):
     LW, C, mp = route
     mp.setattr(C, "unit_choice", lambda t, a, k: None)
     assert LW._gemm_route(object(), (), {}, dict(_UNIT)) == _UNIT
     mp.setenv("NBX_AUTOTUNE_CERTIFIED_ONLY", "1")
-    assert LW._gemm_route(object(), (), {}, dict(_UNIT)) is None        # the FMA launch then refuses the missing key
+    assert LW._gemm_route(object(), (), {}, dict(_UNIT)) == _UNIT       # the rule decides the unit, not the run's mode
 
 
 def test_the_certifier_s_sweep_takes_the_fma_kernel(route):
@@ -108,14 +124,19 @@ def _doc(unit):
     return entry
 
 
-def test_a_unit_choice_slower_than_the_fma_kernel_is_refused():
+def test_a_unit_choice_is_held_to_its_tile_and_its_tolerance_not_to_the_fma_timing():
     from nbxtensor.ops import autotune_certified as C
     tile = {f: v for f, v in _UNIT.items() if not f.startswith("split")}
+    probs = []
+    C._validate_certification("e", _doc({"tile": tile, "deviation": 5e-2, "best_ms": 0.3, "fma_best_ms": 0.4}),
+                              "nbx-autotune-certified/2", None, [128, 256, 256, True, False, "fp16", "fp16", "fp32"],
+                              "fp32", probs)
+    assert any("matrix unit's deviation" in p and "exceeds the tolerance" in p for p in probs), probs
     probs = []
     C._validate_certification("e", _doc({"tile": tile, "deviation": 1e-4, "best_ms": 0.5, "fma_best_ms": 0.4}),
                               "nbx-autotune-certified/2", None, [128, 256, 256, True, False, "fp16", "fp16", "fp32"],
                               "fp32", probs)
-    assert any("matrix unit chosen" in p for p in probs), probs
+    assert not [p for p in probs if "unit" in p], probs                  # slower than the FMA kernel: the rule's unit
     probs = []
     C._validate_certification("e", _doc({"tile": {"block_m": 64}, "deviation": 1e-4, "best_ms": 0.3, "fma_best_ms": 0.4}),
                               "nbx-autotune-certified/2", None, [128, 256, 256, True, False, "fp16", "fp16", "fp32"],
