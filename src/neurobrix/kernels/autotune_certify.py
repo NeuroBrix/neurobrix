@@ -503,7 +503,7 @@ def price_key(qual: str, tuner, key: tuple) -> Optional[Dict[str, int]]:
             "peak": draws + device + max(oracle, deviation)}
 
 def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = None, unified: bool = False,
-               values: bool = True, budget_bytes: Optional[int] = None,
+               budget_bytes: Optional[int] = None,
                floor_bytes: int = 0) -> Optional[Tuple[Callable[[], Any], Optional[Callable[[], Any]], str]]:
     """(call, oracle_fn, output_arg_name) for `key` — the library's synthesis (`nbxtensor.ops.autotune_harness.
     synthesize`: the wrapper run on operands of the key's shape and dtypes, and its LAZY fp64 oracle) behind the
@@ -517,9 +517,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
     - `unified`: the host draws and the device copies share one pool — a padded-row or element-wise class is drawn at
       the size its phase price fits (`_unified_padded_row`) and the key is refused over the card by its phase price
       (`_refuse_unified`);
-    - else `card_bytes`: each operand and the output against the card's share Prism plans against (`_room`).
-
-    `values=False`: the arguments only, no draw and no oracle (the Mac's `msl_census.py` compiles without running)."""
+    - else `card_bytes`: each operand and the output against the card's share Prism plans against (`_room`)."""
     if budget_bytes is not None:
         drawn = _unified_padded_row(qual, tuner, key, card_bytes, C.kernel_short(qual)) if unified else key
         _refuse_unpriced(qual, tuner, drawn, budget_bytes, floor_bytes)
@@ -529,7 +527,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         key = _unified_padded_row(qual, tuner, key, card_bytes, C.kernel_short(qual))
         _refuse_unified(qual, tuner, key, card_bytes)
         card_bytes = None                       # the phase price is the bound on a unified device
-    return H.synthesize(qual, tuner, key, rng, room=_room(card_bytes), values=values, filed_key=filed, out_dt=out_dt)
+    return H.synthesize(qual, tuner, key, rng, room=_room(card_bytes), filed_key=filed, out_dt=out_dt)
 
 
 # ---------------------------------------------------------------------------

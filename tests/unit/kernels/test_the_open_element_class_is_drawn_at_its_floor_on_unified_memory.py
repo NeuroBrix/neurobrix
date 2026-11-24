@@ -51,7 +51,7 @@ def test_the_price_door_prices_the_key_drawn_not_the_key_filed(profile, monkeypa
     monkeypatch.setattr(A, "_refuse_unpriced", door)
     key = (68719476736, "fp32", "fp32")
     with pytest.raises(Stop):
-        A.synthesize(EW, None, key, None, card_bytes=UNIFIED, unified=True, values=False, budget_bytes=UNIFIED,
+        A.synthesize(EW, None, key, None, card_bytes=UNIFIED, unified=True, budget_bytes=UNIFIED,
                      floor_bytes=0)
     assert seen == [(16777217, "fp32", "fp32")], seen
 

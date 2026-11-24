@@ -30,8 +30,7 @@ REPO = Path(__file__).resolve().parents[3]
 PROBE = textwrap.dedent("""
     import json, os
     from neurobrix.kernels import census
-    census.install(hardware_profile={"devices": [{"brand": "nvidia", "model": "Tesla V100-SXM2-16GB",
-                                                  "compute_capability": "7.0", "architecture": "volta"}]})
+    census.install(hardware="v100-16g")      # a committed V100 profile (Tesla V100-SXM2-16GB, 7.0), as the run names it
     from nbxtensor.tensor import NBXTensor
     from nbxtensor.ops import wrappers as W
     import nbxtensor.ops.conv_wrappers as _nbx_conv_wrappers

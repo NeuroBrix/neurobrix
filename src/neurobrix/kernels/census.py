@@ -263,12 +263,11 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     return out
 
 
-def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = None) -> None:
+def install(hardware: Optional[str] = None) -> None:
     """Turn this process into a shadow: no device memory, no launch, no value, no weight file.
 
-    `hardware` names the hardware profile the census is taken for (the run's `--hardware`);
-    `hardware_profile` is its loaded YAML (tests). One of them is how the shadow learns which
-    VENDOR profile its keys are composed under — see `_bind_target`.
+    `hardware` names the hardware profile the census is taken for (the run's `--hardware`): it is
+    how the shadow learns which VENDOR profile its keys are composed under — see `_bind_target`.
     """
     if _ACTIVE["census"]:
         return
@@ -350,7 +349,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     except Exception:  # noqa: BLE001 — a tree without that flow has nothing to shadow
         pass
 
-    _bind_target(hardware, hardware_profile)
+    _bind_target(hardware, None)
 
 
 def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:

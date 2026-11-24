@@ -61,14 +61,12 @@ red until the marker goes), when
 The first is exact (the scan's own reference rule decides it); the second bounds a promise no caller kept, with a
 date the code states and the list keeps, never a git history the tool would have to interpret.
 
-HELD ROWS. The parameter rule of `wrapper` reads call sites BY NAME: any call named `f` in the usage roots counts,
-so `self.mark('gate', False)` of another class reads as passing the second parameter of core/runtime's
-module-level `mark`. A listed
-`f(param)` row of a module-level function that the scan stops finding is re-read by `held` with every call site
-read as module plus name (a bare `f(...)`, or `m.f(...)` whose receiver names f's module through the file's
-imports); a row that reading still finds is HELD: `--write-list` keeps it, counts it in `findings`, and states the
-held count in the header (`# held: N — ...`). The refusal compares the scan's own findings with the header's
-findings less its held rows.
+CALL SITES, MODULE-AWARE. The parameter rule of `wrapper` reads the call sites of a MODULE-LEVEL function `f` of
+module M as module plus name (`_calls_module`): a bare `f(...)` counts; an attribute call counts only when its receiver
+resolves to M through the calling file's imports (`m.f(...)`, `pkg.m.f(...)`), or is the calling module itself
+(`sys.modules[__name__].f(...)`, or a name assigned it). `self.f(...)` or `obj.f(...)` of another class never keeps a
+parameter of M's `f` alive: a coincidence of names hid `mark(sync)` behind tools/container_judge.py's own `self.mark`.
+A method's (or a nested function's) call sites are still read by name: its receiver is an object, not a module.
 
     python tools/engine_slim_scan.py            # the findings, one per line: kind, path, symbol, detail
     python tools/engine_slim_scan.py --lines    # the engine's code-line count
@@ -104,6 +102,8 @@ LIST = Path(__file__).with_name("engine_slim_list.tsv")
 #: and the benchmark harness outside the library (benchmarks/) is a reader: 81641a40 deleted classification.is_triton_op,
 #: which only the harness called, before benchmarks/ was a root
 USAGE_ROOTS = ("src", "tools", "benchmarks")
+#: the receiver by which a module names itself (`_module_bindings`)
+_SELF_MODULE = "sys.modules[__name__]"
 #: non-Python files a name is reached from (entry points, registries written as data)
 DATA_GLOBS = ("pyproject.toml", "src/**/*.yml", "src/**/*.yaml", "src/**/*.json", "src/**/*.toml")
 #: a duplicate body shorter than this many AST nodes is a coincidence of idiom, not a duplicated function
@@ -209,11 +209,6 @@ def library_stamp(library: Path = LIBRARY) -> str:
     return (pin.installed_commit() if library == LIBRARY else None) or library_version(library)
 
 
-def header_int(head: Dict[str, str], name: str) -> int:
-    """A count of the list's header (`# held: 1 — why` reads 1); 0 when the header states none."""
-    return int(head[name].split()[0]) if name in head else 0
-
-
 def read_list(path: Path = LIST) -> Tuple[Dict[str, str], Dict[Tuple[str, str, str], str]]:
     """({header name: value}, {(kind, path, symbol): why it stays}) of the engine's list."""
     head, rows = {}, {}
@@ -250,21 +245,16 @@ def write_list(repo: Path = REPO, library: Path = LIBRARY, path: Path = LIST,
     recorded = read_pending(path)
     scanned = {(k, p, s) for k, p, s, _ in scan(repo, library, today=today, recorded=recorded)}
     head, why = read_list(path) if path.exists() else ({}, {})
-    kept = held(repo, library, set(why) - scanned)
-    found = sorted(scanned | kept)
+    found = sorted(scanned)
     lines = engine_lines(repo)
-    if "findings" in head and len(scanned) > header_int(head, "findings") - header_int(head, "held"):
-        raise ScanRefused(f"{path.name}: findings rose from {header_int(head, 'findings') - header_int(head, 'held')} "
-                          f"to {len(scanned)} (held rows aside); the engine only slims: delete what was added, never "
-                          f"raise the list")
+    if "findings" in head and len(found) > int(head["findings"]):
+        raise ScanRefused(f"{path.name}: findings rose from {head['findings']} to {len(found)}; the engine only slims: "
+                          f"delete what was added, never raise the list")
     out = ["# The engine's slimming findings (tools/engine_slim_scan.py --write-list): kind, path, symbol, why it stays.",
            "# A new finding is written into the engine: delete it, or move it into nbxtensor. Rule (ruling 17/11 16:11):",
            "# the findings count, and the scatter count of scatter_list.tsv, only go down; engine_lines is a measure:",
            "# the test prints the current count against it and never fails on it.",
            f"# nbxtensor: {library_stamp(library)}", f"# engine_lines: {lines}", f"# findings: {len(found)}",
-           f"# held: {len(kept)} — listed findings the by-name call reading clears only by a coincidence of names (an "
-           f"attribute call of another class): kept while the module-aware reading still finds them (`held`), "
-           f"counted in the findings",
            "kind\tpath\tsymbol\twhy it stays"]
     out += ["\t".join((k, p, s, why.get((k, p, s), ""))) for k, p, s in found]
     out += [f"{PENDING_SECTION}: a definition whose caller a named hand-in brings (written from the code's markers,",
@@ -690,6 +680,14 @@ def scan(repo: Path = REPO, library: Path = LIBRARY, twin_aware: bool = True, to
         for k, v in r.calls.items():
             calls[k].extend((q, c) for c in v)
 
+    bindings: Dict[Path, Dict[str, str]] = {}
+
+    def bound_of(q: Path) -> Dict[str, str]:
+        """The import bindings of usage file `q` (`_module_bindings`), read once per file."""
+        if q not in bindings:
+            bindings[q] = _module_bindings(trees[q], _module_name(q, repo, library))
+        return bindings[q]
+
     findings: List[Finding] = []
 
     # 1. dead
@@ -760,13 +758,17 @@ def scan(repo: Path = REPO, library: Path = LIBRARY, twin_aware: bool = True, to
             if isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == "nbxtensor":
                 imported_from_lib.update(a.asname or a.name for a in n.names)
         lib_names_by_module[mod] = imported_from_lib
+        module_level = {id(n) for n in t.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
         for node in ast.walk(t):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 target = pass_through(node)
                 if target:
                     findings.append(("wrapper", _rel(p, repo, library), node.name, f"only hands its parameters to {target}"))
+                sites = calls.get(node.name, [])
+                if id(node) in module_level:
+                    sites = [(q, c) for q, c in sites if _calls_module(c, mod, bound_of(q))]
                 for param, default in _defaulted(node):
-                    if _never_passed(node, param, [c for _, c in calls.get(node.name, [])]):
+                    if _never_passed(node, param, [c for _, c in sites]):
                         findings.append(("wrapper", _rel(p, repo, library), f"{node.name}({param})",
                                          f"no call site passes it: always its default {default}"))
             if isinstance(node, ast.ClassDef):
@@ -885,56 +887,22 @@ def _defaulted(fn) -> List[Tuple[str, str]]:
     return out
 
 
-def held(repo: Path, library: Path, unfound: Iterable[Tuple[str, str, str]]) -> Set[Tuple[str, str, str]]:
-    """The listed wrapper rows `f(param)` of a MODULE-LEVEL function that the scan no longer finds (`unfound`) and that
-    the module-aware call reading still finds: every call site by name read as module plus name (`_calls_module`), so a
-    `self.f(...)` of another class passing that position clears nothing. Such a row is HELD: `--write-list` keeps it
-    and counts it (the header's `held`), until a call of that very function passes the parameter or it is deleted."""
-    want = [(k, p, s) for k, p, s in unfound if k == "wrapper" and re.fullmatch(r"\w+\(\w+\)", s)]
-    if not want:
-        return set()
-    files = [q for r in [repo / u for u in USAGE_ROOTS] + [library] if r.is_dir() for q in _py_files(r)]
-    trees = {q: _parse(q) for q in files}
-    out = set()
-    for kind, rel, symbol in want:
-        name, param = symbol[:-1].split("(")
-        p = repo / rel
-        if p not in trees:
-            continue
-        fn = next((n for n in trees[p].body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-                   and n.name == name), None)
-        if fn is None or param not in {a for a, _ in _defaulted(fn)}:
-            continue
-        mod = _module_name(p, repo, library)
-        sites = []
-        for q, t in trees.items():
-            bound = None
-            for c in ast.walk(t):
-                if isinstance(c, ast.Call) and (getattr(c.func, "id", None) == name or
-                                                getattr(c.func, "attr", None) == name):
-                    bound = _module_bindings(t, _module_name(q, repo, library)) if bound is None else bound
-                    if q == p or _calls_module(c, mod, bound):
-                        sites.append(c)
-        if _never_passed(fn, param, sites):
-            out.add((kind, rel, symbol))
-    return out
-
-
 def findings(repo: Path = REPO, library: Path = LIBRARY, path: Path = LIST) -> Set[Tuple[str, str, str]]:
-    """What the list must hold: the scan's findings and the list's held rows (`held`)."""
-    found = {(k, p, s) for k, p, s, _ in scan(repo, library, recorded=read_pending(path))}
-    listed = set(read_list(path)[1]) if path.exists() else set()
-    return found | held(repo, library, listed - found)
+    """What the list must hold: the scan's findings (kind, path, symbol), read against the list's CALLER PENDING dates."""
+    return {(k, p, s) for k, p, s, _ in scan(repo, library, recorded=read_pending(path))}
 
 
 def _module_bindings(t: ast.Module, here: str) -> Dict[str, str]:
     """{a name this file binds: the module (or module member) it names} from its imports, relative ones resolved
     against `here` (the file's module): `import a.b as x` -> x: a.b; `import a.b` -> a.b: a.b; `from a import b` ->
-    b: a.b."""
-    out = {}
+    b: a.b. A module naming itself is read too: `sys.modules[__name__]` is `here`, and so is a name assigned it
+    (`me = sys.modules[__name__]`, at any depth of the file)."""
+    out = {_SELF_MODULE: here}
     pkg = here.split(".")
     for n in ast.walk(t):
-        if isinstance(n, ast.Import):
+        if isinstance(n, ast.Assign) and ast.unparse(n.value) == _SELF_MODULE:
+            out.update((x.id, here) for x in n.targets if isinstance(x, ast.Name))
+        elif isinstance(n, ast.Import):
             for a in n.names:
                 out[a.asname or a.name] = a.name
         elif isinstance(n, ast.ImportFrom):
@@ -946,22 +914,20 @@ def _module_bindings(t: ast.Module, here: str) -> Dict[str, str]:
 
 def _calls_module(c: ast.Call, mod: str, bound: Dict[str, str]) -> bool:
     """A call site of a MODULE-LEVEL function of module `mod`: a bare name (`f(...)`), or an attribute whose receiver
-    names that module through the file's imports (`m.f(...)`, `pkg.m.f(...)`). `self.f(...)` or `obj.f(...)` of
-    another class is not a call of `mod.f`: an attribute call is read as module plus name, never by name alone (the
-    defining file's own calls are counted by `held` whatever their receiver: a module may name itself)."""
+    names that module through the file's imports (`m.f(...)`, `pkg.m.f(...)`) or is the calling module itself
+    (`sys.modules[__name__].f(...)`, or a name assigned it). `self.f(...)` or `obj.f(...)` of another class is not a
+    call of `mod.f`: an attribute call is read as module plus name, never by name alone."""
     if isinstance(c.func, ast.Name):
         return True
     if not isinstance(c.func, ast.Attribute):
         return False
-    try:
-        recv = ast.unparse(c.func.value)
-    except Exception:
-        return False
+    recv = ast.unparse(c.func.value)
+    if recv in bound:
+        return bound[recv] == mod
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", recv):
         return False
     root, _, rest = recv.partition(".")
-    resolved = bound.get(recv) or (bound[root] + ("." + rest if rest else "") if root in bound else None)
-    return resolved == mod
+    return root in bound and bound[root] + ("." + rest if rest else "") == mod
 
 
 def _never_passed(fn, param: str, sites: List[ast.Call]) -> bool:

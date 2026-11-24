@@ -30,8 +30,7 @@ REPO = Path(__file__).resolve().parents[3]
 PROBE = textwrap.dedent("""
     import json
     from neurobrix.kernels import census
-    census.install(hardware_profile={"devices": [{"brand": "nvidia", "model": "Tesla V100-SXM2-16GB",
-                                                  "compute_capability": "7.0", "architecture": "volta"}]})
+    census.install(hardware="v100-16g")      # a committed V100 profile (Tesla V100-SXM2-16GB, 7.0), as the run names it
     paced = {n: census.pace(n) for n in (64, 65, 255, 256, 1024)}
     census._ACTIVE["census"] = False
     live = {n: census.pace(n) for n in (64, 1024)}

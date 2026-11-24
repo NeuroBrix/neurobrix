@@ -193,13 +193,19 @@ def test_a_changed_date_is_a_finding(tmp_path):
     assert S.pending(r, r / "site" / "nbxtensor", _DAY, recorded=same) == {("src/neurobrix/c.py", "later"): ("1374", "2026-11-20")}
 
 
-# ─── HELD rows: an attribute call of another class is not a call of a module function ───
+# ─── the call sites of a module-level function, read MODULE-AWARE: an attribute call counts by its receiver ───
 
-def _held_repo(tmp_path: Path, other_call: str) -> Path:
+_ROW = ("wrapper", "src/neurobrix/stamps.py", "mark(sync)")
+
+
+def _call_repo(tmp_path: Path, other_call: str, stamps_tail: str = "") -> Path:
+    """A repository whose module function `stamps.mark(name, sync=None)` is called once without `sync`, beside a
+    second call written `other_call` (in tools/judge.py, next to another class's own `mark`)."""
     r = tmp_path / "repo"
     _write(r, "site/nbxtensor/__init__.py", "")
     _write(r, "src/neurobrix/__init__.py", "")
-    _write(r, "src/neurobrix/stamps.py", "def mark(name, sync=None):\n    return (name, sync() if sync else None)\n")
+    _write(r, "src/neurobrix/stamps.py", "import sys\n\ndef mark(name, sync=None):\n"
+                                         "    return (name, sync() if sync else None)\n" + stamps_tail)
     _write(r, "src/neurobrix/user.py", "from neurobrix import stamps\n\ndef go():\n    return stamps.mark('x')\n")
     _write(r, "tools/judge.py", "class Judge:\n    def mark(self, arm, ok):\n        return arm, ok\n\n"
                                 "def run(j):\n    " + other_call + "\n")
@@ -207,11 +213,44 @@ def _held_repo(tmp_path: Path, other_call: str) -> Path:
     return r
 
 
+def _rows(r: Path):
+    return {f[:3] for f in S.scan(r, r / "site" / "nbxtensor", today=_DAY)}
+
+
 def test_an_attribute_call_of_another_class_does_not_keep_a_module_function_alive(tmp_path):
-    row = ("wrapper", "src/neurobrix/stamps.py", "mark(sync)")
-    r = _held_repo(tmp_path, "return j.mark('gate', False)")               # another class's mark, two positionals
-    lib = r / "site" / "nbxtensor"
-    assert row not in {f[:3] for f in S.scan(r, lib, today=_DAY)}              # the by-name reading is fooled
-    assert S.held(r, lib, {row}) == {row}                                      # the listed row is held
-    r2 = _held_repo(tmp_path / "two", "from neurobrix import stamps\n    return stamps.mark('gate', lambda: 0)")
-    assert S.held(r2, r2 / "site" / "nbxtensor", {row}) == set()              # the very function passes it: cleared
+    # another class's mark, two positionals: read by name it would pass `sync`; read by its receiver it is no call
+    assert _ROW in _rows(_call_repo(tmp_path, "return j.mark('gate', False)"))
+
+
+def test_a_call_through_the_imported_module_keeps_it_alive(tmp_path):
+    for i, call in enumerate(("from neurobrix import stamps\n    return stamps.mark('gate', lambda: 0)",
+                              "import neurobrix.stamps as st\n    return st.mark('gate', sync=lambda: 0)",
+                              "import neurobrix.stamps\n    return neurobrix.stamps.mark('gate', lambda: 0)")):
+        assert _ROW not in _rows(_call_repo(tmp_path / str(i), call)), call
+
+
+def test_a_module_naming_itself_through_sys_modules_is_a_call_of_its_function(tmp_path):
+    by_self = "\ndef again():\n    return sys.modules[__name__].mark('y', lambda: 0)\n"
+    assert _ROW not in _rows(_call_repo(tmp_path / "a", "return None", by_self))
+    by_name = "\ndef again():\n    me = sys.modules[__name__]\n    return me.mark('y', sync=lambda: 0)\n"
+    assert _ROW not in _rows(_call_repo(tmp_path / "b", "return None", by_name))
+    # read as the same module, a self call that does not pass it leaves the finding standing (rows_for(root))
+    plain = "\ndef again():\n    me = sys.modules[__name__]\n    return me.mark('y')\n"
+    assert _ROW in _rows(_call_repo(tmp_path / "c", "return None", plain))
+
+
+def test_the_three_parameters_the_module_aware_reading_found_are_gone():
+    # synthesize(values), install(hardware_profile), the Triton twin's runtime_dtypes(operand_reads): no caller of
+    # theirs passed them (2026-11-24); deleted with their branches, they are no finding and no list row
+    import ast
+    for rel, fn, param in (("src/neurobrix/kernels/autotune_certify.py", "synthesize", "values"),
+                           ("src/neurobrix/kernels/census.py", "install", "hardware_profile"),
+                           ("src/neurobrix/triton/prism/runtime_widths.py", "runtime_dtypes", "operand_reads")):
+        tree = ast.parse((REPO / rel).read_text())
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == fn)
+        names = {a.arg for a in node.args.posonlyargs + node.args.args + node.args.kwonlyargs}
+        assert param not in names, f"{rel}: {fn}({param}) is back"
+        assert not any(k[1:] == (rel, f"{fn}({param})") for k in S.read_list(S.LIST)[1]), (rel, fn, param)
+    # and the finding the module-aware reading must not lose stays listed: rows_for(root), called through
+    # `sys.modules[__name__]`
+    assert ("wrapper", "src/neurobrix/kernels/census_table.py", "rows_for(root)") in S.read_list(S.LIST)[1]

@@ -27,7 +27,6 @@ ratio test now reads the measured ratio instead of a constant 1.5.
 """
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from neurobrix.kernels import autotune_certify as AC
@@ -100,7 +99,7 @@ def test_the_price_is_the_phases_not_a_constant(tuners):
     assert dw["oracle"] > dw["draws"], "the windowed conv oracle is the depthwise key's cost, not its draws"
 
 
-def test_a_key_priced_over_the_budget_is_refused_by_name_before_any_draw(tuners):
+def test_a_key_priced_over_the_budget_is_refused_by_name_before_any_draw(tuners, monkeypatch):
     class _NoDraw:
         def __getattr__(self, name):
             raise AssertionError(f"a value was drawn ({name}) for a key refused by its price")
@@ -110,7 +109,9 @@ def test_a_key_priced_over_the_budget_is_refused_by_name_before_any_draw(tuners)
     msg = str(e.value)
     for word in ("oracle", "draws", "budget", "8000"):
         assert word in msg, f"the refusal does not name {word!r}: {msg}"
-    # and the same key under a budget it fits is drawn
-    made = AC.synthesize(DW, tuners[DW], key, np.random.default_rng(0), values=False,
-                         budget_bytes=16000 * 2 ** 20, floor_bytes=FLOOR_MIB * 2 ** 20)
-    assert made is not None
+    # and the same key under a budget it fits passes the door to the library's synthesis (stopped there: drawing it
+    # would hold its 8 886 MiB here)
+    reached = []
+    monkeypatch.setattr(AC.H, "synthesize", lambda qual, tuner, k, rng, **kw: reached.append(k) or ("call", None, "out"))
+    made = AC.synthesize(DW, tuners[DW], key, _NoDraw(), budget_bytes=16000 * 2 ** 20, floor_bytes=FLOOR_MIB * 2 ** 20)
+    assert made is not None and reached == [key]
