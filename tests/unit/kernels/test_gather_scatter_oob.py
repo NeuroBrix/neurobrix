@@ -164,14 +164,16 @@ def test_a_disarmed_channel_allocates_nothing(monkeypatch):
     """
     monkeypatch.setattr(_nbx_runtime, "gpu_backend", lambda: "cuda")
     _nbx_faults.device_fault_code_cached.cache_clear()
-    before = dict(_nbx_faults._FAULT_BUFFERS)
+    allocated = []
+    # `device_fault_buffer` is the one call that allocates the word; a disarmed channel must never reach it.
+    monkeypatch.setattr(_nbx_faults, "device_fault_buffer", lambda device_idx: allocated.append(device_idx))
 
     spare = object()
     ptr, code = _nbx_faults.fault_channel("some: contract", spare)
 
     assert code == 0, "CUDA honours the assert; the channel must be disarmed"
     assert ptr is spare, "a disarmed channel must hand back the tensor it was given"
-    assert _nbx_faults._FAULT_BUFFERS == before, (
+    assert allocated == [], (
         "a disarmed channel allocated a buffer the kernel can never write to, "
         "and nothing frees it")
 

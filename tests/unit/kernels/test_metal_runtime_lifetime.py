@@ -27,8 +27,6 @@ import numpy as np
 import pytest
 import nbxtensor.backend.runtime as _nbx_runtime  # the module the moved names live in (M2 cut of tensor.py)
 
-from tests.unit.kernels._runtime_reset import runtime_reset_scoped
-
 
 def _has_metal():
     nbx_tensor = pytest.importorskip("nbxtensor.tensor")
@@ -40,14 +38,6 @@ def _has_metal():
 
 
 pytestmark = pytest.mark.skipif(not _has_metal(), reason="no Apple GPU here")
-
-
-@pytest.fixture(autouse=True)
-def _the_dead_runtimes_fault_words_go_with_it():
-    """Every cell here resets the runtime: its fault words go with it (`_runtime_reset.runtime_reset_scoped`, which
-    says why the library's reset leaves them)."""
-    with runtime_reset_scoped():
-        yield
 
 
 def test_a_launch_still_works_after_the_runtime_is_reset():
