@@ -284,7 +284,7 @@ def _refuse_misplaced(container: str, topology: dict) -> None:
                       "direct key of one component (components.<c>." + key + ")", f"{key} on its component")
 
 
-# CALLER PENDING: H2 (the tie bind, lead/mac-tie-h2) 2026-11-24
+# CALLER PENDING: 1365 2026-11-24
 def read_tie(topology, container: Optional[str] = None) -> TieReading:
     """The container's tie declarations, frozen. A misplaced new key: refused. Old form (no new key on a component):
     not declared, never refused. Tie form: absent keys are not declared, malformed ones refused by name."""

@@ -39,7 +39,7 @@ _scatter_spec.loader.exec_module(SC)
 
 @functools.lru_cache(maxsize=1)
 def _found():
-    return {(k, p, s) for k, p, s, _ in S.scan(REPO, S.installed_library())}
+    return S.findings(REPO, S.installed_library())          # the scan's findings and the list's held rows
 
 
 @functools.lru_cache(maxsize=1)

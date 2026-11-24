@@ -108,7 +108,7 @@ def test_a_file_it_cannot_read_is_refused_by_name(tmp_path):
 
 # ─── CALLER PENDING (ruling 24/11 11:24): a marker in the code, never a line written by hand ───
 
-_MARK = "# CALLER PENDING: H9 (a hand-in, lead/x) {date}\n"
+_MARK = "# CALLER PENDING: 1374 {date}\n"
 _DAY = S.datetime.date(2026, 11, 24)
 
 
@@ -131,7 +131,7 @@ def test_a_marked_definition_with_no_caller_is_pending_not_dead(tmp_path):
     got = _kinds(r)
     assert ("dead", "plain") in got and not {f for f in got if f[1] == "later"}, got
     assert S.pending(r, r / "site" / "nbxtensor", _DAY) == {
-        ("src/neurobrix/c.py", "later"): ("H9 (a hand-in, lead/x)", "2026-11-24")}
+        ("src/neurobrix/c.py", "later"): ("1374", "2026-11-24")}
 
 
 def test_without_the_marker_it_is_dead_as_before(tmp_path):
@@ -168,5 +168,50 @@ def test_the_list_section_is_written_from_the_markers(tmp_path):
     lib = tmp_path / "installed" / "nbxtensor"                 # the list is written against a library outside the tree
     _write(lib.parent, "nbxtensor/__init__.py", "__version__ = '0.0'\n")
     S.write_list(r, lib, lst, today=_DAY)
-    assert S.read_pending(lst) == {("src/neurobrix/c.py", "later"): ("H9 (a hand-in, lead/x)", "2026-11-24")}
+    assert S.read_pending(lst) == {("src/neurobrix/c.py", "later"): ("1374", "2026-11-24")}
     assert all(k != "pending" for k, _, _ in S.read_list(lst)[1])          # an entry is no finding
+
+
+def test_a_hand_in_that_is_not_a_card_id_is_refused(tmp_path):
+    for bad in ("# CALLER PENDING: soon {date}\n", "# CALLER PENDING: 0000 {date}\n", "# CALLER PENDING: 1374\n"):
+        r = _pending_repo(tmp_path / str(abs(hash(bad))), bad)
+        try:
+            S.scan(r, r / "site" / "nbxtensor", today=_DAY)
+        except S.ScanRefused as e:
+            assert "CALLER PENDING" in str(e) and "c.py" in str(e), e
+        else:
+            raise AssertionError(f"{bad!r} was read as a marker")
+
+
+def test_a_changed_date_is_a_finding(tmp_path):
+    r = _pending_repo(tmp_path, _MARK, date="2026-11-20")
+    first = {("src/neurobrix/c.py", "later"): ("1374", "2026-11-10")}          # the list recorded it on 11-10
+    got = {(k, s) for k, _, s, _ in S.scan(r, r / "site" / "nbxtensor", today=_DAY, recorded=first)}
+    assert ("pending", "later") in got
+    assert S.pending(r, r / "site" / "nbxtensor", _DAY, recorded=first) == {}
+    same = {("src/neurobrix/c.py", "later"): ("1374", "2026-11-20")}
+    assert S.pending(r, r / "site" / "nbxtensor", _DAY, recorded=same) == {("src/neurobrix/c.py", "later"): ("1374", "2026-11-20")}
+
+
+# ─── HELD rows: an attribute call of another class is not a call of a module function ───
+
+def _held_repo(tmp_path: Path, other_call: str) -> Path:
+    r = tmp_path / "repo"
+    _write(r, "site/nbxtensor/__init__.py", "")
+    _write(r, "src/neurobrix/__init__.py", "")
+    _write(r, "src/neurobrix/stamps.py", "def mark(name, sync=None):\n    return (name, sync() if sync else None)\n")
+    _write(r, "src/neurobrix/user.py", "from neurobrix import stamps\n\ndef go():\n    return stamps.mark('x')\n")
+    _write(r, "tools/judge.py", "class Judge:\n    def mark(self, arm, ok):\n        return arm, ok\n\n"
+                                "def run(j):\n    " + other_call + "\n")
+    _write(r, "tools/use.py", "from neurobrix.user import go\nfrom judge import run\ngo(), run(None)\n")
+    return r
+
+
+def test_an_attribute_call_of_another_class_does_not_keep_a_module_function_alive(tmp_path):
+    row = ("wrapper", "src/neurobrix/stamps.py", "mark(sync)")
+    r = _held_repo(tmp_path, "return j.mark('gate', False)")               # another class's mark, two positionals
+    lib = r / "site" / "nbxtensor"
+    assert row not in {f[:3] for f in S.scan(r, lib, today=_DAY)}              # the by-name reading is fooled
+    assert S.held(r, lib, {row}) == {row}                                      # the listed row is held
+    r2 = _held_repo(tmp_path / "two", "from neurobrix import stamps\n    return stamps.mark('gate', lambda: 0)")
+    assert S.held(r2, r2 / "site" / "nbxtensor", {row}) == set()              # the very function passes it: cleared

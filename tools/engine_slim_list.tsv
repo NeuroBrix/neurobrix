@@ -4,7 +4,8 @@
 # the test prints the current count against it and never fails on it.
 # nbxtensor: 3e51f191906cdef611aa445b2967736ac044dac3
 # engine_lines: 102256
-# findings: 165
+# findings: 166
+# held: 1 — listed findings the by-name call reading clears only by a coincidence of names (an attribute call of another class): kept while the module-aware reading still finds them (`held`), counted in the findings
 kind	path	symbol	why it stays
 dead	src/neurobrix/cli/commands/registry.py	installing_path	a test seam: read by tests/unit/cli/test_import_speaks_ndjson.py, nothing else
 dead	src/neurobrix/core/module/autoregressive/generator.py	AutoregressiveGenerator.num_generated	a test seam: read by tests/unit/serving/test_both_engines_read_the_stop_at_their_token_seam.py, nothing else
@@ -109,6 +110,7 @@ wrapper	src/neurobrix/core/runtime/graph_executor.py	execute	the executor interf
 wrapper	src/neurobrix/core/runtime/lm_facts.py	decode_sequences(resolved)	the run's resolved values (a CLI cfg_scale) — the tests pass it (tests/unit/prism/test_the_plan_prices_every_cache_its_decoder_opens)
 wrapper	src/neurobrix/core/runtime/phase_trace.py	first	the ledger's read door: _FIRST is the module's private state
 wrapper	src/neurobrix/core/runtime/phase_trace.py	mark(note)	passed positionally by the Triton flow through its alias `_phase_mark` (triton/flow/autoregressive.py: the allocator's live/cached/free note); the scan reads calls by name, and the one call it saw by that name left with the build tools (2026-11-13)
+wrapper	src/neurobrix/core/runtime/phase_trace.py	mark(sync)	passed positionally by the Triton flow through its alias `_phase_mark` (triton/flow/autoregressive.py: the device sync before a stamp); the scan reads calls by name, and the one call it saw by that name left with the build tools (2026-11-13); HELD since 2026-11-24: the by-name call reading lost it to tools/container_judge.py's own `self.mark(...)` (3e9632b5d), another class's method; the module-aware reading (`held`) still finds it
 wrapper	src/neurobrix/core/runtime/shape_resolver.py	ShapeResolutionError	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `Exception` would name nothing
 wrapper	src/neurobrix/core/runtime/symexpr.py	ExpressionError	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ValueError` would name nothing
 wrapper	src/neurobrix/core/runtime/symexpr.py	RealInShapeSlot	a typed refusal of the engine's error contract: callers catch it or a traceback names it, where a bare `ExpressionError` would name nothing
@@ -173,4 +175,4 @@ wrapper	src/neurobrix/triton/symbols.py	UnboundSymbolError	a typed refusal of th
 wrapper	src/neurobrix/triton/symbols.py	get	the symbol table's accessor (6 403 call sites): the bindings dict stays private, `is_bound` decides boundness
 ## CALLER PENDING: a definition whose caller a named hand-in brings (written from the code's markers,
 ## never by hand; not a finding; EMPTY at the release gate: --release). pending, path, symbol, hand-in, date
-pending	src/neurobrix/pytorch/neurotax/tie.py	read_tie	H2 (the tie bind, lead/mac-tie-h2)	2026-11-24
+pending	src/neurobrix/pytorch/neurotax/tie.py	read_tie	1365	2026-11-24
