@@ -21,7 +21,8 @@ One run root, `<out>/<model>/`:
             on the staged .nbx file build.json names; a file that is absent, or whose sha256 (or byte count) is not
             build.json's, is REFUSED BY NAME and the verdict is red. `autotune` adds what the shared replay cache
             holds: {replayed, missing, missing_count} — every kernel key the arms swept because the frozen
-            directory did not hold it, counted and named (recorded; the gate's colour does not depend on it).
+            directory did not hold it, counted and named. A key swept during the gate turns the gate RED, by name
+            (`swept_keys_refusal`: the gate judges at its own default request, a conventional size).
 
 An arm runs on the container the builder's record names, or not at all: the cached container's `created_at` must
 equal previous.json's (old arm) or build.json's (new arm); any other container is REFUSED BY NAME.
@@ -126,6 +127,34 @@ def autotune_account(directory: Path, replay: Path) -> dict:
                 missing.append(f"{kernel}::{key}" if sep else str(ident))
     missing = sorted(set(missing))
     return {"replayed": replayed, "missing": missing, "missing_count": len(missing)}
+
+
+SWEPT_KEYS_RULING = (
+    "A KEY SWEPT AT RUN TIME DURING THE GATE TURNS THE GATE RED, by name: the gate judges a container at its own "
+    "default request: a CONVENTIONAL size (the owner's condition 6, red line 33): at a conventional size no autotune "
+    "runs on the V100 nor on the Mac: every key is certified; a key that is swept there is a certificate missing: the "
+    "gate says which keys, and the remedy (the census and certification of those keys). Outside a conventional size "
+    "(a user's own size) one autotune is allowed and said: that is the engine's run, not the gate's.")
+
+
+def swept_keys_refusal(stamp: dict):
+    """The project lead's ruling (09:44, 24/11), as its text says — SWEPT_KEYS_RULING:
+
+    A KEY SWEPT AT RUN TIME DURING THE GATE TURNS THE GATE RED, by name: the gate judges a container at its own
+    default request: a CONVENTIONAL size (the owner's condition 6, red line 33): at a conventional size no autotune
+    runs on the V100 nor on the Mac: every key is certified; a key that is swept there is a certificate missing: the
+    gate says which keys, and the remedy (the census and certification of those keys). Outside a conventional size
+    (a user's own size) one autotune is allowed and said: that is the engine's run, not the gate's.
+
+    None when the arms swept no key on the gate's request; else the reason the gate is red, naming every
+    `<kernel>::<key>` the replay cache holds that the frozen directory does not, and the remedy."""
+    missing = list(stamp.get("missing") or [])
+    count = int(stamp.get("missing_count", len(missing)) or 0)
+    if count <= 0 and not missing:
+        return None
+    return (f"{count} kernel key(s) swept at run time on the gate's own request, a conventional size: a certificate "
+            f"missing for each — " + ", ".join(missing)
+            + "; remedy: the census and certification of those keys at this conventional size")
 
 
 def write_whole(path: Path, obj) -> None:
@@ -675,6 +704,9 @@ class Judge:
         else:
             verdict, bytes_verdict, vendor = self._gate_compared(old, new, gd)
         stamp = self.autotune_stamp()
+        swept = swept_keys_refusal(stamp)    # the ruling: a key swept on the gate's request turns the gate red
+        if swept:
+            verdict = f"FAIL ({swept}; the gate's verdict on the bytes: {verdict})"
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
                   autotune=stamp, vendor=vendor or None, request=self.current_request("new"))
         self.write_verdict(verdict, bytes_verdict, vendor, nbx_sha256)
