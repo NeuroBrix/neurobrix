@@ -29,7 +29,10 @@ def test_the_headline_says_how_many_entries_left_the_file(tmp_path):
     f.write_text(json.dumps({"entries": {f"({i},)": {"config": i} for i in range(5)}}))
     _sh("git", "add", ".", cwd=r); _sh("git", "commit", "-q", "-m", "base", cwd=r)
     f.write_text(json.dumps({"entries": {"(9,)": {"config": 9}}}))          # +1, the 5 others dropped
-    gate = tmp_path / "gate.py"; gate.write_text("import sys; sys.exit(0)\n")
+    # a gate that says `ok` for each file: a silent exit 0 is no verdict, and commits nothing
+    gate = tmp_path / "gate.py"
+    gate.write_text("import sys, pathlib\n"
+                    "for p in sorted(pathlib.Path(sys.argv[-1]).rglob('*.json')): print(f'ok      {p} (1 shape(s))')\n")
     rec = tmp_path / "RUN.md"
     res = CP.checkpoint(str(r), "src/neurobrix/config/autotune", [], [sys.executable, str(gate)], [],
                         record=str(rec), say=lambda *a: None)

@@ -28,8 +28,14 @@ certifier:
   check --dir`) behind the no-card door (`CUDA_VISIBLE_DEVICES=` in the gate's
   environment: it cannot open a context on a real card whatever the stack
   does). A file the gate refuses is NAMED and left uncommitted; the others are
-  committed. Nothing is ever restamped or rewritten here — the certifier is
-  the only writer of those files.
+  committed — each ONLY on its own explicit `ok` line. The gate's exit codes are
+  0 (all ok) and 1 (some REFUSED), but a Python crash exits 1 too, so the code is
+  never read alone: a file without a verdict (or with both), a Python crash
+  header ("(most recent call last):") in the gate's output, any other exit code,
+  a 1 naming no refusal or a 0 naming one, and NOTHING is committed — said as
+  "the gate did not judge <files>: nothing committed" and retried at the next
+  tick. Nothing is ever restamped or rewritten here — the certifier is the only
+  writer of those files.
 * The commit carries the counts measured AFTER the add (entries added,
   changed and dropped per file against HEAD), never a number written before the
   measurement. Only the directory's files are committed (`git commit --
@@ -40,8 +46,9 @@ certifier:
 
 Exit: 0 when the producers are gone and the last checkpoint reached every
 remote; 3 when they are gone and a remote still lacks it (said, with the
-remote's name). `--once` runs a single checkpoint and exits with the same
-codes. Without a producer and without `--once` it runs until SIGTERM, which
+remote's name); 4 when the last checkpoint's gate did not judge every changed
+file (nothing committed, the files named). `--once` runs a single checkpoint
+and exits with the same codes. Without a producer and without `--once` it runs until SIGTERM, which
 triggers a last checkpoint.
 """
 from __future__ import annotations
@@ -85,22 +92,80 @@ def changed_files(repo: str, rel_dir: str) -> List[str]:
     return sorted(set(files))
 
 
+#: The gate's documented exit codes: 0 = every file ok, 1 = at least one file REFUSED (each named
+#: on its own line). A Python crash ALSO exits 1, so the code alone never says "refused": the
+#: verdict is read file by file, and a 1 must name a refusal to mean one.
+GATE_ALL_OK, GATE_SOME_REFUSED = 0, 1
+
+#: The checkpointer's own exit code when its final checkpoint met a gate that did not judge.
+RC_GATE_DID_NOT_JUDGE = 4
+
+#: The header Python prints above an uncaught exception's frames: in the gate's output, a crash.
+_CRASH_HEADER = "(most recent call last):"
+
+
+class GateFault(RuntimeError):
+    """The gate ran but its output is no verdict: a crash, an undocumented code, a contradiction."""
+
+
+class GateDidNotJudge(RuntimeError):
+    """Raised when a changed file carries no positive verdict: nothing of the checkpoint is committed."""
+
+    def __init__(self, files: List[str], reason: str):
+        """Name the files the gate left unjudged and why; the message is what the record says."""
+        self.files = sorted(files)
+        self.reason = reason
+        super().__init__(f"the gate did not judge {', '.join(self.files)}: nothing committed ({reason})")
+
+
 def run_gate(repo: str, abs_dir: str, gate_cmd: List[str], env_extra: Optional[Dict[str, str]] = None) -> Dict[str, List[str]]:
-    """The directory's gate, behind the no-card door. Returns {"refused": [abs paths], "ok": [abs paths]}."""
+    """The directory's gate, behind the no-card door. Returns {"refused": [abs paths], "ok": [abs paths]}.
+
+    Raises GateFault when the output cannot be a verdict: a crash header anywhere in it, an exit code
+    other than 0 / 1, a 1 naming no REFUSED file (a crash exits 1 too), or a 0 naming one."""
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = ""            # the door: no context can exist on a real card
     env.setdefault("PYTHONPATH", str(Path(repo) / "src"))
     env.update(env_extra or {})
     r = subprocess.run([*gate_cmd, abs_dir], capture_output=True, text=True, env=env, cwd=repo)
+    out = r.stdout + r.stderr
+    tail = (r.stderr or r.stdout).strip()[-400:]
     refused, ok = [], []
-    for line in (r.stdout + r.stderr).splitlines():
+    for line in out.splitlines():
         if line.startswith("REFUSED "):
             refused.append(line[len("REFUSED "):].split(":", 1)[0].strip())
         elif line.startswith("ok "):
             ok.append(line[3:].strip().split(" (", 1)[0])
-    if r.returncode not in (0, 1):               # 1 = "some refused" (said file by file); anything else = the gate itself broke
-        raise RuntimeError(f"the gate failed to run (rc={r.returncode}): {(r.stderr or r.stdout).strip()[-400:]}")
+    if _CRASH_HEADER in out:
+        raise GateFault(f"the gate crashed (rc={r.returncode}): {tail}")
+    if r.returncode not in (GATE_ALL_OK, GATE_SOME_REFUSED):
+        raise GateFault(f"the gate failed to run (rc={r.returncode}): {tail}")
+    if r.returncode == GATE_SOME_REFUSED and not refused:
+        raise GateFault(f"the gate exited 1 and named no refused file — a failure, not a refusal: {tail or 'no output'}")
+    if r.returncode == GATE_ALL_OK and refused:
+        raise GateFault(f"the gate exited 0 yet named {len(refused)} refused file(s) — its status contradicts its lines")
     return {"refused": refused, "ok": ok}
+
+
+def judge_each_file(root: str, rel_dir: str, files: List[str], gate: Dict[str, List[str]]) -> List[str]:
+    """Map the gate's per-file lines onto the snapshot's files; return the REFUSED ones (repo-relative).
+
+    Every file must carry exactly one verdict, ok or REFUSED. A file with none, or with both, raises
+    GateDidNotJudge naming it: a commit is made only on a positive verdict for each of its files."""
+    base = os.path.realpath(root)
+
+    def rel(p: str) -> str:
+        """A gate-printed path as the repo-relative path of the snapshot file it names."""
+        return os.path.join(rel_dir, os.path.relpath(os.path.realpath(p), base))
+
+    ok = {rel(p) for p in gate["ok"]}
+    refused = {rel(p) for p in gate["refused"]}
+    unjudged = [f for f in files if (f in ok) == (f in refused)]
+    if unjudged:
+        both = [f for f in unjudged if f in ok]
+        raise GateDidNotJudge(unjudged, "no verdict for each file" if not both else
+                              f"both ok and REFUSED for {', '.join(sorted(both))}")
+    return sorted(f for f in files if f in refused)
 
 
 def entry_delta(repo: str, rel_path: str, content: Optional[bytes] = None) -> Dict[str, int]:
@@ -183,9 +248,9 @@ def _git_dir(repo: str) -> Path:
 
 def _gate_snapshot(repo: str, rel_dir: str, snap: Dict[str, bytes], gate_cmd: List[str]) -> List[str]:
     """The gate run on a COPY of exactly the bytes about to be committed (read once); returns the
-    refused files as repo-relative paths. The gate used to read the disk and the commit to take the
-    working tree as it stood later: a certifier write in between was committed ungated (the tools
-    audit, 2026-09-29)."""
+    refused files as repo-relative paths, or raises GateDidNotJudge when any file lacks a verdict.
+    The gate used to read the disk and the commit to take the working tree as it stood later: a
+    certifier write in between was committed ungated (the tools audit, 2026-09-29)."""
     import shutil
     import tempfile
     td = tempfile.mkdtemp(prefix="nbx-ckpt-gate-", dir=str(_git_dir(repo)))
@@ -195,8 +260,11 @@ def _gate_snapshot(repo: str, rel_dir: str, snap: Dict[str, bytes], gate_cmd: Li
             dst = root / os.path.relpath(rel, rel_dir)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
-        gate = run_gate(repo, str(root), gate_cmd)
-        return sorted({os.path.join(rel_dir, os.path.relpath(p, root)) for p in gate["refused"]})
+        try:
+            gate = run_gate(repo, str(root), gate_cmd)
+        except GateFault as fault:
+            raise GateDidNotJudge(list(snap), str(fault)) from None
+        return judge_each_file(str(root), rel_dir, list(snap), gate)
     finally:
         shutil.rmtree(td, ignore_errors=True)
 
@@ -277,7 +345,14 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
             snap[f] = (Path(repo) / f).read_bytes()
         except FileNotFoundError:
             continue                    # replaced away between the status and the read: the next tick sees it
-    refused_rel = _gate_snapshot(repo, rel_dir, snap, gate_cmd)
+    try:
+        refused_rel = _gate_snapshot(repo, rel_dir, snap, gate_cmd)
+    except GateDidNotJudge as unjudged:
+        # A crash exits 1 like a refusal and names nothing: it once committed every changed file
+        # unvalidated (the stale-tests census, 2026-11-24). No verdict for each file, no commit at all.
+        result["gate_failed"] = str(unjudged)
+        _record(record, f"== checkpoint {stamp}: {unjudged}", say)
+        return result
     to_commit = [f for f in snap if f not in refused_rel]
     result["refused"] = refused_rel
     if not to_commit:
@@ -383,6 +458,9 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
                     _record(record, f"== {res['sha']}: committed, NOT pushed (the repository's push window opens in "
                                     f"{seconds_until_push_window():.0f} s)", say)
             if final:
+                if res.get("gate_failed"):
+                    say(f"[checkpoint] final checkpoint: {res['gate_failed']} — rc {RC_GATE_DID_NOT_JUDGE}")
+                    return RC_GATE_DID_NOT_JUDGE
                 failed = [r for r, why in (res.get("remotes") or {}).items() if why]
                 if failed:
                     say(f"[checkpoint] final checkpoint did not reach: {', '.join(failed)} — rc 3")
