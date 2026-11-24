@@ -1,13 +1,29 @@
 {
- "_about": "The gate cell's questions (tools/gate_cell_same_request.py). A gate question is one where the model CHOOSES at every step: its vendor top-2 margin (transformers, the rendered prompt with the pinned date, the container's dtype, the logits after the model's own scaling) is at least the floor at every decoded position (`gate_cell_same_request.py --check-question`). The run sends the `gating` entries in order and never gates an OPEN entry; the open red is the open entry with \"pinned\": false (no system message: the template renders today's date). A status follows the measures; the Mac measures are a probe, the gate's card (V100) measures are to be added by the same command.",
+ "_about": "The gate cell's questions (tools/gate_cell_same_request.py). A gate question is one where the model CHOOSES at every step: its vendor top-2 margin (transformers, the rendered prompt with the pinned date, the container's dtype, the logits after the model's own scaling) is STRICTLY above the floor at every decoded position (`gate_cell_same_request.py --check-question`; a margin at the floor exactly is OPEN, the project lead's ruling of 24/11). THE GATING MEASURE of an entry is its measure on the gate's card class (`gate_card_class`, V100): the run gates exactly the `gating` entries whose V100 measure is strictly above the floor, and the file is refused when a GATE entry has none. The Mac (Metal) measures are kept beside them as a probe, never gating. The run never gates an OPEN entry; the open red is the open entry with \"pinned\": false (no system message: the template renders today's date).",
  "floor": 0.5,
  "units": "vendor logit units (the logits transformers returns, after granite's logits_scaling); one bf16 step near 24 is 0.125",
+ "gate_card_class": "V100",
  "gating": [
   {
    "text": "What is the capital of France?",
    "status": "GATE",
    "pinned": true,
    "measures": [
+    {
+     "min_margin": 1.375,
+     "position": 47,
+     "token": " fam",
+     "runner_up": " the",
+     "decoded": 63,
+     "floor": 0.5,
+     "verdict": "GATE",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
+    },
     {
      "min_margin": 1.4375,
      "position": 47,
@@ -41,6 +57,21 @@
      "date_rendered": "2026-11-23",
      "model": "granite-3.1-1b-a400m-instruct",
      "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
+    },
+    {
+     "min_margin": 0.75,
+     "position": 1,
+     "token": "isk",
+     "runner_up": "is",
+     "decoded": 4,
+     "floor": 0.5,
+     "verdict": "GATE",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
      "vendor": "transformers 5.4.0 torch 2.14.0 mps",
      "measured": "2026-11-24",
      "card_class": "apple_m4_pro, Metal, not the gate's card"
@@ -52,6 +83,21 @@
    "status": "GATE",
    "pinned": true,
    "measures": [
+    {
+     "min_margin": 2.625,
+     "position": 0,
+     "token": "Blue",
+     "runner_up": "Sky",
+     "decoded": 3,
+     "floor": 0.5,
+     "verdict": "GATE",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
+    },
     {
      "min_margin": 2.75,
      "position": 0,
@@ -87,6 +133,21 @@
      "date_rendered": "2026-11-23",
      "model": "granite-3.1-1b-a400m-instruct",
      "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
+    },
+    {
+     "min_margin": 0.0,
+     "position": 15,
+     "token": " is",
+     "runner_up": "'s",
+     "decoded": 25,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
      "vendor": "transformers 5.4.0 torch 2.14.0 mps",
      "measured": "2026-11-24",
      "card_class": "apple_m4_pro, Metal, not the gate's card"
@@ -98,6 +159,21 @@
    "status": "OPEN",
    "pinned": true,
    "measures": [
+    {
+     "min_margin": 0.125,
+     "position": 56,
+     "token": " between",
+     "runner_up": " from",
+     "decoded": 65,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
+    },
     {
      "min_margin": 0.125,
      "position": 52,
@@ -121,6 +197,21 @@
    "pinned": true,
    "measures": [
     {
+     "min_margin": 0.0,
+     "position": 40,
+     "token": " making",
+     "runner_up": " liquid",
+     "decoded": 55,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
+    },
+    {
      "min_margin": 0.1875,
      "position": 35,
      "token": " th",
@@ -142,6 +233,21 @@
    "status": "OPEN",
    "pinned": true,
    "measures": [
+    {
+     "min_margin": 0.0,
+     "position": 69,
+     "token": "<|end_of_text|>",
+     "runner_up": " Its",
+     "decoded": 70,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
+    },
     {
      "min_margin": 0.25,
      "position": 69,
@@ -188,6 +294,22 @@
    "pinned": true,
    "measures": [
     {
+     "min_margin": 0.5,
+     "position": 0,
+     "token": "2",
+     "runner_up": "Two",
+     "decoded": 9,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100",
+     "note": "at the floor exactly: the check printed GATE under the old 'at least' rule; OPEN by the project lead's ruling of 24/11 (a gating question is STRICTLY above the floor)"
+    },
+    {
      "min_margin": 0.25,
      "position": 0,
      "token": "2",
@@ -201,6 +323,28 @@
      "vendor": "transformers 5.4.0 torch 2.14.0 mps",
      "measured": "2026-11-24",
      "card_class": "apple_m4_pro, Metal, not the gate's card"
+    }
+   ]
+  },
+  {
+   "text": "Name the planet we live on.",
+   "status": "OPEN",
+   "pinned": true,
+   "measures": [
+    {
+     "min_margin": 0.0,
+     "position": 1,
+     "token": " a",
+     "runner_up": " of",
+     "decoded": 51,
+     "floor": 0.5,
+     "verdict": "OPEN",
+     "date_rendered": "2026-11-23",
+     "model": "granite-3.1-1b-a400m-instruct",
+     "dtype": "bfloat16",
+     "vendor": "transformers 4.57.6 torch 2.14.0+cu126 Tesla V100-SXM2-16GB",
+     "measured": "2026-11-24",
+     "card_class": "V100"
     }
    ]
   }

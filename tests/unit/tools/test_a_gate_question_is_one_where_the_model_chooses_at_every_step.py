@@ -33,21 +33,65 @@ def test_a_margin_of_0_4_is_under_the_floor_and_3_0_is_over_it():
     clear = _steps([21.0, 24.0, 18.0], [3.0, 0.0, 6.0])
     m, k = G.min_margin(clear)
     assert (m, k) == (3.0, 0) and G.verdict(m, FLOOR) == "GATE"
-    assert G.verdict(0.5, FLOOR) == "GATE" and G.DEFAULT_FLOOR == 0.5
+    assert G.verdict(0.51, FLOOR) == "GATE" and G.DEFAULT_FLOOR == 0.5
+
+
+def test_a_margin_at_the_floor_exactly_is_open():
+    """The project lead's ruling (24/11): a gating question is STRICTLY above the floor. 'What is two plus two?' at
+    exactly 0.5 on the V100 is OPEN, one bf16 step over it (0.625) is GATE."""
+    at = _steps([21.0, 24.0, 23.5], [0.0, 27.0, 24.0])
+    m, k = G.min_margin(at)
+    assert (m, k) == (0.5, 0)
+    assert G.verdict(m, FLOOR) == "OPEN"
+    assert G.verdict(0.625, FLOOR) == "GATE"
 
 
 def test_the_data_file_beside_the_tool_reads_with_its_measures():
     """The file holds the gating set and the open, measured list; each entry its text, status and measures (minimum
-    margin, position, token, card class, date of the measure); a GATE entry was measured at or over its floor."""
+    margin, position, token, card class, date of the measure); a GATE entry's measure on the gate's card class (V100)
+    is STRICTLY over the floor, and the run's gating set is exactly the questions whose V100 measure is."""
     data = G.read_questions()
-    assert G.gating_questions(data) and all(isinstance(q, str) for q in G.gating_questions(data))
+    assert data["gate_card_class"] == "V100" and data["floor"] == 0.5
     for e in data["gating"] + data["open_measured"]:
         assert e["measures"], e["text"]
         for m in e["measures"]:
             assert {"min_margin", "position", "token", "card_class", "measured"} <= set(m), e["text"]
         if e["status"] == "GATE":
-            assert all(m["min_margin"] >= m["floor"] for m in e["measures"]), e["text"]
+            assert G.gate_measure(data, e)["min_margin"] > data["floor"], e["text"]
+    over = [e["text"] for e in data["gating"] + data["open_measured"]
+            if (G.gate_measure(data, e) or {}).get("min_margin", -1) > data["floor"]]
+    assert G.gating_questions(data) == over == [
+        "What is the capital of France?", "Give one word that rhymes with cat.",
+        "What colour is the sky on a clear day? Answer in one word."]
+    two = next(e for e in data["open_measured"] if e["text"].startswith("What is two plus two"))
+    assert G.gate_measure(data, two)["min_margin"] == 0.5 and two["status"] == "OPEN"
     assert G.open_red_question(data) is not None
+
+
+def _v100(margin):
+    return {"min_margin": margin, "card_class": "V100"}
+
+
+def test_a_gate_entry_at_the_floor_exactly_is_refused_by_name(tmp_path):
+    """A GATE entry whose V100 measure is the floor exactly (two plus two, 0.5) is refused when the file is read: at
+    the floor is OPEN, never sent as a gating request."""
+    p = tmp_path / "q.json"
+    p.write_text(json.dumps({"floor": 0.5, "gate_card_class": "V100",
+                             "gating": [{"text": "two", "status": "GATE", "measures": [_v100(0.5)]}],
+                             "open_measured": []}))
+    with pytest.raises(SystemExit, match="not strictly above the floor"):
+        G.read_questions(p)
+
+
+def test_a_gate_entry_without_a_measure_on_the_gate_s_card_is_refused(tmp_path):
+    """A GATE entry measured on the Mac alone has no gating measure: refused by name."""
+    p = tmp_path / "q.json"
+    p.write_text(json.dumps({"floor": 0.5, "gate_card_class": "V100",
+                             "gating": [{"text": "mac", "status": "GATE",
+                                         "measures": [{"min_margin": 2.0, "card_class": "apple_m4_pro, Metal"}]}],
+                             "open_measured": []}))
+    with pytest.raises(SystemExit, match="no measure on the gate's card class 'V100'"):
+        G.read_questions(p)
 
 
 def test_an_entry_without_a_status_is_refused_by_name(tmp_path):
@@ -61,8 +105,10 @@ def test_an_entry_without_a_status_is_refused_by_name(tmp_path):
 def test_the_run_never_gates_an_open_entry(tmp_path):
     """An OPEN entry is skipped even inside the gating list; the open red is the unpinned open entry."""
     p = tmp_path / "q.json"
-    p.write_text(json.dumps({"gating": [{"text": "a", "status": "GATE"}, {"text": "b", "status": "OPEN"},
-                                        {"text": "c", "status": "GATE"}],
+    p.write_text(json.dumps({"floor": 0.5, "gate_card_class": "V100",
+                             "gating": [{"text": "a", "status": "GATE", "measures": [_v100(1.0)]},
+                                        {"text": "b", "status": "OPEN"},
+                                        {"text": "c", "status": "GATE", "measures": [_v100(0.625)]}],
                              "open_measured": [{"text": "d", "status": "OPEN"},
                                                {"text": "e", "status": "OPEN", "pinned": False}]}))
     data = G.read_questions(p)

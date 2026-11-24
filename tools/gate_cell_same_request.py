@@ -24,8 +24,11 @@ renders TODAY's date — is reported apart ("open red: the <dd/mm> prompt, the b
 
 THE QUESTIONS live in ONE data file beside this tool, `gate_cell_questions.json`: the gating set and the "open,
 measured" list, each entry with its text, its measured minimum margin, the position and token of that minimum, the
-card class and the date of the measure. The run sends the gating entries in order and NEVER gates an entry whose
-status is OPEN, wherever it sits; the open red is the open entry marked `"pinned": false`.
+card class and the date of the measure. THE GATING MEASURE of an entry is its measure on the gate's card class (the
+file's `gate_card_class`, V100); other measures (the Mac's, Metal) are kept beside it as a probe and never gate. The
+run sends, in order, exactly the `gating` entries whose gating measure is STRICTLY above the floor, and NEVER gates an
+entry whose status is OPEN, wherever it sits; a GATE entry with no gating measure, or one at or under the floor, is
+refused by name when the file is read. The open red is the open entry marked `"pinned": false`.
 
 THE CHECK (`--check-question "<text>"`, run once when a question is added). A gate question must be one where the
 model CHOOSES at every step: a position where the top two logits nearly tie is decided by the dtype's rounding, and
@@ -34,7 +37,9 @@ greedy answer: transformers, the same rendered prompt with the pinned date (the 
 as the run sends it), the container's dtype, the logits the vendor model returns (after its own scaling, granite's
 `logits_scaling`). It runs in a worker process of `--vendor-python`, offline, in a fresh HF home, reading no token
 or credential file; `--vendor-extra-site` lends only the packages that python lacks (never torchvision). It prints
-the minimum margin, its position and token, and the verdict: GATE when the minimum is at least the floor, else OPEN.
+the minimum margin, its position and token, and the verdict: GATE when the minimum is STRICTLY above the floor, else
+OPEN — a margin at the floor exactly is OPEN (the project lead's ruling, 24/11: 'What is two plus two?' at 0.5 on the
+V100).
 
 THE FLOOR (`--floor`, default 0.5 vendor logit units). granite's top logits sit near ~24, where one bf16 step is
 0.125; the ties measured on 23-24/11 were 0 to 0.125 (0 to 1 bf16 step) and the clear positions about 2.8 to 3.75.
@@ -141,20 +146,40 @@ def served_name(cache: Path, entry: str) -> str:
         return cli_name(entry)
 
 
+def gate_measure(data: dict, entry: dict) -> dict | None:
+    """The entry's GATING measure: its first measure on the gate's card class (`gate_card_class`), else None."""
+    cls = data.get("gate_card_class")
+    return next((m for m in entry.get("measures") or () if cls is not None and m.get("card_class") == cls), None)
+
+
 def read_questions(path: Path = QUESTIONS_FILE) -> dict:
     """The questions data file: its `gating` and `open_measured` lists, every entry with a text and a status (GATE or
-    OPEN); refused by name when an entry lacks either."""
+    OPEN); refused by name when an entry lacks either, or when a GATE entry's gating measure (`gate_measure`) is
+    missing or not STRICTLY above the file's floor."""
     data = json.loads(Path(path).read_text())
+    floor = float(data.get("floor", DEFAULT_FLOOR))
     for kind in ("gating", "open_measured"):
         for e in data.get(kind, []):
             if not isinstance(e.get("text"), str) or e.get("status") not in ("GATE", "OPEN"):
                 raise SystemExit(f"{path}: an entry of {kind!r} lacks its text or a GATE/OPEN status: {e!r}")
+            if e["status"] != "GATE":
+                continue
+            m = gate_measure(data, e)
+            if m is None:
+                raise SystemExit(f"{path}: the GATE entry {e['text']!r} has no measure on the gate's card class "
+                                 f"{data.get('gate_card_class')!r}: measure it there (--check-question) or mark it OPEN")
+            if verdict(float(m["min_margin"]), floor) != "GATE":
+                raise SystemExit(f"{path}: the GATE entry {e['text']!r} measures {m['min_margin']} on "
+                                 f"{data.get('gate_card_class')!r}, not strictly above the floor {floor}: it is OPEN")
     return data
 
 
 def gating_questions(data: dict) -> list:
-    """The texts the run gates on, in order: the `gating` entries, an OPEN one never among them."""
-    return [e["text"] for e in data.get("gating", []) if e["status"] == "GATE"]
+    """The texts the run gates on, in order: the `gating` entries whose gating measure is STRICTLY above the floor,
+    an OPEN one never among them."""
+    floor = float(data.get("floor", DEFAULT_FLOOR))
+    return [e["text"] for e in data.get("gating", []) if e["status"] == "GATE"
+            and (m := gate_measure(data, e)) is not None and verdict(float(m["min_margin"]), floor) == "GATE"]
 
 
 def open_red_question(data: dict) -> str | None:
@@ -187,8 +212,8 @@ def min_margin(steps: list) -> tuple:
 
 
 def verdict(margin: float, floor: float) -> str:
-    """GATE when the question's minimum margin is at least `floor`, OPEN otherwise."""
-    return "GATE" if margin >= floor else "OPEN"
+    """GATE when the question's minimum margin is STRICTLY above `floor`, OPEN otherwise: at the floor is OPEN."""
+    return "GATE" if margin > floor else "OPEN"
 
 
 def vendor_worker(job_path: str) -> None:
