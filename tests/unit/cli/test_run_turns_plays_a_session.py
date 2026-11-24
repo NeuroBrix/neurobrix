@@ -41,5 +41,5 @@ def test_the_turns_file_is_a_list_of_messages(tmp_path):
         p.write_text(json.dumps(bad))
         with pytest.raises(SystemExit, match="JSON list"):
             load_turns(_args(turns=str(p)))
-    with pytest.raises(RuntimeError, match="--prompt beside it"):
-        validate_required_inputs("llm", _args(turns=str(good), prompt="x"))
+    with pytest.raises(SystemExit, match="--prompt beside it"):
+        load_turns(_args(turns=str(good), prompt="x"))

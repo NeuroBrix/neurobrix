@@ -148,11 +148,10 @@ def validate_required_inputs(family: str, args) -> None:
 
 
 def _turns_gate(family: str, inputs: Dict[str, Any], args) -> None:
-    """The --turns gates, in order, before the family's required inputs are read. First: a session of turns is the
-    chat path of a language model, played through `serving.session.play_turn` on an autoregressive flow (the executor
-    refuses a session's turn for any other); a family whose YAML names no --turns among its inputs (audio_llm: one
-    request, its audio and a prompt) refuses it by name, saying what the family runs on. Then: a --prompt beside the
-    turns would be ignored (the turns ARE the prompts), refused rather than dropped."""
+    """The family's acceptance of --turns, read before its required inputs: a session of turns is the chat path of a
+    language model; a family whose YAML names no --turns among its inputs (audio_llm: one request, its audio and a
+    prompt; vlm, multimodal) refuses it by name, saying what the family runs on. A --prompt beside the turns is the
+    command line's alone to refuse, before the container loads (cli/commands/run.load_turns)."""
     if getattr(args, "turns", None) is None:
         return
     named = []
@@ -164,8 +163,6 @@ def _turns_gate(family: str, inputs: Dict[str, Any], args) -> None:
         give = f": give {' and '.join(required)}" if required else ""
         raise RuntimeError(f"ZERO FALLBACK: --turns is the chat path of a language model; family '{family}' runs one "
                            f"request{give}.")
-    if getattr(args, "prompt", None):
-        raise RuntimeError("--turns plays its own messages; --prompt beside it would be ignored. Give one.")
 
 
 def resolve_mode(family: str, args) -> Optional[str]:
