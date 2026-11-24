@@ -27,10 +27,12 @@ from nbxtensor.dtype.nbx_dtype import NBXDtype
 
 
 def _stage(raw, shape, source, target, host_arena=None):
-    """A host-held weight staged as the engine's loader stages it: nbxtensor's primitive, the loader's I/O pool."""
+    """A host-held weight staged as the engine's loader stages it: nbxtensor's primitive, the loader's I/O pool — the
+    process's weight reader's (`weight_reader().io`, as `_load_shard_into_arenas` hands it since 8cd19dc1e replaced the
+    loader's own `_io_pool`)."""
     from neurobrix.triton import weight_loader as W
     from nbxtensor.io import safetensors as SF
-    return SF.load_to_pinned_host(raw, shape, source, target, W._io_pool(), host_arena)
+    return SF.load_to_pinned_host(raw, shape, source, target, W.weight_reader().io, host_arena)
 
 
 
