@@ -9,7 +9,7 @@ What this file does if the judge is wrong: an arm judged on another container, a
 """
 import json
 
-from tests.unit.tools.container_judge_rig import NEW_AT, OLD_AT, J, Rig  # noqa: E402
+from tests.unit.tools.container_judge_rig import NBX_SHA, NEW_AT, OLD_AT, J, Rig  # noqa: E402
 
 
 def test_an_old_arm_on_another_container_is_refused_by_name(tmp_path, monkeypatch, capsys):
@@ -65,6 +65,6 @@ def test_the_verdict_names_the_containers_it_judged(tmp_path, monkeypatch):
     assert rig.main("--arm", "new", "--gate") == 0
     v = rig.verdict()
     assert v["pass"] is True
-    assert v["judged"] == {"created_at": NEW_AT, "nbx_sha256": "ab" * 32}
+    assert v["judged"] == {"created_at": NEW_AT, "nbx_sha256": NBX_SHA}   # computed on the staged file
     assert v["old_container"] == OLD_AT
     assert set(v) >= {"verdict", "pass", "bytes", "vendor", "request", "policy", "autotune", "judged", "old_container"}

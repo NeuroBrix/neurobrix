@@ -2,6 +2,7 @@
 and a stand-in for `neurobrix run` that writes each arm's output (no model, no card)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -12,6 +13,8 @@ with the_workshop_configuration():
     import container_judge as J  # noqa: E402
 
 OLD_AT, NEW_AT = "2026-06-09T10:00:00", "2026-11-24T08:00:00"
+NBX_BYTES = b"a staged container"
+NBX_SHA = hashlib.sha256(NBX_BYTES).hexdigest()
 MODEL = "swin2SR-x4"
 GRAPH_DIFF = {"annotation_changes": 3, "arg_witnessed": 2, "beyond_annotation": 0, "corrupted_before": 2,
               "corrupted_after": 0, "pruned_dead_ops": 0, "components": {}, "topology": [], "topology_additions": []}
@@ -49,11 +52,15 @@ class Rig:
         (d / "manifest.json").write_text(json.dumps({"family": self.family, "created_at": created_at}))
 
     def build(self, created_at: str = NEW_AT, graph_diff=None) -> None:
-        """What the builder's `build` step leaves: the new container installed, build.json, graph_diff.json."""
+        """What the builder's `build` step leaves: the new container installed and staged (`self.nbx`), build.json
+        naming the staged file with its sha256 and byte count, graph_diff.json."""
         self.install(created_at)
+        self.nbx = self.out.parent / "staged" / f"{MODEL}.nbx"
+        self.nbx.parent.mkdir(parents=True, exist_ok=True)
+        self.nbx.write_bytes(NBX_BYTES)
         self.write("build.json", {"model": MODEL, "family": self.family, "installed_name": MODEL,
                                   "cache_path": str(self.cache / MODEL), "created_at": created_at,
-                                  "sha256": "ab" * 32, "bytes": 123})
+                                  "nbx_path": str(self.nbx), "sha256": NBX_SHA, "bytes": len(NBX_BYTES)})
         self.write("graph_diff.json", dict(GRAPH_DIFF if graph_diff is None else graph_diff))
 
     def write(self, name: str, obj) -> None:

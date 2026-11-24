@@ -9,14 +9,19 @@ One run root, `<out>/<model>/`:
 
   builder/  written by the builder only; READ here, never written:
             previous.json   {container, cache_path, created_at, ...}: the container the old arms run on;
-            build.json      the run manifest {model, family, installed_name, cache_path, created_at, sha256, bytes,
-                            snapshot, ...}: the container the new arms run on;
+            build.json      the run manifest {model, family, installed_name, cache_path, created_at, nbx_path, sha256
+                            (or nbx_sha256), bytes, snapshot, ...}: the container the new arms run on, and the staged
+                            .nbx file the gate's verdict is about (nbx_path: absolute, or relative to builder/);
             graph_diff.json the builder's graph comparison of the two containers, read by the gate as it is.
   judge/    written by this tool only, each file whole (a temporary file, then a rename):
             state.json (old_outputs, new_outputs, gate), the arms `old_{sequential,triton}.<ext>` and `new_*` with
             their logs, autotune_directory/ and autotune_replay/, vendor_seed*.png with its json, and verdict.json =
-            {verdict, pass, bytes, vendor, request, policy, autotune, judged: {created_at, nbx_sha256} from build.json,
-            old_container: the created_at from previous.json}.
+            {verdict, pass, bytes, vendor, request, policy, autotune, judged: {created_at, nbx_sha256},
+            old_container: the created_at from previous.json}. `judged.nbx_sha256` is the sha256 the judge COMPUTED
+            on the staged .nbx file build.json names; a file that is absent, or whose sha256 (or byte count) is not
+            build.json's, is REFUSED BY NAME and the verdict is red. `autotune` adds what the shared replay cache
+            holds: {replayed, missing, missing_count} — every kernel key the arms swept because the frozen
+            directory did not hold it, counted and named (recorded; the gate's colour does not depend on it).
 
 An arm runs on the container the builder's record names, or not at all: the cached container's `created_at` must
 equal previous.json's (old arm) or build.json's (new arm); any other container is REFUSED BY NAME.
@@ -76,6 +81,51 @@ def sha(path: Path):
     if not path.is_file() or path.stat().st_size == 0:
         return None
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sha_streamed(path: Path, chunk: int = 1 << 24) -> tuple:
+    """(sha256, byte count) of a file read in chunks: a container can be many GB, never read whole."""
+    h, n = hashlib.sha256(), 0
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(chunk)
+            if not block:
+                break
+            h.update(block)
+            n += len(block)
+    return h.hexdigest(), n
+
+
+def autotune_account(directory: Path, replay: Path) -> dict:
+    """What the arms' shared replay cache holds against the frozen directory: `replayed` = the keys it holds that the
+    frozen directory also holds, `missing` = every key it holds that the frozen directory does NOT (a kernel key the
+    arms swept at runtime), named `<kernel>::<key>` and sorted, `missing_count` their number.
+
+    The frozen directory: `<vendor>/<profile>/<kernel>.<dtype>.json`, {"entries": {key text: ...}}. The replay cache:
+    `autotune_configs_*.json`, {"<module>.<kernel>::<key text>": config} (the library's capture)."""
+    held = set()
+    for f in Path(directory).rglob("*.json") if Path(directory).is_dir() else ():
+        try:
+            entries = json.loads(f.read_text()).get("entries") or {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        kernel = f.name.split(".", 1)[0]
+        held.update((kernel, k) for k in entries)
+    replayed, missing = 0, []
+    for f in sorted(Path(replay).glob("autotune_configs_*.json")) if Path(replay).is_dir() else ():
+        try:
+            stored = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        for ident in stored if isinstance(stored, dict) else ():
+            qual, sep, key = str(ident).partition("::")
+            kernel = qual.rsplit(".", 1)[-1]
+            if sep and (kernel, key) in held:
+                replayed += 1
+            else:
+                missing.append(f"{kernel}::{key}" if sep else str(ident))
+    missing = sorted(set(missing))
+    return {"replayed": replayed, "missing": missing, "missing_count": len(missing)}
 
 
 def write_whole(path: Path, obj) -> None:
@@ -558,23 +608,59 @@ class Judge:
             verdict = "NEEDS_EXPLANATION"        # bytes differ: the difference must be the closed defect and nothing else
         return verdict, bytes_verdict, vendor
 
-    def write_verdict(self, verdict: str, bytes_verdict: dict, vendor) -> dict:
-        """verdict.json, whole: what the builder's upload reads, with the containers it judged."""
+    def nbx_identity(self) -> tuple:
+        """(refusal or None, the sha256 the judge computed or None): the staged .nbx file build.json names, hashed in
+        chunks and compared with build.json's sha256 (and byte count, when it records one). An absent file, a record
+        naming none, or another sha256 is REFUSED BY NAME: the verdict is about the file the upload carries."""
+        build = self.record("build.json")
+        want = build.get("nbx_sha256", build.get("sha256"))
+        named = build.get("nbx_path")
+        if not named:
+            return "build.json names no staged .nbx file (nbx_path) — the judge does not guess which file it judges", None
+        path = Path(named) if Path(named).is_absolute() else self.builder / named
+        if not want:
+            return f"build.json records no sha256 for the staged .nbx {path}", None
+        if not path.is_file():
+            return f"the staged .nbx {path} that build.json names is absent", None
+        have, n = sha_streamed(path)
+        if have != want:
+            return (f"the staged .nbx {path} has sha256 {have}, build.json records {want} — another file than the one "
+                    f"the builder recorded, not judged in its place"), have
+        want_bytes = build.get("nbx_bytes", build.get("bytes"))
+        if want_bytes is not None and int(want_bytes) != n:
+            return f"the staged .nbx {path} is {n} bytes, build.json records {want_bytes}", have
+        return None, have
+
+    def autotune_stamp(self) -> dict:
+        """The frozen kernel-config state with what the arms' replay cache holds against it (`autotune_account`)."""
+        freeze = dict(self.state.get("autotune_freeze") or {})
+        if freeze.get("directory") and freeze.get("replay"):
+            freeze.update(autotune_account(Path(freeze["directory"]), Path(freeze["replay"])))
+        return freeze
+
+    def write_verdict(self, verdict: str, bytes_verdict: dict, vendor, nbx_sha256=None) -> dict:
+        """verdict.json, whole: what the builder's upload reads, with the containers it judged. `judged.nbx_sha256`
+        is the sha256 computed on the staged file when one was computed, else build.json's (on a red verdict)."""
         build, prev = self.record("build.json"), self.record("previous.json")
         out = {"verdict": verdict, "pass": verdict.startswith("PASS"), "bytes": bytes_verdict, "vendor": vendor or None,
-               "request": self.current_request("new"), "policy": POLICY, "autotune": self.state.get("autotune_freeze"),
-               "judged": {"created_at": build.get("created_at"), "nbx_sha256": build.get("nbx_sha256", build.get("sha256"))},
+               "request": self.current_request("new"), "policy": POLICY, "autotune": self.autotune_stamp(),
+               "judged": {"created_at": build.get("created_at"),
+                          "nbx_sha256": nbx_sha256 or build.get("nbx_sha256", build.get("sha256"))},
                "old_container": prev.get("created_at")}
         write_whole(self.dir / "verdict.json", out)
         return out
 
-    def refuse_gate(self, reason: str) -> bool:
-        self.mark("gate", False, verdict="FAIL", reason=reason)
-        self.write_verdict(f"FAIL ({reason})", {}, None)
+    def refuse_gate(self, reason: str, nbx_sha256=None) -> bool:
+        self.mark("gate", False, verdict="FAIL", reason=reason, autotune=self.autotune_stamp())
+        self.write_verdict(f"FAIL ({reason})", {}, None, nbx_sha256)
         log(f"{self.model}: gate FAIL — {reason}")
         return False
 
     def step_gate(self):
+        # The staged file first, every time: a verdict already written is about the file as it was then.
+        nbx_refusal, nbx_sha256 = self.nbx_identity()
+        if nbx_refusal:
+            return self.refuse_gate(nbx_refusal, nbx_sha256)
         if self.done("gate"): return True
         so = self.state["steps"].get("old_outputs") or {}
         sn = self.state["steps"].get("new_outputs") or {}
@@ -588,11 +674,21 @@ class Judge:
             verdict, bytes_verdict = self._gate_unrunnable(so, new, gd)
         else:
             verdict, bytes_verdict, vendor = self._gate_compared(old, new, gd)
+        stamp = self.autotune_stamp()
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
-                  autotune=self.state.get("autotune_freeze"), vendor=vendor or None, request=self.current_request("new"))
-        self.write_verdict(verdict, bytes_verdict, vendor)
-        log(f"{self.model}: gate {verdict} — both arms under {POLICY}; bytes {bytes_verdict}; " + graph_summary(gd))
+                  autotune=stamp, vendor=vendor or None, request=self.current_request("new"))
+        self.write_verdict(verdict, bytes_verdict, vendor, nbx_sha256)
+        log(f"{self.model}: gate {verdict} — both arms under {POLICY}; bytes {bytes_verdict}; " + graph_summary(gd)
+            + f"; {autotune_summary(stamp)}")
         return verdict.startswith("PASS")
+
+
+def autotune_summary(stamp: dict) -> str:
+    """The replay cache's account, one clause for the log: counts, and every missing key by name."""
+    missing = stamp.get("missing") or []
+    return (f"autotune: {stamp.get('replayed', 0)} key(s) replayed from the frozen directory, "
+            f"{stamp.get('missing_count', len(missing))} missing from it (swept)"
+            + (": " + ", ".join(missing) if missing else ""))
 
 
 def graph_summary(gd: dict) -> str:
