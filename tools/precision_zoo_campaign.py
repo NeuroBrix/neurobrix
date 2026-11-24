@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 from typing import Optional
 from one_name import cli_name  # noqa: E402  (the one name a command line passes; tools/one_name.py)
+from process_group import run_group  # noqa: E402,F401  (the process-group runner; tools/process_group.py)
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -197,32 +198,6 @@ def request_args(model: str, family: str, extra: list) -> list:
         if mode == "text":
             args += ["--input-image", str(ASSETS / "apple_448.png"), "--prompt", "Describe this image in one sentence."]
     return args + list(extra)
-
-
-def run_group(cmd, env, fh, timeout: int, cwd=None, before_kill=None) -> int:
-    """The command in its own process group; a timeout kills the WHOLE group — the
-    command's children too. A `drift` that timed out at 7200 s on 2026-09-07 left its
-    child `run` alive on GPU3 beside the zoo's next model for ten minutes: only the
-    direct child was killed. -9 names a timeout. `before_kill(pgid)` runs while the
-    group is still alive — the moment its stack can still be read."""
-    import os
-    import signal
-    # the run's developer lines ([Timings], [Peak], the certified-miss line, tracebacks) are what these tools parse:
-    # a run's default terminal holds none of them (nbxtensor/terminal.py)
-    env = {**(os.environ if env is None else env), "NBX_LOG": "debug"}
-    p = subprocess.Popen([str(c) for c in cmd], env=env, stdout=fh, stderr=subprocess.STDOUT, cwd=cwd,
-                         start_new_session=True)
-    try:
-        return p.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        if before_kill is not None:
-            before_kill(p.pid)
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        p.wait()
-        return -9
 
 
 def oom_kills() -> Optional[int]:
