@@ -228,8 +228,8 @@ class TritonAutoregressiveHandler:
         if kv_session is not None and self.ctx.kv_tier is not None and hasattr(kv_session.cache, "tier_resume"):
             self.ctx.kv_tier.prepare(kv_session, kv_session.cache, prompt_ids)   # a parked continuation restored
         start = kv_session.match(prompt_ids) if kv_session is not None else 0
-        hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk,
-                                 ids=prompt_ids if (start or chunk) else None)
+        # the host ids always: a prompt past a served card's pages takes the chunked path too (TritonLMSession.prefill)
+        hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk, ids=prompt_ids)
         _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
         # Teacher-forced scoring mode (quant-ppl-scoring, tier row

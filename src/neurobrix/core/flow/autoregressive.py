@@ -166,8 +166,9 @@ class GraphLMSession:
     def _prefill_chunks(self, ids: List[int], batch_size: int, start: int, chunk: Optional[int]) -> torch.Tensor:
         """The prefill of positions [start, len(ids)) in chunks (docs/design/prism_kv.md §5bis; R30 mirror of
         triton/session.TritonLMSession._prefill_chunks): `chunk` rows each, the last completed with copies of its last
-        real row whose K/V the next chunk or the decode overwrites — or one chunk of the request's own rows. Every
-        chunk attends over the cache's keys gathered as whole pages. Returns the last chunk's real rows."""
+        real row whose K/V the next chunk or the decode overwrites — or one chunk of the request's own rows; on a card
+        bounded to its pages (a served session's host spill) each chunk is cut to what the card holds.
+        Every chunk attends over the cache's keys gathered as whole pages. Returns the last chunk's real rows."""
         if self.kv_wrapper is None:
             raise RuntimeError("ZERO FALLBACK: a prefill from a cached position (or in planned chunks) needs the KV "
                                "cache path; this session runs without one")
@@ -188,8 +189,14 @@ class GraphLMSession:
         self.executor.enable_hidden_states_capture()
         from nbxtensor.memory.kv_session import chunk_rows
         rows_planned = int(chunk) if chunk else total - start
-        plan = chunk_rows(ids, start, rows_planned, self.uses_absolute_position)
-        for s, real, ids_, pos in plan:
+        s, rows_run = start, 0
+        # a card bounded to its pages (a served session's host spill past them, core/state/kv_tier.attach_spill): every
+        # whole page already written spills before a chunk, so a chunk at s writes at most the card's pages less the
+        # part of a page the card's positions already fill — cut there, the older pages spilling as the chunks write
+        bound = cache.card_pages * cache.page_tokens if getattr(cache, "host_spill", None) is not None else 0
+        while s < total:
+            rows = min(rows_planned, bound - (s - cache.spilled) % cache.page_tokens) if bound else rows_planned
+            (s, real, ids_, pos), = chunk_rows(ids[:s + rows], s, rows, self.uses_absolute_position)
             chunk_ids = torch.tensor([ids_], dtype=torch.long, device=device)
             position_ids = torch.tensor([pos], dtype=torch.long, device=device)
             if self.uses_embeds:
@@ -206,12 +213,10 @@ class GraphLMSession:
             self._add_visual_stubs(run_inputs)
             self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
             self.executor.run(run_inputs)
-            if real < rows_planned:
+            if real < rows:
                 cache.truncate(s + real)
-        rows_run = rows_planned * len(plan)
-        real = plan[-1][1]
-        self.prefilled_rows = total - start
-        self.padded_rows = rows_run - (total - start)
+            s, rows_run = s + real, rows_run + rows
+        self.prefilled_rows, self.padded_rows = total - start, rows_run - (total - start)
         self.kv_wrapper.set_decode_mode(actual_seq_len=1)
         hidden_states = self.executor.get_hidden_states(expected_hidden_dim=self.hidden_dim,
                                                         expected_batch_size=batch_size)
@@ -219,9 +224,9 @@ class GraphLMSession:
             raise RuntimeError("ZERO FALLBACK: Prefill could not extract hidden_states.")
         while hidden_states.dim() > 3:
             hidden_states = hidden_states.squeeze(0)
-        if int(hidden_states.shape[1]) != rows_planned:
+        if int(hidden_states.shape[1]) != rows:
             raise RuntimeError(f"ZERO FALLBACK: the last prefill chunk returned {int(hidden_states.shape[1])} rows of "
-                               f"hidden states for a chunk of {rows_planned}")
+                               f"hidden states for a chunk of {rows}")
         return hidden_states[:, :real, :]
 
     def prefill(self, input_ids: torch.Tensor, batch_size: int, start: int = 0,
@@ -231,7 +236,11 @@ class GraphLMSession:
         `start` > 0: the cache already holds the request's first `start` positions (a serving session's, matched by
         ids — core/state/kv_session.py) and only the rest is prefilled. `chunk`: the plan's prefill chunk
         (KVCachePlan.prefill_chunk). Either one takes the chunked path; neither keeps the one-pass prefill below."""
-        if start or chunk:
+        cache = getattr(self.kv_wrapper, "cache", None)
+        # a one-pass prompt past a served card's pages (its host spill beyond them) takes the chunked path, cut to them
+        past_the_card = getattr(cache, "host_spill", None) is not None and \
+            0 < int(cache.card_pages or 0) * cache.page_tokens < int(input_ids.shape[1])
+        if start or chunk or past_the_card:
             return self._prefill_chunks([int(t) for t in input_ids[0].tolist()], batch_size, int(start), chunk)
         # Reset KV cache for new sequence
         if self.kv_wrapper is not None:
