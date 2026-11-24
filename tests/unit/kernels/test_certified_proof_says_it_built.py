@@ -34,7 +34,7 @@ def _doc(fmt, with_built=True):
         "backend": {"triton": "3.7.0", "name": "metal"},
         "shape": [4, 4, 4, False, False, "fp32", "fp32", "fp32"],
         "deviation": 1e-6, "tolerance": 1e-4, "machine": {"hostname": "x"},
-        "oracle": "fp64",
+        "oracle": "fp64", "bits_epoch": C.BITS_EPOCH,     # this library's bits (e9e5e76: no epoch is refused)
     }
     if with_built:
         proof["built"] = {"gpu": True, "how": "test", "fallback": None}

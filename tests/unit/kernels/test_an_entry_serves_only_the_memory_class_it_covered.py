@@ -28,7 +28,7 @@ def _proof(memory_mb=None, hardware_profile=None):
     p = {"date": "2026-09-13T22:00:00+00:00", "engine_version": "0.5.3",
          "backend": running_backend(), "shape": [10, 1536, 1536],
          "deviation": 1e-6, "tolerance": 1e-4, "oracle": "fp64", "machine": {"hostname": "t"},
-         "built": {"gpu": True}}
+         "built": {"gpu": True}, "bits_epoch": C.BITS_EPOCH}   # this library's bits (e9e5e76: no epoch is refused)
     if hardware_profile is not None:
         p["machine"]["hardware_profile"] = hardware_profile
     if memory_mb is not None:

@@ -18,7 +18,8 @@ KEY = "(10, 1536, 1536, True, True, 'fp32', 'fp16', 'fp32')"
 def _cert(with_built, m=10):
     p = {"date": "2026-09-07T03:53:34+00:00", "engine_version": "0.5.3", "backend": {"name": "cuda"},
          "shape": [m, 1536, 1536, True, True, "fp32", "fp16", "fp32"], "deviation": 1e-6, "tolerance": 1e-4,
-         "oracle": "fp64", "machine": {"hardware_profile": "auto-v100-16gb-16g"}}
+         "oracle": "fp64", "machine": {"hardware_profile": "auto-v100-16gb-16g"},
+         "bits_epoch": C.BITS_EPOCH}      # this library's bits (e9e5e76: a proof of no epoch is refused first)
     if with_built:
         p["built"] = {"gpu": True}
     return {"config": {"kwargs": {"BLOCK_M": 32}, "num_warps": 4, "num_stages": 3}, "proof": p, "excluded": []}

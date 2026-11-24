@@ -35,7 +35,8 @@ B = {"triton": "3.8.0+gitPIN", "name": "metal", "backend_hash": "content-3a38a05
 def _proof(backend, date="2026-11-08T18:00:00+00:00", memory_mb=16384, deviation=1e-6):
     return {"date": date, "engine_version": "0.6.2", "backend": dict(backend), "shape": list(KEY),
             "deviation": deviation, "tolerance": 1e-4, "oracle": "fp64",
-            "machine": {"hostname": "t", "device": {"memory_mb": memory_mb}}, "built": {"gpu": True}}
+            "machine": {"hostname": "t", "device": {"memory_mb": memory_mb}}, "built": {"gpu": True},
+            "bits_epoch": C.BITS_EPOCH}      # proven under this library's bits (library e9e5e76: no epoch is refused)
 
 
 def _cert(config, backend, **kw):

@@ -47,7 +47,9 @@ def _entry(deviation=1.0e-5, tolerance=1.0e-4, **over):
                    # deviation against the oracle is excellent and an entry
                    # certified on one records a config for a path that never
                    # runs.
-                   "built": {"gpu": True, "how": "test fixture", "fallback": None}},
+                   "built": {"gpu": True, "how": "test fixture", "fallback": None},
+                   # proven under this library's bits: a proof of no epoch is refused whole at load (e9e5e76)
+                   "bits_epoch": C.BITS_EPOCH},
          "excluded": [{"config": {"kwargs": {"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64, "GROUP_M": 8},
                                   "num_warps": 8, "num_stages": 3}, "deviation": 0.5, "tolerance": tolerance}]}
     e.update(over)
@@ -107,7 +109,7 @@ def test_a_complete_proof_re_reads(root):
 
 @pytest.mark.parametrize("bad, reason", [
     ({"proof": None}, "no proof"),
-    ({"proof": {"date": "2026-09-07T00:00:00+00:00"}}, "proof without"),
+    ({"proof": {"date": "2026-09-07T00:00:00+00:00", "bits_epoch": C.BITS_EPOCH}}, "proof without"),
     (dict(deviation=0.5), "exceeds its tolerance"),
     (dict(tolerance=2.0e-2), "not the profile's"),
     ({"excluded": [{"config": {}, "deviation": 1.0e-6}]}, "within the tolerance"),
