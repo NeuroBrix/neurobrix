@@ -1066,7 +1066,9 @@ def cmd_run(args):
     # with `No module named 'triton'` AFTER Prism had chosen `single_gpu`
     # and the engine had printed `Engine: COMPILED`, so a fresh Mac could
     # not start the engine in ANY mode.
-    declare_for(execution_mode, hw_profile)
+    # The plan's cards and the run's --proof-card, declared to the library: the only cards the element-wise proof's
+    # worker may run on (engine_choice.run_cards; qa 24/11: never every visible card).
+    declare_for(execution_mode, hw_profile, plan=execution_plan, proof_card=getattr(args, "proof_card", None))
     # What the runtime itself grows to during the run, outside every allocator (core/runtime/runtime_growth.py): read
     # before the executor exists and at the run's end, on the Triton engine with accelerators; recorded per model.
     _growth = growth_baseline(execution_mode, hw_profile)

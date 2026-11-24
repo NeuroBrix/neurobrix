@@ -104,10 +104,38 @@ def _triton_backend_present(log) -> bool:
     return True
 
 
-def declare_for(mode: str, hw_profile) -> None:
+def declare_for(mode: str, hw_profile, plan=None, proof_card=None) -> None:
     """The Triton branch's hardware declaration (`triton.dtype.declare_hardware_profile`, which needs triton), in the
-    Triton modes only, as `serving/engine.py` gates it: no PyTorch mode reads it, so a host without triton runs them."""
+    Triton modes only, as `serving/engine.py` gates it: no PyTorch mode reads it, so a host without triton runs them.
+
+    With the plan, the cards THIS RUN WAS GIVEN are declared to the library too (`ew_proof_child.declare_proof_cards`,
+    visible ordinals): the plan's own cards (`device_utils.plan_devices`) and the run's `--proof-card`, the only cards
+    the element-wise proof's worker may run on (qa 24/11: never every visible card). A proof card the plan places the
+    model on is refused by name (the proofs would have no spare card); `--proof-card` in a PyTorch mode is refused
+    by name (no proof runs there)."""
     TRITON_ENGINES = _branch_door.names("prism", "runtime_widths", "TRITON_ENGINES")[0]
     if mode in TRITON_ENGINES:
         from neurobrix.triton.dtype import declare_hardware_profile
         declare_hardware_profile(hw_profile)
+        if plan is not None:
+            from nbxtensor.ops.ew_proof_child import declare_proof_cards
+            declare_proof_cards(run_cards(plan, proof_card))
+    elif proof_card is not None:
+        raise ValueError(f"--proof-card {proof_card}: the element-wise proofs run in the Triton modes only, not in "
+                         f"--{mode.replace('_', '-')}")
+
+
+def run_cards(plan, proof_card=None) -> list:
+    """The visible ordinals of the cards a run was given: the plan's accelerator cards (`plan_devices`, "cuda:N"),
+    then the proof card when one is given. A negative proof card, or one the plan places the model on, is refused by
+    name."""
+    from neurobrix.core.device_utils import plan_devices
+    cards = sorted({int(str(d).partition(":")[2] or 0) for d in plan_devices(plan)})
+    if proof_card is None:
+        return cards
+    if int(proof_card) < 0:
+        raise ValueError(f"--proof-card {proof_card}: a visible ordinal is 0 or more")
+    if int(proof_card) in cards:
+        raise ValueError(f"--proof-card {proof_card}: the plan places the model on that card (its cards: {cards}); "
+                         f"the proofs need a card the model does not run on")
+    return cards + [int(proof_card)]

@@ -97,6 +97,7 @@ neurobrix run [options]
 | `--chat` | — | Force chat template formatting |
 | `--no-chat` | off | Force raw text completion |
 | `--profile-kernels` `JSON` | — | Time every GPU kernel of the request on its own (Metal) and print them ranked by GPU time (with JSON: the whole table written there); each kernel runs alone, so the table ranks kernels and is not the run's speed |
+| `--proof-card` `N` | — | A spare card the run is given for the element-wise proofs of its first launch (a visible ordinal, numbered as the plan numbers its cards; Triton modes): declared to the library with the plan's own cards, the proof's worker runs on the freest of them. Without it, only the plan's cards |
 | `-v`, `--verbose` | — | -v: the engine's developer lines; -vv: and the traceback of an error (NBX_LOG=debug: both) |
 
 ## info

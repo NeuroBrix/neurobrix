@@ -37,11 +37,12 @@ def test_the_proof_card_among_the_model_s_cards_is_refused_by_name():
     assert T.parse_cards(None, 3) is None
 
 
-def test_the_run_sees_the_model_s_cards_first_and_the_proof_card_last():
-    """CUDA_VISIBLE_DEVICES of a run: the cards, then the proof card; without --cards, the given set, which must hold
-    the proof card."""
-    assert T.visible_devices(["0", "1"], 3, "0,1,2,3") == "0,1,3"
-    assert T.visible_devices(None, 3, "2,3") == "2,3"
+def test_the_run_sees_the_model_s_cards_and_the_proof_card_and_is_told_its_ordinal():
+    """CUDA_VISIBLE_DEVICES of a run: the cards and the proof card, with the proof card's visible ordinal (what the
+    run is told, `--proof-card`); without --cards, the given set as it is, which must hold the proof card."""
+    assert T.visible_devices(["0", "1"], 3, "0,1,2,3") == ("0,1,3", 2)
+    assert T.visible_devices(None, 3, "2,3") == ("2,3", 1)
+    assert T.visible_devices(None, 3, "3,2") == ("3,2", 0)        # the order does not choose the proof's card
     with pytest.raises(T.TableRefused, match="does not name the proof card 3"):
         T.visible_devices(None, 3, "0,1")
     with pytest.raises(T.TableRefused, match="does not name the proof card"):
@@ -109,3 +110,49 @@ def test_a_run_s_line_reads_its_proved_count_and_its_refusals():
            "[ew-proof] this run proved 12 element-wise variant(s) in 3.4 s with 2 child process(es); largest ...\n")
     assert T.summary_of(log) == (12, 1)
     assert T.summary_of("nothing\n") == (None, 0)
+
+
+def test_the_run_is_given_its_proof_card_explicitly(monkeypatch):
+    """The first launch carries `--proof-card K`, K the proof card's visible ordinal, after the Triton mode; the
+    hardware profile when given (qa 24/11: never the order of CUDA_VISIBLE_DEVICES)."""
+    import sys
+    import types
+    monkeypatch.setitem(sys.modules, "one_name", types.SimpleNamespace(cli_name=lambda m: f"cli/{m}"))
+    cmd = T.run_command("deepseek-moe-16b-chat", ["--prompt", "hi"], 1, None)
+    assert cmd[1:] == ["-m", "neurobrix", "run", "--model", "cli/deepseek-moe-16b-chat", "--prompt", "hi", "--triton",
+                       "--proof-card", "1"]
+    assert T.run_command("m", [], 2, "v100-32g")[-4:] == ["--proof-card", "2", "--hardware", "v100-32g"]
+
+
+def test_the_run_declares_its_plan_s_cards_and_its_proof_card_to_the_library():
+    """`neurobrix run --proof-card K` declares the plan's cards and K (`engine_choice.run_cards`): a proof card the
+    plan places the model on, or a negative one, refused by name; `--proof-card` in a PyTorch mode refused by name."""
+    from types import SimpleNamespace as NS
+    from neurobrix.cli import create_parser
+    from neurobrix.cli.engine_choice import declare_for, run_cards
+    plan = NS(components={"llm": NS(devices=["cuda:0"], expert_cards={}), "vae": NS(devices=["cpu"])})
+    assert run_cards(plan) == [0] and run_cards(plan, 1) == [0, 1]
+    with pytest.raises(ValueError, match="places the model on that card"):
+        run_cards(plan, 0)
+    with pytest.raises(ValueError, match="0 or more"):
+        run_cards(plan, -1)
+    with pytest.raises(ValueError, match="Triton modes only"):
+        declare_for("compiled", object(), plan=plan, proof_card=1)
+    args = create_parser().parse_args(["run", "--model", "m", "--triton", "--proof-card", "1"])
+    assert args.proof_card == 1
+
+
+def test_a_triton_run_declares_its_cards_from_the_place_it_declares_its_profile(monkeypatch):
+    """`declare_for` (run.py's one gate) hands the library the run's cards (`declare_proof_cards`) after the profile,
+    in the Triton modes; without a plan (upscale), nothing is declared and the library keeps the launch's card alone."""
+    from types import SimpleNamespace as NS
+    import neurobrix.triton.dtype as tdt
+    from nbxtensor.ops import ew_proof_child
+    from neurobrix.cli.engine_choice import declare_for
+    seen = []
+    monkeypatch.setattr(tdt, "declare_hardware_profile", lambda profile: seen.append(("profile", profile)))
+    monkeypatch.setattr(ew_proof_child, "declare_proof_cards", lambda cards: seen.append(("cards", list(cards))))
+    plan = NS(components={"llm": NS(devices=["cuda:0", "cuda:1"], expert_cards={})})
+    declare_for("triton", "p", plan=plan, proof_card=2)
+    declare_for("triton", "q")
+    assert seen == [("profile", "p"), ("cards", [0, 1, 2]), ("profile", "q")]

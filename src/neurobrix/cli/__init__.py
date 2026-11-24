@@ -34,6 +34,11 @@ def _add_run_command_arguments(p):
                    help='Time every GPU kernel of the request on its own (Metal) and print them ranked by GPU time '
                         '(with JSON: the whole table written there); each kernel runs alone, so the table ranks '
                         'kernels and is not the run\'s speed')
+    p.add_argument('--proof-card', type=int, default=None, metavar='N', dest='proof_card',
+                   help='A spare card the run is given for the element-wise proofs of its first launch (a visible '
+                        'ordinal, numbered as the plan numbers its cards; Triton modes): declared to the library with '
+                        'the plan\'s own cards, the proof\'s worker runs on the freest of them. Without it, only the '
+                        'plan\'s cards')
 
 
 def _add_size_arguments(p):

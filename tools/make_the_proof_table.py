@@ -5,7 +5,8 @@ The library proves each element-wise variant at its first launch in a worker pro
 and keeps the proof in the replay cache. A model that fills its card leaves no room for that worker's context
 (deepseek-moe-16b-chat on two full V100 32 GB, register row 444): the cure is a shipped table, made here by running
 each model's first launch with a SPARE card of the same class in sight. The library's worker runs on the freest
-visible card of the launch's stamp, so the spare card hosts the proofs while the model runs on its own cards.
+of the cards the run was given, and the run is given the spare card explicitly (`neurobrix run --proof-card`), so
+the spare card hosts the proofs while the model runs on its own cards.
 
     python tools/make_the_proof_table.py <models file> <draft dir> --proof-card N [--cards 0,1] [--hardware ID]
 
@@ -18,9 +19,11 @@ For each model, in order:
   * a FRESH home under the homes directory (`--homes`, default `<draft dir>.homes`): its own NEUROBRIX_HOME,
     replay cache, TRITON_CACHE_DIR and TMPDIR; the catalogue is read where this machine keeps it (NEUROBRIX_CACHE);
     the machine's license acceptances, when it has any, are copied in (a gated model is not asked again);
-  * one first launch through the entry point (`python -m neurobrix run --model M <request> --triton`), with
-    CUDA_VISIBLE_DEVICES naming the model's cards (`--cards`) and the proof card, the proof card LAST: the model's
-    plan numbers its own cards first;
+  * one first launch through the entry point (`python -m neurobrix run --model M <request> --triton --proof-card K`),
+    with CUDA_VISIBLE_DEVICES naming the model's cards (`--cards`) and the proof card, and K the proof card's visible
+    ordinal in that list: the run declares its plan's cards and K to the library
+    (`cli/engine_choice.run_cards` -> `nbxtensor.ops.ew_proof_child.declare_proof_cards`), the only cards the proof's
+    worker may run on; a plan that places the model on the proof card is refused by name by the run;
   * the run's kept proofs merged into the draft (`python -m nbxtensor.ops.ew_proof export <home>/replay_cache/
     ew_tile_proof.json <draft>/<vendor>/<profile>/ew_tile_proof.json`), stamp by stamp; a disagreement stops the
     tool, named;
@@ -28,8 +31,9 @@ For each model, in order:
     `NOT proven` lines).
 At the end: each draft table's record count per stamp, and the stamps.
 
-The pin reaches the library through CUDA_VISIBLE_DEVICES alone: the run is a separate process, and the library's
-freest-card rule (no environment knob, the lead's ruling) chooses among the cards it sees. The tool writes nothing
+The proof card reaches the library through the run's own option (`--proof-card`), never through the order of
+CUDA_VISIBLE_DEVICES (qa 24/11): the library chooses only among the cards the run declared, the freest by NVML (no
+context opened on a card to ask). The tool writes nothing
 outside its draft and its homes, and never touches the engine's config directory. It needs a machine with the
 proof card beside the model's cards: never a one-device host (a Mac).
 """
@@ -94,16 +98,27 @@ def parse_cards(cards: Optional[str], proof_card: int) -> Optional[List[str]]:
     return out
 
 
-def visible_devices(card_list: Optional[List[str]], proof_card: int, given: Optional[str]) -> str:
-    """CUDA_VISIBLE_DEVICES of a model's run: its cards then the proof card; without `--cards`, the value given,
-    which must name the proof card."""
+def visible_devices(card_list: Optional[List[str]], proof_card: int, given: Optional[str]) -> Tuple[str, int]:
+    """(CUDA_VISIBLE_DEVICES of a model's run, the proof card's visible ordinal in it): its cards and the proof card;
+    without `--cards`, the value given, which must name the proof card. The ordinal is what the run is told
+    (`--proof-card`): the order of the list does not choose the proof's card."""
     if card_list is not None:
-        return ",".join(card_list + [str(proof_card)])
-    entries = [e.strip() for e in (given or "").split(",") if e.strip()]
-    if str(proof_card) not in entries:
-        raise TableRefused(f"CUDA_VISIBLE_DEVICES={given!r} does not name the proof card {proof_card}: give --cards, "
-                           "or a visible set holding it")
-    return ",".join(entries)
+        entries = card_list + [str(proof_card)]
+    else:
+        entries = [e.strip() for e in (given or "").split(",") if e.strip()]
+        if str(proof_card) not in entries:
+            raise TableRefused(f"CUDA_VISIBLE_DEVICES={given!r} does not name the proof card {proof_card}: give "
+                               "--cards, or a visible set holding it")
+    return ",".join(entries), entries.index(str(proof_card))
+
+
+def run_command(model: str, request: List[str], proof_ordinal: int, hardware: Optional[str]) -> List[str]:
+    """The first launch of one model: `python -m neurobrix run --model M <request> --triton --proof-card K`, K the
+    proof card's visible ordinal (the run declares it to the library with its plan's cards), `--hardware` when given."""
+    from one_name import cli_name
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model), *request, "--triton",
+           "--proof-card", str(int(proof_ordinal))]
+    return cmd + (["--hardware", hardware] if hardware else [])
 
 
 def read_models(path: Path) -> List[Tuple[str, Optional[List[str]]]]:
@@ -182,15 +197,12 @@ def summary_of(log_text: str) -> Tuple[Optional[int], int]:
 
 def one_model(a, model: str, flags: Optional[List[str]], catalogue: str, licenses: Optional[Path]) -> str:
     """One model: a fresh home, its first launch, the export of its kept proofs into the draft; its line."""
-    from one_name import cli_name
     request = flags if flags is not None else census_request(model)
     home = fresh_home(a.homes, model)
     if licenses is not None and licenses.is_file():
         shutil.copy2(licenses, Path(home["NEUROBRIX_HOME"]) / licenses.name)
-    visible = visible_devices(a.card_list, a.proof_card, os.environ.get("CUDA_VISIBLE_DEVICES"))
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", cli_name(model), *request, "--triton"]
-    if a.hardware:
-        cmd += ["--hardware", a.hardware]
+    visible, proof_ordinal = visible_devices(a.card_list, a.proof_card, os.environ.get("CUDA_VISIBLE_DEVICES"))
+    cmd = run_command(model, request, proof_ordinal, a.hardware)
     log = home["root"] / "run.log"
     t0 = time.time()
     with open(log, "w") as fh:
