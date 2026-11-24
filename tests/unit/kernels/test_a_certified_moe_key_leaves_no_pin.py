@@ -6,11 +6,13 @@ left eight expert bases pinned at count 3 in `triton_ext_driver._PIN_COUNTS`, an
 after it went red in the in-order unit run, green alone (2026-11-24; bisected by scripts/bisect_order_leak.py to
 `test_a_fused_moe_key_is_priced_and_windowed.py::test_a_windowed_key_certifies_on_the_device`).
 
-What this test would do if the code were wrong: with `expert_tables_released` emptied (the tables kept), the registry
+What this test would do if the code were wrong: with `_expert_tables.expert_tables_released` emptied (the tables kept), the registry
 after the certification holds bases it did not hold before — red."""
 from __future__ import annotations
 
 import pytest
+
+from tests.unit.kernels._expert_tables import expert_tables_released
 
 
 def test_the_certification_releases_every_pin_it_took(monkeypatch):
@@ -23,7 +25,7 @@ def test_the_certification_releases_every_pin_it_took(monkeypatch):
     from nbxtensor.ops import autotune_harness as H
     import tests.unit.kernels.test_a_fused_moe_key_is_priced_and_windowed as cell
     pins, tables = dict(D._PIN_COUNTS), list(H._EXPERT_TABLES)
-    with cell.expert_tables_released():
+    with expert_tables_released():
         cell.certify_a_windowed_key(monkeypatch)
     assert dict(D._PIN_COUNTS) == pins, f"the certification left {len(D._PIN_COUNTS) - len(pins)} base(s) pinned"
     assert len(H._EXPERT_TABLES) == len(tables), "the certification left its expert tables in the harness"

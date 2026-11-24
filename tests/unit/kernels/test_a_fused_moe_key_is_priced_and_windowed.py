@@ -10,7 +10,6 @@ tracemalloc) — red at the second; a window that is not the whole computation's
 at the third; the last test certifies a windowed key on a card."""
 from __future__ import annotations
 
-import contextlib
 import tracemalloc
 
 import numpy as np
@@ -19,6 +18,7 @@ import pytest
 from neurobrix.kernels import autotune_certify as AC
 from nbxtensor.ops import autotune_harness as H
 from nbxtensor.ops.oracles import fp64 as F
+from tests.unit.kernels._expert_tables import expert_tables_released
 
 QUAL = "nbxtensor.ops.fused_moe.fused_moe_kernel"
 
@@ -77,29 +77,6 @@ def test_a_window_is_the_whole_computations_rows(monkeypatch):
     windowed = F.moe_oracle(x, ws, score, route, True)()
     for (r0, r1), block in windowed.blocks:
         np.testing.assert_array_equal(block, whole[r0:r1])
-
-
-@contextlib.contextmanager
-def expert_tables_released():
-    """Every MoE expert table the library's harness builds inside the block is released at its exit, its pins with it.
-
-    `autotune_harness._expert_table` keeps the last eight keys' tables, their pins AND the expert tensors, for the
-    process (a table holds bare addresses: Volta read freed memory without it, 2026-11-12). A pytest process is not a
-    certification run: the one certification below left eight expert bases pinned at count 3 (gate, up, down), and
-    every pin test of tests/unit/triton after it in the same process found the driver still pinning them
-    (`_PIN_COUNTS`, 2026-11-24; bisected by scripts/bisect_order_leak.py). The tables held before the block are
-    left as they were."""
-    from nbxtensor.memory.allocator import DeviceAllocator
-    held = list(H._EXPERT_TABLES)
-    try:
-        yield
-    finally:
-        added = [entry for entry in H._EXPERT_TABLES if not any(entry is h for h in held)]
-        if added:
-            DeviceAllocator.sync_device()
-        for tables, _experts in added:
-            tables.release_pins()
-        H._EXPERT_TABLES[:] = [entry for entry in H._EXPERT_TABLES if any(entry is h for h in held)]
 
 
 def certify_a_windowed_key(monkeypatch):

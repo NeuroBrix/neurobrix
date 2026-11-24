@@ -7,6 +7,8 @@ What this test would do if the code were wrong: the hand-written table — the b
 import numpy as np
 import pytest
 
+from tests.unit.kernels._expert_tables import expert_tables_released
+
 pytestmark = pytest.mark.usefixtures("needs_device")
 
 
@@ -23,8 +25,9 @@ def test_a_moe_key_is_synthesised_through_the_runtimes_table_builder(qual, key, 
     built = []
     real = PT.build_ptr_tables
     monkeypatch.setattr(PT, "build_ptr_tables", lambda g, u, d: (built.append(len(g)), real(g, u, d))[1])
-    run, oracle, _out = A.synthesize(qual, tuner, key, np.random.default_rng(0))
-    got = run().numpy().astype(np.float64)
+    with expert_tables_released():      # the synthesis's tables pin its experts for the process otherwise
+        run, oracle, _out = A.synthesize(qual, tuner, key, np.random.default_rng(0))
+        got = run().numpy().astype(np.float64)
     want = oracle()
     assert built, "the synthesis wrote its own address table"
     assert np.abs(got - want).max() / np.abs(want).max() < 2e-2
