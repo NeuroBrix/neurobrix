@@ -269,10 +269,12 @@ def check_question(a, cache: Path, system: str | None) -> int:
     defaults = json.loads((cache / a.model / "runtime" / "defaults.json").read_text())
     lead = [{"role": "system", "content": system}] if system is not None else []
     text = render(template_of(cache / a.model), lead + [{"role": "user", "content": a.check_question}])
-    eos = defaults.get("eos_token_id", 0)
+    c = cache / a.model
+    eos = container_value(defaults, "eos_token_id", c)
     eos = list(eos) if isinstance(eos, list) else [eos]
-    dtype = defaults.get("dtype", "bfloat16")
-    v = vendor_steps(a, text, dtype, eos, a.max_tokens or int(defaults.get("max_tokens", 512)))
+    dtype = container_value(defaults, "dtype", c)
+    max_new = a.max_tokens or int(container_value(defaults, "max_tokens", c))
+    v = vendor_steps(a, text, dtype, eos, max_new)
     steps = [(tuple(s[0][:2]), tuple(s[1][:2])) for s in v["steps"]]
     m, k = min_margin(steps)
     said = verdict(m, a.floor)
@@ -331,9 +333,8 @@ def serve_and_ask(branch: str, entry: str, cache: Path, a, requests: list, out: 
     shutil.rmtree(home, ignore_errors=True)
     (home / "cache").mkdir(parents=True)
     (home / "cache" / entry).symlink_to((cache / entry).resolve())
-    for shared in ("hardware",):                                    # the machine's hardware profiles, read only
-        if (atelier.root("engine_home") / shared).is_dir():
-            (home / shared).symlink_to(atelier.root("engine_home") / shared)
+    if (atelier.root("engine_home") / "hardware").is_dir():         # the machine's hardware profiles: a read-only COPY
+        read_only_copy(atelier.root("engine_home") / "hardware", home / "hardware")
     sock, ready, log = atelier.tmp(f"gcsr_{os.getpid()}.sock"), home / "ready.json", out / f"{branch}.serve.log"
     env = {**os.environ, **owned_cache_env(home), "NEUROBRIX_HOME": str(home), "NEUROBRIX_CACHE": str(home / "cache"),
            "PYTHONPATH": os.pathsep.join([str(REPO_SRC)] + ([str(Path(a.lib_src).resolve())] if a.lib_src else [])),
@@ -382,17 +383,55 @@ def line(name: str, branch: str, r: dict) -> str:
             f"{r['text'][:60]!r}")
 
 
+ANSWERED = ("stop", "length")
+
+
+def unusable(r: dict) -> str | None:
+    """Why one branch's answer to a request cannot be compared, or None when it is a real answer: an error, no text, an
+    EMPTY text, or a finish other than stop/length (a fault both branches share would otherwise compare SAME)."""
+    if r.get("error"):
+        return f"gave no answer: {r['error']}"
+    text, finish = r.get("text"), r.get("finish")
+    if text is None or text == "" or finish not in ANSWERED:
+        return f"gave no usable answer: text {str(text)[:60]!r}, finish {finish!r}"
+    return None
+
+
 def compare(name: str, by_branch: dict) -> tuple[bool, str]:
-    """(equal, the line) of one request across the branches: byte-equal answers, none of them an error."""
-    got = {b: r for b, r in by_branch.items() if r.get("text") is not None and not r.get("error")}
-    if len(got) != len(by_branch) or len(got) < 2:
-        return False, f"{name:<9}compare   NOT COMPARED: " + ", ".join(b for b in by_branch if b not in got) + " gave no answer"
+    """(equal, the line) of one request across the branches: byte-equal answers; an error, an empty text or a finish
+    other than stop/length is NOT COMPARED, named by branch and request, and never equal."""
+    bad = {b: unusable(r) for b, r in by_branch.items()}
+    bad = {b: why for b, why in bad.items() if why}
+    if bad:
+        return False, f"{name:<9}compare   NOT COMPARED: " + "; ".join(f"{b} ({name}) {why}" for b, why in bad.items())
+    if len(by_branch) < 2:
+        return False, (f"{name:<9}compare   NOT COMPARED: one branch only ({', '.join(by_branch)}) answered {name}; "
+                       f"nothing to compare it with")
+    got = by_branch
     shas = {b: sha(r["text"]) for b, r in got.items()}
     if len(set(shas.values())) == 1:
         return True, f"{name:<9}compare   SAME  ({'='.join(by_branch)}) byte for byte"
     first, second = [r["text"].encode() for r in list(got.values())[:2]]
     at = next((i for i, (x, y) in enumerate(zip(first, second)) if x != y), min(len(first), len(second)))
     return False, f"{name:<9}compare   DIFFER " + " / ".join(f"{b} {s}" for b, s in shas.items()) + f", first byte apart at {at}"
+
+
+def container_value(defaults: dict, key: str, container: Path):
+    """The value `key` of the container's runtime/defaults.json, REFUSED by name when the container states none: a gate
+    tool never supplies a default of its own."""
+    v = defaults.get(key)
+    if v is None or v == [] or v == "":
+        raise SystemExit(f"{container}/runtime/defaults.json states no {key!r}; the gate tool does not default it")
+    return v
+
+
+def read_only_copy(src: Path, dst: Path) -> None:
+    """Copy the directory `src` to `dst` with every file in read-only mode (0444): the run reads the hardware profiles,
+    and neither it nor the original can be written through the copy."""
+    shutil.copytree(src, dst)
+    for f in dst.rglob("*"):
+        if f.is_file() and not f.is_symlink():
+            f.chmod(0o444)
 
 
 def main(argv=None) -> int:
