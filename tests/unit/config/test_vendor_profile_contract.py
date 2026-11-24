@@ -53,7 +53,7 @@ def test_every_profile_carries_the_load_bearing_keys(vendor, arch):
 
 def test_unknown_architecture_refuses_with_a_typed_error():
     with pytest.raises(UnsupportedArchitectureError):
-        get_vendor_config("nvidia", "pascal")
+        get_vendor_config("nvidia", "kepler")
 
 
 def test_the_refusal_stays_catchable_as_before():
@@ -69,9 +69,9 @@ def test_the_refusal_is_actionable():
     start. The message must name their hardware, what exists, and that the
     gap is ours."""
     with pytest.raises(UnsupportedArchitectureError) as excinfo:
-        get_vendor_config("nvidia", "pascal")
+        get_vendor_config("nvidia", "kepler")
     message = str(excinfo.value)
-    assert "nvidia / pascal" in message, "must name the detected hardware"
+    assert "nvidia / kepler" in message, "must name the detected hardware"
     assert "nvidia/volta" in message, "must list what does exist"
     assert "gap on our side" in message, "must not read as a hardware limit"
     assert "refuses to guess" in message, "must say why it will not continue"

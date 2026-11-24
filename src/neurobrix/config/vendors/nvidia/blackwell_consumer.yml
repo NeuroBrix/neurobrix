@@ -1,0 +1,77 @@
+# NVIDIA Blackwell, consumer and workstation parts (compute capability major 12): compute capability 12.0
+# Example cards: GeForce RTX 50 series, RTX PRO Blackwell (12.0); DGX Spark GB10 (12.1)
+#
+# validation_status: hand_curated_from_docs
+# DOCUMENTATION-SOURCED AND UNMEASURED. No card of this architecture is on any NeuroBrix machine. This is the ENGINE's
+#   half of the device (device_prefix, the engine's allocator keys, the precision flags); every hardware figure the
+#   kernels read (compute_capability, shared memory, registers, warp size, by_capability minors) is the LIBRARY's half,
+#   nbxtensor backend/devices/nvidia/blackwell_consumer.yml, with its sources, and is repeated nowhere here (a key in both halves is
+#   refused by name: core/config/loader.py `_parsed_vendor_file`). No kernel has run on this architecture, no autotune
+#   key is certified for it, its speed is unknown. Written 2026-11-24: the detector named it
+#   (pytorch/prism/autodetect.py `_NVIDIA_ARCH_MAP` / `_NVIDIA_ARCH_REFINE`) and the loader refused it with
+#   "No hardware profile for nvidia/blackwell_consumer".
+#   The detector names every capability of major 12 `blackwell_consumer` (`_NVIDIA_ARCH_MAP` "12"), never
+#   blackwell.yml (10.x, B200: 227 KB of shared memory per block where 12.x documents 99 KB).
+#
+# What this file does NOT state, and what the engine does without it (as nvidia/ada.yml):
+#   * The Triton branch's tuning values (block_sizes, sdpa_thresholds, autotune buckets and screen,
+#     tiling.extent_lattice, pipelining.max_num_stages) and its dead-tensor queue
+#     (memory.deferred_drain_*): no vendor document gives them; they are measured on a card. Absent,
+#     a --triton plan on this architecture is refused by name (pytorch/prism/memory_budget.py
+#     `deferred_drain_policy_of`: "declares no deferred_drain_cliff_bytes"). The default branch where
+#     PyTorch is installed (--compiled) reads none of them.
+#   * memory.compiled_conv3d_workspace_*: absent, a compiled plan holding a 3-D convolution is refused by
+#     name (pytorch/prism/op_workspace.conv3d_workspace_bytes).
+#   * measured: (bandwidths, rates): measured at a machine's first launch, never written here.
+
+# The engine's device string for the CUDA platform (the PyTorch branch's `cuda`, the Triton launcher's CUDA backend).
+device_prefix: "cuda"
+
+memory:
+  # A state page row is read in global-memory transactions of 32-byte segments of 128-byte lines.
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html, read 2026-11-17, "Coalesced Access to Global Memory": "the number of required
+  # transactions is equal to the number of required 128-byte aligned segments".
+  state_page_granule_bytes: 128
+  # A released page returns to the pool at once: kernels on one stream run in issue order.
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html, read 2026-11-17: "The order of execution of operations in a stream is sequential and the
+  # operations are executed in the order they are enqueued into the stream."
+  async_release: false
+  # NOT MEASURED on this architecture: the value that says so. The Triton arena's hold over the walked
+  # activations (pytorch/prism/solver.py `_live_activation_mb`) and a stream chunk's driver overhead.
+  triton_arena_activation_factor: null
+  compiled_stream_driver_over_price: null
+  # THE COMPILED ENGINE'S TORCH CACHING ALLOCATOR (core/runtime/torch_allocator.py), a PyTorch setting, not an NVIDIA
+  # hardware value: PyTorch's CUDA caching allocator, the same allocator on every CUDA card, implements expandable
+  # segments (SOURCE: https://docs.pytorch.org/docs/2.14/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf
+  # "expandable_segments"; https://github.com/pytorch/pytorch/blob/v2.14.0/c10/cuda/CUDAAllocatorConfig.h). Every
+  # profile whose vendor allocator implements it declares it (nvidia/volta.yml holds the measured case and the reason),
+  # so a plan that mixes this card with another NVIDIA one runs one allocator mode. Not measured on this architecture.
+  # An operator's PYTORCH_ALLOC_CONF wins and is logged.
+  compiled_allocator_settings: "expandable_segments:True"
+  # THE COMPILED ENGINE'S ATTENTION (a fact of PyTorch on CUDA, not of the card): scaled_dot_product_attention
+  # dispatches to its memory-efficient kernel on compute capability 5.0 to 12.0 and its flash kernel on 8.0 to
+  # 12.0 (SOURCE: https://github.com/pytorch/pytorch/blob/v2.7.0/aten/src/ATen/native/transformers/cuda/sdp_utils.cpp, read 2026-11-17:
+  # check_mem_efficient_hardware_support, check_sm_version<sm50, sm120>), neither of which writes the full scores.
+  compiled_sdpa_full_scores: false
+  # PyTorch's CUDA caching allocator reuses a freed block for any request that fits (the same allocator on every
+  # CUDA card; nvidia/volta.yml holds the measured case): no retention beyond the live set.
+  compiled_allocator_retention: null
+  # What the compiled engine's other ops hold beyond their price: none stated for CUDA (pytorch/prism/op_workspace.py).
+  compiled_op_workspace: {}
+
+precision:
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html, read 2026-11-24, Table 36 "Input Data Types Supported by Tensor Core Acceleration per
+  # Compute Capability", row 12.0: FP16 Yes.
+  supports_fp16: true
+  # SOURCE: same page, Table 32 "Bfloat16-precision floating-point operations": 12.x Yes; Table 36: BF16 Yes at 12.0.
+  supports_bf16: true
+  # SOURCE: same page, Table 36, TF32 column: Yes.
+  supports_tf32: true
+  # SOURCE: same page, Table 36, FP8 column: Yes.
+  supports_fp8: true
+  # IEEE-754 binary64 in hardware. SOURCE: same page, Table 33, "Ratio of FP32 to FP64 Throughput": 64:1
+  # (a throughput ratio, so the unit exists; slow, not absent).
+  supports_fp64: true
+  stores_fp64:
+    compiled: true
+    triton: false

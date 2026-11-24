@@ -36,10 +36,10 @@ def test_one_listed_card_is_the_only_one_and_is_renumbered_from_zero(windows_wit
     devices, brand = autodetect.detect_devices()
     assert brand == "nvidia"
     assert [(d["index"], d["model"], d["architecture"]) for d in devices] == [(0, "NVIDIA GeForce RTX 3060",
-                                                                               "ampere_consumer")]
+                                                                               "ampere")]  # 8.6: ampere.yml
 
 
 def test_with_the_variable_unset_every_card_is_detected(windows_with_two_cards, monkeypatch):
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     devices, _ = autodetect.detect_devices()
-    assert [d["architecture"] for d in devices] == ["ada", "ampere_consumer"]
+    assert [d["architecture"] for d in devices] == ["ada", "ampere"]  # 8.6 names ampere (its by_capability "8.6")

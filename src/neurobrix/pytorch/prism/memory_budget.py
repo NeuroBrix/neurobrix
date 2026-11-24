@@ -217,6 +217,13 @@ DEFERRED_DRAIN_DOOR = "NBX_DEFERRED_DRAIN_BYTES"
 DEFERRED_DRAIN_COUNT = 512
 
 
+def refused_card(memory: dict) -> None:
+    """A card the Triton branch has no code for (below sm_70: Maxwell, Pascal — the project lead, 2026-11-24): its vendor
+    file's `memory.triton_refused` says so and names the remedy; raised by name before any drain figure is read."""
+    if (memory or {}).get("triton_refused"):
+        raise KeyError(str(memory["triton_refused"]))
+
+
 def deferred_drain_policy_of(memory: dict) -> tuple:
     """The Triton engine's deferred-free drain policy from ONE vendor profile's `memory:` section,
     as `(cliff_bytes, floor_bytes, pressure_reserve_bytes, freecheck_interval)` — the pure reading
@@ -229,6 +236,7 @@ def deferred_drain_policy_of(memory: dict) -> tuple:
     allocator pool off, earlier). Between two drains the queue's bytes are dead to the program and
     alive to the card. A profile that does not state its cliff is refused by name: the figure is
     both a runtime knob and a planned price, and neither may be guessed."""
+    refused_card(memory)
     if "deferred_drain_cliff_bytes" not in (memory or {}):
         raise KeyError("ZERO FALLBACK: the vendor profile's memory section declares no "
                        "deferred_drain_cliff_bytes — the Triton engine's dead-tensor queue has "
@@ -293,6 +301,7 @@ def deferred_drain_floor_of(memory: dict) -> int:
     (each drain is a device sync, then a free per dead tensor). A plan leaving less room than this
     beside a component held whole would make the hot loop drain after nearly every op; such a
     component is not held whole. A profile that does not state it is refused by name."""
+    refused_card(memory)
     if "deferred_drain_floor_bytes" not in (memory or {}):
         raise KeyError("ZERO FALLBACK: the vendor profile's memory section declares no "
                        "deferred_drain_floor_bytes — the smallest drain cliff a plan may leave the "

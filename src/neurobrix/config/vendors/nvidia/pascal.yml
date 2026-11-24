@@ -1,0 +1,81 @@
+# NVIDIA Pascal: compute capability 6.0, 6.1, 6.2
+# Example cards: Tesla P100 (6.0), GeForce GTX 10 series, TITAN X / Xp, Tesla P4 / P40 (6.1), Jetson TX2 (6.2)
+#
+# validation_status: hand_curated_from_docs
+# DOCUMENTATION-SOURCED AND UNMEASURED. No card of this architecture is on any NeuroBrix machine. This is the ENGINE's
+#   half of the device (device_prefix, the engine's allocator keys, the precision flags); every hardware figure the
+#   kernels read (compute_capability, shared memory, registers, warp size, by_capability minors) is the LIBRARY's half,
+#   nbxtensor backend/devices/nvidia/pascal.yml, with its sources, and is repeated nowhere here (a key in both halves is
+#   refused by name: core/config/loader.py `_parsed_vendor_file`). No kernel has run on this architecture, no autotune
+#   key is certified for it, its speed is unknown. Written 2026-11-24: the detector named it
+#   (pytorch/prism/autodetect.py `_NVIDIA_ARCH_MAP` / `_NVIDIA_ARCH_REFINE`) and the loader refused it with
+#   "No hardware profile for nvidia/pascal".
+#   The detector names every capability of major 6 `pascal`; the library's file documents 6.1 and 6.2 in its
+#   memory.by_capability (6.2: 32 K registers per block). CAVEAT, not a profile key: the guide's fp16 throughput at
+#   6.1 (GTX 10, P4, P40) is a small fraction of its fp32 rate, so half precision there stores and moves less but
+#   computes slower than fp32.
+#
+# What this file does NOT state, and what the engine does without it:
+#   * THE TRITON BRANCH: it has no code for a card below sm_70 (the project lead, 2026-11-24). memory.triton_refused
+#     says so by name, with the remedy, before any Triton figure is read (triton/prism/memory_budget.py `refused_card`).
+#     The default branch where PyTorch is installed (--compiled) reads none of the Triton values.
+#   * memory.compiled_conv3d_workspace_*: absent, a compiled plan holding a 3-D convolution is refused by
+#     name (pytorch/prism/op_workspace.conv3d_workspace_bytes).
+#   * measured: (bandwidths, rates): measured at a machine's first launch, never written here.
+
+# The engine's device string for the CUDA platform (the PyTorch branch's `cuda`, the Triton launcher's CUDA backend).
+device_prefix: "cuda"
+
+memory:
+  # A state page row is read in global-memory transactions of 32-byte segments of 128-byte lines.
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html, read 2026-11-17, "Coalesced Access to Global Memory": "the number of required
+  # transactions is equal to the number of required 128-byte aligned segments".
+  state_page_granule_bytes: 128
+  # A released page returns to the pool at once: kernels on one stream run in issue order.
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/asynchronous-execution.html, read 2026-11-17: "The order of execution of operations in a stream is sequential and the
+  # operations are executed in the order they are enqueued into the stream."
+  async_release: false
+  # NOT MEASURED on this architecture: the value that says so. The Triton arena's hold over the walked
+  # activations (pytorch/prism/solver.py `_live_activation_mb`) and a stream chunk's driver overhead.
+  triton_arena_activation_factor: null
+  compiled_stream_driver_over_price: null
+  # THE COMPILED ENGINE'S TORCH CACHING ALLOCATOR (core/runtime/torch_allocator.py), a PyTorch setting, not an NVIDIA
+  # hardware value: PyTorch's CUDA caching allocator, the same allocator on every CUDA card, implements expandable
+  # segments (SOURCE: https://docs.pytorch.org/docs/2.14/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf
+  # "expandable_segments"; https://github.com/pytorch/pytorch/blob/v2.14.0/c10/cuda/CUDAAllocatorConfig.h). Every
+  # profile whose vendor allocator implements it declares it (nvidia/volta.yml holds the measured case and the reason),
+  # so a plan that mixes this card with another NVIDIA one runs one allocator mode. Not measured on this architecture.
+  # An operator's PYTORCH_ALLOC_CONF wins and is logged.
+  compiled_allocator_settings: "expandable_segments:True"
+  # THE COMPILED ENGINE'S ATTENTION (a fact of PyTorch on CUDA, not of the card): scaled_dot_product_attention
+  # dispatches to its memory-efficient kernel on compute capability 5.0 to 12.0 and its flash kernel on 8.0 to
+  # 12.0 (SOURCE: https://github.com/pytorch/pytorch/blob/v2.7.0/aten/src/ATen/native/transformers/cuda/sdp_utils.cpp, read 2026-11-17:
+  # check_mem_efficient_hardware_support, check_sm_version<sm50, sm120>), neither of which writes the full scores.
+  compiled_sdpa_full_scores: false
+  # PyTorch's CUDA caching allocator reuses a freed block for any request that fits (the same allocator on every
+  # CUDA card; nvidia/volta.yml holds the measured case): no retention beyond the live set.
+  compiled_allocator_retention: null
+  # What the compiled engine's other ops hold beyond their price: none stated for CUDA (pytorch/prism/op_workspace.py).
+  compiled_op_workspace: {}
+  # THE TRITON BRANCH HAS NO CODE FOR THIS CARD (below sm_70; the project lead, 2026-11-24): a --triton plan or run on it
+  # is refused with these words (triton/prism/memory_budget.py `refused_card`), never planned on guessed figures.
+  triton_refused: "the NeuroBrix Triton branch has no code for compute capability 6.x (below sm_70): the PyTorch branch runs on this card (--compiled)"
+
+precision:
+  # SOURCE: https://docs.nvidia.com/cuda/archive/12.9.0/cuda-c-programming-guide/index.html, read 2026-11-24, section 6.4.1 "Arithmetic Instructions", Table 7 "Throughput of Native
+  # Arithmetic Instructions" (results per clock cycle per multiprocessor). fp16 is a storage type on every capability (cuda_fp16.h converts it to and from fp32); the
+  # table's 16-bit floating-point add / multiply / multiply-add rows give 128 at 6.0, 2 at 6.1 (the CAVEAT above; fp32: 128) and 256 at 6.2.
+  supports_fp16: true
+  # SOURCE: https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html, read 2026-11-24, Table 32 "Bfloat16-precision floating-point operations": from 8.0. Not at 6.x.
+  supports_bf16: false
+  # TF32 is a Tensor Core input type from 8.0 (same page, Table 36 "Input Data Types Supported by Tensor Core
+  # Acceleration per Compute Capability": TF32 Yes from 8.0, none at 7.x, and no row below 7.x). Not at 6.x.
+  supports_tf32: false
+  # FP8 is a Tensor Core input type from 8.9 (same page, Table 36). Not at 6.x.
+  supports_fp8: false
+  # IEEE-754 binary64 in hardware. SOURCE: https://docs.nvidia.com/cuda/archive/12.9.0/cuda-c-programming-guide/index.html, the same Table 7, 64-bit floating-point add / multiply /
+  # multiply-add rows: a rate at 6.x (32 at 6.0 against 64 for fp32, 1/2; 4 at 6.1 and 6.2 against 128, 1/32; a throughput, so the unit exists; slow, not absent).
+  supports_fp64: true
+  stores_fp64:
+    compiled: true
+    triton: false

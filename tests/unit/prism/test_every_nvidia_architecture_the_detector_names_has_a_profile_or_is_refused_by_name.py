@@ -5,13 +5,14 @@ On 0.6.16 an RTX 4070 (Ada, compute capability 8.9) was detected as `nvidia/ada`
 named architectures no file in config/vendors/nvidia described — turing (T4, RTX 20xx), ampere_consumer (A10, A40,
 RTX 30xx), ada (L4, L40S, RTX 40xx), blackwell (B200, B300). turing, ada and blackwell now have a profile whose
 hardware values are read from NVIDIA's documentation (documentation-sourced and unmeasured, the sources written in the
-file). ampere_consumer does not in 0.6.17: a profile declaring 8.6 would replace, by capability, the Ampere profile the
-shipped 8.6 hardware files (architecture: ampere) plan and launch on; a bare-detected 8.6 card keeps its refusal.
+file). 2026-11-24: maxwell (5.x), pascal (6.x) and blackwell_consumer (12.x) have their engine half (the library's
+half holds their documented figures), and the detector names 8.6 `ampere`, the profile the shipped 8.6 hardware files
+(architecture: ampere) plan and launch on, whose library file declares 8.6 through its memory.by_capability.
 
 What these tests would do if the profiles were missing: the loader raises UnsupportedArchitectureError for the three
 names and Prism plans nothing for the three simulated cards — RED. An architecture still without a profile (kepler,
-maxwell, pascal, and the "unknown" a capability of major 11 or 12 is named) keeps its refusal by name: no default
-profile is ever substituted."""
+and the "unknown" a capability of major 11 is named) keeps its refusal by name: no default profile is ever
+substituted."""
 import subprocess
 
 import pytest
@@ -46,16 +47,16 @@ def _detected(monkeypatch, name, memory_mb, cc):
     return device
 
 
-@pytest.mark.parametrize("cc", ["7.0", "7.5", "8.0", "8.7", "8.9", "9.0", "10.0", "10.3"])
+@pytest.mark.parametrize("cc", ["5.2", "6.1", "7.0", "7.5", "8.0", "8.6", "8.7", "8.9", "9.0", "10.0", "10.3", "12.0"])
 def test_every_capability_of_the_current_cuda_guide_resolves_to_a_profile(cc):
-    """The capabilities NVIDIA's CUDA Programming Guide lists (Tables 33-36) up to major 10, and volta's 7.0; 8.6
-    (ampere_consumer) is refused below, in 0.6.17."""
+    """The capabilities NVIDIA's CUDA Programming Guide lists (Tables 33-36), volta's 7.0, and Maxwell's 5.2 and
+    Pascal's 6.1 (the CUDA 12.9 guide); 8.6 resolves to ampere."""
     arch = autodetect._nvidia_cc_to_arch(cc)
     cfg = get_vendor_config("nvidia", arch)
     assert cfg["memory"]["max_shared_memory_per_block"] > 0 and cfg["memory"]["warp_size"] == 32, (cc, arch)
 
 
-@pytest.mark.parametrize("cc", ["3.5", "5.2", "6.1", "8.6", "11.0", "12.0"])
+@pytest.mark.parametrize("cc", ["3.5", "11.0"])
 def test_an_architecture_without_a_profile_is_refused_by_its_name(cc):
     arch = autodetect._nvidia_cc_to_arch(cc)
     assert not (NVIDIA / f"{arch}.yml").exists(), f"{arch} now has a profile: move {cc} to the test above"

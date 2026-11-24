@@ -31,13 +31,11 @@ from neurobrix.pytorch.prism.autodetect import _nvidia_cc_to_arch
 
 
 # 2026-11-17 (GitHub issue 6): turing and ada have their own profiles, read from NVIDIA's documentation (below); the
-# architectures still without one keep the refusal. ampere_consumer (8.6) is one of them in 0.6.17: a profile declaring
-# 8.6 would replace, by capability, the Ampere profile an 8.6 hardware file plans and launches on.
+# architectures still without one keep the refusal. 2026-11-24: maxwell (5.x) and pascal (6.x) have their engine half
+# (test_a_maxwell_pascal_rtx30_or_rtx50_card_gets_a_hardware_profile.py) and 8.6 names ampere, whose library file
+# declares 8.6 through its memory.by_capability; kepler keeps the refusal.
 @pytest.mark.parametrize("cc,arch,card", [
-    ("8.6", "ampere_consumer", "A10 / RTX 3090"),
     ("3.5", "kepler", "Tesla K80"),
-    ("5.2", "maxwell", "GTX 980 / Tesla M40"),
-    ("6.1", "pascal", "GTX 1080 / Tesla P40"),
 ])
 def test_an_unprofiled_card_is_named_and_refused(cc, arch, card):
     assert _nvidia_cc_to_arch(cc) == arch, (
@@ -72,7 +70,7 @@ def test_the_refusal_says_what_would_close_the_gap():
     must name the file to write and the keys it must carry — and say the
     values come from the vendor's specification, not from a neighbour."""
     with pytest.raises(UnsupportedArchitectureError) as excinfo:
-        get_vendor_config("nvidia", "pascal")
+        get_vendor_config("nvidia", "kepler")
     msg = str(excinfo.value)
     for needed in ("max_shared_memory_per_block", "compute_capability",
                    "block_sizes", "pipelining.max_num_stages", "volta.yml"):

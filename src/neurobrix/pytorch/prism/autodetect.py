@@ -59,7 +59,7 @@ _NVIDIA_ARCH_MAP = {
     "7": "volta",       # 7.0 = V100
     "8": "ampere",      # 8.0 = A100, 8.6 = RTX 3090
     "9": "hopper",      # 9.0 = H100
-    "10": "blackwell",  # 10.0 = B200
+    "10": "blackwell", "12": "blackwell_consumer",  # 10.0 = B200; 12.0 = RTX 50, RTX PRO Blackwell, 12.1 = GB10
 }
 # Capabilities that share a MAJOR with a profiled datacentre part but are not
 # that part. Without an entry here they silently inherit the datacentre
@@ -69,19 +69,22 @@ _NVIDIA_ARCH_MAP = {
 # the doctrine: guessing a block size produces a wrong result, not an error.
 _NVIDIA_ARCH_REFINE = {
     "7.5": "turing",            # RTX 2080, T4 — 64 KB smem vs volta's 96 KB
-    "8.6": "ampere_consumer",   # A10, RTX 3090 — 100 KB smem vs ampere's 164 KB
+    # A10, A40, RTX 30: ampere.yml (nbxtensor backend/devices/nvidia/ampere.yml) declares 8.6 through its
+    # memory.by_capability "8.6" (99 KB smem per block, not 8.0's 164 KB), the profile the shipped 8.6 hardware
+    # files (architecture: ampere) plan and launch on.
+    "8.6": "ampere",
     "8.9": "ada",               # RTX 4090, L40S — 100 KB smem
 }
 
 # NVIDIA: compute capability major → supported dtypes
 _NVIDIA_DTYPE_MAP = {
     "3": ["float32"],
-    "5": ["float32", "float16"],
-    "6": ["float32", "float16"],
+    "5": ["float32", "float16"], "6": ["float32", "float16"],
     "7": ["float32", "float16"],
     "8": ["float32", "float16", "bfloat16"],
     "9": ["float32", "float16", "bfloat16", "float8_e4m3fn"],
     "10": ["float32", "float16", "bfloat16", "float8_e4m3fn"],
+    "12": ["float32", "float16", "bfloat16", "float8_e4m3fn"],
 }
 
 # Architecture → preferred dtype (tensor core sweet spot)
@@ -90,7 +93,7 @@ _PREFERRED_DTYPE = {
     "kepler": "float32", "maxwell": "float16", "pascal": "float16",
     "volta": "float16", "turing": "float16",
     "ampere": "bfloat16", "ada": "bfloat16",
-    "hopper": "bfloat16", "blackwell": "bfloat16",
+    "hopper": "bfloat16", "blackwell": "bfloat16", "blackwell_consumer": "bfloat16",
     # AMD
     "cdna": "float16", "cdna2": "float16", "cdna3": "bfloat16",
     "rdna2": "float16", "rdna3": "float16", "rdna4": "float16",
