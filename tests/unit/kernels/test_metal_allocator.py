@@ -121,7 +121,7 @@ def test_a_device_without_unified_memory_is_refused():
     `reset_runtime_for_tests()` around the construction, and the reset keeps `faults._FAULT_BUFFERS` (the per-device
     fault word, never freed by contract): every armed kernel after it bound a word of the dropped runtime and was
     refused ("pointer argument 3 ... lies in no allocation", `test_index_select_along_any_axis_needs_no_layout_copy`
-    red in the in-order kernels run, 2026-11-24). Held by test_a_refused_metal_runtime_keeps_the_process_runtime.py."""
+    red in the in-order kernels run, 2026-11-24). Held by test_no_fault_word_outlives_its_metal_runtime.py."""
     if not _on_metal():
         pytest.skip("needs an Apple GPU")
 
