@@ -388,11 +388,12 @@ ANSWERED = ("stop", "length")
 
 def unusable(r: dict) -> str | None:
     """Why one branch's answer to a request cannot be compared, or None when it is a real answer: an error, no text, an
-    EMPTY text, or a finish other than stop/length (a fault both branches share would otherwise compare SAME)."""
+    EMPTY text (a whitespace-only one is empty: two would compare SAME byte for byte), or a finish other than
+    stop/length (a fault both branches share would otherwise compare SAME)."""
     if r.get("error"):
         return f"gave no answer: {r['error']}"
     text, finish = r.get("text"), r.get("finish")
-    if text is None or text == "" or finish not in ANSWERED:
+    if text is None or not str(text).strip() or finish not in ANSWERED:
         return f"gave no usable answer: text {str(text)[:60]!r}, finish {finish!r}"
     return None
 

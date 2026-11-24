@@ -27,6 +27,13 @@ def test_an_empty_text_with_a_good_finish_is_red():
     assert not ok and "NOT COMPARED" in msg
 
 
+def test_both_whitespace_only_is_red():
+    """Two whitespace-only answers are empty answers: NOT COMPARED and RED, each branch named, never SAME."""
+    ok, msg = G.compare("req1", {"compiled": _ans(" \n\t "), "triton": _ans(" \n\t ")})
+    assert not ok and "NOT COMPARED" in msg and "SAME" not in msg
+    assert "compiled (req1)" in msg and "triton (req1)" in msg
+
+
 def test_one_empty_names_the_branch():
     """One empty answer is RED and names that branch, the request, its text and finish."""
     ok, msg = G.compare("req2", {"compiled": _ans("Paris"), "triton": _ans("", "stop")})
