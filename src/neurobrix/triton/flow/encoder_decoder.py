@@ -249,7 +249,7 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
             self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
             self.ctx.variable_resolver.resolved["input_ids"] = input_ids
 
-            self._execute_component(dec_name, "forward", None)
+            embed_weight = self._decoder_call(dec_name, embed_weight, lambda: _get_embed_weight(self.ctx, dec_name))
             if kv is not None and step == 1:
                 kv.set_decode_mode()
 

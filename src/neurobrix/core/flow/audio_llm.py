@@ -241,7 +241,7 @@ class AudioLLMEngine(AudioLLMSteps, ComponentFlowHandler):
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids
 
             _steps.before_run()
-            self._execute_component(lm_name, "forward", None)
+            embed_weight = self._decoder_call(lm_name, embed_weight, lambda: self._get_embed_weight(lm_name))
             _steps.after_run()
 
             output = self._get_component_output(lm_name)

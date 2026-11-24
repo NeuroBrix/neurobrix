@@ -151,7 +151,7 @@ def _decode(monkeypatch, table, context_device, script):
         executors={"language_model": types.SimpleNamespace(
             _weights={"model.token_embed.weight": table}, _dag=None)},
         primary_device=context_device,
-        persistent_mode=True,
+        persistent_mode=True, plan=None,
         compute_dtype=lambda: torch.float32)
     monkeypatch.delenv("NBX_DECODE_BOUND", raising=False)
     monkeypatch.delenv("NBX_DECODE_PROGRESS", raising=False)
