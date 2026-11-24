@@ -148,7 +148,8 @@ def _head_without_head(t):
 
 
 def _self_with_unread_hidden(t):
-    t["flow"]["stages"][1]["logits_source"] = "self"
+    for stages in (t["flow"]["stages"], t["flow"]["audio"]["stages"]):    # no 'tied' stage is left to read it
+        stages[1]["logits_source"] = "self"
 
 
 def _tie_not_a_list(t):
@@ -171,7 +172,7 @@ MALFORMED = [
     (_drop_tie, "stage flow.stages[1]", "logits_source", "declares no tied_weights"),
     (_drop_hidden, "stage flow.stages[1]", "logits_source", "declares no hidden_output"),
     (_head_without_head, "stage flow.stages[1]", "logits_source", "names no head component"),
-    (_self_with_unread_hidden, "stage flow.stages[1]", "logits_source", "nothing reads"),
+    (_self_with_unread_hidden, "component 'model.decoder'", "hidden_output", "nothing reads it"),
     (_tie_not_a_list, "component 'model.decoder'", "tied_weights", "not a non-empty list"),
     (_empty_table, "component 'model.decoder'", "token_embedding", "not a non-empty name"),
     (_tie_twice, "component 'model.decoder'", "tied_weights", "tied more than once"),
@@ -262,7 +263,7 @@ def test_an_old_form_topology_is_never_refused_whatever_its_word(twin, word):
 def test_one_new_key_anywhere_makes_the_topology_of_the_tie_form(twin):
     assert twin.carries_the_new_keys(whisper_turbo()) and twin.carries_the_new_keys(granite())
     t = tinyllama_shipped()
-    t["components"]["lm_head"]["hidden_output"] = "aten.mm::0::out_0"
+    t["components"]["model"]["token_embedding"] = "token_embed.weight"
     assert twin.carries_the_new_keys(t) and not twin.read_tie(t).old_form
 
 
@@ -352,3 +353,47 @@ def test_a_logits_source_outside_a_stage_is_refused_never_ignored(twin, where):
         twin.read_tie(t)
     msg = str(e.value)
     assert path in msg and "key 'logits_source'" in msg and "outside a stage" in msg and "FIX: rebuild" in msg
+
+
+@pytest.mark.parametrize("twin", TWINS)
+def test_a_new_key_off_a_component_of_an_old_topology_is_refused_as_misplaced(twin):
+    t = vlm("lm_head")                         # qa's probe: an old topology plus an unrelated hidden_output
+    del t["components"]["model.language_model"]["token_embedding"]
+    t["metadata"] = {"hidden_output": "x"}
+    assert not twin.carries_the_new_keys(t)
+    with pytest.raises(twin.TieDeclarationError) as e:
+        twin.read_tie(t)
+    msg = str(e.value)
+    assert "topology path metadata.hidden_output" in msg and "misplaced" in msg and "key 'hidden_output'" in msg
+    assert "FIX: rebuild the container with the builder so that hidden_output on its component is declared" in msg
+    assert "'lm_head' is not one of" not in msg
+
+
+@pytest.mark.parametrize("twin", TWINS)
+def test_a_new_key_nested_inside_a_component_is_misplaced(twin):
+    t = whisper_turbo()
+    t["components"]["model.encoder"]["shapes"] = {"token_embedding": "token_embed.weight"}
+    with pytest.raises(twin.TieDeclarationError, match=r"topology path components\.model\.encoder\.shapes"
+                                                       r"\.token_embedding.*misplaced"):
+        twin.read_tie(t)
+
+
+@pytest.mark.parametrize("twin", TWINS)
+def test_a_hidden_output_no_stage_reads_is_refused(twin):
+    t = granite()                              # qa's probe: components.<c>.hidden_output, no 'tied'/'head' stage
+    t["components"]["model"]["hidden_output"] = "aten.mm::0::out_0"
+    with pytest.raises(twin.TieDeclarationError) as e:
+        twin.read_tie(t)
+    msg = str(e.value)
+    assert "component 'model'" in msg and "key 'hidden_output'" in msg and "nothing reads it" in msg
+    assert "FIX: rebuild the container with the builder so that" in msg
+
+
+@pytest.mark.parametrize("twin", TWINS)
+def test_a_hidden_output_a_head_stage_reads_is_accepted(twin):
+    t = granite()                              # the head graph reads a hidden the language model does not return
+    t["components"]["model"]["hidden_output"] = "aten.mm::0::out_0"
+    t["flow"]["generation"]["logits_source"] = "head"
+    r = twin.read_tie(t)
+    assert r.component("model").hidden_output == "aten.mm::0::out_0"
+    assert r.stages[-1] == twin.StageLogits("flow.generation", "model", "head", "lm_head")

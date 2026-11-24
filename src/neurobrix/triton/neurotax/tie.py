@@ -12,9 +12,10 @@ THE DECLARATIONS (the tie rulings D1-D7). topology.json declares, in NeuroTax na
                                    projection on the declared tie, for containers whose graph is not rebuilt yet).
 A "head" stage names its head by `head_component`: on the stage, else on its section, else on flow.generation.
 
-TWO FORMS (carries_the_new_keys, the one line between them). A topology that carries none of NEW_KEYS is of the
-OLD FORM: it reads as not declared (old_form=True), its words are left to today's path, never mapped and
-never refused here. A topology that carries one of them is of the tie form, read strictly as below.
+TWO FORMS (carries_the_new_keys, the one line between them). A topology none of whose components carries one of
+NEW_KEYS as a direct key is of the OLD FORM: it reads as not declared (old_form=True), its words are left to today's
+path, never mapped and never refused here. A topology one of whose components carries one is of the tie form, read
+strictly as below. A new key anywhere else is MISPLACED and refused by name, in either form.
 
 THE DOOR. A key that is absent is NOT DECLARED (None, or an empty tuple): the reader never guesses one. A key that is
 present and malformed is REFUSED BY NAME (TieDeclarationError): the message names the container, the component or
@@ -234,29 +235,63 @@ def _check_stage(reading: TieReading, stage: StageLogits) -> None:
     if stage.logits_source == "tied" and comp.hidden_output is None:
         raise _refuse(container, place, "logits_source", f"'tied' but component '{comp.component}' declares no "
                       "hidden_output", "the hidden output the tied projection reads (hidden_output)")
-    if stage.logits_source == "self" and comp.hidden_output is not None:
-        raise _refuse(container, place, "logits_source", f"'self' but component '{comp.component}' declares a "
-                      f"hidden_output '{comp.hidden_output}' nothing reads", "a hidden_output only where it is read")
+
+
+def _check_hidden_is_read(reading: TieReading) -> None:
+    """D3: a hidden_output is declared only where it is read: its component is the component of a 'tied' or 'head'
+    stage (the tied projection or the head graph reads it); anywhere else it is declared and unused, refused."""
+    readers = {s.component for s in reading.stages if s.logits_source in ("tied", "head")}
+    for comp in reading.components:
+        if comp.hidden_output is not None and comp.component not in readers:
+            raise _refuse(reading.container, f"component '{comp.component}'", "hidden_output",
+                          f"'{comp.hidden_output}' is declared and nothing reads it (no 'tied' or 'head' stage of "
+                          f"component '{comp.component}')",
+                          "a hidden_output only where a 'tied' or 'head' stage reads it")
 
 
 def carries_the_new_keys(topology) -> bool:
-    """THE LINE BETWEEN THE TWO FORMS: a topology is of the tie form when one of the NEW_KEYS appears as a key
-    anywhere in it. Otherwise it is of the old form: its logits_source words (lm_head, embed_weight_tied, self)
-    are the old path's, read by no one here, mapped by no one here, and never refused here."""
-    if isinstance(topology, dict):
-        return any(k in NEW_KEYS for k in topology) or any(carries_the_new_keys(v) for v in topology.values())
-    if isinstance(topology, list):
-        return any(carries_the_new_keys(v) for v in topology)
-    return False
+    """THE LINE BETWEEN THE TWO FORMS: a topology is of the tie form when one of the NEW_KEYS is a direct key of one
+    component's object (components.<c>.<key>). Otherwise it is of the old form: its logits_source words (lm_head,
+    embed_weight_tied, self) are the old path's, read by no one here, mapped by no one here, and never refused here.
+    A new key anywhere else is not this line's: it is misplaced, refused by name (_refuse_misplaced)."""
+    specs = topology.get("components") if isinstance(topology, dict) else None
+    if not isinstance(specs, dict):
+        return False
+    return any(isinstance(v, dict) and any(k in NEW_KEYS for k in v) for v in specs.values())
+
+
+def _new_key_paths(node, path: str):
+    """Every place a NEW_KEYS key appears as a key, by its path."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            here = f"{path}.{k}" if path else str(k)
+            if k in NEW_KEYS:
+                yield here
+            yield from _new_key_paths(v, here)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from _new_key_paths(v, f"{path}[{i}]")
+
+
+def _refuse_misplaced(container: str, topology: dict) -> None:
+    """A new key that is not a direct key of a component's object is MISPLACED, refused by name in either form."""
+    specs = topology.get("components") if isinstance(topology.get("components"), dict) else {}
+    placed = {f"components.{c}.{k}" for c, v in specs.items() if isinstance(v, dict) for k in v if k in NEW_KEYS}
+    misplaced = sorted(set(_new_key_paths(topology, "")) - placed)
+    if misplaced:
+        key = misplaced[0].rsplit(".", 1)[-1]
+        raise _refuse(container, f"topology path {misplaced[0]}", key, "misplaced: a tie key is declared only as a "
+                      "direct key of one component (components.<c>." + key + ")", f"{key} on its component")
 
 
 def read_tie(topology, container: Optional[str] = None) -> TieReading:
-    """The container's tie declarations, frozen. Old form (no NEW_KEYS): not declared, never refused. Tie
-    form: absent keys are not declared, malformed ones refused by name with their remedy."""
+    """The container's tie declarations, frozen. A misplaced new key: refused. Old form (no new key on a component):
+    not declared, never refused. Tie form: absent keys are not declared, malformed ones refused by name."""
     if not isinstance(topology, dict):
         raise TieDeclarationError(f"TIE DECLARATION: the topology is {type(topology).__name__}, not an object")
     container = container or str(topology.get("model_name") or "?")
     specs = topology.get("components") if isinstance(topology.get("components"), dict) else {}
+    _refuse_misplaced(container, topology)
     if not carries_the_new_keys(topology):
         return TieReading(container, tuple(ComponentTie(c, None, (), None) for c in specs), (), old_form=True)
     names = frozenset(specs)
@@ -264,4 +299,5 @@ def read_tie(topology, container: Optional[str] = None) -> TieReading:
                          _stages(container, topology.get("flow")))
     for stage in reading.stages:
         _check_stage(reading, stage)
+    _check_hidden_is_read(reading)
     return reading
