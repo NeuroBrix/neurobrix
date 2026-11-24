@@ -7,14 +7,12 @@ import pytest
 
 
 from tests.unit.prism._pinned_machine import V100_16GB, profile
+from tests.unit.kernels._vendor_file import bind_vendor_file
 
 
 @pytest.fixture
 def volta(monkeypatch):
-    from nbxtensor.ops import wrappers as W
-    from nbxtensor.ops import _configs as CF
-    W.set_hardware_profile(profile(V100_16GB))
-    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("7.0"))
+    bind_vendor_file(monkeypatch, "7.0", profile(V100_16GB))
     yield
 
 

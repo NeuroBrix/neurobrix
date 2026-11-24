@@ -20,6 +20,7 @@ pytestmark = pytest.mark.needs_gpu_runtime
 
 from neurobrix.kernels import autotune_certify as AC
 from tests.unit.prism._pinned_machine import V100_16GB, profile
+from tests.unit.kernels._vendor_file import bind_vendor_file
 
 MM = "nbxtensor.ops.matmul.matmul_kernel"
 ABOVE = (1024, 3072, 3072, False, False, "fp16", "fp16", "fp16")      # rows the unit's smallest tile fills
@@ -29,12 +30,7 @@ CONFIG = {"kwargs": {"BLOCK_M": 64, "BLOCK_N": 64, "BLOCK_K": 32, "GROUP_M": 8},
 
 @pytest.fixture
 def volta(monkeypatch):
-    from nbxtensor.ops import wrappers as W
-    from nbxtensor.ops import _configs as CF
-    monkeypatch.setattr(W, "_NBX_HW_PROFILE", W._NBX_HW_PROFILE)
-    monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", W._NBX_HAS_NATIVE_BF16)
-    W.set_hardware_profile(profile(V100_16GB))
-    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("7.0"))
+    bind_vendor_file(monkeypatch, "7.0", profile(V100_16GB))
 
 
 def _entry(measured: bool):

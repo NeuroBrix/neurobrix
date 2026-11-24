@@ -19,14 +19,13 @@ import pytest
 
 
 from tests.unit.prism._pinned_machine import V100_16GB, profile
+from tests.unit.kernels._vendor_file import bind_vendor_file
 
 
 @pytest.fixture
 def volta(monkeypatch):
-    from nbxtensor.ops import wrappers as W
     from nbxtensor.ops import _configs as CF
-    W.set_hardware_profile(profile(V100_16GB))
-    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("7.0"))
+    bind_vendor_file(monkeypatch, "7.0", profile(V100_16GB))
     yield CF.active_vendor_profile()
 
 
@@ -56,7 +55,9 @@ _UNIT = {"block_m": 128, "block_n": 64, "block_k": 32, "warps_m": 4, "warps_n": 
 
 
 @pytest.fixture
-def route(monkeypatch):
+def route(volta, monkeypatch):
+    """The GEMM route under the Volta file in force (its matrix unit's `mm` rows): these cells read the unit in force,
+    and before the bound file was restored they read the one the cells above leaked."""
     from nbxtensor.ops import linalg_wrappers as LW
     from nbxtensor.ops import autotune_certified as C
     from nbxtensor.ops import launch_observer as LO

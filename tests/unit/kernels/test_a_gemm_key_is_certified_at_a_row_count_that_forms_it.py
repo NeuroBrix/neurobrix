@@ -15,14 +15,13 @@ import pytest
 pytestmark = pytest.mark.needs_gpu_runtime
 
 from tests.unit.prism._pinned_machine import V100_16GB, profile
+from tests.unit.kernels._vendor_file import bind_vendor_file
 
 
 @pytest.fixture
 def bound_profile(monkeypatch):
-    from nbxtensor.ops import wrappers as W
     from nbxtensor.ops import _configs as CF
-    W.set_hardware_profile(profile(V100_16GB))
-    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("7.0"))
+    bind_vendor_file(monkeypatch, "7.0", profile(V100_16GB))
     yield CF.active_vendor_profile()
 
 
@@ -54,10 +53,8 @@ def test_the_volta_fp32_class_below_the_unit_is_certified_at_63(bound_profile):
 def apple_profile(monkeypatch):
     """The Mac's M ladder keys every row count below five on its own (buckets 1, 2, 3, 4)."""
     from tests.unit.prism._pinned_machine import APPLE_M4_PRO
-    from nbxtensor.ops import wrappers as W
     from nbxtensor.ops import _configs as CF
-    W.set_hardware_profile(profile(APPLE_M4_PRO))
-    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("apple-m4-pro"))
+    bind_vendor_file(monkeypatch, "apple-m4-pro", profile(APPLE_M4_PRO))
     bound = CF.active_vendor_profile()
     assert bound.get("compute_capability") == "apple-m4-pro", "the Apple profile is not the one in force"
     yield bound
