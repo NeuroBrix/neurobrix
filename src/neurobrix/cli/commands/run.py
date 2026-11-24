@@ -157,12 +157,11 @@ def _try_warm_path(args) -> bool:
 
 def load_turns(args):
     """The `--turns` file: a JSON list of user messages (strings), or None when the run names none. Anything else is
-    refused by name, as is a --prompt beside it (the turns ARE the prompts)."""
+    refused by name. Whether the family plays turns at all, and a --prompt beside them, is the family's input gate's
+    to say once the container's family is known (output_dispatch.validate_required_inputs)."""
     path = getattr(args, "turns", None)
     if path is None:
         return None
-    if getattr(args, "prompt", None):
-        raise SystemExit("ERROR: --turns plays its own messages; --prompt beside it would be ignored. Give one.")
     try:
         with open(path) as f:
             turns = json.load(f)

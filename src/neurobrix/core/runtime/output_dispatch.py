@@ -137,6 +137,7 @@ def validate_required_inputs(family: str, args) -> None:
     """
     cfg = get_family_config(family)
     required = cfg.get("inputs", {}).get("required", [])
+    _turns_gate(family, cfg.get("inputs", {}), args)
     for entry in required:
         flags = list(entry) if isinstance(entry, (list, tuple)) else [entry]
         if not any(getattr(args, _flag_to_dest(f), None) not in (None, "") for f in flags):
@@ -144,6 +145,27 @@ def validate_required_inputs(family: str, args) -> None:
                 f"ZERO FALLBACK: family '{family}' requires {' or '.join(flags)}. "
                 f"Provide it on the command line."
             )
+
+
+def _turns_gate(family: str, inputs: Dict[str, Any], args) -> None:
+    """The --turns gates, in order, before the family's required inputs are read. First: a session of turns is the
+    chat path of a language model, played through `serving.session.play_turn` on an autoregressive flow (the executor
+    refuses a session's turn for any other); a family whose YAML names no --turns among its inputs (audio_llm: one
+    request, its audio and a prompt) refuses it by name, saying what the family runs on. Then: a --prompt beside the
+    turns would be ignored (the turns ARE the prompts), refused rather than dropped."""
+    if getattr(args, "turns", None) is None:
+        return
+    named = []
+    for entry in inputs.get("required", []):
+        named.extend(entry if isinstance(entry, (list, tuple)) else [entry])
+    named.extend(o.get("flag") for o in inputs.get("optional", []) if isinstance(o, dict))
+    if "--turns" not in named:
+        required = [e if isinstance(e, str) else " or ".join(e) for e in inputs.get("required", [])]
+        give = f": give {' and '.join(required)}" if required else ""
+        raise RuntimeError(f"ZERO FALLBACK: --turns is the chat path of a language model; family '{family}' runs one "
+                           f"request{give}.")
+    if getattr(args, "prompt", None):
+        raise RuntimeError("--turns plays its own messages; --prompt beside it would be ignored. Give one.")
 
 
 def resolve_mode(family: str, args) -> Optional[str]:
