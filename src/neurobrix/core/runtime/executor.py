@@ -983,12 +983,10 @@ class RuntimeExecutor:
                 max_length = shapes["input_ids"][1]
                 return max_length
 
-        # Fallback: search all components
-        for comp_name, comp_info in topology_components.items():
-            shapes = comp_info.get("shapes", {})
-            if "input_ids" in shapes:
-                max_length = shapes["input_ids"][1]
-                return max_length
+        # Only the tokenizer's OWN encoder's fixed input length is a tokenization length. Another component's
+        # `input_ids` shape is not: a language model's decoder declares its build stimulus there ([1, 23]), the
+        # extent of a symbolic sequence axis, and taking it cut a raw prompt to 23 tokens on both branches (granite
+        # --no-chat, Mac 24/11). A prompt past what the run holds is refused by name (prompt_length.refuse_past_reach).
 
         # Fallback: tokenizer_config.json
         cache_path = ensure_extracted(Path(self._nbx_path_str))

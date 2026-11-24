@@ -825,6 +825,16 @@ class AutoregressiveHandler(FlowHandler):
                               session.prefilled_rows, session.padded_rows)
         self._unload_non_lm_weights(gen_info)
 
+        return self._resolved_with_the_prefilled_ids(input_ids)
+
+    def _resolved_with_the_prefilled_ids(self, input_ids: torch.Tensor) -> Dict[str, Any]:
+        """The flow's outputs (`resolve_all`), the contract's `global.input_ids` / `global.attention_mask` stated first as
+        the ids this flow prefilled and their all-ones mask. Left unresolved, `resolve_all` called the tokenizer module
+        on the container's default prompt padded to the tokenizer's max length: granite's vendor value (2**63 - 1)
+        raised a MemoryError after the answer."""
+        resolved = self.ctx.variable_resolver.resolved
+        resolved["global.input_ids"] = input_ids
+        resolved["global.attention_mask"] = torch.ones_like(input_ids)
         return self.ctx.variable_resolver.resolve_all()
 
     def _run_snac_codec_decoder(self, generated_tokens) -> None:
