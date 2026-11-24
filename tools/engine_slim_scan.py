@@ -74,7 +74,40 @@ DATA_GLOBS = ("pyproject.toml", "src/**/*.yml", "src/**/*.yaml", "src/**/*.json"
 #: (`return self._x`, `raise NotImplementedError`): the smallest body the scan compares
 MIN_DUPLICATE_NODES = 25
 #: the library's fact modules: every public function there names a fact the engine must read, not recompute
-FACT_MODULES = ("dtype", "shape", "memory", "backend/device_facts.py", "ops/_cost.py")
+#: memory/guarded.py is NOT here: guarded() and place() are OPERATIONS of the element-wise proof (a buffer ending at an
+#: unmapped guard, a placement before it), not facts; an engine helper that shares the name is no finding (qa 1326-1).
+#: A memory module is named here when it holds facts; a new one is added by name, never swept in by its package.
+_MEMORY_FACTS = (
+    "memory/__init__.py",
+    "memory/allocator.py",
+    "memory/arena.py",
+    "memory/block_upload.py",
+    "memory/chunk_rule.py",
+    "memory/deferred_frees.py",
+    "memory/device_memory.py",
+    "memory/device_transfer.py",
+    "memory/expert_slots.py",
+    "memory/fixed_state.py",
+    "memory/host_spill.py",
+    "memory/kv_host_pages.py",
+    "memory/kv_host_tier.py",
+    "memory/kv_session.py",
+    "memory/layout.py",
+    "memory/memory_pool.py",
+    "memory/metal.py",
+    "memory/oom_advice.py",
+    "memory/paged_kv.py",
+    "memory/pages.py",
+    "memory/pointer_tables.py",
+    "memory/pool.py",
+    "memory/shadow.py",
+    "memory/slab.py",
+    "memory/slot_stores.py",
+    "memory/step_stabilizer.py",
+    "memory/to_device_census.py",
+    "memory/trace_replay.py",
+    "memory/vmm.py")
+FACT_MODULES = ("dtype", "shape") + _MEMORY_FACTS + ("backend/device_facts.py", "ops/_cost.py")
 #: other names under which the engine has written a library fact (read in the engine before this scan, 2026-10-29)
 SYNONYMS = {
     "element_size": "itemsize", "bytes_per_element": "itemsize", "dtype_bytes": "itemsize", "dtype_nbytes": "itemsize",
