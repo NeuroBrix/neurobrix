@@ -786,6 +786,8 @@ class Zero3Strategy(TritonStrategy):
 
         executor._persistent_pre_op_callback = pre_op_cb
         executor._post_run_hook = post_run_hook
+        # the executor's own `cleanup()` uninstalls too, before it frees the weights the ratchet copies from
+        executor.strategy_uninstall = lambda: self.uninstall_for_executor(component_name)
         self._installed[component_name] = executor
 
     def uninstall_for_executor(self, component_name: str,
@@ -810,6 +812,7 @@ class Zero3Strategy(TritonStrategy):
         if executor is not None:
             executor._persistent_pre_op_callback = None
             executor._post_run_hook = None
+            executor.__dict__.pop("strategy_uninstall", None)
         state = self._ratchet.pop(component_name, None)
         if state is not None:
             # Evict anything still resident, then tear down the stream.

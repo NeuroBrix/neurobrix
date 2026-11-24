@@ -5984,42 +5984,27 @@ class GraphExecutor:
         requests can rebind fresh weights into the same compiled slot
         mapping without recompiling the op graph.
         """
-        if self._persistent:
-            # Persistent mode: clear per-request state only, keep weights
-            # + compiled sequence (both native and triton).
-            if self._compiled_seq is not None:
-                self._compiled_seq.drop_slots(weights=True)
-            if hasattr(self, '_triton_seq') and self._triton_seq is not None:
-                _nbx_memory.release_store(self._triton_seq.slot_store)
-            if hasattr(self, '_tritonseq_captured'):
-                self._tritonseq_captured = {}
-            if self._pieces_capture is not None:
-                self._pieces_capture = {}
-            MemoryManager.cleanup_context(self._ctx)
-            return
-
-        # Standard mode: unload weights but KEEP compiled sequence.
-        # CompiledSequence holds the compiled op graph (MoE fusion, SymPromotion,
-        # DtypeEngine rules) — recompiling is expensive and produces identical results.
-        # Only the arena (tensor data) and weights need clearing.
+        # Both modes: the per-request state goes (the arena slots, the triton_sequential capture refs — the
+        # unload_weights Step 1c retention hazard — and the execution context). The sequences themselves stay:
+        # R2 rebinds fresh weights into the same slots (`_persistent_tensor_ids` remain valid).
         if self._compiled_seq is not None:
             assert hasattr(self._compiled_seq, '_arena')
             self._compiled_seq.drop_slots(weights=True)
-            # Keep _compiled_seq alive — R2 rebinds fresh weights into same slots
-            # Keep _persistent_tensor_ids — slot mappings remain valid in same sequence
-
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
             _nbx_memory.release_store(self._triton_seq.slot_store)
-            # Keep _triton_seq alive — R2 rebinds fresh weights into same slots
-
-        # Per-request state: drop the triton_sequential capture refs (mirror
-        # of the unload_weights Step 1c — same retention hazard).
         if hasattr(self, '_tritonseq_captured'):
             self._tritonseq_captured = {}
         if self._pieces_capture is not None:
             self._pieces_capture = {}
-
         MemoryManager.cleanup_context(self._ctx)
+        if self._persistent:
+            return      # persistent mode keeps the weights in VRAM and the compiled sequences (native and triton)
+
+        # Standard mode: the weights go, the compiled op graph stays (MoE fusion, SymPromotion, DtypeEngine rules —
+        # recompiling is expensive and produces identical results). The strategy installed on this executor
+        # uninstalls FIRST, the order of `_unload_component_weights`: held pieces and a zero3 ratchet drop what they
+        # hold into the base's arena before it is freed.
+        getattr(self, "strategy_uninstall", lambda: None)()
         MemoryManager.unload_weights(self._weights)
         self._weights_loaded = False  # Allow re-loading on next use
         # The request's context and the host block go with the weights, as in `unload_weights` (its Step 3): the

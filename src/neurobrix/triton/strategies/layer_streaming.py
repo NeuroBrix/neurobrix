@@ -661,6 +661,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
             # Not a streamed component — it stays whole and the runtime must load it.
             # Saying so is the caller's only way to tell the two apart.
             return False
+        # The executor's own `cleanup()` releases the held pieces too, before it frees the base they borrow from.
+        executor.strategy_uninstall = lambda: self.uninstall_for_executor(component_name, None)
         if component_name in self._installed:
             self._ensure_flow_reads(component_name, executor)   # a base unloaded between phases
             return True
