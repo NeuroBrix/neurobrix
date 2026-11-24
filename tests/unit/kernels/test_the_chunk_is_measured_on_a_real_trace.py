@@ -31,30 +31,37 @@ def test_a_trace_without_its_card_is_refused(tmp_path):
         T.load_trace(p)
 
 
-def _timed(monkeypatch, seconds):
-    calls = []
+def _timed(seconds):
+    """A replay of `_child`'s four arguments (the file, device, chunk, stop_after), handed to `chunk_by_replay(child=)` as the
+    library's seam for a test (726c3bf): it records each candidate it replays and the bound it was asked to stop at."""
+    calls, stops = [], []
 
-    def child(trace, device, chunk):
+    def child(path, device, chunk, stop_after=None):
         calls.append(chunk)
+        if chunk:
+            stops.append(stop_after)
         return {"seconds": seconds[chunk].pop(0)}
-    monkeypatch.setattr(T, "_child", child)
-    return calls
+    return child, calls, stops
 
 
 def test_the_smallest_chunk_within_the_segments_noise_is_kept(monkeypatch):
     g = 2 * MB
     seconds = {0: [2.2, 2.3, 2.1], 2 * MB: [11.0] * 3, 4 * MB: [6.0] * 3, 8 * MB: [2.4, 2.35, 2.5],
                16 * MB: [2.25, 2.2, 2.3], 32 * MB: [2.0] * 3}
-    calls = _timed(monkeypatch, seconds)
-    chunk, times = T.chunk_by_replay(0, g, (1, 2, 4, 8, 16), 3, trace="x")
+    child, calls, stops = _timed(seconds)
+    chunk, times = T.chunk_by_replay(0, g, (1, 2, 4, 8, 16), 3, "x", child=child)
     assert chunk == 16 * MB, {k >> 20: v for k, v in times.items()}      # OFF 2.2 + spread 0.1: 8 MiB (2.4) is out
     assert 32 * MB not in calls, "the probe stops at the first candidate within the noise"
+    # an odd count: each candidate's replay stops at OFF's bound, and a candidate's replays end once decided
+    assert stops and all(abs(b - 2.3) < 1e-9 for b in stops), stops
+    assert calls.count(2 * MB) == 2, "two of three replays past the bound decide the candidate"
 
 
 def test_no_chunk_within_the_noise_keeps_the_segments(monkeypatch):
     seconds = {0: [1.0] * 2, 2 * MB: [5.0] * 2, 4 * MB: [3.0] * 2}
-    _timed(monkeypatch, seconds)
-    assert T.chunk_by_replay(0, 2 * MB, (1, 2), 2, trace="x")[0] is None
+    child, _calls, stops = _timed(seconds)
+    assert T.chunk_by_replay(0, 2 * MB, (1, 2), 2, "x", child=child)[0] is None
+    assert stops and all(b is None for b in stops), "an even count: the median of the two needs both replays whole"
 
 
 def test_several_traces_are_named_never_picked(monkeypatch, tmp_path):
