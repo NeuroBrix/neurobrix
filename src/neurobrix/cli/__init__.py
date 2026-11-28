@@ -51,6 +51,40 @@ def _add_size_arguments(p):
                         'line')
 
 
+def _add_run_engine_and_context_flags(p):
+    """Add engine mode, ephemeral override, and token/context bound flags to `run`."""
+    add_engine_flags(p)
+    p.add_argument('--ephemeral', action='store_true', default=False, dest='ephemeral',
+                   help='Run one-shot in-process without starting or using a serving daemon (frees VRAM on exit).')
+    p.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
+                   help='Maximum number of tokens to generate (LLM only)')
+    p.add_argument('--max-context', type=int, default=None, dest='max_context',
+                   help='Cap the serving KV cache context window in tokens (e.g. 4096)')
+
+
+def _add_serve_tuning_flags(serve_parser):
+    """Add idle-unload and context-cap flags to `serve`."""
+    serve_parser.add_argument('--keep-alive', type=float, default=None, dest='keep_alive',
+                              help='Idle VRAM auto-unload TTL in seconds (0 = unload after each request, '
+                                   '-1 = stay resident until --timeout/stop)')
+    serve_parser.add_argument('--max-context', type=int, default=None, dest='max_context',
+                              help='Cap the serving KV cache context window in tokens (e.g. 4096; clamped to model max_position_embeddings)')
+
+
+def _add_chat_serving_flags(chat_parser):
+    """Add auto-start / auto-swap daemon flags to `chat`."""
+    chat_parser.add_argument('--model', default=None,
+                             help='Model name to chat with (auto-starts or swaps the serving daemon if needed; '
+                                  'omitted = connect to the running daemon)')
+    chat_parser.add_argument('--hardware', default=None,
+                             help='Hardware profile ID when auto-starting or swapping the serving daemon')
+    add_engine_flags(chat_parser)
+    chat_parser.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
+                             help='Max tokens per response (default: from model config)')
+    chat_parser.add_argument('--max-context', type=int, default=None, dest='max_context',
+                             help='Cap the serving KV cache context window when auto-starting or swapping the daemon (e.g. 4096)')
+
+
 def _add_run_arguments(p):
     """The request arguments shared by `run` and `calibrate` (one list, one help)."""
     p.add_argument('--model', default=None, help='Model name (auto-detected from running daemon if omitted)')
@@ -83,14 +117,13 @@ def _add_run_arguments(p):
     p.add_argument('--set', action='append', metavar='KEY=VALUE',
                             help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
     # Execution modes (mutually exclusive), the one rule of every command that runs a model (cli/engine_choice.py).
-    add_engine_flags(p)
+    _add_run_engine_and_context_flags(p)
     p.add_argument('--certified-only', action='store_true', dest='certified_only',
                             help='Confirmation run: every autotuned kernel is served from the '
                                  'certified directory, or the run fails naming the missing key '
                                  'and its census row — never a runtime sweep, never the local '
                                  'replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1).')
-    p.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
-                            help='Maximum number of tokens to generate (LLM only)')
+    # --max-tokens and --max-context are added by _add_run_engine_and_context_flags(p)
     p.add_argument('--turns', default=None, metavar='FILE',
                             help='A JSON list of user messages played as ONE chat session, turn after turn, through '
                                  'the session code the daemon runs: the KV cache is kept between turns and each turn '
@@ -465,6 +498,7 @@ Examples:
     serve_parser.add_argument('--hardware', default=None, help='Hardware profile ID. Auto-detected if omitted.')
     serve_parser.add_argument('--timeout', type=int, default=1800,
                               help='Idle timeout in seconds (default: 1800)')
+    _add_serve_tuning_flags(serve_parser)
     serve_parser.add_argument('--foreground', action='store_true',
                               help='Run in foreground (block terminal, for debugging)')
     serve_parser.add_argument('--ready-fd', type=int, default=None,
@@ -514,9 +548,7 @@ Slash commands (inside chat):
   /quit     Exit chat
         """
     )
-    chat_parser.add_argument('--max-tokens', type=int, default=None,
-                             dest='max_tokens',
-                             help='Max tokens per response (default: from model config)')
+    _add_chat_serving_flags(chat_parser)
     chat_parser.add_argument('--temperature', type=float, default=None,
                              help='Sampling temperature')
     chat_parser.add_argument('--repetition-penalty', type=float, default=None,

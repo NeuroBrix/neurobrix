@@ -26,9 +26,11 @@ class TritonLMSession:
                  uses_absolute_position: bool = False,
                  device_idx: int = 0,
                  position_ids_rank: int = 2,
-                 visual_stub_specs: Optional[Dict[str, list]] = None):
+                 visual_stub_specs: Optional[Dict[str, list]] = None,
+                 recurrent_state=None):
         self.executor = executor
         self.kv_wrapper = kv_wrapper
+        self.recurrent_state = recurrent_state
         self.hidden_dim = hidden_dim
         self.graph_inputs = graph_inputs
         self.uses_embeds = uses_embeds
@@ -111,6 +113,8 @@ class TritonLMSession:
             return self._prefill_chunks(ids, batch_size, int(start), chunk)
         if self.kv_wrapper is not None:
             self.kv_wrapper.reset()
+        if self.recurrent_state is not None:
+            self.recurrent_state.reset()
 
         seq_len = input_ids.shape[1]
         self.prefilled_rows, self.padded_rows = int(seq_len), 0
@@ -156,7 +160,7 @@ class TritonLMSession:
         # Switch to decode mode / init O(n) accumulator
         if self.kv_wrapper is not None:
             self.kv_wrapper.set_decode_mode()
-        else:
+        elif self.recurrent_state is None:
             self._accumulated_ids = input_ids
             # uses_embeds graphs replay the embedding stream at O(n) decode
             # (image-AR feeds aligned VQ embeddings, not re-embedded ids).
@@ -182,6 +186,16 @@ class TritonLMSession:
 
         return hidden
 
+    def _run_prefill_chunk(self, run_inputs, start_pos: int, real: int):
+        """Execute one Triton prefill chunk while keeping KV and recurrent state synchronized."""
+        self.kv_wrapper.begin_chunk(start_pos, real, whole_pages=True)
+        if self.recurrent_state is not None:
+            self.recurrent_state.begin_chunk(real=real)
+        outputs = self.executor.run(run_inputs, skip_kills=False)
+        if self.recurrent_state is not None:
+            self.recurrent_state.begin_chunk(real=None)
+        return outputs
+
     def _prefill_chunks(self, ids: Optional[List[int]], batch_size: int, start: int,
                         chunk: Optional[int]) -> NBXTensor:
         """The prefill of positions [start, len(ids)) in chunks (docs/design/prism_kv.md §5bis): `chunk` rows each, the
@@ -204,7 +218,7 @@ class TritonLMSession:
             raise RuntimeError(f"ZERO FALLBACK: the plan's prefill chunk {chunk} is not a whole number of the cache's "
                                f"{cache.page_tokens}-position pages")
         if start == 0:
-            self.kv_wrapper.reset()
+            self.reset_for_new_sequence()
         else:
             cache.truncate(start)
         if hasattr(self.executor, "enable_hidden_states_capture"):
@@ -234,8 +248,7 @@ class TritonLMSession:
             else:
                 run_inputs = {"input_ids": input_ids}
             self._add_visual_stubs(run_inputs)
-            self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
-            outputs = self.executor.run(run_inputs, skip_kills=False)
+            outputs = self._run_prefill_chunk(run_inputs, s, real)
             if real < rows:
                 cache.truncate(s + real)
             s, rows_run = s + real, rows_run + rows
@@ -261,7 +274,7 @@ class TritonLMSession:
         batch_size = input_ids.shape[0]
         seq_len = input_ids.shape[1]
 
-        if self.kv_wrapper is None:
+        if self.kv_wrapper is None and self.recurrent_state is None:
             # O(n) fallback: accumulate tokens and re-run full context.
             # inputs_embeds MUST thread through (image-AR decode input is
             # the aligned VQ embedding — dropping it here re-embedded the
@@ -269,8 +282,13 @@ class TritonLMSession:
             # different stream than the KV-cache path, R30 asymmetry).
             return self._decode_step_full_context(input_ids, inputs_embeds)
 
-        self.kv_wrapper.update_position_offset()
-        cache_len = self.kv_wrapper.get_cache_len()
+        if self.kv_wrapper is not None:
+            self.kv_wrapper.update_position_offset()
+            cache_len = self.kv_wrapper.get_cache_len()
+        else:
+            cache_len = self.recurrent_state.seq_len
+        if self.recurrent_state is not None:
+            self.recurrent_state.begin_chunk(real=None)
 
         # Position IDs
         if self.uses_absolute_position:
@@ -457,14 +475,18 @@ class TritonLMSession:
             self.kv_wrapper.set_decode_mode()
 
     def reset_for_new_sequence(self):
-        """Reset KV cache for new generation."""
+        """Reset KV cache and hybrid recurrent state for new generation."""
         if self.kv_wrapper is not None:
             self.kv_wrapper.reset()
+        if self.recurrent_state is not None:
+            self.recurrent_state.reset()
 
     def get_cache_len(self) -> int:
         """Get current KV cache length for position tracking."""
         if self.kv_wrapper is not None:
             return self.kv_wrapper.get_cache_len()
+        if self.recurrent_state is not None:
+            return self.recurrent_state.seq_len
         return 0
 
     def cleanup(self, keep_cache: bool = False):
@@ -475,5 +497,7 @@ class TritonLMSession:
                 self.kv_wrapper.end_request()
             else:
                 self.kv_wrapper.reset()
+        if self.recurrent_state is not None and not keep_cache:
+            self.recurrent_state.reset()
         if self.executor is not None:
             self.executor.cleanup()

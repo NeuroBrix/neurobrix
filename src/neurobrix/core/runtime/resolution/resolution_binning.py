@@ -175,8 +175,12 @@ def restore_plan(orig_h: int, orig_w: int, new_h: int, new_w: int,
     if orig_h == new_h and orig_w == new_w:
         return None
     ratio = max(new_h / orig_h, new_w / orig_w)
-    resized_w = int(orig_w * ratio)
-    resized_h = int(orig_h * ratio)
+    # Exact cover arithmetic guarantees orig_h * ratio >= new_h and orig_w * ratio >= new_w;
+    # IEEE 754 float64 rounding can under-round an exact integer by 1 ULP (e.g.
+    # 704 * (480 / 704) == 479.99999999999994 -> int() == 479 < 480), which made start_y == -1
+    # and collapsed the cropped height to 1 px (0-byte mp4 on SANA-Video 832x480).
+    resized_w = max(new_w, int(orig_w * ratio))
+    resized_h = max(new_h, int(orig_h * ratio))
     start_x = (resized_w - new_w) // 2
     start_y = (resized_h - new_h) // 2
     top, bottom, _ = slice(start_y, start_y + new_h).indices(resized_h)

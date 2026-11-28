@@ -15,9 +15,14 @@ PERFORMANCE OPTIMIZATION (Fast Loading):
 from .spec import (
     NBX_VERSION,
     NBX_MAGIC,
+    MIN_SUPPORTED_NBX_CONTAINER_VERSION,
+    MAX_SUPPORTED_NBX_CONTAINER_VERSION,
+    REQUIRED_NBX_CONTAINER_VERSION,
     ONNX_TO_NBX_OPS,
     NBX_DTYPES,
     get_nbx_op,
+    parse_nbx_container_version,
+    refuse_unsupported_nbx_container_version,
 )
 
 from .container import NBXContainer, ComponentData
@@ -31,6 +36,11 @@ __all__ = [
     # Version and constants
     "NBX_VERSION",
     "NBX_MAGIC",
+    "MIN_SUPPORTED_NBX_CONTAINER_VERSION",
+    "MAX_SUPPORTED_NBX_CONTAINER_VERSION",
+    "REQUIRED_NBX_CONTAINER_VERSION",
+    "parse_nbx_container_version",
+    "refuse_unsupported_nbx_container_version",
     "ONNX_TO_NBX_OPS",
     "NBX_DTYPES",
     # Helper functions

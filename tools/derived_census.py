@@ -49,8 +49,9 @@ def shadow_env(src, rung=None) -> dict:
     the plan listing (tools/plan_listing.py) explain the same way — a plan explained beside a free
     card reads the room and a 32 GB profile planned as a 16 GB one (2026-10-14 11:1x)."""
     env = dict(os.environ)
+    pp = os.environ.get("PYTHONPATH")
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
-                "PYTHONPATH": str(src),
+                "PYTHONPATH": f"{src}{os.pathsep}{pp}" if pp else str(src),
                 "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"})
     if rung is not None:
         env["NBX_PRISM_BUDGET_MB"] = str(int(rung))
@@ -646,7 +647,8 @@ def runtime_graph(model: str, comp: str) -> dict:
     key = (model, comp)
     if key not in _RUNTIME_GRAPHS:
         from neurobrix.core.runtime.graph_executor import GraphExecutor
-        from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+        from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe, unfused_routers
+        from neurobrix.triton.neurotax import moe_tokens
         base, fname = component_file(comp)
         g = json.loads((CACHE / model / "components" / base / fname).read_text())
         stub = _Stub(_dag=g, _SDPA_LAYOUT_PASSTHROUGH=GraphExecutor._SDPA_LAYOUT_PASSTHROUGH,
@@ -654,8 +656,8 @@ def runtime_graph(model: str, comp: str) -> dict:
         GraphExecutor._normalize_sdpa_scaling(stub)
         GraphExecutor._mark_sdpa_k_layout(stub)
         manifest = json.loads((CACHE / model / "manifest.json").read_text())
-        from neurobrix.core.runtime.graph.moe_fusion import unfused_routers
-        g = detect_and_fuse_moe(stub._dag, manifest.get("family"), norm_topk_prob=True)
+        g = detect_and_fuse_moe(stub._dag, manifest.get("family"), norm_topk_prob=True,
+                                tokens=moe_tokens())
         if comp == declared_moe_lm(model) and unfused_routers(g):
             # the flow's `set_moe_config` on its LM (lm_config.num_experts > 1): the declared pass
             # over every router still unfused, with the registry's norm_topk_prob — as it runs
@@ -665,7 +667,8 @@ def runtime_graph(model: str, comp: str) -> dict:
                 raise SystemExit(f"{model}: lm_config declares a MoE without norm_topk_prob — "
                                  "the flows refuse it, so the derivation does")
             g = detect_and_fuse_moe(g, manifest.get("family"),
-                                    norm_topk_prob=bool(lmc["norm_topk_prob"]), declared=True)
+                                    norm_topk_prob=bool(lmc["norm_topk_prob"]), declared=True,
+                                    tokens=moe_tokens())
         _RUNTIME_GRAPHS[key] = g
     return _RUNTIME_GRAPHS[key]
 

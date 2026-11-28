@@ -14,6 +14,10 @@ Called BEFORE CompiledSequence.compile() to transform the DAG in-place.
 """
 
 from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
+from .moe_choice_fusion import (
+    ChoiceRoutingPlan, fuse_choice_router_layer, fuse_grouped_mm_stacked_layer,
+    parse_choice_routing, resolve_one_layer_routing_tids, select_one_layer_routing_seeds, stamp_one_layer_routing_attrs,
+)
 import re
 import os
 
@@ -52,6 +56,44 @@ class _Tokens(NamedTuple):
     def tid(self, prefix: str, expert_id: int, role: str) -> str:
         """The tensor id of one expert's projection weight under `prefix`, in the caller's tokens."""
         return f"param::{prefix}.{self.by_word['experts']}.{expert_id}.{self.proj()[role]}.weight"
+
+
+def _fuse_plain_router_layer(
+    dag, ops, execution_order, tensors, consumer_map, producer_map, topk_uid,
+    blends, norm_topk_prob, declared, swept_whole, tok, declined, refusals,
+):
+    """Attempt per-expert or stacked fusion for a non-choice MoE router."""
+    blend = blends.get(topk_uid)
+    if blend is not None and blend.representative != topk_uid:
+        # Sibling gate of an already-handled multi-gate layer: its
+        # routing tensors are consumed by the representative's fused op.
+        return None
+    result = _fuse_one_moe_layer(
+        dag, ops, execution_order, tensors,
+        consumer_map, producer_map, topk_uid,
+        norm_topk_prob=norm_topk_prob,
+        blend=blend,
+        whole_sweep=not swept_whole, tok=tok,
+    )
+    swept_whole = swept_whole or result is not None
+    if result is None and blend is None:
+        # Stacked expert parameters (two [E, ., .] slabs, no per-expert
+        # tensors): softmax after topk with a sorted dispatch, or softmax
+        # before topk with the dense all-experts combine. Structurally
+        # disjoint from the walk above, so it gets its own matcher — and
+        # its refusals carry their reason.
+        result = _fuse_one_stacked_layer(
+            dag, ops, execution_order, tensors,
+            consumer_map, producer_map, topk_uid,
+            declared_norm=norm_topk_prob if declared else None, tok=tok)
+        if isinstance(result, Declined):
+            declined[topk_uid] = result.reason
+            if refusals is not None:
+                refusals[topk_uid] = result.reason
+            if os.environ.get("NBX_DEBUG") or os.environ.get("NBX_MOE_FUSION_LOG"):
+                _log.debug(f"[MoE Fusion] {topk_uid}: not fused — {result.reason}")
+            result = None
+    return result, swept_whole
 
 
 def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool = True,
@@ -108,57 +150,42 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     producer_map = _build_producer_map(ops, execution_order)
 
     # The router is the top-k that reaches the dispatch: the top-k's of a group
-    # cluster are part of its router, never routers of their own; a router that
-    # selects on choice scores (sigmoid, choice bias, group mask) is refused by
-    # name and handed to no matcher.
+    # cluster are part of its router, never routers of their own. A router that
+    # selects on choice scores (sigmoid/softmax, optional choice bias, optional
+    # group mask) is parsed by `_parse_choice_routing` and matched only against
+    # choice-aware matchers; any unrecognised cluster is refused by name.
     choice = _choice_routers(ops, tensors, producer_map, moe_topk_uids)
-    moe_topk_uids = [u for u in moe_topk_uids if u not in _choice_members(choice)]
+    moe_topk_uids = [u for u in moe_topk_uids if u not in _choice_members(choice, routers=False)]
 
     # Multi-gate routers (one MoE layer driven by N sibling gates whose
     # topk results are blended by per-token modality masks). Empty dict on
     # every single-gate model — the legacy path below is then bit-identical.
+    plain_topk_uids = [u for u in moe_topk_uids if u not in choice]
     blends = _detect_gate_blends(ops, execution_order, consumer_map,
-                                 tensors, moe_topk_uids)
+                                 tensors, plain_topk_uids)
 
     fused_count = 0
     ops_removed_total = 0
     dead_outputs_total = 0
-    declined: Dict[str, str] = {u: c.reason for u, c in choice.items()}
-    if refusals is not None:
-        refusals.update(declined)
+    declined: Dict[str, str] = {}
     swept_whole = False       # the first per-expert fusion sweeps every op; the next ones sweep what they removed
 
     for topk_uid in moe_topk_uids:
-        blend = blends.get(topk_uid)
-        if blend is not None and blend.representative != topk_uid:
-            # Sibling gate of an already-handled multi-gate layer: its
-            # routing tensors are consumed by the representative's fused op.
-            continue
-        result = _fuse_one_moe_layer(
-            dag, ops, execution_order, tensors,
-            consumer_map, producer_map, topk_uid,
-            norm_topk_prob=norm_topk_prob,
-            blend=blend,
-            whole_sweep=not swept_whole, tok=tok,
-        )
-        swept_whole = swept_whole or result is not None
-        if result is None and blend is None:
-            # Stacked expert parameters (two [E, ., .] slabs, no per-expert
-            # tensors): softmax after topk with a sorted dispatch, or softmax
-            # before topk with the dense all-experts combine. Structurally
-            # disjoint from the walk above, so it gets its own matcher — and
-            # its refusals carry their reason.
-            result = _fuse_one_stacked_layer(
-                dag, ops, execution_order, tensors,
-                consumer_map, producer_map, topk_uid,
-                declared_norm=norm_topk_prob if declared else None, tok=tok)
-            if isinstance(result, Declined):
-                declined[topk_uid] = result.reason
-                if refusals is not None:
-                    refusals[topk_uid] = result.reason
-                if os.environ.get("NBX_DEBUG") or os.environ.get("NBX_MOE_FUSION_LOG"):
-                    _log.debug(f"[MoE Fusion] {topk_uid}: not fused — {result.reason}")
-                result = None
+        if topk_uid in choice:
+            result, swept_whole = fuse_choice_router_layer(
+                dag, ops, execution_order, tensors, consumer_map, producer_map, topk_uid,
+                choice_refusal=choice[topk_uid], norm_topk_prob=norm_topk_prob, declared=declared,
+                swept_whole=swept_whole, tok=tok, declined=declined, refusals=refusals,
+                declined_cls=Declined, fuse_gmm_fn=_fuse_grouped_mm_stacked_layer, fuse_one_fn=_fuse_one_moe_layer,
+            )
+        else:
+            res_pair = _fuse_plain_router_layer(
+                dag, ops, execution_order, tensors, consumer_map, producer_map, topk_uid,
+                blends, norm_topk_prob, declared, swept_whole, tok, declined, refusals,
+            )
+            if res_pair is None:
+                continue
+            result, swept_whole = res_pair
         if result is not None:
             removed_count, fused_uid, fused_op, dead_outputs_count = result
             fused_count += 1
@@ -329,6 +356,11 @@ def _group_topks(ops, tensors, producer_map, mask, chain):
     return groups, n_group
 
 
+def _parse_choice_routing(ops, tensors, consumer_map, producer_map, topk_uid):
+    """Parse a choice-score routing cluster around ``topk_uid`` into ``ChoiceRoutingPlan`` or ``Declined``."""
+    return parse_choice_routing(ops, tensors, consumer_map, producer_map, topk_uid, Declined)
+
+
 def _fuse_one_moe_layer(
     dag: Dict[str, Any],
     ops: Dict[str, Any],
@@ -339,6 +371,8 @@ def _fuse_one_moe_layer(
     topk_uid: str,
     norm_topk_prob: bool = True,
     blend: Optional["GateBlend"] = None,
+    choice_plan: Optional["ChoiceRoutingPlan"] = None,
+    declared_norm: Optional[bool] = None,
     whole_sweep: bool = True, *, tok: _Tokens,
 ) -> Optional[Tuple[int, str, Dict[str, Any], int]]:
     """
@@ -367,21 +401,7 @@ def _fuse_one_moe_layer(
     # Collect ALL ops that belong to this MoE layer
     moe_op_uids: Set[str] = set()
 
-    if blend is not None:
-        # Routing is computed by the graph (N gates + mask blend) and the
-        # fused op consumes the RESULT. No single gate's scores are bound.
-        gate_scores_tid = None
-        seed_weights_tid = blend.weights_tid
-        seed_indices_tid = blend.indices_tid
-    else:
-        # topk input = gate_scores (softmax output)
-        gate_scores_tid = _get_input_tensor_id(topk_data, 0)
-        if gate_scores_tid is None:
-            raise RuntimeError(f"[MoE Fusion] Cannot find gate_scores input for {topk_uid}")
-        # topk outputs: scores and indices
-        seed_weights_tid = topk_data["output_tensor_ids"][0]
-        seed_indices_tid = topk_data["output_tensor_ids"][1]
-        moe_op_uids.add(topk_uid)
+    gate_scores_tid, seed_weights_tid, seed_indices_tid = select_one_layer_routing_seeds(blend, choice_plan, topk_uid, topk_data, moe_op_uids)
 
     # --- Build forward from the routing tensors to find the MoE subgraph ---
 
@@ -496,10 +516,7 @@ def _fuse_one_moe_layer(
 
     fused_uid = f"moe_fused::{block_id}"
 
-    # Routing tensors the fused op reads: a single gate's raw scores (legacy)
-    # or the blended (indices, weights) pair produced in-graph (multi-gate).
-    routing_tids = ([blend.indices_tid, blend.weights_tid] if blend is not None
-                    else [gate_scores_tid])
+    routing_tids = resolve_one_layer_routing_tids(blend, choice_plan, declared_norm, topk_uid, gate_scores_tid)
 
     # Build args list for liveness analysis — all input tensors must be declared
     # so _extract_input_slots_from_dag can track them and prevent premature GC
@@ -537,14 +554,7 @@ def _fuse_one_moe_layer(
         },
     }
 
-    if blend is not None:
-        # Pre-computed routing: the engine reads these instead of running
-        # topk on gate scores. The per-gate normalization already happened
-        # in-graph, so the runtime NEVER re-normalizes in this mode
-        # (norm_topk_prob is ignored — see the runtime dispatchers).
-        fused_op["attributes"]["topk_indices_tid"] = blend.indices_tid
-        fused_op["attributes"]["topk_weights_tid"] = blend.weights_tid
-        fused_op["attributes"]["gate_group"] = list(blend.members)
+    stamp_one_layer_routing_attrs(fused_op, blend, choice_plan)
 
     # --- Remove old ops from execution_order, add fused op ---
 
@@ -1589,7 +1599,7 @@ def _split_halves(ops, consumer_map, split_uid, tensors, F):
 def _stacked_fused_op(tensors, fused_uid, *, top_k, num_experts, F, H,
                       hidden_tid, gate_scores_tid, in_tid, out_tid, exit_tid,
                       in_axis, gate_offset, out_in_axis, norm_topk_prob,
-                      extra_attrs):
+                      extra_attrs, choice_bias_tid: Optional[str] = None):
     """The ONE emission of a stacked-expert custom::moe_fused op, whichever
     built form the matcher recognised. The per-expert entries carry the
     slab's own dtype — a parameter the graph describes."""
@@ -1610,6 +1620,8 @@ def _stacked_fused_op(tensors, fused_uid, *, top_k, num_experts, F, H,
             "tensor_id": down_ids[e], "shape": [H, F], "dtype": sdt,
             "is_parameter": True})
     all_input_tids = [hidden_tid, gate_scores_tid, in_tid, out_tid]
+    if choice_bias_tid is not None:
+        all_input_tids.append(choice_bias_tid)
     attrs = {
         "args": [{"type": "tensor", "tensor_id": t} for t in all_input_tids],
         "kwargs": {},
@@ -2191,6 +2203,18 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
         ops.pop(u, None)
     execution_order[:] = new_order
     return (len(interior), fused_uid, fused_op, 0)
+
+
+def _fuse_grouped_mm_stacked_layer(
+    dag, ops, execution_order, tensors, consumer_map, producer_map, topk_uid,
+    *, choice_plan: ChoiceRoutingPlan, declared_norm=None, tok,
+):
+    """Match and fuse a stacked-expert MoE block dispatched via ``aten::_grouped_mm``."""
+    return fuse_grouped_mm_stacked_layer(
+        dag, ops, execution_order, tensors, consumer_map, producer_map, topk_uid,
+        choice_plan=choice_plan, declared_norm=declared_norm, tok=tok,
+        declined_cls=Declined, split_halves_fn=_split_halves, stacked_fused_op_fn=_stacked_fused_op,
+    )
 
 
 def _unfused(dag: dict, family: str, declared: bool) -> dict:

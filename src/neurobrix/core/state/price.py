@@ -62,35 +62,53 @@ def kv_min_tokens(max_tokens: int, prompt_margin: int, serve: bool) -> int:
     return int(max_tokens) * (2 if serve else 1) + int(prompt_margin)
 
 
-def kv_estimate_tokens(entry: Mapping[str, Any], max_tokens: int, prompt_margin: int) -> int:
-    """The positions a strategy is priced for before the cache is sized: max_tokens + margin, else the window."""
+def validate_max_context(max_context: Optional[int]) -> Optional[int]:
+    """Validate an explicit --max-context cap (>= 1) or None (uncapped). ZERO FALLBACK."""
+    if max_context is None:
+        return None
+    if isinstance(max_context, bool) or not isinstance(max_context, int) or max_context < 1:
+        raise ValueError(f"ZERO FALLBACK: --max-context must be a positive integer (>= 1), got {max_context!r}")
+    return int(max_context)
+
+
+def effective_kv_window(declared_window: int, max_context: Optional[int]) -> int:
+    """Effective KV context window: min(declared_window, max_context) when both > 0, else whichever is set."""
+    cap = validate_max_context(max_context)
+    win = int(declared_window or 0)
+    if cap is None:
+        return win
+    return min(win, cap) if win > 0 else cap
+
+
+def kv_estimate_tokens(entry: Mapping[str, Any], max_tokens: int, prompt_margin: int,
+                       max_context: Optional[int] = None) -> int:
+    """The positions a strategy is priced for before the cache is sized: max_tokens + margin, else the window,
+    clamped by the declared window and explicit --max-context when set."""
+    cap = validate_max_context(max_context)
     if max_tokens:
-        return int(max_tokens) + int(prompt_margin)
-    window = entry.get("window")
-    if not window:
-        raise StateUndeclared("ZERO FALLBACK: no max_tokens and the KV state declares no window — nothing bounds it")
-    return int(window)
+        est = int(max_tokens) + int(prompt_margin)
+    else:
+        window = entry.get("window")
+        if not window:
+            raise StateUndeclared("ZERO FALLBACK: no max_tokens and the KV state declares no window — nothing bounds it")
+        est = int(window)
+    eff = effective_kv_window(int(entry.get("window") or 0), cap)
+    return min(est, eff) if eff else est
 
 
 def kv_cache_size(entry: Mapping[str, Any], token_bytes: int, max_tokens: int, prompt_margin: int, serve: bool,
                   remaining_bytes: int, floor_max_tokens: Optional[int] = None,
-                  growth_reserve_bytes: int = 0) -> Dict[str, int]:
+                  growth_reserve_bytes: int = 0, max_context: Optional[int] = None) -> Dict[str, int]:
     """{max_cache_len, initial_cache_len, memory_bytes}: as many positions as the remaining bytes afford, bounded by the
-    request (run: max_tokens + margin) or the declared window (serve), never beyond the window. Refused by name below
-    the minimum.
-
-    The cache, its floor included, is granted only from the room above `growth_reserve_bytes`, the allocator's reserve
-    where the caller's capacity does not already hold it back: below the floor there, the plan is refused by name and
-    the solver takes its next strategy. Grown into the reserve, the cache of Qwen2.5-Coder-7B-Instruct (compiled,
-    lazy_sequential, V100-16GB) took 8 724 positions (477 MiB) for a 5-token request and its first prefill ran out of
-    memory; with only its growth kept above the reserve, its floor still took the reserve: on the same plan, 476 MiB
-    left above its priced peak, a 4 254-position cache ran, 4 358 positions ran out of memory twice and 4 458 once in
-    two, every run reaching the same 15.6 GB working set the plan priced 232 MiB lower (2026-11-15)."""
+    request (run: max_tokens + margin) or the effective window (serve: min(declared window, --max-context)), never
+    beyond the window. Refused by name below the minimum."""
     if int(growth_reserve_bytes) < 0:
         raise ValueError(f"kv_cache_size: growth_reserve_bytes {growth_reserve_bytes}")
-    window = int(entry.get("window") or 0)
-    if serve and not window:
+    cap = validate_max_context(max_context)
+    raw_window = int(entry.get("window") or 0)
+    if serve and not raw_window:
         raise StateUndeclared("ZERO FALLBACK: serving plans the decoder's whole window, and its KV state declares none")
+    window = effective_kv_window(raw_window, cap)
     upper = window if (serve or not max_tokens) else int(max_tokens) + int(prompt_margin)
     upper = min(upper, window) if window else upper
     above = max(int(remaining_bytes) - int(growth_reserve_bytes), 0)
@@ -98,9 +116,13 @@ def kv_cache_size(entry: Mapping[str, Any], token_bytes: int, max_tokens: int, p
     # the floor is the request's when it names fewer tokens than the package (a run's --max-tokens)
     floor = min(kv_min_tokens(floor_max_tokens if floor_max_tokens else max_tokens, prompt_margin, serve), upper)
     if grown < floor:
+        hint = (
+            " Pass --max-context <N> (e.g. --max-context 4096) to cap the serving KV cache context window."
+            if cap is None else ""
+        )
         raise RuntimeError(
             f"ZERO FALLBACK: KV cache budget too small: {floor} positions need {floor * token_bytes / 1e6:.0f} MB of cache, "
-            f"{remaining_bytes / 1e6:.0f} MB left, {above / 1e6:.0f} of them above the reserve of {growth_reserve_bytes / 1e6:.0f} MB.")
+            f"{remaining_bytes / 1e6:.0f} MB left, {above / 1e6:.0f} of them above the reserve of {growth_reserve_bytes / 1e6:.0f} MB.{hint}")
     length = min(grown, upper)
     initial = min(int(max_tokens) + int(prompt_margin), length) if (serve and max_tokens) else 0
     return {"max_cache_len": length, "initial_cache_len": initial, "memory_bytes": length * int(token_bytes)}

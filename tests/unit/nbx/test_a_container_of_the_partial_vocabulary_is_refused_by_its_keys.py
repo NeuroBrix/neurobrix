@@ -19,6 +19,7 @@ import pytest
 
 from neurobrix.pytorch.neurotax import NEUROTAX_VERSION, first_non_canonical, refuse_non_canonical
 from neurobrix.core.runtime.loader import NBXRuntimeLoader
+from neurobrix.nbx.spec import REQUIRED_NBX_CONTAINER_VERSION
 
 
 def test_a_partial_key_is_refused_naming_container_component_key_and_canonical_form():
@@ -44,7 +45,7 @@ def _container(tmp_path, keys):
     d = tmp_path / "m"
     (d / "runtime").mkdir(parents=True)
     (d / "components" / "lm").mkdir(parents=True)
-    (d / "manifest.json").write_text(json.dumps({"model_name": "m", "neurotax_version": NEUROTAX_VERSION}))
+    (d / "manifest.json").write_text(json.dumps({"model_name": "m", "nbx_container_version": REQUIRED_NBX_CONTAINER_VERSION, "neurotax_version": NEUROTAX_VERSION}))
     for rel in ("topology.json", "runtime/variables.json", "runtime/defaults.json"):
         (d / rel).write_text("{}")
     (d / "components" / "lm" / "weights_index.json").write_text(json.dumps({"tensors": {k: {} for k in keys}}))

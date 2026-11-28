@@ -74,7 +74,8 @@ def test_opening_a_container_records_what_it_carries(monkeypatch, tmp_path):
     from neurobrix.nbx import container as container_mod
     cache = tmp_path / "cache"
     cache.mkdir()
-    (cache / "manifest.json").write_text(json.dumps({"model_name": "wan", "family": "video"}))
+    from neurobrix.nbx.spec import REQUIRED_NBX_CONTAINER_VERSION
+    (cache / "manifest.json").write_text(json.dumps({"model_name": "wan", "family": "video", "nbx_container_version": REQUIRED_NBX_CONTAINER_VERSION}))
     (cache / "topology.json").write_text(json.dumps({
         "components": {}, "flow": {},
         "extracted_values": {"text_encoder": {"zero_pad_embeddings": True},

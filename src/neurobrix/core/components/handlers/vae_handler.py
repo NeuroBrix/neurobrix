@@ -114,6 +114,9 @@ class VAEComponentHandler(ComponentHandler):
         scaling_factor = self.config.scaling_factor
         if scaling_factor is not None and scaling_factor != 0 and scaling_factor != 1.0:
             latent = latent / scaling_factor
+        shift_factor = self.config.shift_factor
+        if shift_factor is not None and shift_factor != 0.0:
+            latent = latent + shift_factor
 
         if _dbg and is_torch_tensor(latent):
             _log.debug(f"[VAE-SEAM] out  shape={list(latent.shape)} "

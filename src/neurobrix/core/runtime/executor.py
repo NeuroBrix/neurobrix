@@ -1149,9 +1149,6 @@ class RuntimeExecutor:
                          + (f", experts held on {sorted(_a['expert_cards'])}" if _a['expert_cards'] else "")
                          + (f", expert cache {_a['expert_cache_mb']:.0f} MB" if _a['expert_cache_mb'] else ""))
 
-        # Get loading_mode from Prism plan (DATA-DRIVEN)
-        loading_mode = getattr(self.plan, 'loading_mode', 'lazy')
-
         context = _branch_door.names("strategies", "", "StrategyContext")[0](       # the branch's own strategies
             strategy_name=self._strategy_name,
             allocations=allocations,
@@ -1159,7 +1156,7 @@ class RuntimeExecutor:
             variable_resolver=self.variable_resolver,
             topology=self.pkg.topology,
             runtime_package=self.pkg,
-            loading_mode=loading_mode,
+            loading_mode=getattr(self.plan, 'loading_mode', 'lazy'),
             transient_components=frozenset(
                 getattr(self.plan, "transient_components", None) or ()),
             layer_segments=dict(
@@ -1175,6 +1172,7 @@ class RuntimeExecutor:
             layer_resident={k: frozenset(v) for k, v in
                             (getattr(self.plan, "layer_stream_resident", None) or {}).items()},
             mode=self.mode,
+            residency_plan=getattr(self.plan, "residency_plan", None),
         )
 
         self.strategy = _branch_door.names("strategies", "", "get_strategy")[0](self._strategy_name, context)

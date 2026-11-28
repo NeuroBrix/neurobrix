@@ -327,6 +327,10 @@ def _placement_of(op, args, ops=()) -> str:
             f"tensor inputs on {devs}, produced by {producers}")
 
 
+
+from .moe_choice_routing import choice_route_torch, resolve_choice_routing_slot, route_choice_on_device  # noqa: E402,F401
+
+
 class CompiledSequence(SequenceSteps):
     """
     Pre-compiled execution sequence with zero runtime isinstance() checks.
@@ -1971,7 +1975,7 @@ class CompiledSequence(SequenceSteps):
         weight_slots = []
         for slot_idx in all_input_slots:
             tid = self._slot_to_tensor_id.get(slot_idx)
-            if tid and (tid.startswith("param::") or tid.startswith("buffer::")):
+            if tid and tid.startswith(("param::", "buffer::")) and not tensors.get(tid, {}).get("constant"):
                 weight_slots.append(slot_idx)
 
         return CompiledOp(
@@ -2029,6 +2033,7 @@ class CompiledSequence(SequenceSteps):
         top_k = attrs["top_k"]
         num_experts = attrs["num_experts"]
         norm_topk_prob = attrs.get("norm_topk_prob", True)
+        choice_routing, choice_bias_slot = resolve_choice_routing_slot(attrs, self._tensor_id_to_slot)
 
         # Resolve tensor IDs to arena slots (compile-time)
         if topk_indices_tid is not None and topk_weights_tid is not None:
@@ -2100,10 +2105,8 @@ class CompiledSequence(SequenceSteps):
         _top_k = top_k
         _num_experts = num_experts
         _norm_topk_prob = norm_topk_prob
-        _gate_scores_slot = gate_scores_slot
-        _topk_indices_slot = topk_indices_slot
-        _topk_weights_slot = topk_weights_slot
-        _hidden_states_slot = hidden_states_slot
+        _gate_scores_slot, _topk_indices_slot, _topk_weights_slot = gate_scores_slot, topk_indices_slot, topk_weights_slot
+        _choice_routing, _choice_bias_slot, _hidden_states_slot = choice_routing, choice_bias_slot, hidden_states_slot
         _gate_w_slots = gate_w_slots
         _up_w_slots = up_w_slots
         _down_w_slots = down_w_slots
@@ -2123,10 +2126,8 @@ class CompiledSequence(SequenceSteps):
             All routing computed dynamically from gate_scores.
             """
             _blended = _gate_scores_slot is None
-            gate_scores = None if _blended else arena[_gate_scores_slot]
-            pre_indices = arena[_topk_indices_slot] if _blended else None
-            pre_scores = arena[_topk_weights_slot] if _blended else None
-            hidden_states = arena[_hidden_states_slot]
+            gate_scores, choice_bias = (None if _blended else arena[_gate_scores_slot]), (None if _choice_bias_slot is None else arena[_choice_bias_slot])
+            pre_indices, pre_scores, hidden_states = (arena[_topk_indices_slot] if _blended else None), (arena[_topk_weights_slot] if _blended else None), arena[_hidden_states_slot]
 
             if hidden_states is None:
                 raise RuntimeError(
@@ -2179,8 +2180,8 @@ class CompiledSequence(SequenceSteps):
                 if hidden_states.device != _card_dev:
                     _home = hidden_states.device
                     hidden_states = to_card(hidden_states, _card_dev)
-                    if gate_scores is not None:
-                        gate_scores = to_card(gate_scores, _card_dev)
+                    gate_scores = to_card(gate_scores, _card_dev) if gate_scores is not None else None
+                    choice_bias = to_card(choice_bias, _card_dev) if choice_bias is not None else None
                     if pre_indices is not None:
                         pre_indices = to_card(pre_indices, _card_dev)
                         pre_scores = to_card(pre_scores, _card_dev)
@@ -2209,6 +2210,8 @@ class CompiledSequence(SequenceSteps):
                     scores = to_card(scores, _compute_dev)
                 _dnat("blend_scores", scores)
                 _dnat("blend_indices", indices)
+            elif _choice_routing is not None:
+                scores, indices = route_choice_on_device(gate_scores, choice_bias, _compute_dev, _top_k, _norm_topk_prob, _choice_routing, to_card, _dnat)
             else:
                 # ROUTING IN FP32: precision-critical for expert selection. The
                 # fp32-upcast policy is owned by the dtype engine (single source);
@@ -2358,8 +2361,7 @@ class CompiledSequence(SequenceSteps):
             return {}
 
         # All input slots: routing + hidden_states + all expert weights
-        _routing_slots = ([topk_indices_slot, topk_weights_slot]
-                          if gate_scores_slot is None else [gate_scores_slot])
+        _routing_slots = ([topk_indices_slot, topk_weights_slot] if gate_scores_slot is None else [gate_scores_slot]) + ([choice_bias_slot] if choice_bias_slot is not None else [])
         moe_all_input_slots = _routing_slots + [_hidden_states_slot] + list(all_weight_slots)
 
         return CompiledOp(
@@ -2874,12 +2876,13 @@ class CompiledSequence(SequenceSteps):
         # An op needs_transfer only when its inputs come from a different device.
         slot_device: dict = {}  # slot_idx → torch.device
 
-        # Seed slot_device from weight/buffer tensors already in arena
-        for op in self._ops:
-            for ws in op.weight_input_slots:
-                tensor = arena[ws]
-                if tensor is not None and hasattr(tensor, 'device'):
-                    slot_device[ws] = tensor.device
+        # Seed slot_device from all pre-bound weight/buffer/constant tensors in arena
+        # so ops consuming an unsharded graph constant on another card get needs_transfer=True
+        # rather than pulling the layer back to the primary card.
+        for ws in range(self._num_weights):
+            tensor = arena[ws]
+            if tensor is not None and hasattr(tensor, 'device'):
+                slot_device[ws] = tensor.device
 
         # Also seed from input tensors (bound later, but we know input slots)
         # Input slots will be set at runtime — skip for now, handle in phase 3

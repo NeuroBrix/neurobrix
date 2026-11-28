@@ -75,6 +75,13 @@ def op_flops(kind: str, ins: List[List[int]], outs: List[List[int]], attrs: Mapp
         top_k = int(attrs.get("top_k") or 0)
         per_expert = int(attrs.get("_expert_params") or 0)
         return 2 * tokens * top_k * per_expert
+    if kind == "custom::gated_delta_rule" and len(ins) >= 3 and ins[0] and ins[2]:
+        q, v = ins[0], ins[2]
+        if len(q) == 4 and len(v) == 4:
+            b, l, dk = int(q[0]), int(q[1]), int(q[3])
+            hv, dv = int(v[2]), int(v[3])
+            norms = 2 * (3 * dk + 1) if attrs.get("qk_l2norm", True) else 0
+            return b * l * hv * (7 * dk * dv + 2 * dv + dk + norms)
     return out
 
 

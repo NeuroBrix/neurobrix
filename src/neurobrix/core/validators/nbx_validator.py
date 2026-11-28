@@ -122,7 +122,7 @@ class NBXValidator:
 
     # Required manifest fields
     REQUIRED_MANIFEST_FIELDS = {
-        "nbx_version",
+        "nbx_container_version",
         "model_name",
         "components",
     }
@@ -191,7 +191,7 @@ class NBXValidator:
                     # Can't continue without manifest
                     return ValidationResult(nbx_path, False, errors, warnings, stats)
 
-                stats["nbx_version"] = manifest.get("nbx_version")
+                stats["nbx_container_version"] = manifest.get("nbx_container_version")
                 stats["model_name"] = manifest.get("model_name")
 
                 # Extract neural components from manifest
@@ -288,6 +288,19 @@ class NBXValidator:
                         component=None,
                         file="manifest.json",
                         message=f"Missing required field: {field_name}"
+                    ))
+
+            # Check nbx_container_version compatibility (also catches legacy nbx_version)
+            if "nbx_container_version" in manifest or "nbx_version" in manifest:
+                from neurobrix.nbx.spec import refuse_unsupported_nbx_container_version
+                try:
+                    refuse_unsupported_nbx_container_version(manifest)
+                except RuntimeError as e:
+                    errors.append(ValidationError(
+                        level=ValidationLevel.SCHEMA,
+                        component=None,
+                        file="manifest.json",
+                        message=str(e),
                     ))
 
             # Check components is non-empty

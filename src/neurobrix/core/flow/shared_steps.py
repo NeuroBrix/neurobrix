@@ -423,3 +423,97 @@ def keep_hidden_tap(rows, resolved, lm_name, was_whole) -> None:
             "output — rebuild the container with the speech contract (R15 "
             "registry-driven tap).")
     rows.keep(tap, was_whole)
+
+
+def resolve_logits_head(flow: Dict[str, Any], stage: Dict[str, Any]) -> Optional[str]:
+    """Return the head component name when logits come from a separate head stage, else None."""
+    logits_source = stage.get("logits_source", "embed_weight_tied")
+    if logits_source not in ("head", "lm_head"):
+        return None
+    audio_cfg = flow.get("audio") or {}
+    gen_cfg = flow.get("generation") or {}
+    head = (
+        stage.get("head_component")
+        or audio_cfg.get("head_component")
+        or gen_cfg.get("head_component")
+    )
+    return head or ("lm_head" if logits_source == "lm_head" else None)
+
+
+def require_logits_head(ctx: Any, logits_source: str, head_name: Optional[str]) -> str:
+    """Validate and return the head component name for a 'head' or 'lm_head' logits_source."""
+    resolved = head_name or ("lm_head" if logits_source == "lm_head" else None)
+    if not resolved:
+        raise RuntimeError(
+            f"ZERO FALLBACK: logits_source is '{logits_source}' but no head_component is declared."
+        )
+    executors = getattr(ctx, "executors", None) or {}
+    if resolved not in executors:
+        raise RuntimeError(
+            f"ZERO FALLBACK: logits_source is '{logits_source}' and head component "
+            f"{resolved!r} is missing from executors (available: {sorted(executors)})."
+        )
+    return resolved
+
+
+def prepare_logits_head(ctx: Any, ensure_weights_fn, decoder_stage: Dict[str, Any]) -> Optional[str]:
+    """Resolve, validate, and load the head component when decoder_stage names one."""
+    logits_source = decoder_stage.get("logits_source", "embed_weight_tied")
+    if logits_source not in ("head", "lm_head"):
+        return None
+    flow = ctx.pkg.topology.get("flow", {})
+    head_name = require_logits_head(ctx, logits_source, resolve_logits_head(flow, decoder_stage))
+    ensure_weights_fn(head_name)
+    return head_name
+
+
+def unload_encoder_decoder_components(
+    ctx: Any, unload_fn, release_fn, flow: Dict[str, Any],
+    decoder_stage: Dict[str, Any], enc_name: str, dec_name: str,
+) -> None:
+    """Unload encoder, decoder, and optional head weights after a non-persistent request."""
+    unload_fn(enc_name)
+    unload_fn(dec_name)
+    head_name = resolve_logits_head(flow, decoder_stage)
+    if head_name and head_name in (getattr(ctx, "executors", None) or {}):
+        unload_fn(head_name)
+    release_fn(ctx.primary_device)
+
+
+def head_input_name(executor: Any) -> str:
+    """Return the primary input tensor name expected by a head graph executor."""
+    dag = getattr(executor, "_dag", None)
+    if isinstance(dag, dict):
+        tids = dag.get("input_tensor_ids") or [
+            t for t in (dag.get("tensors") or {}) if t.startswith("input::")
+        ]
+        if "input::input" in tids:
+            return "input"
+        if len(tids) == 1 and tids[0].startswith("input::"):
+            return tids[0][len("input::"):]
+    return "input"
+
+
+def run_head_executor(executor: Any, last_hidden: Any) -> Any:
+    """Execute a head component graph on `last_hidden` and return its logits tensor."""
+    output = executor.run({head_input_name(executor): last_hidden})
+    if isinstance(output, dict):
+        if not output:
+            raise RuntimeError("ZERO FALLBACK: head executor returned an empty output dict.")
+        return next(iter(output.values()))
+    return output
+
+
+def inject_tied_embed_weight(ctx: Any, dec_name: str, embed_weight: Any) -> None:
+    """Inject token embedding weight into decoder weights for weight-tied models when absent."""
+    if embed_weight is None:
+        return
+    executor = (getattr(ctx, "executors", None) or {}).get(dec_name)
+    weights = getattr(executor, "_weights", None)
+    dag = getattr(executor, "_dag", None)
+    if weights is None or not dag:
+        return
+    tensors = dag.get("tensors", {})
+    for tied_name in ("head.weight", "model.token_embed.weight"):
+        if tied_name not in weights and f"param::{tied_name}" in tensors:
+            weights[tied_name] = embed_weight

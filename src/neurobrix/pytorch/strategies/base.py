@@ -79,6 +79,9 @@ class StrategyContext:
     # the Triton branch's strategies are neurobrix.triton.strategies).
     mode: str = "compiled"
 
+    # Prism 4-tier residency plan (ResidencyPlan or dict, None for legacy plans).
+    residency_plan: Any = None
+
     # Active component tracking (for lazy loading)
     _active_component: Optional[str] = None
 

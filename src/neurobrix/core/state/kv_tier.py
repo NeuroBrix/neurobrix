@@ -136,6 +136,8 @@ def served_reach(kv_plan, tier: Optional[KVTier], window: int) -> "tuple[int, st
     the KV host tier serves and the model's window is longer, the host spill's reach on the tier's share now, never past
     the window. A request past it is refused before it runs."""
     from neurobrix.serving.session import session_ceiling
+    from neurobrix.core.state.price import effective_kv_window
+    window = effective_kv_window(window, getattr(kv_plan, "max_context", None))
     card, source = session_ceiling(kv_plan)
     if tier is None or not window or window <= card:
         return card, source
@@ -165,6 +167,8 @@ def attach_spill(cache, tier: Optional[KVTier], kv_plan, window: int) -> str:
     if tier is None or kv_plan is None:
         return "KV mid-decode spill: off (no KV host tier)"
     from neurobrix.serving.session import session_ceiling
+    from neurobrix.core.state.price import effective_kv_window
+    window = effective_kv_window(window, getattr(kv_plan, "max_context", None))
     card = session_ceiling(kv_plan)[0]                 # the card's figure the served reach adds the host's to
     if not window or window <= card:
         return f"KV mid-decode spill: off (the plan's cache of {card} positions reaches the model's window {window})"

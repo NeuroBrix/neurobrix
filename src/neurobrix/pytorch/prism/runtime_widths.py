@@ -751,7 +751,7 @@ class _TritonRules(_Rules):
         c = self.c
         name = op.get("op_type", "").split("::")[-1].split(".")[0]
         fl = [(t, d) for t, d, zero in self.floats(ins, w) if not zero]
-        if not fl or name in _CASTS:
+        if not fl or name in _CASTS or name == "gated_delta_rule":
             return []
         seq_rms = self.tseq and op.get("op_type") == "custom::rms_norm"
         if self.half and not seq_rms and (uid in self.contract.fp32_op_uids or (
@@ -803,6 +803,9 @@ class _TritonRules(_Rules):
 
     def _class_rule(self, uid, op, name, fl, ins) -> str:
         c = self.c
+        if name == "gated_delta_rule":
+            # Self-managed: q, k, v, beta at model dtype, g in fp32, output at v's dtype (3rd input).
+            return fl[2][1] if len(fl) >= 3 else (self.first(fl) or c)
         if name in _tdt.AMP_SCALAR_FILL_OPS:                               # :545-546
             return self.first(fl) or self.default(op, fl)
         if name == "where":
@@ -1025,6 +1028,9 @@ class _AtenRules(_Rules):
             # `_fused_upsample_conv2d_torch` allocates at weight.dtype
             # (kernels/ops/fused_upsample_conv.py:299-303): the weights are at C.
             return c
+        if name == "gated_delta_rule":
+            # execute_gated_delta_rule_torch self-manages dtype: fp32 inside, output at v's dtype (3rd input).
+            return fl[2][1] if len(fl) >= 3 else (self.first(fl) or c)
         if name == "rms_norm":
             # compiled_ops.py:294-295, 551-568 -> engine.py:26-50 `rms_norm_fp32`: fp32
             # inside, the output at the WEIGHT's dtype. It is in no AMP class

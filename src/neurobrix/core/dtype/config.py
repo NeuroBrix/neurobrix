@@ -21,6 +21,7 @@ if TYPE_CHECKING:  # R33: torch is the ATen branch's; this table is shared
 # torch (R33). Widths live in config/dtypes.yml, read through core/dtype/itemsize.py; `DTYPE_MAP` / `DTYPE_TO_STR` stay importable
 # through the module __getattr__ below.
 _DTYPE_NAMES = ("bfloat16", "float16", "float32", "float64",
+                "complex64", "complex128",
                 "int8", "int16", "int32", "int64", "uint8", "bool")
 _TORCH_MAPS = None
 

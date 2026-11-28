@@ -73,6 +73,7 @@ def load_component_config(cache_path: str, component_name: str) -> ComponentConf
 
         # VAE fields
         scaling_factor=cfg.get("scaling_factor"),
+        shift_factor=cfg.get("shift_factor"),
         latent_channels=cfg.get("latent_channels") or attrs.get("state_channels"),
         vae_scale_factor=vae_scale,
         block_out_channels=block_channels,

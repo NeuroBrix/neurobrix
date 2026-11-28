@@ -21,6 +21,14 @@ class RuntimePackage:
     components: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     modules: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
+def _validate_container_manifest(cache_path, manifest: dict) -> None:
+    """Verify cache naming and required nbx_container_version before weight/graph I/O."""
+    from neurobrix.nbx.cache import refuse_misnamed
+    from neurobrix.nbx.spec import refuse_unsupported_nbx_container_version
+    refuse_misnamed(cache_path, manifest)
+    refuse_unsupported_nbx_container_version(manifest, str(cache_path))
+
+
 class NBXRuntimeLoader:
     """
     Passive loader for NBX v0.1 containers.
@@ -66,8 +74,7 @@ class NBXRuntimeLoader:
                 )
             core_data[key] = self._load_json_from_cache(file_path)
         # The naming door at the runtime's own entry (see `nbx.cache.refuse_misnamed`).
-        from neurobrix.nbx.cache import refuse_misnamed
-        refuse_misnamed(cache_path, core_data["manifest"])
+        _validate_container_manifest(cache_path, core_data["manifest"])
 
         # 1b. Weight-storage encoding compatibility gate (artifact-verdict
         # condition 1): a build whose manifest declares a weight_encoding

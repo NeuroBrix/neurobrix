@@ -21,6 +21,10 @@ from typing import Any, Dict, List, Optional
 from .base import ComponentFlowHandler, register_flow
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 from neurobrix.core.flow.shared_steps import _maybe_log_topk   # both branches
+from neurobrix.core.flow.shared_steps import (
+    inject_tied_embed_weight, prepare_logits_head, require_logits_head,
+    run_head_executor, unload_encoder_decoder_components,
+)
 import logging
 _log = logging.getLogger(__name__)
 
@@ -38,7 +42,7 @@ class EncoderDecoderEngine(ComponentFlowHandler):
           - component: model.decoder
             execution: autoregressive
             cross_attention_from: model.encoder
-            logits_source: embed_weight_tied | self | lm_head
+            logits_source: embed_weight_tied | tied | self | lm_head | head
     """
 
     def execute(self) -> Dict[str, Any]:
@@ -151,9 +155,9 @@ class EncoderDecoderEngine(ComponentFlowHandler):
                 break
 
         if not self.ctx.persistent_mode:
-            self._unload_component_weights(enc_name)
-            self._unload_component_weights(dec_name)
-            release_flow_memory(self.ctx.primary_device)
+            unload_encoder_decoder_components(
+                self.ctx, self._unload_component_weights, release_flow_memory,
+                flow, decoder_stage, enc_name, dec_name)
 
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = _all_ids
         if _n_win > 1:
@@ -216,20 +220,12 @@ class EncoderDecoderEngine(ComponentFlowHandler):
         _log.debug(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
         start = time.perf_counter()
         self._ensure_weights_loaded(dec_name)
+        head_name = prepare_logits_head(self.ctx, self._ensure_weights_loaded, decoder_stage)
 
         # Get embed weight for weight-tied logits
         embed_weight = self._get_embed_weight(dec_name)
 
-        # Inject embed weight for weight-tied models (LoRA breaks data_ptr tying)
-        if embed_weight is not None:
-            executor = self.ctx.executors.get(dec_name)
-            if executor is not None and hasattr(executor, '_weights'):
-                dag = getattr(executor, '_dag', None)
-                if dag:
-                    tensors = dag.get("tensors", {})
-                    for tied_name in ("head.weight", "model.token_embed.weight"):
-                        if tied_name not in executor._weights and f"param::{tied_name}" in tensors:
-                            executor._weights[tied_name] = embed_weight
+        inject_tied_embed_weight(self.ctx, dec_name, embed_weight)
 
         device = self.ctx.primary_device
         generated_ids = [decoder_start_token_id]
@@ -262,7 +258,8 @@ class EncoderDecoderEngine(ComponentFlowHandler):
             if decoder_output is None:
                 break
 
-            logits = self._compute_logits(decoder_output, embed_weight, logits_source)
+            logits = (self._compute_logits(decoder_output, embed_weight, logits_source, head_name=head_name)
+                      if head_name else self._compute_logits(decoder_output, embed_weight, logits_source))
 
             current_pos = len(generated_ids)
             if current_pos in forced_map and forced_map[current_pos] is not None:
@@ -366,21 +363,18 @@ class EncoderDecoderEngine(ComponentFlowHandler):
 
     def _compute_logits(
         self, hidden_states: torch.Tensor, embed_weight: Optional[torch.Tensor],
-        logits_source: str,
+        logits_source: str, head_name: Optional[str] = None,
     ) -> torch.Tensor:
         """Compute logits from hidden states."""
         last_hidden = hidden_states[:, -1:, :]
 
-        if logits_source == "lm_head" and "lm_head" in self.ctx.executors:
-            self._ensure_weights_loaded("lm_head")
-            executor = self.ctx.executors["lm_head"]
-            for key, tensor in executor._weights.items():
-                if tensor is not None and tensor.ndim == 2:
-                    w = tensor.to(dtype=last_hidden.dtype)
-                    return torch.matmul(last_hidden, w.T)
-            return last_hidden
+        if logits_source in ("head", "lm_head"):
+            resolved_head = require_logits_head(self.ctx, logits_source, head_name)
+            self._ensure_weights_loaded(resolved_head)
+            executor = self.ctx.executors[resolved_head]
+            return run_head_executor(executor, last_hidden)
 
-        if logits_source == "embed_weight_tied" and embed_weight is not None:
+        if logits_source in ("embed_weight_tied", "tied") and embed_weight is not None:
             w = embed_weight.to(dtype=last_hidden.dtype)
             return torch.matmul(last_hidden, w.T)
 

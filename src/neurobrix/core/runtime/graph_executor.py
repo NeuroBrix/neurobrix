@@ -1204,11 +1204,8 @@ class GraphExecutor:
         # MoE Fusion Pass: detect and fuse MoE expert subgraphs BEFORE any execution.
         # CRITICAL: This runs for ALL modes (compiled, native, triton).
         # Without fusion, MoE models use hardcoded build-time routing indices → garbage output.
-        from .graph.moe_fusion import detect_and_fuse_moe
-        self._dag = detect_and_fuse_moe(
-            self._dag, self.family,
-            norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True), tokens=_branch_door.names("neurotax", "", "moe_tokens")[0](),
-        )
+        from .graph.moe_choice_routing import run_moe_and_gdr_fusion
+        self._dag = run_moe_and_gdr_fusion(self._dag, self.family, getattr(self, '_moe_norm_topk_prob', True), _branch_door.names('neurotax', '', 'moe_tokens')[0]())
 
         # ORDER MATTERS HERE. fusion_horizontal runs FIRST because it
         # REWRITES the graph, emitting one `aten::cat` of constant
@@ -3894,9 +3891,10 @@ class GraphExecutor:
         # Multi-gate blend: routing was computed in-graph by N gates and a
         # per-token modality mask blend (see moe_fusion._detect_gate_blends).
         # Mirror of the compiled/triton-compiled engines (R30).
-        idx_tid = attrs.get("topk_indices_tid")
-        w_tid = attrs.get("topk_weights_tid")
+        idx_tid, w_tid = attrs.get("topk_indices_tid"), attrs.get("topk_weights_tid")
         blended = idx_tid is not None and w_tid is not None
+        choice_routing = attrs.get("choice_routing")
+        cb_tid = choice_routing.get("choice_bias_tid") if isinstance(choice_routing, dict) else None
 
         if attrs.get("stacked_experts"):
             from nbxtensor.ops.moe_fused import StackedSlabPromotion
@@ -3933,7 +3931,8 @@ class GraphExecutor:
                 norm_topk_prob=attrs.get("norm_topk_prob", True), cache_key=cache_key,
                 topk_indices=_to_card(store.get(idx_tid)) if blended else None,
                 topk_weights=_to_card(store.get(w_tid)) if blended else None,
-                weights_per_call=False, expert_store=None, expert_layer=_layer)
+                weights_per_call=False, expert_store=None, expert_layer=_layer,
+                choice_routing=choice_routing, choice_bias=_to_card(store.get(cb_tid)) if cb_tid else None)
             _nbx_device.select(home)
             return out if out._device_idx == home else transfer_tensor(out, home)
         return execute_moe_fused(
@@ -3953,6 +3952,7 @@ class GraphExecutor:
             # served from the component's store, named by the layer's first gate weight id.
             expert_store=None if attrs.get("stacked_experts") else getattr(self, "_expert_store", None),
             expert_layer=None if attrs.get("stacked_experts") else attrs["expert_gate_weight_ids"][0],
+            choice_routing=choice_routing, choice_bias=store.get(cb_tid) if cb_tid else None,
         )
 
     def register_triton_interceptors(self, interceptors: Dict[str, Any]):
@@ -5224,9 +5224,8 @@ class GraphExecutor:
         gate_weight_ids = attrs["expert_gate_weight_ids"]
         up_weight_ids = attrs["expert_up_weight_ids"]
         down_weight_ids = attrs["expert_down_weight_ids"]
-        top_k = attrs["top_k"]
-        num_experts = attrs["num_experts"]
-        norm_topk_prob = attrs.get("norm_topk_prob", True)
+        top_k, num_experts, norm_topk_prob = attrs["top_k"], attrs["num_experts"], attrs.get("norm_topk_prob", True)
+        choice_routing, cb_tid = attrs.get("choice_routing"), (attrs["choice_routing"].get("choice_bias_tid") if isinstance(attrs.get("choice_routing"), dict) else None)
 
         # Note: _execute_moe_fused_native is the sequential fallback path.
         # Compiled mode uses moe_fused_dispatch() in compiled_sequence.py.
@@ -5254,9 +5253,7 @@ class GraphExecutor:
         tensors_meta = self._ctx.tensors_metadata
         weights = self._ctx.weights
         _stacked = attrs.get("stacked_experts")
-        _resolve_ids = ([_stacked["input_linear_tid"], _stacked["output_linear_tid"]]
-                        if _stacked else
-                        list(gate_weight_ids) + list(up_weight_ids) + list(down_weight_ids))
+        _resolve_ids = ([_stacked["input_linear_tid"], _stacked["output_linear_tid"]] if _stacked else list(gate_weight_ids) + list(up_weight_ids) + list(down_weight_ids)) + ([cb_tid] if cb_tid is not None else [])
         for wid in _resolve_ids:
             if wid not in store:
                 wname = tensors_meta.get(wid, {}).get("weight_name")
@@ -5307,6 +5304,9 @@ class GraphExecutor:
                 scores = to_card(scores, _compute_dev)
             _dump_n("blend_indices", indices)
             _dump_n("blend_scores", scores)
+        elif choice_routing is not None:
+            from .graph.moe_choice_routing import route_choice_on_device
+            scores, indices = route_choice_on_device(gate_scores, store.get(cb_tid) if cb_tid else None, _compute_dev, top_k, norm_topk_prob, choice_routing, to_card, _dump_n)
         else:
             gate_scores = routing_upcast_fp32(gate_scores)
             if gate_scores.device != _compute_dev:

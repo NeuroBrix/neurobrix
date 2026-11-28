@@ -93,7 +93,7 @@ class TritonFlowEulerScheduler:
 
 # R30 mirror of core/module/scheduler/flow/flow_euler.py (numpy only, R33; no shared
 # compute code between the engines). See flow_sigma_schedule there for the sources.
-_SIGMA_SCHEDULE_FAMILIES = ("linspace", "linear_quadratic")
+_SIGMA_SCHEDULE_FAMILIES = ("linspace", "linspace_inclusive", "linear_quadratic")
 
 
 def _validate_sigma_schedule(decl):
@@ -143,6 +143,8 @@ def _dynamic_shift_mu(decl, calculate_mu, image_seq_len, frames):
 def _flow_sigma_schedule(decl, num_steps: int):
     if decl is None or decl.get("family") == "linspace":
         return np.linspace(1, 0, num_steps + 1, dtype=np.float64)[:-1]
+    if decl.get("family") == "linspace_inclusive":
+        return np.linspace(1.0, 0.0, num_steps, dtype=np.float64)
     thr = float(decl["threshold_noise"])
     linear_steps = decl.get("linear_steps")
     linear_steps = num_steps // 2 if linear_steps is None else int(linear_steps)

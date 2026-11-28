@@ -229,7 +229,9 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
             old.unlink()
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": str(n_dev),
-                "NBX_KEY_RECORD": str(rec), "PYTHONPATH": str(REPO / "src"),
+                "NBX_KEY_RECORD": str(rec),
+                "PYTHONPATH": (f"{REPO / 'src'}{os.pathsep}{os.environ['PYTHONPATH']}"
+                               if os.environ.get("PYTHONPATH") else str(REPO / "src")),
                 # A shadow costs shapes: its host math is small, and a BLAS thread pool spinning
                 # behind it burned 4 235 % CPU on one chatterbox shadow (64 threads at 24 % each)
                 # and starved the certifiers on the cards (measured 2026-09-21 23:32). One thread.
@@ -487,8 +489,17 @@ def directory_idents(vendor_profile: str, idents, memory_class: int) -> set:
     proven on a 32 GB card served to a 16 GB census. Nothing is swallowed here."""
     import neurobrix  # noqa: F401 — the engine provides nbxtensor's host services (neurobrix/_nbxtensor_host.py)
     from nbxtensor.ops import autotune_certified as C
+    import importlib
     from nbxtensor.ops.autotune_cache import _autotuners
     vendor, _, profile = vendor_profile.partition("/")
+    for mod_name in sorted({ident.partition("::")[0].rsplit(".", 1)[0]
+                            for ident in idents if "." in ident.partition("::")[0]}):
+        if not mod_name or mod_name.startswith("."):
+            continue
+        try:
+            importlib.import_module(mod_name)
+        except (ImportError, ValueError, TypeError):
+            pass
     tuners = {qual: at for qual, at in _autotuners()}
     out = set()
     for ident in idents:

@@ -166,6 +166,12 @@ def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "",
                 f"cannot find — a refusal rather than a silent fallback."
             ) from exc
 
+    # Gated Delta Rule fusion runs in ALL modes (GraphExecutor.__init__),
+    # and is 100% pure over the graph — apply it here so Prism layer cuts
+    # and runtime execution see the exact same fused graph.
+    from neurobrix.core.runtime.graph.gated_delta_rule_fusion import detect_and_fuse_gated_delta_rule
+    detect_and_fuse_gated_delta_rule(out)
+
     if not _sequence_rewrites_graph(mode):
         return out
 

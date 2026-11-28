@@ -62,7 +62,8 @@ def install_model(cache: Path, model: str, processors=None) -> Path:
     """A toy model's cache entry: a manifest, with the `processors` key when `processors` is given."""
     entry = cache / model
     entry.mkdir(parents=True, exist_ok=True)
-    manifest = {"model_name": model, "family": "tts", "format_version": "0.1"}
+    from neurobrix.nbx.spec import REQUIRED_NBX_CONTAINER_VERSION
+    manifest = {"model_name": model, "family": "tts", "nbx_container_version": REQUIRED_NBX_CONTAINER_VERSION, "format_version": "0.1"}
     if processors is not None:
         manifest["processors"] = processors
     (entry / "manifest.json").write_text(json.dumps(manifest))

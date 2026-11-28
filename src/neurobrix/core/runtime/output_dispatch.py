@@ -756,11 +756,17 @@ def _dump_decoded_frames(frames_uint8, output_path: str) -> None:
 
 def _write_video_h264(output_path: str, frames_uint8, fps: float) -> None:
     """Write video as H.264/mp4 using ffmpeg."""
+    import os
     import subprocess
-    import imageio_ffmpeg
+    from neurobrix.core.components.runtime_deps import resolve_ffmpeg_exe
 
-    _, H, W, _ = frames_uint8.shape
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    T, H, W, _ = frames_uint8.shape
+    if T <= 0 or H <= 0 or W <= 0:
+        raise RuntimeError(
+            f"ZERO FALLBACK: cannot encode empty video {output_path!r} "
+            f"(shape={tuple(frames_uint8.shape)}, fps={fps})"
+        )
+    ffmpeg_exe = resolve_ffmpeg_exe()
     cmd = [
         ffmpeg_exe, "-y",
         "-f", "rawvideo",
@@ -778,4 +784,17 @@ def _write_video_h264(output_path: str, frames_uint8, fps: float) -> None:
     proc = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
-    proc.communicate(input=frames_uint8.tobytes())
+    _, stderr = proc.communicate(input=frames_uint8.tobytes())
+    if proc.returncode != 0:
+        err_text = (stderr or b"").decode("utf-8", errors="replace").strip()
+        tail = err_text[-600:] if len(err_text) > 600 else err_text
+        raise RuntimeError(
+            f"ZERO FALLBACK: ffmpeg failed (rc={proc.returncode}) writing {output_path!r} "
+            f"({T} frames, {W}x{H}, fps={fps}): {tail}"
+        )
+    if not str(output_path).startswith("/dev/"):
+        if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
+            raise RuntimeError(
+                f"ZERO FALLBACK: ffmpeg exited rc=0 but wrote an empty file {output_path!r} "
+                f"({T} frames, {W}x{H}, fps={fps})"
+            )

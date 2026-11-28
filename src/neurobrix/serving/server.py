@@ -50,6 +50,7 @@ limits and timeouts from config/system.yml `serving:`.
 """
 
 import json
+import math
 import os
 import queue
 import sys
@@ -65,6 +66,7 @@ from typing import Any, Dict, Optional
 from neurobrix import decode_progress, decode_stop
 from neurobrix.serving.engine import InferenceEngine
 from neurobrix.serving.operations import OperationTable, Operation, serving_settings
+from neurobrix.serving.fault_watchdog import abort_on_sticky_fault
 from neurobrix.serving.worker import InferenceWorker
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
@@ -133,6 +135,26 @@ def _answers_in_text(engine) -> bool:
         return False
 
 
+def validate_keep_alive(value: Any) -> Optional[float]:
+    """Validate `--keep-alive <seconds>`: None or -1 (stay resident), 0 (unload
+    after every request), or > 0 (idle VRAM auto-unload TTL in seconds)."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"--keep-alive must be a number in seconds (-1, 0, or > 0), got {value!r}")
+    try:
+        secs = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"--keep-alive must be a number in seconds (-1, 0, or > 0), got {value!r}") from exc
+    if math.isnan(secs) or math.isinf(secs):
+        raise ValueError(f"--keep-alive must be a finite number (-1, 0, or > 0), got {value!r}")
+    if secs < 0.0 and secs != -1.0:
+        raise ValueError(
+            f"--keep-alive must be -1 (stay resident), 0 (unload after each request), or > 0, got {value!r}"
+        )
+    return secs
+
+
 class ServingDaemon:
     """
     Long-running process that holds InferenceEngine with weights in VRAM.
@@ -147,10 +169,18 @@ class ServingDaemon:
         idle_timeout: float = 1800.0,
         engine=None,
         http: Optional[Dict[str, Any]] = None,
+        max_context: Optional[int] = None,
+        keep_alive: Optional[float] = None,
+        watchdog_exit_fn=None,
     ):
+        from neurobrix.core.state.price import validate_max_context
+        max_context = validate_max_context(max_context)
+        self._keep_alive = validate_keep_alive(keep_alive)
+        self._watchdog_exit_fn = watchdog_exit_fn or os._exit
         # `engine` is injected only by a test (a fake engine that yields tokens
         # without a model); the daemon builds its InferenceEngine.
-        self._engine = engine if engine is not None else InferenceEngine(model_name, hardware_id, mode)
+        self._engine = (engine if engine is not None
+                        else InferenceEngine(model_name, hardware_id, mode, max_context=max_context))
         # an Intel GPU refused at run time (pytorch/prism/intel_refusal.py): the daemon reloads once on the CPU plan — only
         # when it resolved the machine's profile itself (an explicit --hardware is the user's: it is not replaced)
         self._auto_hardware, self._intel_refused = not hardware_id, False
@@ -172,9 +202,11 @@ class ServingDaemon:
         # Open connections and their threads, under their own lock.
         self._conn_lock = threading.Lock()
         self._connections: Dict[socket.socket, threading.Thread] = {}
+        self._last_activity = time.monotonic()
+        self._unload_pending = False
 
     def start(self, foreground: bool = False, ready_fd: Optional[int] = None,
-              ready_file=None) -> None:
+              ready_file=None, exit_parent: bool = True) -> None:
         """
         Load model and start serving.
 
@@ -194,16 +226,17 @@ class ServingDaemon:
         if not foreground:
             if IS_WINDOWS or sys.platform == "darwin":
                 # Windows + macOS: spawn subprocess (fork+setsid breaks Metal GPU on macOS)
-                self._daemonize_subprocess()
+                self._daemonize_subprocess(exit_parent=exit_parent)
                 return  # Parent returns after spawning child
             else:
-                self._daemonize_unix()
-                # After _daemonize_unix(), we are in the child process
+                if not self._daemonize_unix(exit_parent=exit_parent):
+                    return  # Parent returns cleanly when exit_parent=False
+                # After _daemonize_unix() returns True, we are in the child process
                 # stdout/stderr redirected to LOG_PATH
 
         self._start_serving()
 
-    def _daemonize_subprocess(self) -> None:
+    def _daemonize_subprocess(self, exit_parent: bool = True) -> None:
         """
         Spawn background daemon via subprocess (Windows + macOS).
 
@@ -256,7 +289,9 @@ class ServingDaemon:
                             ready_file=None if read_fd is not None else INSTANCE.ready_path,
                             poll_s=self._settings["ready_poll_s"])
         if not _announce(record):
-            sys.exit(1)
+            if exit_parent:
+                sys.exit(1)
+            raise RuntimeError(f"Daemon failed to start: {record.get('error', 'unknown error')}")
 
     def _foreground_command(self) -> list:
         """This `serve` again, in the foreground: the child serves the model,
@@ -268,6 +303,10 @@ class ServingDaemon:
                *(["--hardware", self._engine.hardware_id] if self._engine.hardware_id else []),
                f"--{self._engine.mode.replace('_', '-')}",
                "--timeout", str(int(self._idle_timeout)),
+               *(["--max-context", str(self._engine.max_context)]
+                 if getattr(self._engine, "max_context", None) is not None else []),
+               *(["--keep-alive", str(self._keep_alive)]
+                 if self._keep_alive is not None else []),
                "--foreground"]
         if self._http is not None:
             cmd.append("--http")
@@ -305,7 +344,9 @@ class ServingDaemon:
         said = intel_refusal.sentence(devices, err, "the daemon loads the model again without it.")
         _log.warning(f"[Daemon] {said}")
         intel_refusal.record(devices, f"refused at run time: {err.call}: {err.result}", old.hardware_id)
-        new = type(old)(old.model_name, None, old.mode)
+        _mc = getattr(old, "max_context", None)
+        new = (type(old)(old.model_name, None, old.mode, max_context=_mc)
+               if _mc is not None else type(old)(old.model_name, None, old.mode))
         get_or_create_default_profile = _branch_door.names("prism", "autodetect", "get_or_create_default_profile")[0]
         new.hardware_id = get_or_create_default_profile()
         new.load()
@@ -332,7 +373,7 @@ class ServingDaemon:
                               api_key=read_api_key(cfg.get("api_key_file")))
         return self._door.open()
 
-    def _daemonize_unix(self) -> None:
+    def _daemonize_unix(self, exit_parent: bool = True) -> bool:
         """
         Unix/macOS: fork to background. Parent waits for ready signal, then exits.
         Child continues execution with stdout/stderr → LOG_PATH.
@@ -353,7 +394,12 @@ class ServingDaemon:
             _log.debug(f"[Serve] Log: {LOG_PATH}")
 
             record = wait_ready(_ForkedChild(pid), read_fd=read_fd)
-            sys.exit(0 if _announce(record) else 1)
+            ok = _announce(record)
+            if exit_parent:
+                sys.exit(0 if ok else 1)
+            if not ok:
+                raise RuntimeError(f"Daemon failed to start: {record.get('error', 'unknown error')}")
+            return False
 
         else:
             # ── CHILD PROCESS (daemon) ──
@@ -378,6 +424,7 @@ class ServingDaemon:
             devnull = os.open(os.devnull, os.O_RDONLY)
             os.dup2(devnull, sys.stdin.fileno())
             os.close(devnull)
+            return True
 
     def _ready_record(self, error: Optional[BaseException] = None) -> Dict[str, Any]:
         """What the launcher learns at start-up, as one record: ready (bound,
@@ -490,22 +537,72 @@ class ServingDaemon:
         idle timeout. The daemon calls it after loading; a test calls it on a
         socket of its own with a fake engine."""
         self._server_socket = server_socket
-        self._server_socket.settimeout(self._idle_timeout)
+        self._last_activity = time.monotonic()
+        self._server_socket.settimeout(self._accept_timeout())
         self._running = True
         self._serve_loop()
+
+    def _idle_for(self) -> float:
+        """Seconds since the daemon was last active (0 while a client or op is active)."""
+        if self._open_connections() or self._ops.live():
+            return 0.0
+        idle = max(0.0, time.monotonic() - self._last_activity)
+        if self._door is not None:
+            return min(idle, self._door.idle_for())
+        return idle
+
+    def _accept_timeout(self) -> float:
+        """Next socket accept timeout: wake for keep-alive unload before idle shutdown."""
+        if self._keep_alive is None or self._keep_alive <= 0.0:
+            return self._idle_timeout
+        idle = self._idle_for()
+        until_shutdown = max(0.01, self._idle_timeout - idle)
+        if getattr(self._engine, "is_loaded", True):
+            until_unload = max(0.01, self._keep_alive - idle)
+            return min(until_shutdown, until_unload)
+        return until_shutdown
+
+    def _schedule_idle_unload(self) -> None:
+        """Submit a single idle-unload job on the inference worker thread."""
+        if self._unload_pending or not getattr(self._engine, "is_loaded", True):
+            return
+        self._unload_pending = True
+
+        def _unload_if_still_idle() -> None:
+            try:
+                if (self._running
+                        and self._keep_alive is not None
+                        and self._keep_alive > 0.0
+                        and getattr(self._engine, "is_loaded", True)
+                        and self._idle_for() >= self._keep_alive):
+                    self._unload_weights(f"idle {self._keep_alive}s")
+            finally:
+                self._unload_pending = False
+
+        self._worker.submit(_unload_if_still_idle, name="keep-alive-unload")
+
+    def _on_accept_timeout(self) -> bool:
+        """Handle an accept() timeout; return True when the daemon should shut down."""
+        if self._open_connections():
+            return False   # a client is connected (maybe generating): not idle
+        idle = self._idle_for()
+        if idle >= self._idle_timeout:
+            _log.debug(f"[Daemon] Idle timeout ({self._idle_timeout}s) — shutting down")
+            return True
+        if self._keep_alive is not None and self._keep_alive > 0.0 and idle >= self._keep_alive:
+            self._schedule_idle_unload()
+        return False
 
     def _serve_loop(self) -> None:
         """Accept connections; hand each to its own thread."""
         while self._running:
+            self._server_socket.settimeout(self._accept_timeout())
             try:
                 conn, _ = self._server_socket.accept()
             except socket.timeout:
-                if self._open_connections():
-                    continue   # a client is connected (maybe generating): not idle
-                if self._door is not None and self._door.idle_for() < self._idle_timeout:
-                    continue   # the HTTP door served within the idle timeout: not idle
-                _log.debug(f"[Daemon] Idle timeout ({self._idle_timeout}s) — shutting down")
-                break
+                if self._on_accept_timeout():
+                    break
+                continue
             except OSError:
                 if self._running:
                     _log.debug("[Daemon] Socket error")
@@ -562,6 +659,7 @@ class ServingDaemon:
             _log.debug(f"[Daemon] Connection error: {e}")
             traceback.print_exc()
         finally:
+            self._last_activity = time.monotonic()
             with self._conn_lock:
                 self._connections.pop(conn, None)
             conn.close()
@@ -622,6 +720,8 @@ class ServingDaemon:
         try:
             if method == "status":
                 extra = {"http": self._door.endpoint()} if self._door is not None else {}
+                if self._keep_alive is not None:
+                    extra["keep_alive"] = self._keep_alive
                 return make_response({**self._engine.get_status(), **extra,
                                       "operations": self._ops.live()})
 
@@ -697,14 +797,17 @@ class ServingDaemon:
                 decode_stop.bind(op.stop_event)
                 result, error = None, None
                 try:
+                    self._ensure_loaded()
                     result = work()
                 except Exception as e:
                     traceback.print_exc()
+                    self._check_sticky_fault(e)
                     try:                                           # on the worker: the daemon's engine thread
                         said = self._reload_after_intel_refusal(e)
                         error = f"{said} This request was not served: send it again." if said else str(e)
                     except Exception as e2:                        # the reload itself failed: both are the answer
                         traceback.print_exc()
+                        self._check_sticky_fault(e2)
                         error = f"{e}; and the reload after the Intel GPU's refusal failed: {e2}"
                 finally:
                     honoured = decode_stop.honoured_at()
@@ -716,8 +819,12 @@ class ServingDaemon:
                     self._engine.sync_devices()
                 except Exception as e:
                     traceback.print_exc()
+                    self._check_sticky_fault(e)
                     error = f"{error}; device sync failed: {e}" if error else f"device sync failed: {e}"
                     honoured = None   # an unsynced device is never an acknowledged stop
+                self._last_activity = time.monotonic()
+                if self._keep_alive == 0.0:
+                    self._unload_weights("keep-alive=0")
                 state = self._ops.finish(op, honoured, error)
                 return state, result
             finally:
@@ -889,6 +996,44 @@ class ServingDaemon:
         self._ops.stop_all("shutdown")
         # Close server socket to unblock accept()
         self._close_listener()
+
+    def _ensure_loaded(self) -> None:
+        """Transparently reload weights on the inference worker if previously unloaded for keep-alive."""
+        if not getattr(self._engine, "is_loaded", True):
+            _log.info("[Daemon] Reloading model weights after keep-alive idle unload...")
+            self._engine.load()
+
+    def _unload_weights(self, reason: str) -> None:
+        """Unload model weights on the inference worker so VRAM returns to ~0 MiB."""
+        if not getattr(self._engine, "is_loaded", True):
+            return
+        _log.info(f"[Daemon] Unloading model weights from VRAM ({reason})")
+        try:
+            self._engine.unload()
+        except Exception as e:
+            traceback.print_exc()
+            self._check_sticky_fault(e)
+            _log.warning(f"[Daemon] Idle VRAM unload failed ({reason}): {e}")
+
+    def _cleanup_files_for_abort(self) -> None:
+        """Best-effort removal of daemon IPC/PID/ready files prior to watchdog os._exit(1)."""
+        paths = list(INSTANCE.instance_files())
+        if self._ready_file is not None:
+            paths.append(Path(self._ready_file))
+        for f in paths:
+            try:
+                if f.exists():
+                    f.unlink()
+            except OSError:
+                pass
+
+    def _check_sticky_fault(self, exc: BaseException) -> bool:
+        """Abort immediately via watchdog on unrecoverable sticky GPU faults."""
+        return abort_on_sticky_fault(
+            exc,
+            cleanup_fn=self._cleanup_files_for_abort,
+            exit_fn=self._watchdog_exit_fn,
+        )
 
     def _cleanup(self) -> None:
         """Clean up socket and PID files."""

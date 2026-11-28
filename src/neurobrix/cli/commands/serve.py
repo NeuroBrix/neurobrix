@@ -16,29 +16,17 @@ import sys
 log = logging.getLogger(__name__)
 
 
-def cmd_serve(args):
-    """Start the serving daemon."""
-    from neurobrix.serving.client import DaemonClient
-    from neurobrix.serving.server import ServingDaemon
+def _resolve_serve_mode(args) -> str:
+    """Resolve and validate the execution mode for `neurobrix serve`."""
+    from neurobrix.core.runtime import engines
 
-    # Check if already running
-    from neurobrix.cli.utils import resolve_model_arg
-    args.model = resolve_model_arg(args.model)
-
-    if DaemonClient.is_running():
-        pid = DaemonClient.get_pid()
-        log.error(f"Error: a daemon is already running (PID {pid}): neurobrix chat talks to it, neurobrix stop ends it")
-        sys.exit(1)
-
-    # Determine execution mode (mutually exclusive flags;
-    # default = triton, `core/runtime/engines.default_mode`).
-    _mode_flags = [
+    flags = [
         getattr(args, 'compiled', False),
         getattr(args, 'sequential', False),
         getattr(args, 'triton', False),
         getattr(args, 'triton_sequential', False),
     ]
-    if sum(bool(f) for f in _mode_flags) > 1:
+    if sum(bool(f) for f in flags) > 1:
         log.error("Error: only one execution mode flag may be passed "
                   "(--compiled / --sequential / --triton / --triton-sequential).")
         sys.exit(1)
@@ -51,20 +39,85 @@ def cmd_serve(args):
     elif getattr(args, 'compiled', False):
         mode = "compiled"
     else:
-        # no mode flag: the default engine, Triton, whether torch is installed or not — said here
-        from neurobrix.core.runtime.engines import default_mode
-        mode, _said = default_mode()
-        log.info(f"[Serve] {_said}")
-    # The PyTorch branch without torch installed: refused by name before the daemon starts (core/runtime/engines.py).
-    from neurobrix.core.runtime import engines
+        mode, said = engines.default_mode()
+        log.info(f"[Serve] {said}")
     try:
         engines.require_engine(mode)
     except (engines.PyTorchBranchNotInstalledError, engines.TritonBranchNotInstalledError) as exc:
         log.error(f"Error: {exc}")
         sys.exit(1)
+    return mode
+
+
+def _wait_daemon_exit(timeout_s: float) -> bool:
+    """Poll until the serving daemon stops or `timeout_s` elapses."""
+    import time
+    from neurobrix.serving.client import DaemonClient
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if not DaemonClient.is_running():
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _send_socket_shutdown() -> bool:
+    """Request a clean socket shutdown from the running daemon."""
+    from neurobrix.serving.client import DaemonClient
+
+    try:
+        client = DaemonClient()
+        client.connect()
+        sock = getattr(client, "_sock", None)
+        if sock is not None:
+            sock.settimeout(3.0)
+        client.shutdown()
+        client.close()
+        return True
+    except Exception:
+        return False
+
+
+def _query_running_daemon() -> dict:
+    """Return status dict of the running serving daemon, or empty dict on error."""
+    from neurobrix.serving.client import DaemonClient
+
+    try:
+        client = DaemonClient()
+        client.connect()
+        st = client.status()
+        client.close()
+        return st if isinstance(st, dict) else {}
+    except Exception:
+        return {}
+
+
+def cmd_serve(args):
+    """Start the serving daemon."""
+    from neurobrix.serving.client import DaemonClient
+    from neurobrix.serving.server import ServingDaemon, validate_keep_alive
+
+    # Check if already running
+    from neurobrix.cli.utils import resolve_model_arg
+    args.model = resolve_model_arg(args.model)
+
+    if DaemonClient.is_running():
+        pid = DaemonClient.get_pid()
+        log.error(f"Error: a daemon is already running (PID {pid}): neurobrix chat talks to it, neurobrix stop ends it")
+        sys.exit(1)
+
+    mode = _resolve_serve_mode(args)
 
     timeout = getattr(args, 'timeout', 1800) or 1800
     foreground = getattr(args, 'foreground', False)
+    from neurobrix.core.state.price import validate_max_context
+    try:
+        max_context = validate_max_context(getattr(args, 'max_context', None))
+        keep_alive = validate_keep_alive(getattr(args, 'keep_alive', None))
+    except ValueError as exc:
+        log.error(f"Error: {exc}")
+        sys.exit(1)
 
     # Resolve hardware: explicit profile or auto-detect
     # The default profile is resolved by the DAEMON, in its own process (ServingDaemon._resolve_hardware): its
@@ -92,14 +145,20 @@ def cmd_serve(args):
         mode=mode,
         idle_timeout=float(timeout),
         http=http,
+        max_context=max_context,
+        keep_alive=keep_alive,
     )
 
     daemon.start(foreground=foreground, ready_fd=getattr(args, 'ready_fd', None),
                  ready_file=getattr(args, 'ready_file', None))
 
 
-def cmd_stop(args):
-    """Stop the serving daemon with escalation: socket → SIGTERM → force kill."""
+
+
+def stop_daemon(quiet: bool = False) -> bool:
+    """Stop the running serving daemon with escalation: socket shutdown (clean VRAM unload)
+    -> SIGTERM -> SIGKILL. Returns True if no daemon is running afterward, False if it could
+    not be stopped."""
     import os
     import signal
     import time
@@ -108,68 +167,38 @@ def cmd_stop(args):
 
     if not DaemonClient.is_running():
         dead = DaemonClient.get_pid()
-        if dead is not None:
-            # A daemon removes its pid file on every exit it can run code for (shutdown, a signal it handles, an
-            # exception); one left behind means the process was killed outright — a SIGKILL, which no process can
-            # log (the kernel's out-of-memory killer is the usual sender). Said, with where its last lines are.
-            from neurobrix.serving.protocol import LOG_PATH
-            print(f"No daemon is running: the daemon (PID {dead}) ended without its shutdown — it was killed "
-                  f"(a SIGKILL leaves no line in its log; the kernel's out-of-memory killer is the usual sender). "
-                  f"Its last lines: {LOG_PATH}")
-        else:
-            print("No daemon is running.")
-        # Clean up stale files (socket, pid, and a named Windows instance's port)
-        for f in INSTANCE.instance_files():
-            if f.exists():
-                f.unlink()
-        sys.exit(0)
+        if not quiet:
+            if dead is not None:
+                from neurobrix.serving.protocol import LOG_PATH
+                print(f"No daemon is running: the daemon (PID {dead}) ended without its shutdown — it was killed "
+                      f"(a SIGKILL leaves no line in its log; the kernel's out-of-memory killer is the usual sender). "
+                      f"Its last lines: {LOG_PATH}")
+            else:
+                print("No daemon is running.")
+        [f.unlink() for f in INSTANCE.instance_files() if f.exists()]
+        return True
 
     pid = DaemonClient.get_pid()
     log.debug(f"[Stop] Sending shutdown to daemon (PID {pid})...")
 
-    # Step 1: Try clean socket shutdown (3s timeout)
-    socket_ok = False
-    try:
-        client = DaemonClient()
-        client.connect()
-        # Set socket timeout so we don't block forever
-        if client._sock is not None:
-            client._sock.settimeout(3.0)
-        client.shutdown()
-        client.close()
-        socket_ok = True
-    except Exception:
-        pass
+    if _send_socket_shutdown() and _wait_daemon_exit(5.0):
+        if not quiet:
+            print("Stopped the serving daemon.")
+        return True
 
-    if socket_ok:
-        # Wait up to 5s for clean exit
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            if not DaemonClient.is_running():
-                print("Stopped the serving daemon.")
-                return
-            time.sleep(0.2)
-
-    # Step 2: Graceful termination (3s timeout)
     if pid is not None:
         log.debug("[Stop] Sending termination signal...")
         try:
-            if IS_WINDOWS:
-                # Windows: SIGTERM via os.kill calls TerminateProcess
-                os.kill(pid, signal.SIGTERM)
-            else:
-                os.kill(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, OSError):
             _cleanup_daemon_files(SOCKET_PATH, PID_PATH)
-            print("The serving daemon had already exited.")
-            return
-
-        deadline = time.time() + 3.0
-        while time.time() < deadline:
-            if not DaemonClient.is_running():
+            if not quiet:
+                print("The serving daemon had already exited.")
+            return True
+        if _wait_daemon_exit(3.0):
+            if not quiet:
                 print("Stopped the serving daemon.")
-                return
-            time.sleep(0.2)
+            return True
 
     # Step 3: Force kill (platform-adaptive)
     if pid is not None and DaemonClient.is_running():
@@ -185,11 +214,8 @@ def cmd_stop(args):
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-
-        # Wait briefly for OS to reap
         time.sleep(0.5)
 
-    # Clean up files (daemon can't clean up after force kill)
     _cleanup_daemon_files(SOCKET_PATH, PID_PATH)
 
     if DaemonClient.is_running():
@@ -197,9 +223,88 @@ def cmd_stop(args):
             log.error(f"Error: the daemon is still alive; kill it by hand: taskkill /F /PID {pid}")
         else:
             log.error(f"Error: the daemon is still alive after SIGKILL; kill it by hand: kill -9 {pid}")
-        sys.exit(1)
-    else:
+        return False
+    if not quiet:
         print("Stopped the serving daemon.")
+    return True
+
+
+def ensure_serving(
+    model_name: str,
+    *,
+    hardware_id=None,
+    mode=None,
+    timeout: float = 1800.0,
+    max_context=None,
+) -> str:
+    """Ensure a serving daemon is running with `model_name` (and `mode`/`hardware_id` if explicitly requested).
+
+    Returns:
+      * "reused"  — daemon already serves `model_name` (warm reuse, zero reload);
+      * "swapped" — previous daemon cleanly shut down (VRAM unloaded) and new daemon started;
+      * "started" — no daemon was running; new background daemon auto-started.
+    """
+    from neurobrix.serving.client import DaemonClient
+    from neurobrix.serving.server import ServingDaemon
+    from neurobrix.core.runtime import engines
+
+    from neurobrix.core.state.price import validate_max_context
+    max_context = validate_max_context(max_context)
+    hardware_id = hardware_id or None
+
+    if mode is not None:
+        engines.require_engine(mode)
+
+    daemon_running = DaemonClient.is_running()
+    current_model = None
+    if daemon_running:
+        st = _query_running_daemon()
+        current_model = st.get("model")
+        if (current_model == model_name
+                and (mode is None or st.get("mode") == mode)
+                and (hardware_id is None or st.get("hardware") == hardware_id)
+                and (max_context is None or st.get("max_context") == max_context)):
+            return "reused"
+
+    if mode is None:
+        resolved_mode, _said = engines.default_mode()
+        log.info(f"[Serve] {_said}")
+    else:
+        resolved_mode = mode
+
+    # Validate engine availability BEFORE stopping any healthy running daemon.
+    engines.require_engine(resolved_mode)
+
+    action = "started"
+    if daemon_running:
+        log.info(
+            f"[Serve] Auto-swapping daemon from {current_model or 'unknown'} to {model_name} "
+            f"(unloading VRAM cleanly)..."
+        )
+        if not stop_daemon(quiet=True):
+            raise RuntimeError(
+                f"Cannot swap to {model_name}: the running serving daemon did not stop cleanly. "
+                f"Stop it manually with: neurobrix stop"
+            )
+        action = "swapped"
+
+    log.info(f"[Serve] Auto-starting daemon for {model_name} (mode={resolved_mode})...")
+    daemon_kwargs = {"max_context": max_context} if max_context is not None else {}
+    daemon = ServingDaemon(
+        model_name=model_name,
+        hardware_id=hardware_id,
+        mode=resolved_mode,
+        idle_timeout=float(timeout),
+        **daemon_kwargs,
+    )
+    daemon.start(foreground=False, exit_parent=False)
+    return action
+
+
+def cmd_stop(args):
+    """Stop the serving daemon with escalation: socket -> SIGTERM -> force kill."""
+    if not stop_daemon(quiet=False):
+        sys.exit(1)
 
 
 def _cleanup_daemon_files(socket_path, pid_path):

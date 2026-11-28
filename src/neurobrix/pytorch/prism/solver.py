@@ -23,9 +23,15 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
+from neurobrix.core.state.residency_tier import ResidencyPlan, compute_residency_plan
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
 from neurobrix.pytorch.prism.host_footprint import engine_of, streamed_loads
+from neurobrix.pytorch.prism.per_card_kv import (
+    compute_fgp_drain_costs_mb, compute_kv_floor_bytes, extract_max_context, fgp_per_card_weights_bytes,
+    finalize_rung_kv_room, kv_card_room_map, load_kv_cache_plan_dict, make_pages_policy_decision,
+    per_card_kv_accounting, serialize_plan_kv_dict,
+)
 from neurobrix.pytorch.prism import owed_facts as OF
 from neurobrix.pytorch.prism import load_ceiling
 from neurobrix.pytorch.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile, names_accelerator
@@ -353,6 +359,8 @@ class KVCachePlan:
     # Why prefill_chunk is what it is (pytorch/prism/prefill_chunk.py): the candidates' certified costs, or why none was
     # eligible — stated, never silent.
     prefill_chunk_reason: str = ""
+    # Explicit context window cap from --max-context (None = uncapped, model's declared window).
+    max_context: Optional[int] = None
 
     @property
     def head_dim(self) -> int:
@@ -586,6 +594,7 @@ class ExecutionPlan:
     # the profile's standard rung (expert_topology.py). Stated, never read to place; None when no
     # component routes.
     expert_working_set: Optional[Dict] = None
+    residency_plan: Optional[ResidencyPlan] = None
 
     @property
     def primary_device(self) -> str:
@@ -646,22 +655,8 @@ class ExecutionPlan:
                 }
                 for name, mem in self.component_memory.items()
             },
-            "kv_cache_plan": {
-                "max_cache_len": self.kv_cache_plan.max_cache_len,
-                "num_layers": self.kv_cache_plan.num_layers,
-                "num_kv_heads": self.kv_cache_plan.num_kv_heads,
-                "k_head_dim": self.kv_cache_plan.k_head_dim,
-                "v_head_dim": self.kv_cache_plan.v_head_dim,
-                "dtype": self.kv_cache_plan.dtype,
-                "memory_mb": self.kv_cache_plan.memory_mb,
-                "per_token_bytes": self.kv_cache_plan.per_token_bytes,
-                # exact, never through the float MB above (a restored plan lost them: the defect A's step 0 names)
-                "memory_bytes": int(self.kv_cache_plan.memory_bytes),
-                "initial_cache_len": int(self.kv_cache_plan.initial_cache_len),
-                "session_reach": self.kv_cache_plan.session_reach,
-                "prefill_chunk": self.kv_cache_plan.prefill_chunk,
-                "prefill_chunk_reason": self.kv_cache_plan.prefill_chunk_reason,
-            } if self.kv_cache_plan else None,
+            "kv_cache_plan": serialize_plan_kv_dict(self.kv_cache_plan),
+            "residency_plan": self.residency_plan.to_dict() if self.residency_plan else None,
         }
 
     def save(self, output_path: Path, hardware_profile: str = "unknown") -> None:
@@ -718,25 +713,7 @@ class ExecutionPlan:
             for name, mem in data.get("memory_breakdown", {}).items()
         }
 
-        # Deserialize KV cache plan
-        kv_data = data.get("kv_cache_plan")
-        kv_cache_plan = None
-        if kv_data:
-            kv_cache_plan = KVCachePlan(
-                max_cache_len=kv_data["max_cache_len"],
-                num_layers=kv_data["num_layers"],
-                num_kv_heads=kv_data["num_kv_heads"],
-                k_head_dim=kv_data.get("k_head_dim") or kv_data["head_dim"],
-                v_head_dim=kv_data.get("v_head_dim") or kv_data["head_dim"],
-                dtype=kv_data["dtype"],   # required, like num_layers above
-                memory_bytes=int(kv_data["memory_bytes"]),
-                per_token_bytes=kv_data.get("per_token_bytes", 0),
-                initial_cache_len=int(kv_data["initial_cache_len"]),
-                session_reach=kv_data.get("session_reach"),
-                # a plan saved before the field planned one chunk: None is that plan's meaning
-                prefill_chunk=kv_data.get("prefill_chunk"),
-                prefill_chunk_reason=kv_data.get("prefill_chunk_reason", ""),
-            )
+        kv_cache_plan = load_kv_cache_plan_dict(data.get("kv_cache_plan"), KVCachePlan)
 
         return cls(
             components=components,
@@ -746,6 +723,7 @@ class ExecutionPlan:
             component_memory=component_memory,
             loading_mode=data.get("loading_mode", "lazy"),
             kv_cache_plan=kv_cache_plan,
+            residency_plan=ResidencyPlan.from_dict(data.get("residency_plan")),
         )
 
 
@@ -1217,16 +1195,24 @@ class PrismSolver:
         raw = [] if engine_of(getattr(self, "_mode", "compiled")) == "triton" else [d for d in cards if d.device_string not in bounded]
         return sum(int(self._margin_mb(self._effective_capacity_mb(d)) * 1024 * 1024) for d in raw)
 
-    def _kv_card_room(self, cards, held: int, kv_plan) -> Optional[Tuple[str, int]]:
-        """(card, bytes) the decode cache and what the plan holds beside it leave the cache's ONE card on the Triton
-        engine, from the accounting that sized the cache — the drain's room there (`_assign_drain_cliffs`). Sized apart,
-        the two promised the same memory: deepseek-moe-16b-chat served on one V100-32GB, 31 376 MB held whole + a
-        session reach of 2 126 positions (930 MB) + a 725 MB cliff on a 32 195 MB card, out of memory from request 2
-        (2026-11-12). None elsewhere (several cards, another engine, no cache)."""
-        if kv_plan is None or not cards or len(cards) != 1 or engine_of(getattr(self, "_mode", "compiled")) != "triton":
-            return None
-        room = int(self._rung_part_mb(cards[0]) * 1024 * 1024)
-        return cards[0].device_string, room - held - int(kv_plan.memory_bytes)
+    def _fgp_per_card_weights_bytes(self, container, comp_name: str, mem, shard_map: Dict[str, str]) -> Tuple[Dict[str, int], Dict[str, int]]:
+        """Per-card compute-dtype weight bytes and block counts for a block-sharded (`fgp:`) component."""
+        return fgp_per_card_weights_bytes(self._parse_blocks, container, comp_name, mem, shard_map)
+
+    def _per_card_kv_accounting(self, strat_name: str, strat_allocs: Dict, component_memory: Dict, cards, profile, kv_already_counted: int = 0, container=None) -> Optional[Tuple[Dict[str, int], Dict[str, float]]]:
+        """Per-card (held_bytes, kv_layer_share) when a decoder's blocks are spread over several cards (`fgp:`)."""
+        return per_card_kv_accounting(
+            lm=self._lm_component_name, strat_name=strat_name, strat_allocs=strat_allocs,
+            component_memory=component_memory, cards=cards, profile=profile,
+            kv_already_counted=kv_already_counted, container=container,
+            fgp_weights_fn=self._fgp_per_card_weights_bytes, unloaded=self._unloaded_by_request(container),
+            alloc_devices_fn=self._alloc_devices, loads_on_demand=self._loads_on_demand(strat_name),
+            phase_peak_fn=self._phase_peak, is_unified_fn=_device_is_unified,
+        )
+
+    def _kv_card_room(self, cards, held: int, kv_plan, per_card=None) -> Optional[Dict[str, int]]:
+        """Per-card remaining room bytes after held components and KV cache on Triton."""
+        return kv_card_room_map(cards, held, kv_plan, per_card, getattr(self, "_mode", "compiled"), engine_of, self._rung_part_mb)
 
     def _assign_drain_cliffs(self, container, plan, devices) -> None:
         """The deferred-drain cliff of every accelerator the plan uses, set on each component held
@@ -1252,13 +1238,16 @@ class PrismSolver:
         tiled = set(plan.component_tiling or {}) | set(getattr(plan, "component_stream", None) or {})
         whole_mb: Dict[str, float] = {}
         for name, alloc in plan.components.items():
-            dev = by_name.get(str(alloc.device))
-            if dev is None or len(alloc.devices) != 1 or alloc.strategy == "zero3":
+            if alloc.strategy == "zero3" or name in streamed or name in tiled or name not in plan.component_memory:
                 continue
-            if name in streamed or name in tiled or name not in plan.component_memory:
-                continue
-            cost = self._held_component_mb(container, name, plan.component_memory[name], dev, alloc)
-            whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0), cost)
+            if len(alloc.devices) == 1:
+                dev = by_name.get(str(alloc.device))
+                if dev is None:
+                    continue
+                cost = self._held_component_mb(container, name, plan.component_memory[name], dev, alloc)
+                whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0), cost)
+            elif alloc.strategy in ("pipeline_parallel", "block_scatter") and alloc.shard_map:
+                compute_fgp_drain_costs_mb(self._fgp_per_card_weights_bytes, container, name, plan.component_memory[name], alloc.shard_map, by_name, whole_mb)
         # A streamed plan holds its WINDOW on the card (resident beside + constants + flow reads +
         # KV + the largest piece): a held cost like a whole component. Cut against the profile's
         # cliff it leaves at least that cliff and changes nothing; cut against the floor it sets
@@ -1281,10 +1270,10 @@ class PrismSolver:
                 if key not in cliffs:
                     room_mb = self._rung_part_mb(dev) - whole_mb.get(key, 0.0)
                     left = getattr(self, "_kv_card_left", None)
-                    if left is not None and left[0] == key:
-                        # the decode cache's card: what the components held there AND the cache leave it, as the
-                        # cache was sized (`_kv_card_left`) — the largest whole component alone left it the cache too
-                        room_mb = min(room_mb, left[1] / mib)
+                    if isinstance(left, dict) and key in left:
+                        # the decode cache's card(s): what the components held there AND the card's share of the cache
+                        # leave it, as the cache was sized (`_kv_card_left`)
+                        room_mb = min(room_mb, left[key] / mib)
                     cliffs[key] = planned_drain_cliff_bytes(memory, room_mb * mib)
                 own.append(cliffs[key])
             # A component spread over several cards runs one queue per card's sequence; it
@@ -3162,6 +3151,7 @@ class PrismSolver:
                                                                     component_memory, strat_devices, profile,
                                                                     total_allocated)
                 remaining = max(total_capacity - total_allocated, 0)
+                _per_card_kv, remaining = finalize_rung_kv_room(self._per_card_kv_accounting, self._kv_capacity_bytes, self._kv_growth_reserve_bytes, strat_name, strat_allocs, component_memory, _kv_only, profile, kv_already_counted, container, remaining, kv_growth_reserve, _bounded)
                 try:
                     # `target_dtype_str`, the dtype after the fp32 fallback if it fired — the
                     # pre-fallback `target_dtype` sized an fp32 plan's cache at 2 bytes.
@@ -3183,11 +3173,9 @@ class PrismSolver:
                                            f"{decision.name} has no runtime yet ({decision.reason})"))
                     continue
                 kv_cache_plan = kv_plan
-                self._kv_card_left = self._kv_card_room(_kv_only, total_allocated, kv_plan)
+                self._kv_card_left = self._kv_card_room(_kv_only, total_allocated, kv_plan, per_card=_per_card_kv)
                 if kv_plan is not None:
-                    from neurobrix.core.state.policy import PolicyDecision
-                    self._state_policy = PolicyDecision("pages", f"pages: the whole cache fits "
-                                                        f"({kv_plan.memory_bytes / 2**20:,.0f} MB)")
+                    self._state_policy = make_pages_policy_decision(kv_plan.memory_bytes)
 
             allocations = strat_allocs
             chosen_strategy = strat_name
@@ -3420,9 +3408,9 @@ class PrismSolver:
             # nothing up front (used 0) — its dearest phase (`_peak_loaded_bytes`); the door read nothing for those
             # and a lazy plan ran into a card another process held (found with the busy-machine re-plan, 2026-10-26)
             if plan.device_window_mb is not None:
-                # a streamed plan holds its WINDOW on the card (segments + what stays beside them, the figure it was
-                # cut against) — never every component it lists, which it never holds at once
-                _planned = float(plan.device_window_mb)
+                # a streamed plan holds its WINDOW on the card(s) it actually places components on (segments + what
+                # stays beside them) — never on unused cards of a heterogeneous pool (e.g. 16 GB beside 32 GB)
+                _planned = float(plan.device_window_mb) if any(_d.device_string in (_a.devices or []) for _a in plan.components.values()) else 0.0
             else:
                 _planned = float(_d.used_mb) if _d.used_mb > 0 else _on_demand_peak_mb(_d)
             if getattr(_d, "live_free_mb", None) is None or _planned <= 0:
@@ -3517,9 +3505,7 @@ class PrismSolver:
         # Step 7.10: the routed working set, STATED beside the plan's figures (expert_topology.py) —
         # the dense part, the experts a token reads, an expert cache on the profile's standard rung.
         # Placement does not read this figure: an expert store is placed from the topology (`_expert_store_floor`).
-        plan.expert_working_set = self._expert_working_set(plan, profile)
-
-        # Step 8: Summary
+        plan.expert_working_set, plan.residency_plan = self._expert_working_set(plan, profile), compute_residency_plan(plan, profile, devices)
         self._print_summary(devices, plan, profile)
         return plan
 
@@ -5105,6 +5091,10 @@ class PrismSolver:
         return int(activation_bytes * ratio)
 
 
+    def _max_context(self) -> Optional[int]:
+        """Return validated `--max-context` cap, or None."""
+        return extract_max_context(getattr(self, "_input_config", None))
+
     def _estimate_kv_cache_bytes(self, container, target_dtype_str: str) -> int:
         """The KV bytes a strategy is priced for before the cache is sized (core/state/price.py): max_tokens + margin
         positions, else the declared window, at the compute dtype, across every sequence. 0 when the flow decodes
@@ -5114,17 +5104,17 @@ class PrismSolver:
         if declared is None:
             return 0
         defaults = self._read_defaults(container) or {}
-        tokens = kv_estimate_tokens(declared[1], self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
+        tokens = kv_estimate_tokens(declared[1], self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN), max_context=self._max_context())
         return tokens * self._kv_token_bytes(container, target_dtype_str)
 
     def _kv_min_tokens(self, container) -> int:
         """The fewest cache positions a plan is accepted with (core/state/price.kv_min_tokens): one turn, two when
-        serving, 64 without max_tokens. One authority: `_try_layer_streaming` reserves at least this beside its
-        segments, or the plan it cuts is refused."""
+        serving, 64 without max_tokens, bounded by --max-context when set. One authority: `_try_layer_streaming`
+        reserves at least this beside its segments, or the plan it cuts is refused."""
         from neurobrix.core.state.price import kv_min_tokens, DEFAULT_PROMPT_MARGIN
         defaults = self._read_defaults(container) or {}
-        return kv_min_tokens(self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
-                             bool(self._serve_requested))
+        tokens = kv_min_tokens(self._request_max_tokens(defaults), defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN), bool(self._serve_requested))
+        return min(tokens, self._max_context()) if self._max_context() is not None else tokens
 
     def _request_max_tokens(self, defaults) -> int:
         """The tokens the KV floor and estimate are priced for: a run's own request (`InputConfig.max_tokens`, the
@@ -5171,10 +5161,7 @@ class PrismSolver:
         declared = self._kv_declared(container)
         if declared is None:
             return 0
-        from neurobrix.core.state.price import kv_min_tokens, DEFAULT_PROMPT_MARGIN
-        defaults = self._read_defaults(container) or {}
-        floor_bytes = kv_min_tokens(defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN),
-                                    True) * self._kv_token_bytes(container, target_dtype)
+        floor_bytes = compute_kv_floor_bytes(self._read_defaults(container) or {}, self._max_context(), self._kv_token_bytes(container, target_dtype))
         kv_cards = self._kv_devices(strat_allocs, profile)
         mib = 1024 * 1024
         reserved = 0
@@ -5208,15 +5195,16 @@ class PrismSolver:
         per_token_bytes = self._kv_token_bytes(container, target_dtype)
         common = (entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", DEFAULT_PROMPT_MARGIN))
         room = {"remaining_bytes": remaining_vram_bytes, "growth_reserve_bytes": growth_reserve_bytes}
-        size = kv_cache_size(*common, bool(getattr(self, "_serve_mode", False)), floor_max_tokens=self._request_max_tokens(defaults), **room)
+        cap = self._max_context()
+        size = kv_cache_size(*common, bool(getattr(self, "_serve_mode", False)), floor_max_tokens=self._request_max_tokens(defaults), max_context=cap, **room)
         # what a serving session would hold in the same room — the same reserve kept: a reach past what a served cache
-        # is granted would promise positions it cannot hold — bounded by the declared window: the context a request can
+        # is granted would promise positions it cannot hold — bounded by the effective window: the context a request can
         # reach on this class (the derived census keys a prompt up to it). No window, or no session floor in the room:
         # None, stated by the record, never a guess.
         session_reach = None
         if entry.get("window"):
             try:
-                session_reach = int(kv_cache_size(*common, True, **room)["max_cache_len"])
+                session_reach = int(kv_cache_size(*common, True, max_context=cap, **room)["max_cache_len"])
             except RuntimeError:            # StateUndeclared included: it is a RuntimeError
                 session_reach = None
         plan = KVCachePlan(
@@ -5230,9 +5218,9 @@ class PrismSolver:
             per_token_bytes=per_token_bytes,
             initial_cache_len=size["initial_cache_len"],
             session_reach=session_reach,
+            max_context=cap,
         )
-        plan.prefill_chunk, plan.prefill_chunk_reason = self._prefill_chunk(container, plan, defaults, profile,
-                                                                            kv_devices)
+        plan.prefill_chunk, plan.prefill_chunk_reason = self._prefill_chunk(container, plan, defaults, profile, kv_devices)
         return plan
 
     def _prefill_chunk(self, container, kv: "KVCachePlan", defaults, profile, kv_devices) -> Tuple[Optional[int], str]:

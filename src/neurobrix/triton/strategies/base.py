@@ -85,6 +85,9 @@ class StrategyContext:
     # Execution mode: "triton" | "triton_sequential" on this branch (`get_strategy` refuses another by name).
     mode: str = "triton"
 
+    # Prism 4-tier residency plan (ResidencyPlan or dict, None for legacy plans).
+    residency_plan: Any = None
+
     # Active component tracking (for lazy loading)
     _active_component: Optional[str] = None
 

@@ -17,6 +17,7 @@ import json
 import pytest
 
 from neurobrix.core.runtime.loader import NBXRuntimeLoader
+from neurobrix.nbx.spec import REQUIRED_NBX_CONTAINER_VERSION
 from neurobrix.pytorch.neurotax import NEUROTAX_VERSION, _neurotax_major_minor
 
 MAJOR, MINOR = _neurotax_major_minor(NEUROTAX_VERSION)
@@ -34,7 +35,7 @@ def _container(tmp_path, manifest):
 
 
 def _load(tmp_path, manifest):
-    NBXRuntimeLoader().load(str(_container(tmp_path, {"model_name": "m", **manifest})))
+    NBXRuntimeLoader().load(str(_container(tmp_path, {"model_name": "m", "nbx_container_version": REQUIRED_NBX_CONTAINER_VERSION, **manifest})))
 
 
 def _passes_the_door(tmp_path, version):

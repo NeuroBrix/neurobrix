@@ -239,6 +239,22 @@ class TextProcessor:
             attention_mask = self._place(result["attention_mask"], device)
             return input_ids, attention_mask
 
+        # Data-driven chat-template formatting for LLM text encoders (e.g. Qwen3/NextDiT)
+        # when declared by topology.extracted_values.<tokenizer>.use_chat_template or chat_template_kwargs.
+        chat_tpl_kwargs = self._tokenizer_vals.get("chat_template_kwargs")
+        use_chat_tpl = bool(self._tokenizer_vals.get("use_chat_template")) or isinstance(chat_tpl_kwargs, dict)
+        if (use_chat_tpl
+            and hasattr(self._tokenizer, "apply_chat_template")
+            and (not hasattr(self._tokenizer, "has_chat_template") or self._tokenizer.has_chat_template())):
+            ct_kwargs = {"tokenize": False, "add_generation_prompt": True}
+            if isinstance(chat_tpl_kwargs, dict):
+                ct_kwargs.update(chat_tpl_kwargs)
+            ct_kwargs["tokenize"] = False
+            prompt = self._tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                **ct_kwargs,
+            )
+
         # Fallback: basic tokenization (non-chat models)
 
         tokens = self._tokenizer(
@@ -312,6 +328,20 @@ class TextProcessor:
                 "Model data incomplete. Re-import: neurobrix remove <model> && neurobrix import <org>/<model>"
             )
 
+        neg_tok_vals = self._topology.get("extracted_values", {}).get(tokenizer_name, {})
+        neg_chat_kw = neg_tok_vals.get("chat_template_kwargs")
+        neg_use_chat = bool(neg_tok_vals.get("use_chat_template")) or isinstance(neg_chat_kw, dict)
+        if (neg_use_chat
+            and hasattr(self._tokenizer, "apply_chat_template")
+            and (not hasattr(self._tokenizer, "has_chat_template") or self._tokenizer.has_chat_template())):
+            ct_kwargs = {"tokenize": False, "add_generation_prompt": True}
+            if isinstance(neg_chat_kw, dict):
+                ct_kwargs.update(neg_chat_kw)
+            ct_kwargs["tokenize"] = False
+            negative_prompt = self._tokenizer.apply_chat_template(
+                [{"role": "user", "content": negative_prompt}],
+                **ct_kwargs,
+            )
         neg_tokens = self._tokenizer(text=negative_prompt, max_length=neg_max_length)
         neg_input_ids = self._place(neg_tokens["input_ids"], device)
         neg_attention_mask = self._place(neg_tokens["attention_mask"], device)

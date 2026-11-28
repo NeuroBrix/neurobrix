@@ -52,6 +52,9 @@ class InputConfig:
     # The tokens the request asks the decoder for (`--max-tokens`): a run's KV floor and pre-sizing estimate are this
     # request's, not the package's declared ceiling (runtime/defaults.json max_tokens). None: the package's.
     max_tokens: Optional[int] = None
+    # Explicit KV cache context cap (`--max-context`): bounds serving/run KV cache planning and session reach to
+    # min(max_context, model max_position_embeddings). None: uncapped (model's full declared window).
+    max_context: Optional[int] = None
     # The tokens the request decodes at most (`--max-tokens` as given), whatever the flow and its inputs: what Prism's
     # time estimate counts generated tokens by (`max_tokens` above prices a cache floor and is None for a request with
     # an image, video or audio input — granite-speech's 32 tokens were estimated as the package's 448, 2026-11-03).
@@ -692,6 +695,21 @@ class ActivationProfiler:
         """tensor_id -> the op after which it is dead (`dag_last_uses`, the one liveness rule)."""
         return dag_last_uses(self.dag)
 
+    @staticmethod
+    def _raise_missing_axis(sid: str, name: str, built: Any) -> None:
+        if name == "time":
+            raise MissingRuntimeValue(
+                f"the plan's request names no frame count for symbol {sid} (time) of "
+                f"this graph: the build-time extent {built} is a witnessed stimulus, not the request")
+        if name == "height":
+            raise MissingRuntimeValue(
+                f"the plan's request names no height for symbol {sid} (height) of "
+                f"this graph: the build-time extent {built} is a witnessed stimulus, not the "
+                "request (Wan T2V planned 1.74 GiB for a 35 GiB decode this way)")
+        raise MissingRuntimeValue(
+            f"the plan's request names no width for symbol {sid} (width) of this "
+            f"graph: the build-time extent {built} is a witnessed stimulus, not the request")
+
     def build_symbol_map(self, input_config: InputConfig,
                          placement_floor: bool = False, flow: bool = True) -> Dict[str, int]:
         """Symbol map for THIS graph: positional base + name-driven overrides.
@@ -772,6 +790,8 @@ class ActivationProfiler:
         # overflow from the placement cascade). Strictly additive: False for
         # every non-downsampler / causal-encoder graph, whose bindings are
         # byte-identical to before.
+        flow_ovr = (input_config.flow.overrides(self.dag, input_config)
+                    if flow and getattr(input_config, "flow", None) is not None else {})
         pixel_space = is_downscale_graph(self.dag)
         for sid, info in syms.items():
             if not isinstance(info, dict):
@@ -805,25 +825,12 @@ class ActivationProfiler:
                     input_config.batch_size)
             elif name == "time" and input_config.chunk_frames is not None:
                 symbol_map[sid] = int(input_config.chunk_frames)
-            elif name == "time":
-                if latent_t is None:
-                    raise MissingRuntimeValue(
-                        f"the plan's request names no frame count for symbol {sid} (time) of "
-                        f"this graph: the build-time extent {built} is a witnessed stimulus, not the request")
-                symbol_map[sid] = latent_t
-            elif name == "height":
-                if latent_h is None:
-                    raise MissingRuntimeValue(
-                        f"the plan's request names no height for symbol {sid} (height) of "
-                        f"this graph: the build-time extent {built} is a witnessed stimulus, not the "
-                        "request (Wan T2V planned 1.74 GiB for a 35 GiB decode this way)")
-                symbol_map[sid] = latent_h
-            elif name == "width":
-                if latent_w is None:
-                    raise MissingRuntimeValue(
-                        f"the plan's request names no width for symbol {sid} (width) of this "
-                        f"graph: the build-time extent {built} is a witnessed stimulus, not the request")
-                symbol_map[sid] = latent_w
+            elif name in ("time", "height", "width"):
+                val = {"time": latent_t, "height": latent_h, "width": latent_w}[name]
+                if val is not None:
+                    symbol_map[sid] = val
+                elif sid not in flow_ovr:
+                    self._raise_missing_axis(sid, name, built)
             elif name in ("seq_len", "sequence_length"):
                 symbol_map[sid] = input_config.seq_len or (
                     built if isinstance(built, int) else 128)
@@ -849,9 +856,8 @@ class ActivationProfiler:
         # the flow runs, never a guess, so never floored. Floored, Wan2.2-I2V's transformer (built
         # at batch 3, a collision-free stimulus) was priced at 3 for a CFG batch of 2 (2026-09-29).
         # `flow=False` is the rules' own recursion (a rule binding another component by name alone).
-        if flow and getattr(input_config, "flow", None) is not None:
-            for sid, v in input_config.flow.overrides(self.dag, input_config).items():
-                symbol_map[sid] = int(v)
+        for sid, v in flow_ovr.items():
+            symbol_map[sid] = int(v)
         if getattr(input_config, "cut_extents", None):
             for sid, info in syms.items():
                 if isinstance(info, dict) and info.get("name") in input_config.cut_extents:
