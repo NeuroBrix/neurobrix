@@ -220,6 +220,12 @@ class TritonSequentialDispatcher:
                 return func(*inputs, **kwargs)
             return func(*inputs)
 
+        if op_type == "custom::gated_delta_rule":
+            from neurobrix.triton.gated_delta_rule import execute_gated_delta_rule
+            kwargs = self.resolve_kwargs(attributes)
+            out_tids = (op_record or {}).get("output_tensor_ids") or []
+            return execute_gated_delta_rule(*inputs, return_state=(len(out_tids) > 1), **kwargs)
+
         # SDPA variants → unified wrapper (AMP wrapping via the wrapper itself)
         if "scaled_dot_product" in base and "attention" in base:
             return self._dispatch_sdpa(base, inputs, attributes)
@@ -241,9 +247,11 @@ class TritonSequentialDispatcher:
 
         # Lookup kernel and wrap with AMP rules (alias-canonical: the AMP
         # sets key on canonical names — aten::multiply must behave as mul).
-        from neurobrix.kernels.classification import canonical_aten
+        from neurobrix.kernels.classification import canonical_aten, kernel_for
         base = canonical_aten(base)
         func = kernel_dispatch(base)
+        if func is None:
+            func = kernel_for(base)
         if func is None:
             raise RuntimeError(f"[triton-sequential] No kernel for: {op_type}")
         func = self._dtype_engine.wrap_op(base, func, op_uid=op_uid,

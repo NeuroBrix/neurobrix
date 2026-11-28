@@ -77,14 +77,8 @@ class InputResolver:
         # Check if component has declared connections
         # UNIVERSAL: Use connections from topology (same pattern for all model types)
         # Connections are generated at build time (Phase C) for all models including forward_pass
-        if comp_name in self._connections_index:
-            connections = self._connections_index[comp_name]
-            if connections:  # Has actual connection mappings
-                resolved = {}
-                for input_name, sources in connections.items():
-                    # sources is a list - try each in order until one resolves
-                    resolved[input_name] = self.resolve_source_chain(sources)
-                return resolved
+        if self._connections_index.get(comp_name):
+            return self._resolve_declared_connections(comp_name)
 
         # FALLBACK: If no connections, try to resolve from variable_resolver.resolved
         # This handles cases where tokenization stores input_ids/attention_mask,
@@ -127,6 +121,28 @@ class InputResolver:
 
         # Component has no declared inputs - may use global defaults
         return {}
+
+
+    def _resolve_declared_connections(self, comp_name: str) -> Dict[str, Any]:
+        resolved = {
+            input_name: self.resolve_source_chain(sources)
+            for input_name, sources in self._connections_index[comp_name].items()
+        }
+        self._merge_staged_list_inputs(comp_name, resolved)
+        return resolved
+
+    def _merge_staged_list_inputs(self, comp_name: str, resolved: Dict[str, Any]) -> None:
+        """Merge list-batched inputs staged explicitly under `f"{comp_name}.<name>"`
+        (dot-indexed slots like `x.0`, `cap_feats.0`, and their matched timestep)."""
+        prefix = f"{comp_name}."
+        staged_keys = [k for k in self._variable_resolver.resolved if k.startswith(prefix)]
+        has_indexed = any("." in k[len(prefix):] for k in staged_keys)
+        if not has_indexed:
+            return
+        for k in staged_keys:
+            name = k[len(prefix):]
+            if "." in name or name in resolved:
+                resolved[name] = self._variable_resolver.resolved[k]
 
     def resolve_source_chain(self, sources: List[str]) -> Any:
         """

@@ -40,6 +40,8 @@ from typing import Optional
 
 import numpy as np
 
+from neurobrix.core.components.runtime_deps import ensure_python_dep, resolve_ffmpeg_exe
+
 # CLIP defaults — used ONLY when the embedded preprocessor_config.json
 # omits the keys (mirrors the config's own documented defaults).
 _CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
@@ -290,6 +292,31 @@ def _smart_resize_2d(height: int, width: int, factor: int,
     return h_bar, w_bar
 
 
+def _open_video_reader(imageio, video_path: str):
+    """Open an imageio video reader, resolving ffmpeg runtime deps if missing."""
+    import os
+    try:
+        return imageio.get_reader(str(video_path))
+    except Exception as exc:
+        msg = str(exc).lower()
+        if not any(k in msg for k in ("ffmpeg", "imageio", "backend", "plugin")):
+            raise
+        os.environ.setdefault("IMAGEIO_FFMPEG_EXE", resolve_ffmpeg_exe(allow_prompt=True))
+        return _retry_video_reader_with_ffmpeg_dep(imageio, video_path)
+
+
+def _retry_video_reader_with_ffmpeg_dep(imageio, video_path: str):
+    """Retry opening the video reader, ensuring imageio_ffmpeg if imageio requires it."""
+    try:
+        return imageio.get_reader(str(video_path))
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "imageio_ffmpeg" not in msg and "imageio-ffmpeg" not in msg and "ffmpeg" not in msg:
+            raise
+        ensure_python_dep("imageio_ffmpeg", "imageio-ffmpeg>=0.4.0", "reading input video frames")
+        return imageio.get_reader(str(video_path))
+
+
 def native_patch_grid_video_np(video_path: str, preprocessing_cfg: dict,
                                fps: Optional[float] = None):
     """Video variant of the flattened patch grid — vendor
@@ -331,8 +358,8 @@ def native_patch_grid_video_np(video_path: str, preprocessing_cfg: dict,
     max_frames = int(cfg.get("video_max_frames", 768))
 
     # Boundary file I/O (R34-allowed): decode the clip + container fps.
-    import imageio
-    reader = imageio.get_reader(str(video_path))
+    imageio = ensure_python_dep("imageio", "imageio>=2.30.0", "reading input video frames")
+    reader = _open_video_reader(imageio, video_path)
     meta = reader.get_meta_data()
     video_fps = float(meta.get("fps") or 0.0)
     if video_fps <= 0:

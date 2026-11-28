@@ -232,6 +232,104 @@ class IterativeSteps:
             raise RuntimeError(f"Tokenization failed: {e}") from e
 
 
+    def _resolve_loop_state(self, state_key: str):
+        """Resolve the loop state variable, aliasing to the declared state_tensor when absent."""
+        from neurobrix.core.runtime.resolution.list_batched_denoiser import resolve_state_variable_alias
+        return resolve_state_variable_alias(self.ctx, state_key)
+
+    def _resolve_encoder_hidden_key(self, enc_name: str) -> str:
+        """Resolve the topology-declared hidden-state variable key for a pre-loop text encoder."""
+        from neurobrix.core.runtime.resolution.list_batched_denoiser import resolve_encoder_hidden_key
+        return resolve_encoder_hidden_key(self.ctx, enc_name)
+
+    def _flow_component_convention(self, comp_name: str, driver, do_cfg: bool):
+        """Cached (list_batched_spec, flow_step_convention) for a loop component."""
+        cache = getattr(self, "_flow_conv_cache", None)
+        if cache is None:
+            cache = {}
+            self._flow_conv_cache = cache
+        if comp_name not in cache:
+            from neurobrix.core.runtime.resolution.list_batched_denoiser import (
+                list_batched_spec, flow_step_convention,
+            )
+            lspec = list_batched_spec(self.ctx, comp_name) if self._is_loop_component(comp_name) else None
+            conv = flow_step_convention(self.ctx, comp_name, driver, list_spec=lspec)
+            cache[comp_name] = (lspec, conv)
+        return cache[comp_name]
+
+    def _execute_list_batched_step(
+        self, comp_name: str, scaled_state, scaled_timestep,
+        do_cfg: bool, guidance_scale: float, list_spec: Dict[str, Any], flow_conv: Dict[str, Any],
+    ):
+        """Stage dot-indexed inputs (x.0 / cap_feats.0 / t), run denoiser pass(es), unpack & apply CFG."""
+        from neurobrix.core.runtime.resolution.list_batched_denoiser import (
+            extract_caption_embeddings, build_list_batched_passes, unpack_list_batched_output,
+        )
+        caps_cache = getattr(self, "_list_caps_cache", None)
+        if caps_cache is None:
+            pos_caps, neg_caps = extract_caption_embeddings(self.ctx, do_cfg, comp_name=comp_name, cond_prefix=list_spec.get("cond_prefix"))
+            self._list_caps_cache = (pos_caps, neg_caps)
+        else:
+            pos_caps, neg_caps = caps_cache
+
+        passes = build_list_batched_passes(
+            scaled_state, scaled_timestep, pos_caps, neg_caps, list_spec, do_cfg,
+        )
+        vr = self.ctx.variable_resolver
+        pass_outputs = []
+        for staged, pass_t in passes:
+            staged_keys = []
+            try:
+                for name, val in staged.items():
+                    k_comp = f"{comp_name}.{name}"
+                    vr.resolved[k_comp] = val
+                    staged_keys.append(k_comp)
+                out = self._execute_component(comp_name, "loop", pass_t)
+                pass_outputs.append(out)
+            finally:
+                for k_comp in staged_keys:
+                    vr.resolved.pop(k_comp, None)
+
+        return unpack_list_batched_output(
+            pass_outputs, list_spec, do_cfg, guidance_scale, flow_conv["cfg_formula"],
+        )
+
+
+    def _step_timestep_and_convention(self, comp_name: str, timestep, driver, do_cfg: bool):
+        """Scale timestep + apply flow convention; return (scaled_timestep, list_spec, flow_conv)."""
+        from neurobrix.core.runtime.resolution.list_batched_denoiser import apply_model_timestep_convention
+        comp_scale = self._get_component_timestep_scale(comp_name)
+        scaled_ts = timestep * comp_scale if comp_scale != 1.0 else timestep
+        list_spec, flow_conv = self._flow_component_convention(comp_name, driver, do_cfg)
+        return apply_model_timestep_convention(scaled_ts, flow_conv), list_spec, flow_conv
+
+    def _run_loop_step_component(
+        self, comp_name: str, state_key: str, scaled_state, scaled_timestep,
+        do_cfg: bool, guidance_scale: float, encoder_dtype, list_spec, flow_conv,
+        i2v_apply_fn, tensor_cls,
+    ):
+        """Run one loop component (list-batched, CFG, or standard non-CFG)."""
+        if list_spec is not None:
+            return self._execute_list_batched_step(
+                comp_name, scaled_state, scaled_timestep, do_cfg, guidance_scale, list_spec, flow_conv,
+            )
+        if do_cfg and self._is_loop_component(comp_name) and self._cfg_engine:
+            return self._cfg_engine.execute_component_with_cfg(
+                comp_name, scaled_state, scaled_timestep, guidance_scale, encoder_dtype=encoder_dtype,
+            )
+        if getattr(self, "_i2v_condition", None) is not None and self._is_loop_component(comp_name):
+            self.ctx.variable_resolver.set(
+                state_key, i2v_apply_fn(scaled_state, self._i2v_condition, self._i2v_channel_dim),
+            )
+        ts_arg = scaled_timestep if isinstance(scaled_timestep, tensor_cls) else None
+        return self._execute_component(comp_name, "loop", ts_arg)
+
+    @staticmethod
+    def _apply_step_velocity_sign(model_output, flow_conv):
+        from neurobrix.core.runtime.resolution.list_batched_denoiser import apply_velocity_sign
+        return apply_velocity_sign(model_output, flow_conv)
+
+
 def required_num_steps(ctx):
     """The step count the request or the container declares; refuses by name, the container named, when neither does."""
     try:

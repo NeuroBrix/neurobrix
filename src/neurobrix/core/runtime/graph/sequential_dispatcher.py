@@ -178,9 +178,8 @@ class NativeATenDispatcher:
         """
         Dispatch operation to native PyTorch.
         """
-        # [CUSTOM OPS] Handle pattern-reassembled ops before standard dispatch
-        if op_type == "custom::rms_norm":
-            return self._dispatch_rms_norm(inputs, attributes)
+        if op_type in ("custom::rms_norm", "custom::gated_delta_rule"):
+            return self._dispatch_custom_op(op_type, inputs, attributes)
 
         # 1. Clean operation name
         clean_name = op_type.replace("aten::", "")
@@ -652,6 +651,12 @@ class NativeATenDispatcher:
         return self._tensor_to_int(val)
 
 
+    def _dispatch_custom_op(self, op_type: str, inputs: List[Any], attributes: Dict[str, Any]) -> Any:
+        """Dispatch pattern-reassembled custom ops before standard ATen dispatch."""
+        if op_type == "custom::rms_norm":
+            return self._dispatch_rms_norm(inputs, attributes)
+        return self._dispatch_gated_delta_rule(inputs, attributes)
+
     def _dispatch_rms_norm(self, inputs: List[Any], attributes: Dict[str, Any]) -> Any:
         """Dispatch custom::rms_norm (pattern-reassembled RMSNorm)."""
         x = inputs[0]
@@ -662,6 +667,24 @@ class NativeATenDispatcher:
         # fp32-variance RMSNorm; the dtype-upcast policy lives in the engine.
         from neurobrix.core.dtype.engine import rms_norm_fp32
         return rms_norm_fp32(x, weight, epsilon)
+
+    def _dispatch_gated_delta_rule(self, inputs: List[Any], attributes: Dict[str, Any]) -> Any:
+        """Dispatch ``custom::gated_delta_rule`` in PyTorch sequential mode."""
+        from neurobrix.core.runtime.graph.gated_delta_rule_torch import (
+            execute_gated_delta_rule_torch,
+        )
+
+        kw_attr = attributes.get("kwargs", {}) or {}
+        qk_l2norm = bool(attributes.get("qk_l2norm", kw_attr.get("qk_l2norm", True)))
+        eps = float(attributes.get("eps", kw_attr.get("eps", 1e-6)))
+        scale = attributes.get("scale", kw_attr.get("scale", None))
+        if scale is not None:
+            scale = float(scale)
+        state = inputs[5] if len(inputs) > 5 else None
+        return execute_gated_delta_rule_torch(
+            inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], state,
+            qk_l2norm=qk_l2norm, eps=eps, scale=scale, return_state=False,
+        )
 
 
 # ===========================================================================

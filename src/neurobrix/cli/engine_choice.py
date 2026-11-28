@@ -17,8 +17,9 @@ from typing import Optional
 from neurobrix import branch_door as _branch_door
 
 #: the flag dest -> the execution mode it asks for
-_FLAGS = (("compiled", "compiled"), ("sequential", "sequential"), ("triton", "triton"),
-          ("triton_sequential", "triton_sequential"))
+ENGINE_MODE_FLAGS = (("compiled", "compiled"), ("sequential", "sequential"), ("triton", "triton"),
+                     ("triton_sequential", "triton_sequential"))
+_FLAGS = ENGINE_MODE_FLAGS
 
 
 def add_engine_flags(p) -> None:

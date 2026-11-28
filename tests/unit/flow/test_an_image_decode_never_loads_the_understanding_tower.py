@@ -21,7 +21,12 @@ def test_the_components_the_generation_does_not_name_are_never_loaded():
             assert unloaded_by_request(_topology(GEN), mode, served=served) == {"aligner", "vision_model"}, (mode, served)
 
 
-def test_a_text_decode_and_a_block_that_leaves_a_component_unnamed_declare_nothing():
-    assert unloaded_by_request(_topology({**GEN, "type": "autoregressive_text"})) == set()
+def test_a_text_decode_unloads_non_text_components_and_unnamed_blocks_declare_nothing():
+    assert unloaded_by_request(_topology({**GEN, "type": "autoregressive_text"})) == {
+        "aligner", "gen_aligner", "gen_embed", "gen_vision_model", "vision_model",
+    }
+    for k in ("lm_component", "head_component"):
+        text_gen = {"type": "autoregressive_text", "lm_component": "language_model", "head_component": "gen_head"}
+        assert unloaded_by_request(_topology({n: v for n, v in text_gen.items() if n != k})) == set(), k
     for k in ("lm_component", "decoder_component", "head_component", "embed_component", "aligner_component"):
         assert unloaded_by_request(_topology({n: v for n, v in GEN.items() if n != k})) == set(), k

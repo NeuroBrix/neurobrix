@@ -152,7 +152,7 @@ def main(argv=None) -> int:
         if entry is None or not (a.cache / entry / "manifest.json").exists():
             raise SystemExit(f"ERROR: {name}: no cache entry in the catalogue's full table or no manifest at {a.cache}/{entry}")
         mpath = a.cache / entry / "manifest.json"; m = json.loads(mpath.read_text())
-        cont = (f"nbx {m.get('nbx_version', '?')}, built {str(m.get('created_at', ''))[:10]}, NeuroTax {m.get('neurotax_version', '?')}, "
+        cont = (f"nbx {m.get('nbx_container_version') or m.get('nbx_version', '?')}, built {str(m.get('created_at', ''))[:10]}, NeuroTax {m.get('neurotax_version', '?')}, "
                 f"manifest {hashlib.sha256(mpath.read_bytes()).hexdigest()[:12]}")
         cen = "derived: " + " / ".join(str(len(census[c][entry])) for c in names)
         keys = "; ".join("%d / %d" % served_keys(census[c][entry], files, int(classes[c]), C) for c in names)

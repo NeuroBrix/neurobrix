@@ -300,6 +300,8 @@ class CompiledOpResolver:
             return self._make_scatter_ops(op_name)
         if op_name == "custom::rms_norm" or op_name == "rms_norm":
             return self._make_rms_norm(attrs)
+        if op_name == "custom::gated_delta_rule" or op_name == "gated_delta_rule":
+            return self._make_gated_delta_rule(attrs)
         if "scaled_dot_product" in op_name and "attention" in op_name:
             return self._make_attention(op_name, attrs, op_uid=op_uid)
         if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
@@ -615,6 +617,31 @@ class CompiledOpResolver:
             return rms_norm_fp32(x, weight, epsilon)
 
         return _rms_norm_fn
+
+    def _make_gated_delta_rule(self, attrs: Dict[str, Any]) -> Callable:
+        """Create dynamic PyTorch ``custom::gated_delta_rule`` callable."""
+        from neurobrix.core.runtime.graph.gated_delta_rule_torch import (
+            execute_gated_delta_rule_torch,
+        )
+
+        kw_attr = attrs.get("kwargs", {}) or {}
+        qk_l2norm = bool(attrs.get("qk_l2norm", kw_attr.get("qk_l2norm", True)))
+        eps = float(attrs.get("eps", kw_attr.get("eps", 1e-6)))
+        scale = attrs.get("scale", kw_attr.get("scale", None))
+        if scale is not None:
+            scale = float(scale)
+
+        def _gdr_fn(q, k, v, g, beta, state=None, **kwargs):
+            return execute_gated_delta_rule_torch(
+                q, k, v, g, beta, state,
+                qk_l2norm=bool(kwargs.get("qk_l2norm", qk_l2norm)),
+                eps=float(kwargs.get("eps", eps)),
+                scale=kwargs.get("scale", scale),
+                return_state=bool(kwargs.get("return_state", False)),
+            )
+
+        _gdr_fn.self_manages_dtype = True  # type: ignore[attr-defined]
+        return _gdr_fn
 
     def _make_attention(self, op_name: str, attrs: Dict[str, Any],
                         op_uid: Optional[str] = None) -> Callable:

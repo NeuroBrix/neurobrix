@@ -117,10 +117,13 @@ class InferenceEngine:
     For image/audio/video: each generate() call is independent.
     """
 
-    def __init__(self, model_name: str, hardware_id: str, mode: str = "compiled"):
+    def __init__(self, model_name: str, hardware_id: str, mode: str = "compiled",
+                 max_context: Optional[int] = None):
+        from neurobrix.core.state.price import validate_max_context
         self.model_name = model_name
         self.hardware_id = hardware_id
         self.mode = mode
+        self.max_context = validate_max_context(max_context)
         _branch_door.choose(mode)               # the daemon runs one branch: common code asks the door for its side
 
         self._pkg = None           # RuntimePackage (immutable)
@@ -195,6 +198,7 @@ class InferenceEngine:
             temporal_compression=temporal_compression,
             flow=(FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
                   if _topo_path.exists() else None),
+            max_context=self.max_context,
         )
 
         # the session's plan, its prefill chunk raised while the plan holds (pytorch/prism/served_prefill.py); the input
@@ -216,16 +220,7 @@ class InferenceEngine:
         # loading_mode is set by Prism solver based on strategy type:
         #   eager = weights stay in VRAM (single_gpu, pp, fgp, tp)
         #   lazy  = weights reload per request (pp_lazy, lazy_sequential, zero3)
-        loading_mode = getattr(self._plan, 'loading_mode', 'lazy')
-        # A lazy plan whose flow holds every component together during a request (a text decode: the language model
-        # and its head) releases nothing between requests that the next one would not reload: it serves warm too. Cold,
-        # Qwen3-Coder-30B-A3B on two V100-32GB reloaded 57.6 GB and recopied 31 GB of experts onto its second card at
-        # every request — about 150 s of a 170 s, 64-token answer (2026-11-10).
-        from neurobrix.core.flow.base import holds_every_component
-        engine_of = _branch_door.names("prism", "host_footprint", "engine_of")[0]
-        _topology = json.load(open(_topo_path)) if _topo_path.exists() else {}
-        self._warm_serving = (loading_mode == "eager"
-                              or holds_every_component(_topology, engine_of(self.mode), self._plan.components))
+        self._warm_serving = self._resolve_warm_serving(self._plan, _topo_path)
 
         # 5. Load RuntimePackage
         loader = NBXRuntimeLoader()
@@ -456,8 +451,10 @@ class InferenceEngine:
         return result
 
     def _window(self) -> int:
-        """The model's own context window, as the package states it (its lm_config), or 0."""
-        return int(((self._pkg.defaults or {}).get("lm_config") or {}).get("max_position_embeddings") or 0)
+        """The model's effective context window (lm_config max_position_embeddings, capped by --max-context)."""
+        from neurobrix.core.state.price import effective_kv_window
+        raw = int(((self._pkg.defaults or {}).get("lm_config") or {}).get("max_position_embeddings") or 0)
+        return effective_kv_window(raw, self.max_context)
 
     def session_reach(self) -> "tuple[int, str]":
         """The positions a served session may hold and their source: core/state/kv_tier.served_reach (the card, then
@@ -510,23 +507,38 @@ class InferenceEngine:
             if self._executor.plan is not self._plan:
                 self._adopt_plan(self._executor.plan)
 
+    def _resolve_warm_serving(self, plan, topo_path: Optional[Path] = None) -> bool:
+        """Resolve warm vs cold serving from Prism's residency_plan (or legacy loading_mode)."""
+        residency = getattr(plan, "residency_plan", None)
+        if residency is not None:
+            return residency.residency_tier != "disk_stream"
+        if getattr(plan, "loading_mode", "lazy") == "eager":
+            return True
+        if topo_path is not None and topo_path.exists():
+            from neurobrix.core.flow.base import holds_every_component
+            engine_of = _branch_door.names("prism", "host_footprint", "engine_of")[0]
+            return bool(holds_every_component(json.load(open(topo_path)), engine_of(self.mode), plan.components))
+        return False
+
     def _adopt_plan(self, plan) -> None:
         """The plan a request re-planned to becomes the daemon's: its device, warm or cold serving, and its status."""
         old, self._plan, self._device = self._plan.strategy, plan, plan.primary_device
-        self._warm_serving = getattr(plan, "loading_mode", "lazy") == "eager"
+        self._warm_serving = self._resolve_warm_serving(plan)
         self._executor._persistent_mode = self._warm_serving
         _log.warning(f"[NeuroBrix] the daemon now serves {self.model_name} under the re-planned {plan.strategy} "
                      f"(was {old}; {'warm' if self._warm_serving else 'cold'} serving)")
 
     def _release_cold_request(self) -> None:
-        """Cold serving (a lazy plan: weights reload per request): at the end of a request every component's host
-        copy leaves, so the daemon holds ONE copy at a time. The flow's per-request cleanup marks a component unloaded
-        but its strategy's install (the zero3 ratchet keeps the host originals, `cpu_originals`) and the pinned host
-        block outlived it, so each request's reload doubled the host footprint until the next request's run replaced
-        them (Qwen3-Coder-30B, lazy_sequential, 2026-11-08: 61 GB resident between requests, 118 GB during each load;
-        the tools request's daemon was killed on a busy host). The strategy's own uninstall (the lifecycle mirror of
-        its install) releases them; a warm daemon keeps everything."""
-        if self._warm_serving or self._executor is None:
+        """Cold serving (`disk_stream` / legacy lazy): at the end of a request every component's host
+        copy leaves, so the daemon holds ONE copy at a time. Warm residency tiers (`vram_resident`,
+        `remote_vram_spill`, `host_pinned`) keep their corresponding tier resident between requests."""
+        residency = getattr(getattr(self, "_plan", None), "residency_plan", None)
+        if residency is not None:
+            if residency.residency_tier != "disk_stream":
+                return
+        elif self._warm_serving:
+            return
+        if self._executor is None:
             return
         strategy = getattr(self._executor, "strategy", None)
         uninstall = getattr(strategy, "uninstall_for_executor", None)
@@ -705,12 +717,17 @@ class InferenceEngine:
             "family": self._family,
             "loaded": self._is_loaded,
             "mode": self.mode,
+            "max_context": self.max_context,
             "warm_serving": self._warm_serving,
             **daemon_identity(),
         }
 
         if self._plan is not None:
             status["strategy"] = self._plan.strategy
+            residency = getattr(self._plan, "residency_plan", None)
+            if residency is not None:
+                status["residency_plan"] = residency.to_dict()
+                status["residency_tier"] = residency.residency_tier
 
         if self._is_loaded and self._device:
             stats = device_memory_stats(self._device)

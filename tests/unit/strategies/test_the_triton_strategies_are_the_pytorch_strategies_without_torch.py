@@ -26,6 +26,8 @@ SRC = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
 TORCH_SIDE, TRITON_SIDE = SRC / "pytorch" / "strategies", SRC / "triton" / "strategies"
 #: the PyTorch modules with no Triton twin: the PyTorch engine's own
 NO_TWIN = {"pinned_block.py", "utils/__init__.py", "utils/block_detector.py"}
+#: Triton-only strategy helper modules with no PyTorch counterpart
+TRITON_ONLY_MODULES = {"async_prefetch.py"}
 #: what only a Triton module holds, and why
 TRITON_ONLY = {
     "base.py": {"TritonStrategy"},                 # the base of every Triton strategy (the former triton/strategies/base.py)
@@ -45,8 +47,8 @@ def _members(path: Path):
 
 
 def test_every_module_has_its_twin_with_the_same_members():
-    assert sorted(set(_modules(TORCH_SIDE)) - NO_TWIN) == _modules(TRITON_SIDE)
-    for rel in _modules(TRITON_SIDE):
+    assert sorted(set(_modules(TORCH_SIDE)) - NO_TWIN) == sorted(set(_modules(TRITON_SIDE)) - TRITON_ONLY_MODULES)
+    for rel in sorted(set(_modules(TRITON_SIDE)) - TRITON_ONLY_MODULES):
         torch_side, triton_side = _members(TORCH_SIDE / rel), _members(TRITON_SIDE / rel)
         assert torch_side - triton_side == set(), rel
         assert triton_side - torch_side == TRITON_ONLY.get(rel, set()), rel

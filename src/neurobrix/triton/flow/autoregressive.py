@@ -102,6 +102,7 @@ def session_kv_params(kv_plan, window: int, decode_budget: int) -> Dict[str, Any
             "ZERO FALLBACK: the plan carries no KV cache for this decode session. Prism plans the "
             "cache of every flow that decodes (core/runtime/lm_facts.decode_lm_component); a plan "
             "without one did not see this flow — re-plan, never size the cache from constants.")
+    from neurobrix.core.state.price import effective_kv_window
     return dict(
         num_layers=kv_plan.num_layers,
         num_kv_heads=kv_plan.num_kv_heads,
@@ -109,7 +110,7 @@ def session_kv_params(kv_plan, window: int, decode_budget: int) -> Dict[str, Any
         v_head_dim=kv_plan.v_head_dim,
         max_cache_len=kv_plan.max_cache_len,
         dtype=parse_dtype(kv_plan.dtype),
-        window_ceiling=window,
+        window_ceiling=effective_kv_window(window, getattr(kv_plan, "max_context", None)),
         decode_budget=decode_budget,
         # Serve plans carry a small initial size (the compiled
         # cache honours it; the triton cache now does too —
@@ -141,6 +142,27 @@ def retire_replay_plans(uid: int, generation: int) -> None:
     from neurobrix.triton import replay as _replay
     _replay.drop_plans_by_contribution(lambda c: isinstance(c, tuple) and len(c) >= 5 and c[0] == "kv_decode_paged"
                                        and c[3] == uid and c[4] == generation)
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _reset_triton_recurrent_on_error(session):
+    """Reset Triton hybrid recurrent state if prefill or decode aborts mid-request."""
+    try:
+        yield
+    except BaseException:
+        if session.recurrent_state is not None:
+            session.recurrent_state.reset()
+        raise
+
+
+def _sync_triton_recurrent_prefix(start: int, session) -> int:
+    """Drop prefix reuse when hybrid recurrent state cannot rewind to `start`."""
+    if start > 0 and session.recurrent_state is not None and start != session.recurrent_state.seq_len:
+        return 0
+    return start
 
 
 class TritonAutoregressiveHandler:
@@ -227,89 +249,89 @@ class TritonAutoregressiveHandler:
         chunk = getattr(kv_plan, "prefill_chunk", None) if kv_session is not None else None
         if kv_session is not None and self.ctx.kv_tier is not None and hasattr(kv_session.cache, "tier_resume"):
             self.ctx.kv_tier.prepare(kv_session, kv_session.cache, prompt_ids)   # a parked continuation restored
-        start = kv_session.match(prompt_ids) if kv_session is not None else 0
-        # the host ids always: a prompt past a served card's pages takes the chunked path too (TritonLMSession.prefill)
-        hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk, ids=prompt_ids)
-        _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
+        with _reset_triton_recurrent_on_error(session):
+            start = _sync_triton_recurrent_prefix(kv_session.match(prompt_ids) if kv_session is not None else 0, session)
+            # the host ids always: a prompt past a served card's pages takes the chunked path too (TritonLMSession.prefill)
+            hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk, ids=prompt_ids)
+            _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
-        # Teacher-forced scoring mode (quant-ppl-scoring, tier row
-        # clause 2): --set global.score_mode=1 turns the request into
-        # ONE prefill + head over ALL positions + per-token NLL vs the
-        # shifted prompt ids — no decode loop, no sampling. The output
-        # text is a JSON record the ppl harness aggregates. R30 mirror:
-        # core/flow/autoregressive.py.
-        if self.ctx.variable_resolver.resolved.get("global.score_mode"):
-            if kv_session is not None:
-                raise RuntimeError("ZERO FALLBACK: a scoring request (global.score_mode) is not a session turn")
-            self._execute_score(strategy, hidden, input_ids)
-            rv = self.ctx.variable_resolver.resolved
-            session.cleanup()
-            return {"status": "success",
-                    "global.transcription": rv["global.transcription"],
-                    "output_tokens": []}
+            # Teacher-forced scoring mode (quant-ppl-scoring, tier row
+            # clause 2): --set global.score_mode=1 turns the request into
+            # ONE prefill + head over ALL positions + per-token NLL vs the
+            # shifted prompt ids — no decode loop, no sampling. The output
+            # text is a JSON record the ppl harness aggregates. R30 mirror:
+            # core/flow/autoregressive.py.
+            if self.ctx.variable_resolver.resolved.get("global.score_mode"):
+                if kv_session is not None:
+                    raise RuntimeError("ZERO FALLBACK: a scoring request (global.score_mode) is not a session turn")
+                self._execute_score(strategy, hidden, input_ids)
+                rv = self.ctx.variable_resolver.resolved
+                session.cleanup()
+                return {"status": "success",
+                        "global.transcription": rv["global.transcription"],
+                        "output_tokens": []}
 
-        # Decode loop
-        import os as _os_dl
-        _dump_path = _os_dl.environ.get("NBX_DUMP_LOGITS")
-        for step_idx in generator:
-            logits = strategy.get_logits(hidden, step_idx)
-            if _dump_path and step_idx == 0:
-                import json as _json_dl
-                # logits shape may be (B, V) or (B, S, V); flatten to (V,)
-                arr = logits
-                if hasattr(arr, '_shape'):
-                    flat = arr
-                    while flat.ndim > 1:
-                        flat = flat[0]
-                    vals = flat.to(NBXDtype.float32).numpy().reshape(-1).tolist()
-                else:
-                    # Triton logits are always NBXTensor (the branch above). A
-                    # non-NBX tensor here would mean a wiring bug, not a torch
-                    # path — skip the diagnostic rather than import torch (R33).
-                    vals = []
-                # top-10
-                idx_sorted = sorted(range(len(vals)), key=lambda i: -vals[i])[:10]
-                top10 = [(i, vals[i]) for i in idx_sorted]
-                with open(_dump_path, 'w') as _f:
-                    # the whole first-token logits too: the identity proof of a prefill class (a row count
-                    # keyed by its bucket vs exactly) compares them bit for bit (2026-10-19)
-                    _json_dl.dump({"engine": "triton", "vocab_size": len(vals),
-                                   "top10": top10,
-                                   "argmax": idx_sorted[0],
-                                   "logits": vals}, _f)
-                _log.debug(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}")
-            # `flow.first_token` is stamped inside the step, at the per-token
-            # emit site every decoding flow shares (decode_progress.emit).
-            next_token, is_done = generator.step(logits, step_idx)
-            # A census shadow walks the decode by bucket classes of the cache length, not by
-            # tokens (kernels/census.py::pace, 0 on a live run): the positions up to the
-            # current bucket's top would produce this step's keys, so the cache's counters
-            # move past them at once and the sampled token stands for them.
-            from neurobrix.kernels import census as _census
-            _kvw = getattr(session, "kv_wrapper", None)
-            if _kvw is not None and not is_done:
-                _skip = _census.pace(int(_kvw.get_cache_len()) + 1)
-                _gen_n = len(getattr(getattr(generator, "_state", None), "generated_tokens", None) or [])
-                _skip = min(_skip, max(0, int(getattr(generator, "max_tokens", _gen_n + _skip)) - _gen_n))
-                if _skip:
-                    _kvw.skip_positions(_skip)
-                    _gen = getattr(getattr(generator, "_state", None), "generated_tokens", None)
-                    if _gen:
-                        _gen.extend([_gen[-1]] * _skip)
+            # Decode loop
+            import os as _os_dl
+            _dump_path = _os_dl.environ.get("NBX_DUMP_LOGITS")
+            for step_idx in generator:
+                logits = strategy.get_logits(hidden, step_idx)
+                if _dump_path and step_idx == 0:
+                    import json as _json_dl
+                    # logits shape may be (B, V) or (B, S, V); flatten to (V,)
+                    arr = logits
+                    if hasattr(arr, '_shape'):
+                        flat = arr
+                        while flat.ndim > 1:
+                            flat = flat[0]
+                        vals = flat.to(NBXDtype.float32).numpy().reshape(-1).tolist()
+                    else:
+                        # Triton logits are always NBXTensor (the branch above). A
+                        # non-NBX tensor here would mean a wiring bug, not a torch
+                        # path — skip the diagnostic rather than import torch (R33).
+                        vals = []
+                    # top-10
+                    idx_sorted = sorted(range(len(vals)), key=lambda i: -vals[i])[:10]
+                    top10 = [(i, vals[i]) for i in idx_sorted]
+                    with open(_dump_path, 'w') as _f:
+                        # the whole first-token logits too: the identity proof of a prefill class (a row count
+                        # keyed by its bucket vs exactly) compares them bit for bit (2026-10-19)
+                        _json_dl.dump({"engine": "triton", "vocab_size": len(vals),
+                                       "top10": top10,
+                                       "argmax": idx_sorted[0],
+                                       "logits": vals}, _f)
+                    _log.debug(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}")
+                # `flow.first_token` is stamped inside the step, at the per-token
+                # emit site every decoding flow shares (decode_progress.emit).
+                next_token, is_done = generator.step(logits, step_idx)
+                # A census shadow walks the decode by bucket classes of the cache length, not by
+                # tokens (kernels/census.py::pace, 0 on a live run): the positions up to the
+                # current bucket's top would produce this step's keys, so the cache's counters
+                # move past them at once and the sampled token stands for them.
+                from neurobrix.kernels import census as _census
+                _kvw = getattr(session, "kv_wrapper", None)
+                if _kvw is not None and not is_done:
+                    _skip = _census.pace(int(_kvw.get_cache_len()) + 1)
+                    _gen_n = len(getattr(getattr(generator, "_state", None), "generated_tokens", None) or [])
+                    _skip = min(_skip, max(0, int(getattr(generator, "max_tokens", _gen_n + _skip)) - _gen_n))
+                    if _skip:
+                        _kvw.skip_positions(_skip)
+                        _gen = getattr(getattr(generator, "_state", None), "generated_tokens", None)
+                        if _gen:
+                            _gen.extend([_gen[-1]] * _skip)
 
-            # Per-step token diagnostic (mirrors the compiled flow's NBX_DEBUG_DECODE)
-            # for triton-seq-vs-sequential decode parity: the first id, read through the library.
-            if _os_dl.environ.get("NBX_DEBUG_DECODE") == "1" and step_idx < 15:
-                _log.debug(f"  [DBG-TRITON] step={step_idx} token={int(next_token.numpy().reshape(-1)[0])}")
+                # Per-step token diagnostic (mirrors the compiled flow's NBX_DEBUG_DECODE)
+                # for triton-seq-vs-sequential decode parity: the first id, read through the library.
+                if _os_dl.environ.get("NBX_DEBUG_DECODE") == "1" and step_idx < 15:
+                    _log.debug(f"  [DBG-TRITON] step={step_idx} token={int(next_token.numpy().reshape(-1)[0])}")
 
-            if is_done:
-                break
+                if is_done:
+                    break
 
-            token_embed = strategy.embed_token(next_token, step_idx)
-            decode_ids, decode_embeds = strategy.prepare_decode_input(
-                next_token, token_embed, batch_size)
-            hidden = session.decode_step(decode_ids,
-                                         inputs_embeds=decode_embeds)
+                token_embed = strategy.embed_token(next_token, step_idx)
+                decode_ids, decode_embeds = strategy.prepare_decode_input(
+                    next_token, token_embed, batch_size)
+                hidden = session.decode_step(decode_ids, inputs_embeds=decode_embeds)
 
         # Free LM + KV cache VRAM before the VQ decoder runs.  Janus's
         # language_model alone is ~13 GB bf16; adding the 249-op conv
@@ -754,17 +776,29 @@ class TritonAutoregressiveHandler:
                 interceptors["aten::arange"] = kv_interceptor.intercept_arange
             executor.register_triton_interceptors(interceptors)
 
-        _phase_mark("flow.session.kv_ready", None, _phase_mem_note)
+        return self._finalize_session(
+            executor, dag, kv_session, kv_interceptor,
+            hidden_dim, graph_inputs, uses_embeds,
+            uses_abs_pos, device_idx, position_ids_rank,
+            visual_stub_specs, _phase_mark, _phase_mem_note,
+        )
+
+    def _finalize_session(
+        self, executor, dag, kv_session, kv_interceptor,
+        hidden_dim, graph_inputs, uses_embeds,
+        uses_abs_pos, device_idx, position_ids_rank,
+        visual_stub_specs, phase_mark, phase_mem_note,
+    ):
+        """Attach optional Triton hybrid recurrent state and construct TritonLMSession."""
+        from neurobrix.triton.recurrent_state import attach_triton_recurrent_state
+        recurrent_state = attach_triton_recurrent_state(executor, dag, kv_session, kv_interceptor)
+        phase_mark("flow.session.kv_ready", None, phase_mem_note)
         return TritonLMSession(
-            executor=executor,
-            kv_wrapper=kv_interceptor,
-            hidden_dim=hidden_dim,
-            graph_inputs=graph_inputs,
-            uses_embeds=uses_embeds,
-            uses_absolute_position=uses_abs_pos,
-            device_idx=device_idx,
-            position_ids_rank=position_ids_rank,
-            visual_stub_specs=visual_stub_specs,
+            executor=executor, kv_wrapper=kv_interceptor, hidden_dim=hidden_dim,
+            graph_inputs=graph_inputs, uses_embeds=uses_embeds,
+            uses_absolute_position=uses_abs_pos, device_idx=device_idx,
+            position_ids_rank=position_ids_rank, visual_stub_specs=visual_stub_specs,
+            recurrent_state=recurrent_state,
         )
 
     def _create_strategy(self, gen_info: Dict,

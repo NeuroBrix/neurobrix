@@ -123,8 +123,9 @@ def test_sana_s_vae_channels_stay_literal_through_compile():
 def _container(tmp_path, graphs, others=(), stamped=()):
     d = tmp_path / "m"
     (d / "runtime").mkdir(parents=True)
+    from neurobrix.nbx.spec import REQUIRED_NBX_CONTAINER_VERSION
     (d / "manifest.json").write_text(json.dumps(
-        {"model_name": "m", "neurotax_version": NEUROTAX_VERSION}))
+        {"model_name": "m", "nbx_container_version": REQUIRED_NBX_CONTAINER_VERSION, "neurotax_version": NEUROTAX_VERSION}))
     for name in graphs:
         (d / "components" / name).mkdir(parents=True)
         (d / "components" / name / "graph.json").write_text("{}")

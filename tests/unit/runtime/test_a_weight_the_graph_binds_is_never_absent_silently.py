@@ -423,7 +423,7 @@ def _archive(root: Path, out: Path) -> Path:
     (root / "components" / COMP / "graph.json").write_text("{}")
     (root / "components" / COMP / "config.json").write_text("{}")
     (root / "manifest.json").write_text(json.dumps({
-        "nbx_version": "1.0", "model_name": root.name,
+        "nbx_container_version": "0.2", "model_name": root.name,
         "components": {COMP: {"type": "neural"}}}))
     with zipfile.ZipFile(out, "w") as zf:
         for f in sorted(root.rglob("*")):

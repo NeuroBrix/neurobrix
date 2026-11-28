@@ -13,6 +13,10 @@ from neurobrix.triton.flow.decoder_call import decoder_call   # the decoder call
 from neurobrix import decode_progress, decode_stop
 from neurobrix.core.flow.shared_steps import effective_sampling as _effective_sampling   # both branches read the sampling alike
 from neurobrix.core.flow.shared_steps import _maybe_log_topk   # both branches
+from neurobrix.core.flow.shared_steps import (
+    inject_tied_embed_weight, prepare_logits_head, require_logits_head,
+    run_head_executor, unload_encoder_decoder_components,
+)
 import numpy as np
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +24,7 @@ import os
 from nbxtensor.tensor import NBXTensor
 from nbxtensor.dtype.nbx_dtype import NBXDtype, parse_dtype
 from nbxtensor.memory.memory_pool import release_flow_memory
-from nbxtensor.memory.device_transfer import parse_device_idx
+from nbxtensor.memory.device_transfer import parse_device_idx, transfer_tensor
 from nbxtensor.random.seeded_draw import apply_repetition_penalty, draw_from_probabilities
 from neurobrix.core.flow.base import ComponentFlowHandler   # the executor's four component callables, both branches
 import logging
@@ -40,7 +44,7 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
           - component: model.decoder
             execution: autoregressive
             cross_attention_from: model.encoder
-            logits_source: embed_weight_tied | self | lm_head
+            logits_source: embed_weight_tied | tied | self | lm_head | head
     """
 
     def execute(self) -> Dict[str, Any]:
@@ -151,9 +155,9 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
                 break
 
         if not self.ctx.persistent_mode:
-            self._unload_component_weights(enc_name)
-            self._unload_component_weights(dec_name)
-            release_flow_memory(self.ctx.primary_device)
+            unload_encoder_decoder_components(
+                self.ctx, self._unload_component_weights, release_flow_memory,
+                flow, decoder_stage, enc_name, dec_name)
 
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = _all_ids
         if _n_win > 1:
@@ -216,20 +220,12 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
         _log.debug(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
         start = time.perf_counter()
         self._ensure_weights_loaded(dec_name)
+        head_name = prepare_logits_head(self.ctx, self._ensure_weights_loaded, decoder_stage)
 
         # Get embed weight for weight-tied logits
         embed_weight = _get_embed_weight(self.ctx, dec_name)
 
-        # Inject embed weight for weight-tied models
-        if embed_weight is not None:
-            executor = self.ctx.executors.get(dec_name)
-            if executor is not None and hasattr(executor, '_weights'):
-                dag = getattr(executor, '_dag', None)
-                if dag:
-                    tensors = dag.get("tensors", {})
-                    for tied_name in ("head.weight", "model.token_embed.weight"):
-                        if tied_name not in executor._weights and f"param::{tied_name}" in tensors:
-                            executor._weights[tied_name] = embed_weight
+        inject_tied_embed_weight(self.ctx, dec_name, embed_weight)
 
         device_idx = parse_device_idx(self.ctx.primary_device)
         _nbx_device.select(device_idx)
@@ -258,9 +254,8 @@ class TritonEncoderDecoderEngine(ComponentFlowHandler):
             if decoder_output is None:
                 break
 
-            logits = _compute_logits(
-                self.ctx, decoder_output, embed_weight, logits_source
-            )
+            logits = (_compute_logits(self.ctx, decoder_output, embed_weight, logits_source, head_name=head_name, ensure_weights_fn=self._ensure_weights_loaded)
+                      if head_name else _compute_logits(self.ctx, decoder_output, embed_weight, logits_source))
 
             current_pos = len(generated_ids)
             if current_pos in forced_map and forced_map[current_pos] is not None:
@@ -373,11 +368,14 @@ def _get_embed_weight(ctx, comp_name):
     return None
 
 
-def _compute_logits(ctx, hidden_states, embed_weight, logits_source):
+def _compute_logits(
+    ctx, hidden_states, embed_weight, logits_source,
+    head_name: Optional[str] = None, ensure_weights_fn=None,
+):
     """Compute logits from hidden states.
 
-    For triton mode, we use the executor.run() path where possible.
-    For weight-tied logits, we do a manual matmul via the kernel dispatcher.
+    For triton mode, head components run through executor.run() and
+    weight-tied logits use a manual matmul via the kernel dispatcher.
     """
     # Extract last hidden state
     if hasattr(hidden_states, 'shape') and len(hidden_states.shape) >= 3:
@@ -388,14 +386,21 @@ def _compute_logits(ctx, hidden_states, embed_weight, logits_source):
     else:
         last_hidden = hidden_states
 
-    if logits_source == "lm_head" and "lm_head" in ctx.executors:
-        executor = ctx.executors["lm_head"]
-        output = executor.run({"input": last_hidden})
-        if isinstance(output, dict):
-            return next(iter(output.values()))
-        return output
+    if logits_source in ("head", "lm_head"):
+        resolved_head = require_logits_head(ctx, logits_source, head_name)
+        if ensure_weights_fn is not None:
+            ensure_weights_fn(resolved_head)
+        executor = ctx.executors[resolved_head]
+        head_dev_str = getattr(executor, "device", None)
+        if head_dev_str and hasattr(last_hidden, "_device_idx"):
+            head_dev = parse_device_idx(head_dev_str)
+            if last_hidden._device_idx != head_dev:
+                last_hidden = transfer_tensor(last_hidden, head_dev)
+        if hasattr(last_hidden, "is_contiguous") and not last_hidden.is_contiguous():
+            last_hidden = last_hidden.contiguous()
+        return run_head_executor(executor, last_hidden)
 
-    if logits_source == "embed_weight_tied" and embed_weight is not None:
+    if logits_source in ("embed_weight_tied", "tied") and embed_weight is not None:
         # matmul: last_hidden @ embed_weight.T
         # Use the graph executor's run for the matmul if available,
         # otherwise fall back to kernel dispatch

@@ -26,14 +26,36 @@ def banner(entry: str) -> str:
     return f"{name_of(cache_dir(), entry)} — /new /context /status /quit"
 
 
+def _ensure_chat_daemon(args) -> None:
+    """Ensure a serving daemon is ready for chat, auto-starting or swapping when --model is passed."""
+    from neurobrix.serving.client import DaemonClient
+
+    requested_model = getattr(args, "model", None)
+    if requested_model is not None:
+        from neurobrix.cli.utils import resolve_model_arg
+        from neurobrix.cli.commands.serve import ensure_serving
+        from neurobrix.cli.commands.run import explicit_engine_mode
+        try:
+            ensure_serving(
+                resolve_model_arg(requested_model),
+                hardware_id=getattr(args, "hardware", None),
+                mode=explicit_engine_mode(args),
+                max_context=getattr(args, "max_context", None),
+            )
+        except Exception as exc:
+            log.error(f"Error: {exc}")
+            sys.exit(1)
+    elif not DaemonClient.is_running():
+        log.error("Error: no daemon is running; pass --model <name> to auto-start one, "
+                  "or start one first: neurobrix serve --model <name>")
+        sys.exit(1)
+
+
 def cmd_chat(args):
     """Interactive chat REPL connected to serving daemon."""
     from neurobrix.serving.client import DaemonClient
 
-    # Check daemon is running
-    if not DaemonClient.is_running():
-        log.error("Error: no daemon is running; start one first: neurobrix serve --model <name>")
-        sys.exit(1)
+    _ensure_chat_daemon(args)
 
     # Connect
     client = DaemonClient()

@@ -46,6 +46,80 @@ log = logging.getLogger(__name__)      # INFO: the engine and the time; DEBUG: t
 
 
 
+
+def explicit_engine_mode(args):
+    """Return the engine mode explicitly requested via CLI flag, or None when no flag was passed."""
+    from neurobrix.cli.engine_choice import ENGINE_MODE_FLAGS
+    asked = [mode for dest, mode in ENGINE_MODE_FLAGS if getattr(args, dest, False)]
+    if len(asked) > 1:
+        log.error("Error: only one execution mode flag can be passed at a time: one of --compiled, --sequential, "
+                  "--triton, --triton-sequential")
+        sys.exit(1)
+    return asked[0] if asked else None
+
+
+_explicit_engine_mode = explicit_engine_mode
+
+
+def _should_use_ephemeral(args, *, turns=None) -> bool:
+    """True when `run` must execute in-process rather than through the serving daemon."""
+    return bool(
+        getattr(args, "ephemeral", False)
+        or getattr(args, "explain_plan", False)
+        or getattr(args, "certified_only", False)
+        or turns is not None
+        or getattr(args, "profile_kernels", None) is not None
+        or getattr(args, "proof_card", None) is not None
+        or getattr(args, "input_image", None) is not None
+        or getattr(args, "input_video", None) is not None
+        or getattr(args, "mask_image", None) is not None
+        or getattr(args, "video", None) is not None
+        or getattr(args, "fps", None) is not None
+        or getattr(args, "num_frames", None) is not None
+        or getattr(args, "system", None) is not None
+        or bool(getattr(args, "set", None))
+        or bool(getattr(args, "no_resolution_binning", False))
+        or _os_dbg.environ.get("NBX_CENSUS") == "1"
+        or _os_dbg.environ.get("NBX_EPHEMERAL") == "1"
+        or _os_dbg.environ.get("NBX_AUTOTUNE_CERTIFIED_ONLY") == "1"
+    )
+
+
+def _dispatch_served_or_guard_ephemeral(args, turns) -> None:
+    """Route through the serving daemon by default, or guard an ephemeral in-process run."""
+    if not _should_use_ephemeral(args, turns=turns):
+        from neurobrix.cli.commands.serve import ensure_serving
+        try:
+            ensure_serving(
+                args.model,
+                hardware_id=getattr(args, "hardware", None),
+                mode=explicit_engine_mode(args),
+                max_context=getattr(args, "max_context", None),
+            )
+        except Exception as exc:
+            log.error(f"Error: {exc}")
+            sys.exit(1)
+        if _try_warm_path(args):
+            sys.exit(0)
+        log.error(f"Error: the serving daemon for {args.model} did not answer the request. "
+                  f"Try --ephemeral or inspect: neurobrix status")
+        sys.exit(1)
+
+    from neurobrix.serving.client import DaemonClient
+    if (DaemonClient.is_running()
+            and not getattr(args, "explain_plan", False)
+            and _os_dbg.environ.get("NBX_CENSUS") != "1"):
+        daemon_pid = DaemonClient.get_pid()
+        if getattr(args, "certified_only", False) or _os_dbg.environ.get("NBX_AUTOTUNE_CERTIFIED_ONLY") == "1":
+            log.error(f"Error: a serving daemon is running (PID {daemon_pid}); a confirmation run (--certified-only) is "
+                      f"never answered by a daemon, whose process keeps its own autotune state. Stop it first: "
+                      f"neurobrix stop")
+            sys.exit(1)
+        log.error(f"Error: a serving daemon is running (PID {daemon_pid}); --ephemeral cannot share the GPU with it. "
+                  f"Stop it first (neurobrix stop), or omit --ephemeral to auto-swap cleanly.")
+        sys.exit(1)
+
+
 def _try_warm_path(args) -> bool:
     """Attempt warm-path execution via running daemon. Returns True if handled."""
     from neurobrix.serving.client import DaemonClient
@@ -486,9 +560,8 @@ def request_input_config(args, manifest: dict, family, cache_path):
         width=width,
         seq_len=seq_len,
         max_tokens=request_decode_bound(args, cached_defaults),
-        # an image flow decodes its declared image tokens whatever --max-tokens says (`request_decode_bound`)
-        decode_tokens=(None if (cached_defaults or {}).get("type") == "autoregressive_image"
-                       else getattr(args, "max_tokens", None)),
+        max_context=getattr(args, "max_context", None),
+        decode_tokens=None if (cached_defaults or {}).get("type") == "autoregressive_image" else getattr(args, "max_tokens", None),
         steps=(getattr(args, "steps", None) or cached_defaults.get("num_inference_steps")),
         flow=_flow,
         scoring=scoring_request(args),
@@ -659,23 +732,7 @@ def cmd_run(args):
     # A session of turns is played here, through the engine's own session code (never by a daemon's generate)
     turns = load_turns(args)
 
-    # Warm path: if daemon is running with same model, use it — never for a confirmation run or a session of turns
-    if not getattr(args, "certified_only", False) and turns is None and _try_warm_path(args):
-        sys.exit(0)
-
-    # GUARD: If daemon is running but warm path failed, refuse cold path.
-    # Cold run + daemon = double GPU allocation = OOM. One task at a time.
-    from neurobrix.serving.client import DaemonClient
-    if DaemonClient.is_running():
-        daemon_pid = DaemonClient.get_pid()
-        if getattr(args, "certified_only", False):
-            log.error(f"Error: a serving daemon is running (PID {daemon_pid}); a confirmation run (--certified-only) is "
-                      f"never answered by a daemon, whose process keeps its own autotune state. Stop it first: "
-                      f"neurobrix stop")
-            sys.exit(1)
-        log.error(f"Error: a serving daemon is running (PID {daemon_pid}) with another model, and NeuroBrix runs one "
-                  f"task at a time. Stop it first (neurobrix stop), or serve {args.model}.")
-        sys.exit(1)
+    _dispatch_served_or_guard_ephemeral(args, turns)
 
     # DATA-DRIVEN: Find model by scanning all family directories
     try:

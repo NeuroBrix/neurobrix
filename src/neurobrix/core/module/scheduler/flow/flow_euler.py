@@ -323,7 +323,7 @@ class RectifiedFlowScheduler(FlowSchedulerBase):
 # Pipeline sigma schedules (R30: mirrored, numpy-only, in triton/scheduler/flow_euler.py)
 # ---------------------------------------------------------------------------
 
-SIGMA_SCHEDULE_FAMILIES = ("linspace", "linear_quadratic")
+SIGMA_SCHEDULE_FAMILIES = ("linspace", "linspace_inclusive", "linear_quadratic")
 
 
 def validate_sigma_schedule(decl):
@@ -391,6 +391,8 @@ def flow_sigma_schedule(decl, num_steps: int):
     import numpy as np
     if decl is None or decl.get("family") == "linspace":
         return np.linspace(1, 0, num_steps + 1)[:-1]
+    if decl.get("family") == "linspace_inclusive":
+        return np.linspace(1.0, 0.0, num_steps)
     thr = float(decl["threshold_noise"])
     linear_steps = decl.get("linear_steps")
     linear_steps = num_steps // 2 if linear_steps is None else int(linear_steps)

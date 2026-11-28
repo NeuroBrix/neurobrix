@@ -33,6 +33,7 @@ class ComponentConfig:
 
     # === VAE-specific fields ===
     scaling_factor: Optional[float] = None      # From profile.json (e.g., 0.41407)
+    shift_factor: Optional[float] = None        # From profile.json (e.g., 0.1159)
     latent_channels: Optional[int] = None       # From profile.json (e.g., 32 for DC-AE, 4 for KL)
     vae_scale_factor: Optional[int] = None      # Derived: 2^(len(blocks)-1)
     block_out_channels: Optional[List[int]] = None  # From profile.json

@@ -32,7 +32,12 @@ try:
 except ImportError:
     NUMPY_AVAILABLE = False
 
-from .spec import NBX_VERSION, NBX_MAGIC
+from .spec import (
+    NBX_VERSION,
+    NBX_MAGIC,
+    REQUIRED_NBX_CONTAINER_VERSION,
+    refuse_unsupported_nbx_container_version,
+)
 
 
 def get_category_from_config(config: Dict[str, Any]) -> str:
@@ -241,6 +246,7 @@ class NBXContainer:
             **kwargs: Additional metadata fields
         """
         self._manifest = {
+            "nbx_container_version": REQUIRED_NBX_CONTAINER_VERSION,
             "format_version": NBX_VERSION,
             "model_name": model_name,
             "created_at": datetime.now().isoformat(),
@@ -395,11 +401,11 @@ class NBXContainer:
         container._source_path = nbx_path
         container._cache_path = cache_path  # Store cache path for runtime access
 
-        # Read manifest from cache
+        # Read and validate manifest from cache before reading components/graphs
         manifest_path = cache_path / "manifest.json"
-        if manifest_path.exists():
-            with open(manifest_path) as f:
-                container._manifest = json.load(f)
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+        refuse_unsupported_nbx_container_version(manifest, str(cache_path))
+        container._manifest = manifest
 
         # Read config from cache
         config_path = cache_path / "config.json"
@@ -661,6 +667,7 @@ class NBXContainer:
         if self._manifest:
             info["model_name"] = self._manifest.get("model_name")
             info["framework_source"] = self._manifest.get("framework_source")
+            info["nbx_container_version"] = self._manifest.get("nbx_container_version")
             info["format_version"] = self._manifest.get("format_version")
 
         # Count ops across all component graphs

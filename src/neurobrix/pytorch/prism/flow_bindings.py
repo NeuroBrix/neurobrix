@@ -180,12 +180,72 @@ class FlowBindings:
                 out[enc] = n
         return out
 
+    @staticmethod
+    def _declared_preprocessor_shape(pc: Any) -> Optional[tuple]:
+        """Explicit (1, 3, H, W) declared by `preprocessor_config.json`, or None (never defaults to 224)."""
+        if not isinstance(pc, dict):
+            return None
+        crop = pc.get("crop_size")
+        if isinstance(crop, dict):
+            h, w = crop.get("height"), crop.get("width")
+            if isinstance(h, int) and not isinstance(h, bool) and h > 0 and isinstance(w, int) and not isinstance(w, bool) and w > 0:
+                return (1, 3, h, w)
+        elif isinstance(crop, int) and not isinstance(crop, bool) and crop > 0:
+            return (1, 3, crop, crop)
+        size = pc.get("size")
+        if isinstance(size, dict):
+            h, w = size.get("height"), size.get("width")
+            if isinstance(h, int) and not isinstance(h, bool) and h > 0 and isinstance(w, int) and not isinstance(w, bool) and w > 0:
+                return (1, 3, h, w)
+            for key in ("shortest_edge", "longest_edge"):
+                s = size.get(key)
+                if isinstance(s, int) and not isinstance(s, bool) and s > 0:
+                    return (1, 3, s, s)
+        elif isinstance(size, int) and not isinstance(size, bool) and size > 0:
+            return (1, 3, size, size)
+        return None
+
+    def _vlm_declared_pixel_view(self, comp: str) -> Optional[Dict[str, tuple]]:
+        """{input name: shape} for a served VLM vision tower with no request image yet, read strictly from
+        the container's own declared vision size (`preprocessor_config.json` or `vision_image_size` in
+        `topology.extracted_values`). Returns None when nothing is declared (ZERO FALLBACK)."""
+        vlm = self.flow.get("vlm") or {}
+        if comp != vlm.get("vision_component") or self.image_path:
+            return None
+        names = [c.get("to", "").rpartition(".")[2] for c in self.topology.get("connections") or []
+                 if c.get("from") == "global.pixel_values" and c.get("to", "").rpartition(".")[0] == comp]
+        if not names and self.cache_path is not None and (self.cache_path / "components" / comp / "graph.json").exists():
+            if "input::pixel_values" in (self.graph(comp).get("tensors") or {}):
+                names = ["pixel_values"]
+        if not names:
+            return None
+        if self.cache_path is not None:
+            for sub in ("image_processor", "processor"):
+                cfg = self.cache_path / "modules" / sub / "preprocessor_config.json"
+                if not cfg.exists():
+                    continue
+                try:
+                    shape = self._declared_preprocessor_shape(json.loads(cfg.read_text()))
+                except Exception:
+                    shape = None
+                if shape is not None:
+                    return {n: shape for n in names}
+        ev = self.topology.get("extracted_values") or {}
+        for k in (comp, vlm.get("lm_component")):
+            sz = (ev.get(k) or {}).get("vision_image_size") if isinstance(ev.get(k), dict) else None
+            if isinstance(sz, int) and not isinstance(sz, bool) and sz > 0:
+                return {n: (1, 3, sz, sz) for n in names}
+        return None
+
     def pixel_view(self, comp: str) -> Optional[Dict[str, tuple]]:
         """{input name: shape} of the image view the run feeds `comp` through `global.pixel_values`:
         the CLIP view of the build's processor, when the build embeds one and the flow declares no
-        VLM preprocessing of its own (`input_processor.prepare_image_inputs`'s own branch); None
+        VLM preprocessing of its own (`input_processor.prepare_image_inputs`'s own branch), or the
+        container-declared vision extent for a VLM vision tower planned without an image; None
         otherwise."""
-        if self.flow.get("vlm") or self.cache_path is None:
+        if self.flow.get("vlm"):
+            return self._vlm_declared_pixel_view(comp)
+        if self.cache_path is None:
             return None
         cfg = self.cache_path / "modules" / "image_processor" / "preprocessor_config.json"
         if not cfg.exists():

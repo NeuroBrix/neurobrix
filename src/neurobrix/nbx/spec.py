@@ -5,7 +5,7 @@ Universal operation mapping from ONNX to NBX format.
 Follows the NBX Format Specification v1.0.
 """
 
-from typing import Optional
+from typing import Any, Mapping, Optional, Tuple
 
 # =============================================================================
 # NBX FORMAT CONSTANTS
@@ -13,6 +13,109 @@ from typing import Optional
 
 NBX_VERSION = "1.0.0"
 NBX_MAGIC = b"NBX\x00"  # Magic bytes for .nbx files
+
+# Container format version contract (manifest.json "nbx_container_version").
+# Engine 0.7.0 strictly requires containers with nbx_container_version == "0.2"
+# and refuses legacy (e.g. nbx_version: "0.1" or missing nbx_container_version)
+# as well as incompatible older/newer container format versions.
+MIN_SUPPORTED_NBX_CONTAINER_VERSION = "0.2"
+MAX_SUPPORTED_NBX_CONTAINER_VERSION = "0.2"
+REQUIRED_NBX_CONTAINER_VERSION = MIN_SUPPORTED_NBX_CONTAINER_VERSION
+
+
+def parse_nbx_container_version(version: Any) -> Tuple[int, ...]:
+    """Parse a dotted container format version string (e.g. "0.2") into an integer tuple.
+
+    Trailing zero patch segments are normalized so "0.2.0" compares equal to "0.2",
+    while "0.10" compares newer than "0.2". Non-string, empty, single-segment, or
+    non-numeric values raise ValueError.
+    """
+    if not isinstance(version, str):
+        raise ValueError(f"expected a version string, got {type(version).__name__}")
+    raw = version.strip()
+    parts = raw.split(".")
+    if len(parts) < 2 or not all(p.isdigit() for p in parts):
+        raise ValueError(
+            f"expected dotted numeric version (e.g. {REQUIRED_NBX_CONTAINER_VERSION!r}), got {version!r}"
+        )
+    nums = [int(p) for p in parts]
+    while len(nums) > 2 and nums[-1] == 0:
+        nums.pop()
+    return tuple(nums)
+
+
+def refuse_unsupported_nbx_container_version(
+    manifest: Optional[Mapping[str, Any]],
+    container: str = "",
+) -> str:
+    """Refuse any container whose manifest nbx_container_version is missing, outdated, or too new.
+
+    Raises RuntimeError with an actionable message naming the found version (including
+    legacy nbx_version when nbx_container_version is absent), the supported version,
+    and the update command. Returns the validated version string when supported.
+    """
+    has_mapping = isinstance(manifest, Mapping)
+    version = manifest.get("nbx_container_version") if has_mapping else None
+    legacy_version = manifest.get("nbx_version") if has_mapping else None
+    raw_name = manifest.get("model_name") if has_mapping else None
+    model_ref = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else "<model>"
+    target = container or model_ref
+    expected = (
+        MIN_SUPPORTED_NBX_CONTAINER_VERSION
+        if MIN_SUPPORTED_NBX_CONTAINER_VERSION == MAX_SUPPORTED_NBX_CONTAINER_VERSION
+        else f"{MIN_SUPPORTED_NBX_CONTAINER_VERSION}..{MAX_SUPPORTED_NBX_CONTAINER_VERSION}"
+    )
+
+    if version is None:
+        if legacy_version is not None:
+            raise RuntimeError(
+                f"NBX CONTAINER VERSION: container {target!r} uses outdated container format "
+                f"(legacy nbx_version={legacy_version!r}, missing nbx_container_version); "
+                f"NeuroBrix 0.7.0 requires nbx_container_version={expected!r}.\n"
+                f"  FIX: Update / re-download the model container:\n"
+                f"    neurobrix remove {model_ref} && neurobrix import <org>/{model_ref}"
+            )
+        raise RuntimeError(
+            f"NBX CONTAINER VERSION: container {target!r} is missing required "
+            f"nbx_container_version (outdated or incomplete format); "
+            f"NeuroBrix 0.7.0 requires nbx_container_version={expected!r}.\n"
+            f"  FIX: Update / re-download the model container:\n"
+            f"    neurobrix remove {model_ref} && neurobrix import <org>/{model_ref}"
+        )
+
+    try:
+        got = parse_nbx_container_version(version)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"NBX CONTAINER VERSION: container {target!r} has unreadable "
+            f"nbx_container_version ({version!r}: {exc}); "
+            f"NeuroBrix 0.7.0 requires nbx_container_version={expected!r}.\n"
+            f"  FIX: Update / re-download the model container:\n"
+            f"    neurobrix remove {model_ref} && neurobrix import <org>/{model_ref}"
+        ) from None
+
+    min_ver = parse_nbx_container_version(MIN_SUPPORTED_NBX_CONTAINER_VERSION)
+    max_ver = parse_nbx_container_version(MAX_SUPPORTED_NBX_CONTAINER_VERSION)
+
+    if got < min_ver:
+        raise RuntimeError(
+            f"NBX CONTAINER VERSION: container {target!r} uses outdated format "
+            f"nbx_container_version {version!r}; NeuroBrix 0.7.0 requires "
+            f"nbx_container_version >= {MIN_SUPPORTED_NBX_CONTAINER_VERSION} (supported: {expected}).\n"
+            f"  FIX: Update / re-download the model container:\n"
+            f"    neurobrix remove {model_ref} && neurobrix import <org>/{model_ref}"
+        )
+
+    if got > max_ver:
+        raise RuntimeError(
+            f"NBX CONTAINER VERSION: container {target!r} uses newer format "
+            f"nbx_container_version {version!r}, which is not supported by NeuroBrix 0.7.0 "
+            f"(supported: {expected}).\n"
+            f"  FIX: Upgrade neurobrix (pip install -U neurobrix) to load containers "
+            f"of format nbx_container_version {version!r}."
+        )
+
+    return version
 
 # =============================================================================
 # ONNX TO NBX OPERATION MAPPING

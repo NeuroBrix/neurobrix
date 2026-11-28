@@ -1896,6 +1896,9 @@ class TritonSequence(SequenceSteps):
                 bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
                 func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
                                                   op_record=op_data)
+        elif op_type == "custom::gated_delta_rule":
+            from neurobrix.triton.recurrent_state import make_triton_gdr_op
+            func = make_triton_gdr_op(len(output_tids) > 1)
         else:
             func = _kernel_for(op_type)
             if func is None:
@@ -1980,9 +1983,9 @@ class TritonSequence(SequenceSteps):
         gate_weight_ids = attrs["expert_gate_weight_ids"]
         up_weight_ids = attrs["expert_up_weight_ids"]
         down_weight_ids = attrs["expert_down_weight_ids"]
-        top_k = attrs["top_k"]
-        num_experts = attrs["num_experts"]
-        norm_topk_prob = attrs.get("norm_topk_prob", True)
+        top_k, num_experts, norm_topk_prob = attrs["top_k"], attrs["num_experts"], attrs.get("norm_topk_prob", True)
+        choice_routing = attrs.get("choice_routing")
+        choice_bias_slot = self._tid_to_slot[choice_routing["choice_bias_tid"]] if isinstance(choice_routing, dict) and choice_routing.get("choice_bias_tid") is not None else None
 
         # Resolve arena slots (compile-time)
         if topk_indices_tid is not None and topk_weights_tid is not None:
@@ -2024,10 +2027,8 @@ class TritonSequence(SequenceSteps):
                 down_w_slots.append(ds)
 
         # Freeze for closure
-        _gs_slot = gate_scores_slot
-        _ti_slot = topk_indices_slot
-        _tw_slot = topk_weights_slot
-        _hs_slot = hidden_states_slot
+        _gs_slot, _ti_slot, _tw_slot = gate_scores_slot, topk_indices_slot, topk_weights_slot
+        _choice_routing, _cb_slot, _hs_slot = choice_routing, choice_bias_slot, hidden_states_slot
         _gw = tuple(gate_w_slots)
         _uw = tuple(up_w_slots)
         _dw = tuple(down_w_slots)
@@ -2081,9 +2082,8 @@ class TritonSequence(SequenceSteps):
                     cache_key=_cache_key,
                     topk_indices=None if _ti_slot is None else _to_card(arena[_ti_slot]),
                     topk_weights=None if _tw_slot is None else _to_card(arena[_tw_slot]),
-                    weights_per_call=False,
-                    expert_store=None,
-                    expert_layer=_layer_key,
+                    weights_per_call=False, expert_store=None, expert_layer=_layer_key,
+                    choice_routing=_choice_routing, choice_bias=None if _cb_slot is None else _to_card(arena[_cb_slot]),
                 )
                 _nbx_device.select(_home)
                 return _out if _out._device_idx == _home else _xfer_card(_out, _home)
@@ -2114,9 +2114,8 @@ class TritonSequence(SequenceSteps):
                 cache_key=_cache_key,
                 topk_indices=None if _ti_slot is None else arena[_ti_slot],
                 topk_weights=None if _tw_slot is None else arena[_tw_slot],
-                weights_per_call=_per_call,
-                expert_store=_seq._expert_store,
-                expert_layer=_layer_key,
+                weights_per_call=_per_call, expert_store=_seq._expert_store, expert_layer=_layer_key,
+                choice_routing=_choice_routing, choice_bias=None if _cb_slot is None else arena[_cb_slot],
             )
 
         # Output slots
@@ -2144,9 +2143,7 @@ class TritonSequence(SequenceSteps):
             # slots — the device derivation, the zero3 check and the block partition
             # read these tuples (R30: the compiled mirror lists the same two).
             weight_input_slots=tuple(_weight_slots),
-            all_input_slots=tuple(
-                ([_gs_slot] if _gs_slot is not None else [_ti_slot, _tw_slot])
-                + [_hs_slot] + _weight_slots),
+            all_input_slots=tuple(([_gs_slot] if _gs_slot is not None else [_ti_slot, _tw_slot]) + ([_cb_slot] if _cb_slot is not None else []) + [_hs_slot] + _weight_slots),
         )
 
     # ========================================================================
@@ -2170,13 +2167,14 @@ class TritonSequence(SequenceSteps):
         return slots
 
     def _extract_weight_slots(self, op_data):
-        """Extract weight/buffer slots from op_data args."""
+        """Extract sharded weight/buffer slots from op_data args (excluding graph constants)."""
         slots = []
+        tensors = self.dag.get("tensors", {})
         raw_args = op_data.get("attributes", {}).get("args", [])
         for arg in raw_args:
             if isinstance(arg, dict) and arg.get("type") in ("tensor", "tensor_ref"):
                 tid = arg.get("tensor_id", "")
-                if tid.startswith("param::") or tid.startswith("buffer::"):
+                if tid.startswith(("param::", "buffer::")) and not tensors.get(tid, {}).get("constant"):
                     slot = self._tid_to_slot.get(tid)
                     if slot is not None:
                         slots.append(slot)
@@ -2252,13 +2250,15 @@ class TritonSequence(SequenceSteps):
         if not self._is_multi_device:
             return
 
-        # Phase 2+4: propagate current_activation_device, flag needs_transfer
+        # Phase 2+4: propagate current_activation_device, flag needs_transfer.
+        # Seed all pre-bound weight/buffer/constant slots so ops consuming an unsharded
+        # graph constant on another card get needs_transfer=True without hijacking
+        # current_activation_device (R30 mirror of compiled_sequence.compute_op_devices).
         slot_device: Dict[int, int] = {}
-        for op in self._ops:
-            for ws in op.weight_input_slots:
-                tensor = arena[ws]
-                if tensor is not None and hasattr(tensor, '_device_idx'):
-                    slot_device[ws] = tensor._device_idx
+        for ws in range(self._num_weights):
+            tensor = arena[ws]
+            if tensor is not None and hasattr(tensor, '_device_idx'):
+                slot_device[ws] = tensor._device_idx
 
         # Runtime-bound INPUT slots (flow globals) occupy the contiguous range
         # [num_weights, num_weights + num_inputs). Their device is unknowable

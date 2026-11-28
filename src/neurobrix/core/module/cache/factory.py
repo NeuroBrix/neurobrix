@@ -97,7 +97,9 @@ class StateCacheFactory:
             # limit, not a budget).
             max_len = kv_plan.max_cache_len
             initial = getattr(kv_plan, 'initial_cache_len', 0)
-            window = int(lm_config.get("max_position_embeddings") or 0)
+            from neurobrix.core.state.price import effective_kv_window
+            window = effective_kv_window(int(lm_config.get("max_position_embeddings") or 0),
+                                         getattr(kv_plan, "max_context", None))
             ceiling_is_window = False
             if window > max_len:
                 initial = initial or max_len

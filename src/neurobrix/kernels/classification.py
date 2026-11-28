@@ -98,6 +98,9 @@ _TRITON_OPS = {
     # Linear algebra (4)
     "linalg_vector_norm", "_weight_norm", "addr", "trace",
 
+    # Complex (1)
+    "polar",
+
     # RoPE (1)
     "rope",
 
@@ -170,7 +173,12 @@ def kernel_for(op_type: str):
     first — the alias table is the engine's knowledge of built graphs, never the library's — or None."""
     from nbxtensor.ops.dispatch import dispatch
     bare = op_type.split("::")[-1] if "::" in op_type else op_type
-    return dispatch(canonical_aten(bare))
+    canon = canonical_aten(bare)
+    fn = dispatch(canon)
+    if fn is None and canon == "polar":
+        from neurobrix.triton.complex_ops import polar
+        return polar
+    return fn
 
 
 # Build the classification dict
@@ -183,6 +191,7 @@ ATEN_CLASSIFICATION["custom::swiglu_fused"] = OpExecution.TRITON
 ATEN_CLASSIFICATION["custom::rope_fused"] = OpExecution.TRITON
 ATEN_CLASSIFICATION["custom::mm_epilogue"] = OpExecution.TRITON
 ATEN_CLASSIFICATION["custom::addmm_epilogue"] = OpExecution.TRITON
+ATEN_CLASSIFICATION["custom::gated_delta_rule"] = OpExecution.TRITON
 for op in _METADATA_OPS:
     ATEN_CLASSIFICATION[f"aten::{op}"] = OpExecution.METADATA
 

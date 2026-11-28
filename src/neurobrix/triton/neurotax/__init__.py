@@ -572,6 +572,15 @@ class SynonymRegistry:
         "kv_a_proj_with_mqa": "kv_down",     # multi-head latent attention: KV down-projection
         "kv_a_layernorm": "kv_norm",
         "kv_b_proj": "kv_up",
+        # Multi-head Latent Attention (MLA) Q-latent projections & norm, MoE router bias, MTP head
+        "q_a_proj": "q_a_proj",
+        "q_a_layernorm": "q_a_layernorm",
+        "q_b_proj": "q_b_proj",
+        "e_score_correction_bias": "e_score_correction_bias",
+        "eh_proj": "eh_proj",
+        "enorm": "enorm",
+        "hnorm": "hnorm",
+        "shared_head": "shared_head",
         "q_norm": "norm_q",
         "k_norm": "norm_k",
         "query_norm": "norm_q",
@@ -769,6 +778,14 @@ class SynonymRegistry:
         "modulation": "mod",
         "noise_refiner": "latent_refiner",
         "ref_image_refiner": "ref_refiner",
+        # NextDiT structural tokens (multi-patch-size ModuleDicts, caption embedder,
+        # context stream refiner, sequence pad tokens).
+        "all_final_layer": "all_final_layer",
+        "all_x_embedder": "all_x_embedder",
+        "cap_embedder": "cap_embedder",
+        "cap_pad_token": "cap_pad_token",
+        "context_refiner": "context_refiner",
+        "x_pad_token": "x_pad_token",
 
         # --- speech: pitch, energy, source ------------------------------------------------------
         "F0": "pitch",                       # StyleTTS2 lineage: fundamental-frequency branch
@@ -808,6 +825,7 @@ class SynonymRegistry:
     # Patterns that should NEVER be modified
     PRESERVE_PATTERNS = [
         r"^\d+$",           # Numeric indices (0, 1, 2, ...)
+        r"^\d+-\d+$",       # Patch-size pair indices in ModuleDicts (e.g. NextDiT "2-1")
         r"^weight$",
         r"^bias$",
         r"^scale$",

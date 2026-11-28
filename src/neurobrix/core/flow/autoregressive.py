@@ -60,6 +60,27 @@ def _phase_mem_note() -> str:
     return f"alloc={a:.0f}MB reserved={r:.0f}MB free={free / 2**20:.0f}MB"
 
 
+from contextlib import contextmanager
+
+
+@contextmanager
+def _reset_recurrent_on_error(session):
+    """Reset hybrid recurrent state if prefill or decode aborts mid-request."""
+    try:
+        yield
+    except BaseException:
+        if session.recurrent_state is not None:
+            session.recurrent_state.reset()
+        raise
+
+
+def _sync_recurrent_prefix(start: int, session) -> int:
+    """Drop prefix reuse when hybrid recurrent state cannot rewind to `start`."""
+    if start > 0 and session.recurrent_state is not None and start != session.recurrent_state.seq_len:
+        return 0
+    return start
+
+
 class GraphLMSession:
     """
     Encapsulates GraphExecutor + KVCacheWrapper lifecycle.
@@ -78,9 +99,11 @@ class GraphLMSession:
         uses_absolute_position: bool = False,
         position_ids_rank: int = 2,
         visual_stub_specs: Optional[Dict[str, list]] = None,
+        recurrent_state: Optional[Any] = None,
     ):
         self.executor = executor
         self.kv_wrapper = kv_wrapper
+        self.recurrent_state = recurrent_state
         self.hidden_dim = hidden_dim
         self.graph_inputs = graph_inputs
         self.uses_embeds = uses_embeds
@@ -153,6 +176,33 @@ class GraphLMSession:
             return position_ids.unsqueeze(0).expand(3, -1, -1).contiguous()
         return position_ids
 
+    def _reset_sequence_state(self):
+        """Reset KV cache and hybrid recurrent state for a new sequence."""
+        if self.kv_wrapper is not None:
+            self.kv_wrapper.reset_for_new_sequence()
+        if self.recurrent_state is not None:
+            self.recurrent_state.reset()
+
+    def _run_prefill_chunk(self, run_inputs, start_pos: int, real: int):
+        """Execute one prefill chunk while keeping KV and recurrent state synchronized."""
+        self.kv_wrapper.begin_chunk(start_pos, real, whole_pages=True)
+        if self.recurrent_state is not None:
+            self.recurrent_state.begin_chunk(real=real)
+        self.executor.run(run_inputs)
+        if self.recurrent_state is not None:
+            self.recurrent_state.begin_chunk(real=None)
+
+    def _advance_stateful_decode(self) -> int:
+        """Advance KV/recurrent decode offsets and return the current cache length."""
+        if self.kv_wrapper is not None:
+            self.kv_wrapper.update_position_offset()
+            cache_len = self.kv_wrapper.get_cache_len()
+        else:
+            cache_len = self.recurrent_state.seq_len
+        if self.recurrent_state is not None:
+            self.recurrent_state.begin_chunk(real=None)
+        return cache_len
+
     def _graph_device(self):
         """The device this session feeds its graph from (FGP may have distributed weights): the embedding's."""
         device = self.executor.device
@@ -182,7 +232,7 @@ class GraphLMSession:
             raise RuntimeError(f"ZERO FALLBACK: the plan's prefill chunk {chunk} is not a whole number of the cache's "
                                f"{cache.page_tokens}-position pages")
         if start == 0:
-            self.kv_wrapper.reset_for_new_sequence()
+            self._reset_sequence_state()
         else:
             cache.truncate(start)
         device = self._graph_device()
@@ -211,8 +261,7 @@ class GraphLMSession:
             else:
                 run_inputs = {"input_ids": chunk_ids}
             self._add_visual_stubs(run_inputs)
-            self.kv_wrapper.begin_chunk(s, real, whole_pages=True)
-            self.executor.run(run_inputs)
+            self._run_prefill_chunk(run_inputs, s, real)
             if real < rows:
                 cache.truncate(s + real)
             s, rows_run = s + real, rows_run + rows
@@ -242,9 +291,7 @@ class GraphLMSession:
             0 < int(cache.card_pages or 0) * cache.page_tokens < int(input_ids.shape[1])
         if start or chunk or past_the_card:
             return self._prefill_chunks([int(t) for t in input_ids[0].tolist()], batch_size, int(start), chunk)
-        # Reset KV cache for new sequence
-        if self.kv_wrapper is not None:
-            self.kv_wrapper.reset_for_new_sequence()
+        self._reset_sequence_state()
 
         # Find correct device from executor weights (FGP may have distributed weights)
         device = self.executor.device
@@ -308,7 +355,7 @@ class GraphLMSession:
         while hidden_states.dim() > 3:
             hidden_states = hidden_states.squeeze(0)
 
-        if self.kv_wrapper is None:
+        if self.kv_wrapper is None and self.recurrent_state is None:
             # Init O(n) fallback accumulation
             if self.uses_embeds:
                 embed_weight = self.executor.get_embed_tokens()
@@ -328,11 +375,10 @@ class GraphLMSession:
         batch_size = input_ids.shape[0]
         device = input_ids.device
 
-        if self.kv_wrapper is not None:
-            # ── O(1) path: KV cache ──
-            self.kv_wrapper.update_position_offset()
+        if self.kv_wrapper is not None or self.recurrent_state is not None:
+            # ── O(1) path: KV cache and/or hybrid recurrent state ──
+            cache_len = self._advance_stateful_decode()
             seq_len = input_ids.shape[1]
-            cache_len = self.kv_wrapper.get_cache_len()
 
             # Position IDs policy:
             # - Models with FLOAT arange (RoPE via interceptor): relative [[0]]
@@ -436,6 +482,11 @@ class GraphLMSession:
             else:
                 self.kv_wrapper.reset_for_new_sequence()
             self.kv_wrapper = None
+
+        if self.recurrent_state is not None:
+            if not keep_cache:
+                self.recurrent_state.reset()
+            self.recurrent_state = None
 
         if not is_persistent:
             release_flow_memory(device)
@@ -749,9 +800,9 @@ class AutoregressiveHandler(FlowHandler):
             if kv_session is not None else None
         if kv_session is not None and self.ctx.kv_tier is not None and hasattr(kv_session.cache, "tier_resume"):
             self.ctx.kv_tier.prepare(kv_session, kv_session.cache, prompt_ids)   # a parked continuation restored
-        start = kv_session.match(prompt_ids) if kv_session is not None else 0
+        start = _sync_recurrent_prefix(kv_session.match(prompt_ids) if kv_session is not None else 0, session)
 
-        with torch.inference_mode():
+        with _reset_recurrent_on_error(session), torch.inference_mode():
             # ── PREFILL ────────────────────────────────────
             hidden = session.prefill(input_ids, batch_size, start=start, chunk=chunk)
             _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
@@ -1099,16 +1150,27 @@ class AutoregressiveHandler(FlowHandler):
                 f"ZERO FALLBACK: 'hidden_size' not found for '{lm_name}'."
             )
 
-        _phase_mark("flow.session.kv_ready", None, _phase_mem_note)
+        return self._finalize_session(
+            executor, dag, kv_session, kv_wrapper, hidden_dim, graph_inputs,
+            uses_embeds, uses_absolute_position, position_ids_rank,
+            visual_stub_specs, _phase_mark, _phase_mem_note,
+        )
+
+    def _finalize_session(
+        self, executor, dag, kv_session, kv_wrapper, hidden_dim, graph_inputs,
+        uses_embeds, uses_absolute_position, position_ids_rank,
+        visual_stub_specs, phase_mark, phase_mem_note,
+    ) -> GraphLMSession:
+        """Attach optional hybrid recurrent state and construct GraphLMSession."""
+        from neurobrix.core.runtime.graph.recurrent_state_torch import attach_torch_recurrent_state
+        recurrent_state = attach_torch_recurrent_state(executor, dag, kv_session, kv_wrapper)
+        phase_mark("flow.session.kv_ready", None, phase_mem_note)
         return GraphLMSession(
-            executor=executor,
-            kv_wrapper=kv_wrapper,
-            hidden_dim=hidden_dim,
-            graph_inputs=graph_inputs,
-            uses_embeds=uses_embeds,
+            executor=executor, kv_wrapper=kv_wrapper, hidden_dim=hidden_dim,
+            graph_inputs=graph_inputs, uses_embeds=uses_embeds,
             uses_absolute_position=uses_absolute_position,
-            position_ids_rank=position_ids_rank,
-            visual_stub_specs=visual_stub_specs,
+            position_ids_rank=position_ids_rank, visual_stub_specs=visual_stub_specs,
+            recurrent_state=recurrent_state,
         )
 
     def _create_strategy(self, gen_info: Dict, session: GraphLMSession) -> GenerationStrategy:

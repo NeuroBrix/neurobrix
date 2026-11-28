@@ -322,7 +322,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         # Save original inputs AND positive embeddings (per-encoder variables)
         orig_input_ids = self.ctx.variable_resolver.get(input_ids_var)
         orig_attention_mask = self.ctx.variable_resolver.get(attention_mask_var)
-        pos_hidden_state = self.ctx.variable_resolver.get(f"{text_encoder_name}.last_hidden_state") if hidden else None
+        pos_hidden_state = self.ctx.variable_resolver.get(self._resolve_encoder_hidden_key(text_encoder_name)) if hidden else None
         pos_pooled = {o: self.ctx.variable_resolver.get(f"{text_encoder_name}.{o}") for o in pooled_outputs}
 
         # Set negative inputs temporarily
@@ -342,7 +342,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
             return
 
         # Get negative embedding
-        neg_hidden_state = self.ctx.variable_resolver.get(f"{text_encoder_name}.last_hidden_state")
+        neg_hidden_state = self.ctx.variable_resolver.get(self._resolve_encoder_hidden_key(text_encoder_name))
 
         # --- PURIFICATION: Finalize embeddings via Handler ---
         executor = self.ctx.executors.get(text_encoder_name)
@@ -368,7 +368,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
         # Restore original inputs
         self.ctx.variable_resolver.set(input_ids_var, orig_input_ids)
         self.ctx.variable_resolver.set(attention_mask_var, orig_attention_mask)
-        self.ctx.variable_resolver.set(f"{text_encoder_name}.last_hidden_state", pos_hidden_state)
+        self.ctx.variable_resolver.set(self._resolve_encoder_hidden_key(text_encoder_name), pos_hidden_state)
 
 
     def _execute_main_loop(
@@ -419,7 +419,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                 _latent = self.ctx.variable_resolver.get("global.latents")
                 self.ctx.variable_resolver.set(state_key, _latent)
 
-        current_state = self.ctx.variable_resolver.get(state_key)
+        current_state = self._resolve_loop_state(state_key)
 
         # DATA-DRIVEN: Detect if Flux-style packing is needed
         packing_shape = self._detect_packing(components)
@@ -630,31 +630,11 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                 scaled_state = driver.scale_model_input(current_state, timestep)
                 self.ctx.variable_resolver.set(state_key, scaled_state)
 
-                # Get timestep scale for component
-                comp_timestep_scale = self._get_component_timestep_scale(comp_name)
-                scaled_timestep = timestep * comp_timestep_scale if comp_timestep_scale != 1.0 else timestep
-
-                # Execute with or without CFG
-                if do_cfg and self._is_loop_component(comp_name) and self._cfg_engine:
-                    output = self._cfg_engine.execute_component_with_cfg(
-                        comp_name, scaled_state, scaled_timestep, guidance_scale,
-                        encoder_dtype=encoder_dtype
-                    )
-                else:
-                    # I2V channel-concat conditioning on the denoiser's state
-                    # (non-CFG path; the CFG engine applies it on its own batched/
-                    # sequential paths via global.i2v_condition).
-                    if (self._i2v_condition is not None
-                            and self._is_loop_component(comp_name)):
-                        self.ctx.variable_resolver.set(
-                            state_key,
-                            i2v_conditioning.apply(scaled_state, self._i2v_condition,
-                                                   self._i2v_channel_dim))
-                    # Type guard: scaled_timestep may be int/float, convert to tensor if needed
-                    timestep_arg: Optional[torch.Tensor] = None
-                    if isinstance(scaled_timestep, torch.Tensor):
-                        timestep_arg = scaled_timestep
-                    output = self._execute_component(comp_name, "loop", timestep_arg)
+                scaled_timestep, _list_spec, _flow_conv = self._step_timestep_and_convention(
+                    comp_name, timestep, driver, do_cfg)
+                output = self._run_loop_step_component(
+                    comp_name, state_key, scaled_state, scaled_timestep, do_cfg, guidance_scale,
+                    encoder_dtype, _list_spec, _flow_conv, i2v_conditioning.apply, torch.Tensor)
 
                 # Update state via driver step
                 if output is not None:
@@ -679,6 +659,7 @@ class IterativeProcessHandler(IterativeSteps, FlowHandler):
                     if model_channels == 2 * state_channels:
                         split_dim = 2 if current_state.dim() == 3 else 1
                         model_output = model_output.chunk(2, dim=split_dim)[0]
+                    model_output = self._apply_step_velocity_sign(model_output, _flow_conv)
 
                     # DiT velocity-diff capture (NBX_DUMP_DIT): step-0 transformer
                     # inputs + raw velocity, for a matched-input comparison against

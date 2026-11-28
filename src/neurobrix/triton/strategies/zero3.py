@@ -94,6 +94,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from neurobrix.core.device_utils import device_empty_cache
 
+from .async_prefetch import AsyncLayerPrefetcher, resolve_prefetch_depth
 from .base import StrategyContext, TritonStrategy
 
 logger = logging.getLogger(__name__)
@@ -377,7 +378,11 @@ class Zero3Strategy(TritonStrategy):
         host = {tid: state['cpu_originals'][tid] for tid in entry['weight_tensor_ids']
                 if state['cpu_originals'].get(tid) is not None}
         _refuse_the_other_branch(is_triton, "prefetch")
-        # the library's block upload: on the copy stream with a readiness event, or synchronous without one
+        prefetcher = state.get('prefetcher')
+        if prefetcher is not None:
+            state['gpu_cache'][bidx] = prefetcher.prefetch(bidx, host, device=f"cuda:{dev_idx}")
+            return
+        # Legacy fallback when state was built without an AsyncLayerPrefetcher.
         from nbxtensor.memory.block_upload import upload_block
         state['gpu_cache'][bidx], ev = upload_block(host, dev_idx, state['transfer_stream'])
         if ev is not None:
@@ -403,6 +408,11 @@ class Zero3Strategy(TritonStrategy):
         stream see committed data. Fast-path no-op if the event never
         got recorded (synchronous prefetch path).
         """
+        prefetcher = state.get('prefetcher')
+        if prefetcher is not None:
+            _refuse_the_other_branch(is_triton, "wait")
+            prefetcher.await_layer(bidx, compute_stream=state.get('compute_stream'))
+            return
         ev = state['block_events'].pop(bidx, None)
         if ev is None:
             return
@@ -449,6 +459,9 @@ class Zero3Strategy(TritonStrategy):
 
         # Step 3: drop GPU refs
         state['gpu_cache'].pop(bidx, None)
+        prefetcher = state.get('prefetcher')
+        if prefetcher is not None:
+            prefetcher.evict(bidx)
 
         # Step 4: sync so the next malloc sees the freed region
         _refuse_the_other_branch(is_triton, "evict")
@@ -482,8 +495,12 @@ class Zero3Strategy(TritonStrategy):
             if bidx not in resident:
                 self._evict_block(state, bidx, is_triton)
         # Also drop any unwaited readiness events.
-        from nbxtensor.memory.block_upload import drop_upload_events
-        drop_upload_events(state['block_events'].values())
+        prefetcher = state.get('prefetcher')
+        if prefetcher is not None:
+            prefetcher.clear(keep=resident)
+        else:
+            from nbxtensor.memory.block_upload import drop_upload_events
+            drop_upload_events(state['block_events'].values())
         state['block_events'].clear()
         state['current_block'] = -1
         state['fresh_pass'] = True
@@ -544,29 +561,23 @@ class Zero3Strategy(TritonStrategy):
                              f"BLOCK WEIGHTS ({len(cpu_originals)} originals) — prime only")
             return self._prime_only_state(component_name, seq, is_triton, executor)
 
-        # Stream setup. Transfer stream carries the async H2D; the
-        # compute stream is the runtime default (stream=0).
+        # Stream setup driven by Prism's ResidencyPlan.prefetch_depth.
         dev_idx = self._exec_dev_idx()
-        transfer_stream = 0
         transfer_stream_torch = None                 # the PyTorch engine's stream: none on this branch
         _refuse_the_other_branch(is_triton, "ratchet state")
-        try:
-            from nbxtensor.memory.block_upload import open_copy_stream
-            transfer_stream = open_copy_stream(dev_idx)
-        except Exception as e:
-            logger.warning(
-                f"[Zero3] {component_name}: transfer_stream create "
-                f"failed ({e}); falling back to synchronous prefetch"
-            )
-            transfer_stream = 0
 
         # `expert_store` (Prism, `_zero3_resident_budgets`): the dense part resident, the routed
         # experts served from an expert cache on the card (triton/strategies/expert_store.py).
         alloc = self.context.allocations.get(component_name)
         if isinstance(alloc, dict) and alloc.get('strategy') == "expert_store":
+            transfer_stream = self._open_expert_copy_stream(component_name, dev_idx)
             from .expert_store import build_expert_store_state
             return build_expert_store_state(self, component_name, executor, seq, is_triton, blocks,
                                             dev_idx, transfer_stream, transfer_stream_torch)
+
+        prefetch_depth = resolve_prefetch_depth(getattr(self.context, "residency_plan", None), default=0)
+        prefetcher = AsyncLayerPrefetcher(prefetch_depth=prefetch_depth, device=f"cuda:{dev_idx}")
+        transfer_stream = prefetcher.copy_stream_handle
 
         nonblock = blocks.get(-1)
         if nonblock is not None and nonblock.get('weight_tensor_ids'):
@@ -587,6 +598,9 @@ class Zero3Strategy(TritonStrategy):
             'current_block': -1,
             'transfer_stream': transfer_stream,
             'transfer_stream_torch': transfer_stream_torch,
+            'prefetcher': prefetcher,
+            'prefetch_depth': prefetch_depth,
+            'compute_stream': None,
             'primed': False,
             'executor': executor,
             'resident': resident,
@@ -608,6 +622,18 @@ class Zero3Strategy(TritonStrategy):
             f"{len(state['streamed'])} streamed per pass through a 2-block window, "
             f"path=triton, stream={'async' if transfer_stream else 'sync'}")
         return state
+
+    @staticmethod
+    def _open_expert_copy_stream(component_name: str, dev_idx: int) -> int:
+        try:
+            from nbxtensor.memory.block_upload import open_copy_stream
+            return open_copy_stream(dev_idx)
+        except Exception as exc:
+            logger.warning(
+                f"[Zero3] {component_name}: transfer_stream create "
+                f"failed ({exc}); falling back to synchronous prefetch"
+            )
+            return 0
 
     def _resident_budget_mb(self, component_name: str) -> float:
         """The MB of `component_name`'s weights the plan keeps resident on the card across
@@ -748,11 +774,17 @@ class Zero3Strategy(TritonStrategy):
                 and prev not in resident):
             self._evict_block(state, prev, is_triton)
 
-        # Step 3: kick off the prefetch of the next STREAMED block for overlap (a resident
-        # block is already on the card).
-        next_bidx = next((b for b in state['streamed'] if b > bidx), None)
-        if next_bidx is not None and next_bidx not in state['gpu_cache']:
-            self._prefetch_block(state, next_bidx, is_triton)
+        # Step 3: kick off the prefetch of the next STREAMED block(s) for overlap (a resident
+        # block is already on the card). Depth comes from Prism's ResidencyPlan.prefetch_depth.
+        prefetcher = state.get('prefetcher')
+        if prefetcher is not None:
+            for next_bidx in prefetcher.next_keys(state['streamed'], bidx):
+                if next_bidx not in state['gpu_cache']:
+                    self._prefetch_block(state, next_bidx, is_triton)
+        else:
+            next_bidx = next((b for b in state['streamed'] if b > bidx), None)
+            if next_bidx is not None and next_bidx not in state['gpu_cache']:
+                self._prefetch_block(state, next_bidx, is_triton)
 
         state['current_block'] = bidx
 
@@ -822,8 +854,12 @@ class Zero3Strategy(TritonStrategy):
             if state.get('expert_store') is not None:
                 from .expert_store import release_expert_store
                 release_expert_store(state)
-            from nbxtensor.memory.block_upload import close_copy_stream
-            close_copy_stream(state.get('transfer_stream') or 0, state['block_events'].values())
+            prefetcher = state.get('prefetcher')
+            if prefetcher is not None:
+                prefetcher.close()
+            else:
+                from nbxtensor.memory.block_upload import close_copy_stream
+                close_copy_stream(state.get('transfer_stream') or 0, state['block_events'].values())
 
     # ------------------------------------------------------------------
     # Strategy entry points

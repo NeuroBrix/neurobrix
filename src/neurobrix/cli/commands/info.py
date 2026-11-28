@@ -150,7 +150,7 @@ def cmd_inspect(args):
                 entry["shards"] = len(comp.weight_paths)
             comps.append(entry)
         emit("inspect", {"path": str(nbx_path), "model": manifest.get("model_name"),
-                         "nbx_version": manifest.get("nbx_version"), "family": manifest.get("family"),
+                         "nbx_container_version": manifest.get("nbx_container_version"), "family": manifest.get("family"),
                          "components": comps})
         return
     print(f"NBX Inspect: {nbx_path.name}")
@@ -160,7 +160,7 @@ def cmd_inspect(args):
 
     print(f"\nFile: {nbx_path}")
     print(f"Model: {manifest.get('model_name', 'Unknown')}")
-    print(f"NBX Version: {manifest.get('nbx_version', 'Unknown')}")
+    print(f"NBX Container Version: {manifest.get('nbx_container_version', 'Unknown')}")
     print(f"Family: {manifest.get('family', 'Unknown')}")
 
     components = container.list_components()
